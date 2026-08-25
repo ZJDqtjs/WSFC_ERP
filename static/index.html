@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>企业台账系统</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="app" id="app">
+    <!-- 左侧导航 -->
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <span class="brand-name">企业台账</span>
+      </div>
+      <nav class="side-nav">
+        <button class="nav-item active" data-page="home"><span class="nav-ico">🏠</span>工作台</button>
+        <div class="nav-group">业务管理</div>
+        <button class="nav-item" data-page="stock"><span class="nav-ico">📦</span>库存管理</button>
+        <button class="nav-item" data-page="inbound"><span class="nav-ico">⬇️</span>入库</button>
+        <button class="nav-item" data-page="outbound"><span class="nav-ico">⬆️</span>出库 / 销售</button>
+        <button class="nav-item" data-page="products"><span class="nav-ico">🏷️</span>商品</button>
+        <div class="nav-group">经营分析</div>
+        <button class="nav-item" data-page="report"><span class="nav-ico">📊</span>财务报表</button>
+        <div class="nav-group">数据工具</div>
+        <button class="nav-item" data-page="import"><span class="nav-ico">📥</span>导入与关联</button>
+      </nav>
+      <div class="side-user">
+        <div class="user-avatar" id="userAvatar">管</div>
+        <div class="user-meta">
+          <div class="user-name" id="userName">未登录</div>
+          <div class="user-role" id="userRole"></div>
+        </div>
+        <button class="logout-btn" id="logoutBtn" title="退出登录">⏻</button>
+      </div>
+    </aside>
+
+    <!-- 主内容 -->
+    <main class="main">
+      <!-- 工作台 -->
+      <section id="page-home" class="page active">
+        <div class="card welcome">
+          <div class="welcome-text">
+            <h2 id="dashGreeting">你好 👋</h2>
+            <p id="dashDate"></p>
+          </div>
+          <div class="welcome-actions">
+            <button class="btn" onclick="goPage('inbound')">⬇️ 快速入库</button>
+            <button class="btn green" onclick="goPage('outbound')">⬆️ 快速出库</button>
+            <button class="btn secondary" onclick="goPage('products')">🏷️ 新增商品</button>
+          </div>
+        </div>
+
+        <div class="stat-grid" id="dashStats"></div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head">
+              <h3>⚠️ 缺货预警</h3>
+              <button class="btn-link" onclick="goPage('stock')">去补货 →</button>
+            </div>
+            <div id="dashLow"></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h3>📋 最近动态</h3>
+              <button class="btn-link" onclick="goPage('outbound')">查看出库 →</button>
+            </div>
+            <div id="dashActivity"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 库存管理 -->
+      <section id="page-stock" class="page">
+        <div class="seg" id="stockSeg">
+          <button class="seg-item active" data-panel="stock-overview" onclick="switchSeg('stockSeg', this)">库存总览</button>
+          <button class="seg-item" data-panel="stock-movements" onclick="switchSeg('stockSeg', this)">库存流水</button>
+        </div>
+
+        <div id="stock-overview">
+          <div class="card">
+            <div class="toolbar">
+              <input id="stockSearch" placeholder="🔍 搜索商品名称 / 分类..." oninput="renderStock()" />
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="openAdjust()">⚖️ 盘点调整</button>
+              <button class="btn secondary" onclick="loadStock()">🔄 刷新</button>
+            </div>
+            <div class="table-wrap"><table id="stockTable"></table></div>
+          </div>
+          <div class="stat-grid">
+            <div class="stat"><div class="label">商品种类</div><div class="value" id="statTypes">-</div></div>
+            <div class="stat accent"><div class="label">库存总值</div><div class="value" id="statStockValue">-</div><div class="sub" id="statStockSub"></div></div>
+            <div class="stat warn"><div class="label">缺货预警</div><div class="value" id="statLow">-</div></div>
+          </div>
+        </div>
+
+        <div id="stock-movements" style="display:none;">
+          <div class="card">
+            <div class="toolbar">
+              <select id="mvProduct"><option value="0">全部商品</option></select>
+              <input id="mvDateFrom" type="date" /><span>-</span><input id="mvDateTo" type="date" />
+              <button class="btn" onclick="loadMovements()">查询</button>
+            </div>
+            <div class="table-wrap"><table id="mvTable"></table></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 入库 -->
+      <section id="page-inbound" class="page">
+        <div class="card">
+          <div class="card-head"><h3>新增入库单</h3><span class="hint">按采购单位录入，系统自动折算到基础单位</span></div>
+          <div class="form-grid">
+            <div class="field">
+              <label>商品 *</label>
+              <select id="inProduct"></select>
+              <div class="field-hint" id="inStockHint"></div>
+            </div>
+            <div class="field"><label>进货单位 *</label><select id="inUnit"></select><div class="field-hint" id="inUnitHint"></div></div>
+            <div class="field"><label>数量 *</label><input id="inQty" type="number" min="0" step="any" placeholder="0" oninput="calcInbound()" /></div>
+            <div class="field"><label>单价（所选单位）*</label><input id="inPrice" type="number" min="0" step="any" placeholder="0.00" oninput="calcInbound()" /></div>
+            <div class="field"><label>金额</label><input id="inAmount" readonly /></div>
+            <div class="field"><label>供应商</label><input id="inSupplier" placeholder="供应商名称" /></div>
+            <div class="field"><label>日期 *</label><input id="inDate" type="date" /></div>
+            <div class="field"><label>操作员</label><input id="inOperator" placeholder="谁操作的" /></div>
+          </div>
+          <div class="field" style="margin-top:12px;"><label>备注</label><textarea id="inRemark" rows="1" placeholder="可选"></textarea></div>
+          <div id="inAlert" class="alert" style="display:none;"></div>
+          <div class="form-actions"><button class="btn green" onclick="submitInbound()">✓ 确认入库</button></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>入库记录</h3><span class="hint" id="inListHint"></span></div>
+          <div class="toolbar">
+            <input id="inDateFrom" type="date" /><span>-</span><input id="inDateTo" type="date" />
+            <button class="btn secondary" onclick="loadInbounds()">筛选</button>
+          </div>
+          <div class="table-wrap"><table id="inTable"></table></div>
+        </div>
+      </section>
+
+      <!-- 出库/销售 -->
+      <section id="page-outbound" class="page">
+        <div class="card">
+          <div class="card-head"><h3>新增出库 / 销售单</h3><span class="hint">卖商品自动结转关联包装材料与打包费</span></div>
+          <div class="form-grid">
+            <div class="field"><label>日期 *</label><input id="outDate" type="date" /></div>
+            <div class="field"><label>客户</label><input id="outCustomer" placeholder="客户名称" /></div>
+            <div class="field"><label>操作员</label><input id="outOperator" placeholder="谁操作的" /></div>
+            <div class="field"><label>备注</label><input id="outRemark" placeholder="可选" /></div>
+          </div>
+
+          <h4 class="block-title">销售商品行</h4>
+          <div class="table-wrap">
+            <table id="outSaleTable">
+              <thead><tr>
+                <th style="width:26%;">商品</th><th>销售单位</th><th>数量</th><th>单价</th><th>折算</th><th>小计</th><th></th>
+              </tr></thead>
+              <tbody id="outSaleBody"></tbody>
+            </table>
+          </div>
+          <div class="toolbar" style="margin-top:12px;">
+            <button class="btn secondary" onclick="addSaleRow()">＋ 添加商品行</button>
+            <button class="btn" onclick="previewOutbound()">🔍 预览结算</button>
+            <span class="muted">自动带出泡沫箱 / 泡沫垫 / 打包费等关联结算项</span>
+          </div>
+
+          <div id="outPreview" style="display:none;">
+            <hr />
+            <h4 class="block-title">关联结算（包装材料 / 固定费用）</h4>
+            <div id="outWarn"></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th style="width:30%;">商品</th><th>单位</th><th style="width:14%;">数量</th><th>类型</th><th style="width:14%;">成本</th><th>小计</th><th></th></tr></thead>
+                <tbody id="outPackBody"></tbody>
+              </table>
+            </div>
+            <div class="form-grid" style="margin-top:12px;">
+              <div class="field"><label>固定费用合计（人工打包费等）</label><input id="outFee" type="number" step="any" min="0" oninput="calcOutboundTotals()" /></div>
+            </div>
+            <div class="stat-grid" style="margin-top:14px;">
+              <div class="stat"><div class="label">销售收入</div><div class="value" id="otAmount">¥0.00</div></div>
+              <div class="stat"><div class="label">结转成本</div><div class="value" id="otCogs">¥0.00</div></div>
+              <div class="stat success"><div class="label">毛利</div><div class="value" id="otGross" style="color:var(--green)">¥0.00</div></div>
+              <div class="stat success"><div class="label">净利</div><div class="value" id="otNet" style="color:var(--green)">¥0.00</div></div>
+            </div>
+            <div class="form-actions">
+              <button class="btn green" onclick="submitOutbound()">✓ 确认出库</button>
+              <button class="btn secondary" onclick="clearPreview()">取消</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>出库记录</h3><span class="hint" id="outListHint"></span></div>
+          <div class="toolbar">
+            <input id="outDateFrom" type="date" /><span>-</span><input id="outDateTo" type="date" />
+            <button class="btn secondary" onclick="loadOutbounds()">筛选</button>
+          </div>
+          <div class="table-wrap"><table id="outTable"></table></div>
+        </div>
+      </section>
+
+      <!-- 商品管理 -->
+      <section id="page-products" class="page">
+        <div class="card">
+          <div class="card-head"><h3>商品管理</h3><button class="btn" onclick="openProductModal()">＋ 新增商品</button></div>
+          <div class="toolbar">
+            <input id="prodSearch" placeholder="🔍 搜索商品..." oninput="renderProducts()" />
+          </div>
+          <div class="table-wrap"><table id="prodTable"></table></div>
+        </div>
+      </section>
+
+      <!-- 财务报表 -->
+      <section id="page-report" class="page">
+        <div class="card">
+          <div class="card-head"><h3>财务利润报表</h3></div>
+          <div class="toolbar">
+            <input id="repDateFrom" type="date" /><span>-</span><input id="repDateTo" type="date" />
+            <button class="btn" onclick="loadReport()">查询</button>
+            <button class="btn secondary" onclick="quickRange('today')">今天</button>
+            <button class="btn secondary" onclick="quickRange('month')">本月</button>
+            <button class="btn secondary" onclick="quickRange('all')">全部</button>
+          </div>
+          <div class="stat-grid" id="repStats"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>商品销售明细</h3></div>
+          <div class="table-wrap"><table id="repProductTable"></table></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>财务流水</h3><button class="btn secondary" onclick="openFinanceModal()">＋ 手动记账</button></div>
+          <div class="table-wrap"><table id="financeTable"></table></div>
+        </div>
+      </section>
+
+      <!-- 导入与关联 -->
+      <section id="page-import" class="page">
+        <div class="seg" id="importSeg">
+          <button class="seg-item active" data-panel="import-batch" onclick="switchSeg('importSeg', this)">📥 批量导入</button>
+          <button class="seg-item" data-panel="import-jst" onclick="switchSeg('importSeg', this)">🔗 聚水潭编码关联</button>
+        </div>
+
+        <div id="import-batch">
+          <div class="card">
+            <div class="card-head"><h3>导入模板下载</h3></div>
+            <div class="toolbar">
+              <button class="btn secondary" onclick="downloadTpl('products')">⬇ 商品导入模板</button>
+              <button class="btn secondary" onclick="downloadTpl('inbounds')">⬇ 入库导入模板</button>
+              <button class="btn secondary" onclick="downloadTpl('outbounds')">⬇ 出库导入模板</button>
+            </div>
+            <div class="alert ok" style="margin-top:10px;">商品模板兼容「柠檬云商品导入模板.xlsx」，整表上传自动识别（编码/类别/名称/规格/单位）。</div>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head"><h3>商品批量导入</h3></div>
+              <div class="toolbar">
+                <input type="file" id="impProdFile" accept=".xlsx" />
+                <button class="btn" onclick="doImport('products')">导入商品</button>
+              </div>
+              <div id="impProdResult"></div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h3>入库批量导入</h3></div>
+              <div class="toolbar">
+                <input type="file" id="impInFile" accept=".xlsx" />
+                <button class="btn" onclick="doImport('inbounds')">导入入库</button>
+              </div>
+              <div id="impInResult"></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>出库批量导入 <span class="hint">同「单号」自动合并为一单，自动结转关联材料与费用</span></h3></div>
+            <div class="toolbar">
+              <input type="file" id="impOutFile" accept=".xlsx" />
+              <button class="btn" onclick="doImport('outbounds')">导入出库</button>
+            </div>
+            <div id="impOutResult"></div>
+          </div>
+        </div>
+
+        <div id="import-jst" style="display:none;">
+          <div class="card">
+            <div class="card-head"><h3>① 上传聚水潭销售出库单并关联商品编码</h3><span class="hint">解析商品名称并自动推荐匹配，保存后即可自动结算</span></div>
+            <div class="toolbar">
+              <input type="file" id="mpFile" accept=".xlsx" />
+              <button class="btn" onclick="parseJushuitan()">解析并匹配</button>
+              <button class="btn secondary" onclick="autoMapping()">🤖 自动匹配未关联</button>
+              <button class="btn secondary" onclick="clearMapping()">清空关联</button>
+            </div>
+            <div id="mpParseInfo"></div>
+            <div class="table-wrap" style="margin-top:10px;"><table id="mpTable"></table></div>
+            <div class="form-actions">
+              <button class="btn green" onclick="saveMappings()">✓ 保存全部关联</button>
+              <span class="muted">下拉框已自动选中推荐项，核对后保存即可</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>② 已保存的关联关系</h3><span class="hint">查看 / 修改 / 删除，或手动新增</span></div>
+            <div class="toolbar">
+              <input id="mpNewCode" placeholder="外部商品编码（如：京鲜生七彩花生2斤）" style="flex:1;min-width:240px;" />
+              <select id="mpNewProduct"><option value="">选择关联到系统商品…</option></select>
+              <button class="btn secondary" onclick="addMappingRow()">＋ 手动新增</button>
+              <button class="btn" onclick="saveSavedMappings()">✓ 保存修改</button>
+            </div>
+            <div class="table-wrap" style="margin-top:10px;"><table id="mpSavedTable"></table></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>③ 导入聚水潭出库单（自动结算）</h3><span class="hint">按已保存的关联生成出库单并核算成本</span></div>
+            <div class="toolbar">
+              <input type="file" id="mpImportFile" accept=".xlsx" />
+              <button class="btn green" onclick="importJushuitan()">导入出库单</button>
+            </div>
+            <div id="mpImportResult"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 登录 -->
+  <div class="login-mask" id="loginMask">
+    <div class="login-box">
+      <div class="login-brand"><span class="brand-dot"></span>企业台账系统</div>
+      <p class="login-sub">库存 · 财务 · 一体化</p>
+      <div class="field" style="margin-bottom:12px;">
+        <label>用户名</label>
+        <input id="loginUser" autocomplete="username" placeholder="请输入用户名" />
+      </div>
+      <div class="field" style="margin-bottom:16px;">
+        <label>密码</label>
+        <input id="loginPass" type="password" autocomplete="current-password" placeholder="请输入密码" onkeydown="if(event.key==='Enter')doLogin()" />
+      </div>
+      <div id="loginErr" class="alert err" style="display:none;"></div>
+      <button class="btn" style="width:100%;" onclick="doLogin()">登 录</button>
+      <p class="login-foot">默认账号 admin1 / admin1</p>
+    </div>
+  </div>
+
+  <!-- 弹窗 -->
+  <div class="modal-mask" id="modalMask">
+    <div class="modal" id="modalBox"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
