@@ -1,0 +1,14 @@
+[project]
+name = "erp"
+version = "0.1.0"
+description = "企业台账系统：库存 + 财务一体化（单位换算 / 关联商品结算 / 成本核算）"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141.1",
+    "openpyxl>=3.1.5",
+    "pydantic>=2.13.4",
+    "python-multipart>=0.0.32",
+    "sqlalchemy>=2.0.52",
+    "uvicorn[standard]>=0.52.4",
+]
