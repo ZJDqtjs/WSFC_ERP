@@ -52,10 +52,17 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
         }
 
     products = list(db.execute(select(Product)).scalars())
-    stock_value = round(sum(p.stock_value for p in products), 2)
+    # 人工/快递 无真实库存，不计入库存统计
+    NO_STOCK_CATS = ["人工", "快递"]
+    stock_products = [
+        p for p in products
+        if p.product_type == "stock" and p.category not in NO_STOCK_CATS
+    ]
+    stock_value = round(sum(p.stock_value for p in stock_products), 2)
     low_stock = [
-        {"id": p.id, "name": p.name, "stock": p.stock, "base_unit": p.base_unit}
-        for p in products
+        {"id": p.id, "name": p.name, "stock": p.stock, "base_unit": p.base_unit,
+         "default_unit": p.default_unit, "conversions": p.conversions or {}}
+        for p in stock_products
         if p.stock <= 1e-6
     ]
     low_stock.sort(key=lambda x: x["stock"])
@@ -85,7 +92,7 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
         "low_stock": low_stock,
         "recent_inbounds": inbound_snapshot(),
         "recent_outbounds": outbound_snapshot(),
-        "product_count": len(products),
+        "product_count": len(stock_products),
     }
 
 

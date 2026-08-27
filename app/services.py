@@ -37,6 +37,21 @@ def unit_to_base(product: Product, unit: str, quantity: float) -> float:
     return quantity * float(factor)
 
 
+def stock_deduction(db: Session, order_product: Product, qty_base_in_order: float) -> tuple[Product, float]:
+    """计算出库时实际扣减的库存商品与扣减数量（库存基础单位）。
+
+    - 订单商品关联了库存商品：扣减库存商品，扣减数 = 订单基础数量 × 倍数 × 库存默认单位折算
+    - 未关联：回退为扣减订单商品自身
+    """
+    if order_product.stock_product_id:
+        sp = db.get(Product, order_product.stock_product_id)
+        if sp:
+            du = sp.default_unit or sp.base_unit
+            factor = (sp.conversions or {}).get(du, 1.0)
+            return sp, qty_base_in_order * (order_product.multiplier or 1.0) * float(factor)
+    return order_product, qty_base_in_order
+
+
 def base_to_unit(product: Product, unit: str, quantity_base: float) -> float:
     conv = product.conversions or {}
     factor = conv.get(unit)
@@ -206,13 +221,17 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
             raise ValueError(f"「{p.name}」数量必须大于 0")
         qty_base = unit_to_base(p, unit, quantity)
         amount = round(quantity * price, 2)
-        cogs = round(qty_base * p.avg_cost, 2)
+        # 扣减目标：订单商品关联的库存商品（大类），未关联则扣减自身
+        target, deduction_base = stock_deduction(db, p, qty_base)
+        cogs = round(deduction_base * (target.avg_cost or target.unit_cost), 2)
         if fee is None:
             fee = p.pack_fee
         sale_rows.append(
             {
                 "product_id": p.id, "product_name": p.name, "base_unit": p.base_unit,
                 "unit": unit, "quantity": quantity, "quantity_base": qty_base,
+                "stock_product_id": target.id, "stock_product_name": target.name,
+                "deduction_base": deduction_base,
                 "unit_price": price, "amount": amount, "cogs": cogs, "pack_fee": fee,
                 "line_type": "sale",
             }
@@ -239,12 +258,14 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
         if not m:
             raise ValueError(f"关联商品ID {spec['product_id']} 不存在")
         qty_base = unit_to_base(m, spec["unit"], spec["quantity"])
-        cogs = round(qty_base * m.avg_cost, 2)
+        # 关联材料成本：优先用库存平均成本，未入库时用参考成本（如纸箱单价）
+        cost = m.avg_cost if m.avg_cost else m.unit_cost
+        cogs = round(qty_base * cost, 2)
         pack_rows.append(
             {
                 "product_id": m.id, "product_name": m.name, "base_unit": m.base_unit,
                 "unit": spec["unit"], "quantity": spec["quantity"], "quantity_base": qty_base,
-                "unit_price": m.avg_cost, "amount": cogs, "cogs": cogs, "pack_fee": 0,
+                "unit_price": cost, "amount": cogs, "cogs": cogs, "pack_fee": 0,
                 "line_type": "pack",
             }
         )
@@ -255,10 +276,19 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
     else:
         total_fee = round(sum(r["pack_fee"] for r in sale_rows), 2)
 
+    # 库存预警（允许继续，仅提示；服务型商品如 人工/快递 不校验库存）
     for r in sale_rows + pack_rows:
-        p = db.get(Product, r["product_id"])
-        if p and r["quantity_base"] > p.stock + 1e-6:
-            warnings.append(f"「{p.name}」库存不足：需 {fmt_qty(r['quantity_base'])} {p.base_unit}，现有 {fmt_qty(p.stock)} {p.base_unit}")
+        if r["line_type"] == "sale":
+            pid, need = r["stock_product_id"], r["deduction_base"]
+            label = f"{r['product_name']}（扣{fmt_qty(need)} {r['stock_product_name']}）"
+        else:
+            pid, need = r["product_id"], r["quantity_base"]
+            label = r["product_name"]
+        p = db.get(Product, pid)
+        if not p or p.category in ("人工", "快递"):
+            continue
+        if need > p.stock + 1e-6:
+            warnings.append(f"「{label}」库存不足：需 {fmt_qty(need)} {p.base_unit}，现有 {fmt_qty(p.stock)} {p.base_unit}")
 
     return {
         "sale_lines": sale_rows,
@@ -293,6 +323,10 @@ def create_outbound(db: Session, payload: dict, operator: str = "") -> tuple[Out
 
     affected = set()
     for r in order["sale_lines"] + order["pack_lines"]:
+        is_sale = r["line_type"] == "sale"
+        # 库存流水扣在库存商品上（订单商品扣减其关联大类）
+        move_pid = r["stock_product_id"] if is_sale else r["product_id"]
+        move_qty = -r["deduction_base"] if is_sale else -r["quantity_base"]
         db.add(
             OutboundLine(
                 outbound_id=rec.id,
@@ -309,19 +343,20 @@ def create_outbound(db: Session, payload: dict, operator: str = "") -> tuple[Out
         )
         db.add(
             StockMovement(
-                product_id=r["product_id"],
-                move_type="out" if r["line_type"] == "sale" else "pack_out",
-                quantity_base=-r["quantity_base"],
+                product_id=move_pid,
+                move_type="out" if is_sale else "pack_out",
+                quantity_base=move_qty,
                 amount=r["cogs"],
                 ref_type="outbound",
                 ref_id=rec.id,
                 date=date,
                 operator=op,
-                remark=f"{'销售' if r['line_type']=='sale' else '包装消耗'} {rec.code}",
+                remark=f"{'销售' if is_sale else '包装消耗'} {rec.code}",
             )
         )
+        affected.add(move_pid)
         affected.add(r["product_id"])
-        if r["line_type"] == "sale" and r["amount"] > 0:
+        if is_sale and r["amount"] > 0:
             db.add(
                 FinanceRecord(
                     type="income", category="销售收入", product_id=r["product_id"],

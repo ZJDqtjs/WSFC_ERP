@@ -39,6 +39,10 @@ class OutboundIn(BaseModel):
     pack_fee_total: float | None = None
 
 
+class BatchIds(BaseModel):
+    ids: list[int]
+
+
 def _to_dict(o: Outbound) -> dict:
     return {
         "id": o.id,
@@ -116,3 +120,24 @@ def delete_outbound(oid: int, db: Session = Depends(get_db), user: User = Depend
         recompute_product(db, pid)
     db.commit()
     return {"ok": True}
+
+
+@router.post("/batch-delete")
+def batch_delete_outbounds(data: BatchIds, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    deleted, missing = 0, 0
+    for oid in data.ids:
+        rec = db.get(Outbound, oid)
+        if not rec:
+            missing += 1
+            continue
+        affected = {l.product_id for l in rec.lines}
+        for m in db.execute(select(StockMovement).where(StockMovement.ref_type == "outbound", StockMovement.ref_id == oid)).scalars():
+            db.delete(m)
+        for f in db.execute(select(FinanceRecord).where(FinanceRecord.ref_type == "outbound", FinanceRecord.ref_id == oid)).scalars():
+            db.delete(f)
+        db.delete(rec)
+        for pid in affected:
+            recompute_product(db, pid)
+        deleted += 1
+    db.commit()
+    return {"ok": True, "deleted": deleted, "missing": missing}

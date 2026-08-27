@@ -82,7 +82,16 @@ def adjust_stock(data: AdjustIn, db: Session = Depends(get_db), user: User = Dep
 
 @router.get("/stock-overview")
 def stock_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    rows = db.execute(select(Product).where(Product.is_active.is_(True)).order_by(Product.category, Product.name)).scalars()
+    # 人工/快递 无真实库存，不进入库存总览
+    NO_STOCK_CATS = ["人工", "快递"]
+    rows = db.execute(
+        select(Product).where(
+            Product.is_active.is_(True),
+            Product.product_type == "stock",
+            Product.category.not_in(NO_STOCK_CATS),
+        )
+        .order_by(Product.category, Product.name)
+    ).scalars()
     result = []
     for p in rows:
         result.append(

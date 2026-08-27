@@ -27,22 +27,35 @@ class Unit(Base):
 
 
 class Product(Base):
-    """商品。conversions: {单位名: 每1单位=多少基础单位}；pack_items: 销售关联商品清单。"""
+    """商品。product_type:
+    - stock 库存商品（大类，如 佛手柑大果）：真实库存，可入库/盘点
+    - order 订单商品（小类，如 佛手柑大果2个）：用于出库销售，不存库存，
+            通过 stock_product_id + multiplier 关联到库存商品，出库时按倍数扣减大类库存。
+    conversions: {单位名: 每1单位=多少基础单位}；pack_items: 销售关联商品清单(包材/人工)。"""
 
     __tablename__ = "products"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(128), default="", index=True)  # 商品编码
     name: Mapped[str] = mapped_column(String(128), index=True)
-    category: Mapped[str] = mapped_column(String(64), default="")
+    category: Mapped[str] = mapped_column(String(64), default="")  # 商品类型/分类
+    product_type: Mapped[str] = mapped_column(String(8), default="stock")  # stock 库存 / order 订单
     base_unit: Mapped[str] = mapped_column(String(32))  # 基础单位：通常 克 或 个
+    default_unit: Mapped[str] = mapped_column(String(32), default="")  # 默认出库/展示单位，如 斤
     spec: Mapped[str] = mapped_column(String(255), default="")  # 规格说明，如 每个约150克
     sale_price: Mapped[float] = mapped_column(Float, default=0.0)  # 默认售价(每基础单位)
+    unit_cost: Mapped[float] = mapped_column(Float, default=0.0)  # 参考成本/采购单价(每基础单位)
     conversions: Mapped[dict] = mapped_column(JSON, default=dict)  # {单位: 换算到基础单位的系数}
-    # 销售关联商品/包装清单：[{product_id, quantity(基础单位), unit}]
+    # 销售关联商品/包装清单：[{product_id, quantity, unit}]
     pack_items: Mapped[list] = mapped_column(JSON, default=list)
     pack_fee: Mapped[float] = mapped_column(Float, default=0.0)  # 每单固定人工/包装费
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # 订单商品 → 库存商品 的关联（解耦）
+    stock_product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("products.id"), nullable=True, index=True
+    )  # 关联的库存商品（大类）
+    multiplier: Mapped[float] = mapped_column(Float, default=1.0)  # 1单订单商品 = multiplier × 库存商品默认单位
 
     # 缓存聚合（由库存流水重算）
     stock: Mapped[float] = mapped_column(Float, default=0.0)

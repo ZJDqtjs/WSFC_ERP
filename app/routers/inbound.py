@@ -11,6 +11,10 @@ from ..services import create_inbound, recompute_product
 router = APIRouter(prefix="/api/inbounds", tags=["inbound"])
 
 
+class BatchIds(BaseModel):
+    ids: list[int]
+
+
 class InboundIn(BaseModel):
     product_id: int
     unit: str
@@ -52,6 +56,9 @@ def list_inbounds(date_from: str = "", date_to: str = "", db: Session = Depends(
 
 @router.post("")
 def create_inbound_api(data: InboundIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    p = db.get(Product, data.product_id)
+    if p and p.product_type == "order":
+        raise HTTPException(400, f"「{p.name}」是订单商品（小类），请入库其关联的库存商品（大类）")
     try:
         rec = create_inbound(
             db,
@@ -79,3 +86,23 @@ def delete_inbound(rid: int, db: Session = Depends(get_db), user: User = Depends
     recompute_product(db, pid)
     db.commit()
     return {"ok": True}
+
+
+@router.post("/batch-delete")
+def batch_delete_inbounds(data: BatchIds, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    deleted, missing = 0, 0
+    for rid in data.ids:
+        rec = db.get(Inbound, rid)
+        if not rec:
+            missing += 1
+            continue
+        pid = rec.product_id
+        for m in db.execute(select(StockMovement).where(StockMovement.ref_type == "inbound", StockMovement.ref_id == rid)).scalars():
+            db.delete(m)
+        for f in db.execute(select(FinanceRecord).where(FinanceRecord.ref_type == "inbound", FinanceRecord.ref_id == rid)).scalars():
+            db.delete(f)
+        db.delete(rec)
+        recompute_product(db, pid)
+        deleted += 1
+    db.commit()
+    return {"ok": True, "deleted": deleted, "missing": missing}
