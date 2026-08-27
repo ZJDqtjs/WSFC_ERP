@@ -3,9 +3,10 @@ import difflib
 import io
 import re
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from openpyxl import Workbook, load_workbook
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -18,11 +19,14 @@ from ..services import (
     create_inbound,
     create_outbound,
     default_conversions,
+    fmt_qty,
     resolve_product,
     unit_to_base,
 )
 
 router = APIRouter(prefix="/api", tags=["import"])
+
+DOCS_DIR = Path(__file__).resolve().parent.parent.parent / "docs"
 
 WEIGHT_UNITS = {"克": 1.0, "g": 1.0, "斤": 500.0, "公斤": 1000.0, "千克": 1000.0, "kg": 1000.0}
 
@@ -98,16 +102,21 @@ def read_rows(file: UploadFile):
     return [list(r) for r in ws.iter_rows(values_only=True)]
 
 
+def _norm_cell(c) -> str:
+    """表头单元格归一化：去首尾空白、去星号（*必填 标记）。"""
+    return str(c).strip().replace("*", "").strip() if c is not None else ""
+
+
 def detect_header(rows, aliases) -> tuple[dict, int]:
     """扫描前 20 行找表头行，返回 {字段: 列索引} 与数据起始行号。"""
     flat = {name for names in aliases.values() for name in names}
     for idx, row in enumerate(rows[:20]):
-        cells = {str(c).strip() for c in row if c is not None and str(c).strip()}
+        cells = {_norm_cell(c) for c in row if _norm_cell(c)}
         hits = cells & flat
         if len(hits) >= 2:
             mapping = {}
             for i, c in enumerate(row):
-                c = str(c).strip() if c is not None else ""
+                c = _norm_cell(c)
                 for field, names in aliases.items():
                     if c in names:
                         mapping[field] = i
@@ -186,47 +195,65 @@ def _xlsx_response(wb, filename: str):
     )
 
 
+def _serve_tpl(filename: str, factory):
+    """优先返回 docs/ 目录下的静态模板文件（便于维护），不存在则动态生成。"""
+    f = DOCS_DIR / filename
+    if f.exists():
+        return FileResponse(
+            f,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=filename,
+        )
+    return _xlsx_response(factory(), filename)
+
+
 @router.get("/templates/products")
 def tpl_products(user: User = Depends(get_current_user)):
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "商品导入"
-    ws.append(["商品编码", "商品名称*", "分类", "规格", "基础单位", "单位换算", "默认售价", "打包费", "关联商品清单"])
-    ws.append(["", "番茄", "蔬菜", "每个约150克", "克", "克=1;斤=500;公斤=1000;个=150", 0.016, 1, "泡沫箱=1个;泡沫垫=2个"])
-    ws.append(["ydj001", "土豆", "蔬菜", "", "斤", "克=1;斤=500;公斤=1000", 2, 0, ""])
-    for col, w in zip("ABCDEFGHI", [14, 18, 10, 20, 10, 30, 10, 8, 30]):
-        ws.column_dimensions[col].width = w
-    ws.freeze_panes = "A2"
-    return _xlsx_response(wb, "商品导入模板.xlsx")
+    def factory():
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "商品导入"
+        ws.append(["商品编码", "商品名称*", "分类", "规格", "基础单位", "单位换算", "默认售价", "打包费", "关联商品清单"])
+        ws.append(["", "番茄", "蔬菜", "每个约150克", "克", "克=1;斤=500;公斤=1000;个=150", 0.016, 1, "泡沫箱=1个;泡沫垫=2个"])
+        ws.append(["ydj001", "土豆", "蔬菜", "", "斤", "克=1;斤=500;公斤=1000", 2, 0, ""])
+        for col, w in zip("ABCDEFGHI", [14, 18, 10, 20, 10, 30, 10, 8, 30]):
+            ws.column_dimensions[col].width = w
+        ws.freeze_panes = "A2"
+        return wb
+    return _serve_tpl("商品导入模板.xlsx", factory)
 
 
 @router.get("/templates/inbounds")
 def tpl_inbounds(user: User = Depends(get_current_user)):
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "入库导入"
-    ws.append(["商品编码或名称*", "进货单位*", "数量*", "单价*", "供应商", "日期*", "操作员", "备注"])
-    ws.append(["番茄", "斤", 10, 3, "张三菜行", "2026-08-25", "管理员", ""])
-    ws.append(["泡沫箱", "个", 50, 2, "包装厂", "2026-08-25", "", ""])
-    for col, w in zip("ABCDEFGH", [20, 12, 10, 10, 16, 14, 12, 16]):
-        ws.column_dimensions[col].width = w
-    ws.freeze_panes = "A2"
-    return _xlsx_response(wb, "入库导入模板.xlsx")
+    def factory():
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "入库导入"
+        ws.append(["商品编码或名称*", "进货单位*", "数量*", "单价*", "供应商", "日期*", "操作员", "备注"])
+        ws.append(["番茄", "斤", 10, 3, "张三菜行", "2026-08-25", "管理员", ""])
+        ws.append(["泡沫箱", "个", 50, 2, "包装厂", "2026-08-25", "", ""])
+        for col, w in zip("ABCDEFGH", [20, 12, 10, 10, 16, 14, 12, 16]):
+            ws.column_dimensions[col].width = w
+        ws.freeze_panes = "A2"
+        return wb
+    return _serve_tpl("入库批量导入模板.xlsx", factory)
 
 
 @router.get("/templates/outbounds")
 def tpl_outbounds(user: User = Depends(get_current_user)):
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "出库导入"
-    ws.append(["单号", "日期*", "客户", "商品编码或名称*", "销售单位*", "数量*", "单价*", "打包费", "操作员", "备注"])
-    ws.append(["单A001", "2026-08-25", "李四", "番茄", "斤", 3, 8, 1, "", ""])
-    ws.append(["单A001", "2026-08-25", "李四", "泡沫垫", "个", 2, 0, 0, "", "同单号自动合并为一单"])
-    ws.append(["", "2026-08-25", "王五", "土豆", "公斤", 2, 4, 0, "", "单号留空则每行一单"])
-    for col, w in zip("ABCDEFGHIJ", [12, 14, 12, 20, 12, 10, 10, 8, 12, 20]):
-        ws.column_dimensions[col].width = w
-    ws.freeze_panes = "A2"
-    return _xlsx_response(wb, "出库导入模板.xlsx")
+    def factory():
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "出库导入"
+        ws.append(["单号", "日期*", "客户", "商品编码或名称*", "销售单位*", "数量*", "单价*", "打包费", "操作员", "备注"])
+        ws.append(["单A001", "2026-08-25", "李四", "番茄", "斤", 3, 8, 1, "", ""])
+        ws.append(["单A001", "2026-08-25", "李四", "泡沫垫", "个", 2, 0, 0, "", "同单号自动合并为一单"])
+        ws.append(["", "2026-08-25", "王五", "土豆", "公斤", 2, 4, 0, "", "单号留空则每行一单"])
+        for col, w in zip("ABCDEFGHIJ", [12, 14, 12, 20, 12, 10, 10, 8, 12, 20]):
+            ws.column_dimensions[col].width = w
+        ws.freeze_panes = "A2"
+        return wb
+    return _serve_tpl("出库批量导入模板.xlsx", factory)
 
 
 # ---------------- 商品导入（支持柠檬云模板） ----------------
@@ -253,6 +280,9 @@ def import_products(file: UploadFile, db: Session = Depends(get_db), user: User 
             conversions = parse_conversions(cell(row, mapping.get("conversions")), base_unit, unit)
             if base_unit not in conversions:
                 conversions[base_unit] = 1.0
+            default_unit = unit or base_unit  # 默认出库/展示单位，如 斤
+            if default_unit not in conversions:
+                conversions[default_unit] = 1.0
             pack_items = parse_pack_items(cell(row, mapping.get("pack_items")), db)
             p = Product(
                 code=code,
@@ -260,6 +290,7 @@ def import_products(file: UploadFile, db: Session = Depends(get_db), user: User 
                 category=cell(row, mapping.get("category")),
                 spec=cell(row, mapping.get("spec")),
                 base_unit=base_unit,
+                default_unit=default_unit,
                 sale_price=to_float(cell(row, mapping.get("sale_price"))),
                 conversions=conversions,
                 pack_items=pack_items,
@@ -281,6 +312,95 @@ def import_products(file: UploadFile, db: Session = Depends(get_db), user: User 
 
 
 # ---------------- 入库导入 ----------------
+class DraftInbound(BaseModel):
+    product_id: int
+    product_name: str = ""
+    unit: str
+    quantity: float
+    unit_price: float
+    supplier: str = ""
+    date: str
+    operator: str = ""
+    remark: str = ""
+
+
+class ConfirmInboundIn(BaseModel):
+    items: list[DraftInbound] = []
+
+
+def parse_inbound_draft(file: UploadFile, db: Session, user: User) -> tuple[list[DraftInbound], list[dict]]:
+    """解析入库模板 → 草稿入库行（不建单）。"""
+    rows = read_rows(file)
+    mapping, start = detect_header(rows, INBOUND_ALIASES)
+    if not mapping or "product" not in mapping:
+        raise HTTPException(400, "未识别到入库表头（需包含「商品」列），请使用下载的入库导入模板")
+    items, failed = [], []
+    for i in range(start, len(rows)):
+        row = rows[i]
+        product_key = cell(row, mapping.get("product"))
+        if not product_key:
+            continue
+        product = resolve_product(db, product_key)
+        if not product:
+            failed.append({"row": i + 1, "reason": f"商品「{product_key}」不存在"})
+            continue
+        if product.product_type == "order":
+            failed.append({"row": i + 1, "reason": f"「{product.name}」是订单商品（小类），请入库其关联的库存商品（大类）"})
+            continue
+        unit = cell(row, mapping.get("unit"))
+        if unit not in (product.conversions or {}):
+            failed.append({"row": i + 1, "reason": f"商品「{product.name}」未配置单位「{unit}」"})
+            continue
+        qty = to_float(cell(row, mapping.get("quantity")), -1)
+        price = to_float(cell(row, mapping.get("unit_price")), -1)
+        if qty <= 0 or price < 0:
+            failed.append({"row": i + 1, "reason": f"数量/单价无效（{product_key}）"})
+            continue
+        items.append(
+            DraftInbound(
+                product_id=product.id, product_name=product.name, unit=unit,
+                quantity=qty, unit_price=price,
+                supplier=cell(row, mapping.get("supplier")),
+                operator=cell(row, mapping.get("operator")) or user.name,
+                date=norm_date(cell(row, mapping.get("date"))) or datetime.now().strftime("%Y-%m-%d"),
+                remark=cell(row, mapping.get("remark")),
+            )
+        )
+    return items, failed
+
+
+@router.post("/import/inbounds/preview")
+def preview_import_inbounds(file: UploadFile, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    items, failed = parse_inbound_draft(file, db, user)
+    return {"items": [it.model_dump() for it in items], "failed": failed, "failed_count": len(failed)}
+
+
+@router.post("/import/inbounds/confirm")
+def confirm_import_inbounds(data: ConfirmInboundIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    created, failed = 0, []
+    for it in data.items:
+        if it.quantity <= 0:
+            failed.append({"row": it.product_name, "reason": "数量无效"})
+            continue
+        try:
+            create_inbound(
+                db,
+                {
+                    "product_id": it.product_id, "unit": it.unit, "quantity": it.quantity,
+                    "unit_price": it.unit_price, "supplier": it.supplier,
+                    "operator": it.operator or user.name,
+                    "date": it.date, "remark": it.remark,
+                },
+                operator=user.name,
+            )
+            db.flush()
+            created += 1
+        except Exception as e:
+            failed.append({"row": it.product_name, "reason": str(e)})
+    db.commit()
+    return {"ok": True, "created": created, "failed": failed, "failed_count": len(failed)}
+
+
 @router.post("/import/inbounds")
 def import_inbounds(file: UploadFile, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     rows = read_rows(file)
@@ -326,6 +446,201 @@ def import_inbounds(file: UploadFile, db: Session = Depends(get_db), user: User 
 
 
 # ---------------- 出库导入 ----------------
+class DraftLine(BaseModel):
+    product_id: int
+    product_name: str = ""
+    unit: str
+    quantity: float
+    price: float
+    amount: float = 0.0
+    deduct: str = ""  # 扣减说明（订单商品→库存商品）
+
+
+class DraftOrder(BaseModel):
+    doc_no: str = ""
+    date: str
+    customer: str = ""
+    operator: str = ""
+    remark: str = ""
+    pack_fee: float = 0.0
+    lines: list[DraftLine] = []
+
+
+class ConfirmOutIn(BaseModel):
+    orders: list[DraftOrder] = []
+
+
+def _confirm_orders(db: Session, user: User, orders: list[DraftOrder]) -> dict:
+    """按用户确认后的草稿创建出库单（自动结转成本与关联商品）。"""
+    created, warnings, failed = 0, [], []
+    for o in orders:
+        if not o.lines:
+            continue
+        try:
+            rec, warns = create_outbound(
+                db,
+                {
+                    "customer": o.customer, "operator": o.operator or user.name,
+                    "date": o.date, "remark": o.remark,
+                    "lines": [
+                        {"product_id": l.product_id, "unit": l.unit, "quantity": l.quantity, "price": l.price}
+                        for l in o.lines
+                    ],
+                    "pack_lines": [], "pack_fee_total": o.pack_fee or 0,
+                },
+                operator=user.name,
+            )
+            db.flush()
+            created += 1
+            for w in warns:
+                warnings.append(f"{rec.code}: {w}")
+        except Exception as e:
+            failed.append({"doc": o.doc_no, "reason": str(e)})
+    db.commit()
+    return {"ok": True, "created": created, "failed": failed, "warnings": warnings, "failed_count": len(failed)}
+
+
+def parse_outbound_draft(file: UploadFile, db: Session, user: User) -> tuple[list[DraftOrder], list[dict]]:
+    """解析标准出库模板 → 草稿单（不建单）。"""
+    rows = read_rows(file)
+    mapping, start = detect_header(rows, OUTBOUND_ALIASES)
+    if not mapping or "product" not in mapping:
+        raise HTTPException(400, "未识别到出库表头（需包含「商品」列），请使用下载的出库导入模板")
+    orders: dict[str, dict] = {}
+    failed = []
+    for i in range(start, len(rows)):
+        row = rows[i]
+        product_key = cell(row, mapping.get("product"))
+        if not product_key:
+            continue
+        product = resolve_product(db, product_key)
+        if not product:
+            failed.append({"row": i + 1, "reason": f"商品「{product_key}」不存在"})
+            continue
+        unit = cell(row, mapping.get("unit"))
+        if unit not in (product.conversions or {}):
+            failed.append({"row": i + 1, "reason": f"商品「{product.name}」未配置单位「{unit}」"})
+            continue
+        qty = to_float(cell(row, mapping.get("quantity")), -1)
+        price = to_float(cell(row, mapping.get("unit_price")), 0)
+        if qty <= 0:
+            failed.append({"row": i + 1, "reason": f"数量无效（{product_key}）"})
+            continue
+        doc_no = cell(row, mapping.get("doc_no")) or f"_r{i}"
+        order = orders.setdefault(
+            doc_no,
+            {
+                "doc_no": doc_no,
+                "date": norm_date(cell(row, mapping.get("date"))) or datetime.now().strftime("%Y-%m-%d"),
+                "customer": cell(row, mapping.get("customer")),
+                "operator": cell(row, mapping.get("operator")) or user.name,
+                "remark": cell(row, mapping.get("remark")),
+                "pack_fee": 0.0,
+                "lines": [],
+            },
+        )
+        order["lines"].append(
+            DraftLine(
+                product_id=product.id, product_name=product.name, unit=unit,
+                quantity=qty, price=price, amount=round(qty * price, 2),
+            )
+        )
+        order["pack_fee"] += to_float(cell(row, mapping.get("pack_fee")))
+    return [DraftOrder(**o) for o in orders.values()], failed
+
+
+def parse_jushuitan_draft(file: UploadFile, db: Session, user: User) -> tuple[list[DraftOrder], list[dict], dict, set]:
+    """解析聚水潭出库单 → 草稿单（不建单）。"""
+    rows = read_rows(file)
+    orders, skip = jushuitan_rows(rows)
+    mapping_rows = list(db.execute(select(CodeMapping)).scalars())
+    mapping_by_code = {m.external_code: m for m in mapping_rows}
+
+    drafts, failed, unmapped_codes = [], [], set()
+    for o in orders:
+        lines = []
+        for ext_name, qty in parse_jushuitan_name(o["name"]):
+            m = mapping_by_code.get(ext_name)
+            pid = m.product_id if m else None
+            p = db.get(Product, pid) if pid else None
+            if not p:
+                unmapped_codes.add(ext_name)
+                continue
+            unit, per_item = pick_jst_unit(p, ext_name)
+            if unit is None or per_item is None:
+                failed.append({"doc": o["doc_no"], "reason": f"「{ext_name}」未配置每件重量换算（如 1个=1000克 或 每件2斤），请在商品管理中补充换算后重试"})
+                continue
+            if unit not in (p.conversions or {}):
+                failed.append({"doc": o["doc_no"], "reason": f"「{ext_name}」换算单位「{unit}」未配置"})
+                continue
+            # 消耗量 = 件数 × 每件数量（如 1件×2斤=2斤）
+            lines.append({"p": p, "ext_name": ext_name, "unit": unit, "qty": round(qty * per_item, 4)})
+        if not lines:
+            failed.append({"doc": o["doc_no"], "reason": "无已关联商品（未关联编码）"})
+            continue
+
+        # 金额按商品默认售价比例分摊卖家实收
+        revenue = o["amount"]
+        qty_bases, raws = [], []
+        for ln in lines:
+            qb = unit_to_base(ln["p"], ln["unit"], ln["qty"])
+            ln["qty_base"] = qb
+            qty_bases.append(qb)
+            raws.append(ln["p"].sale_price * qb)
+        sum_raw = sum(raws)
+        sum_qb = sum(qty_bases)
+        draft_lines = []
+        for ln, raw, qb in zip(lines, raws, qty_bases):
+            if sum_raw > 0:
+                amt = revenue * raw / sum_raw
+            else:
+                amt = revenue * qb / sum_qb if sum_qb > 0 else 0
+            amt = round(amt, 2)
+            draft_lines.append(
+                DraftLine(
+                    product_id=ln["p"].id, product_name=ln["p"].name, unit=ln["unit"],
+                    quantity=ln["qty"], price=round(amt / ln["qty"], 4) if ln["qty"] else 0,
+                    amount=amt, deduct=f"{ln['ext_name']} 每件{fmt_qty(per_item)}{unit}" if per_item else "",
+                )
+            )
+        drafts.append(
+            DraftOrder(
+                doc_no=o["doc_no"], date=o["date"],
+                customer=o["customer"] or o["shop"],
+                operator=o["seller"] or user.name,
+                remark=f"聚水潭导入 单{o['doc_no']} {o['express']}{o['track']}",
+                pack_fee=0.0, lines=draft_lines,
+            )
+        )
+    return drafts, failed, skip, unmapped_codes
+
+
+@router.post("/import/outbounds/preview")
+def preview_import_outbounds(file: UploadFile, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    drafts, failed = parse_outbound_draft(file, db, user)
+    return {"orders": [o.model_dump() for o in drafts], "failed": failed, "failed_count": len(failed)}
+
+
+@router.post("/jushuitan/import/preview")
+def preview_import_jushuitan(file: UploadFile, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    drafts, failed, skip, unmapped = parse_jushuitan_draft(file, db, user)
+    return {
+        "orders": [o.model_dump() for o in drafts],
+        "skip": skip, "failed": failed, "failed_count": len(failed),
+        "unmapped_codes": sorted(unmapped),
+    }
+
+
+@router.post("/import/outbounds/confirm")
+def confirm_import_outbounds(data: ConfirmOutIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    return _confirm_orders(db, user, data.orders)
+
+
+@router.post("/jushuitan/import/confirm")
+def confirm_import_jushuitan(data: ConfirmOutIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    return _confirm_orders(db, user, data.orders)
+
+
 @router.post("/import/outbounds")
 def import_outbounds(file: UploadFile, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     rows = read_rows(file)
@@ -414,6 +729,44 @@ def parse_jushuitan_name(name: str) -> list[tuple[str, float]]:
     return out
 
 
+# 聚水潭商品名中的单件规格：如 "京鲜生七彩花生2斤" → 每件 2斤
+SPEC_RE = re.compile(r"([\d.]+)\s*(斤|公斤|千克|克|g|kg)")
+UNIT_ALIAS = {"g": "克", "kg": "千克"}
+COUNT_PREF = ["个", "袋", "包", "盒", "箱", "件", "份"]
+
+
+def parse_jst_spec(name: str) -> tuple[str | None, float | None]:
+    """从外部商品名解析每件规格，如 '京鲜生七彩花生2斤' → ('斤', 2.0)。"""
+    m = SPEC_RE.search(str(name or ""))
+    if m:
+        u = UNIT_ALIAS.get(m.group(2), m.group(2))
+        return u, float(m.group(1))
+    return None, None
+
+
+def pick_jst_unit(product: Product, ext_name: str) -> tuple[str | None, float | None]:
+    """决定聚水潭一行用哪个单位与每件数量（件数→实际数量的倍数关系）。
+
+    优先级：
+    1) 商品名内嵌规格（如 每件2斤 → 单位斤、每件数量2）；
+    2) 商品已配置的计数单位（个/袋/包…，1件=1个/袋）；
+    3) 基础单位本身是计数类；
+    否则返回 (None, None)，交由调用方明确报错，避免错误入账。
+    """
+    conv = product.conversions or {}
+    u, qty = parse_jst_spec(ext_name)
+    if u and u in conv:
+        return u, qty
+    if u and product.base_unit == u:
+        return u, qty
+    for cu in COUNT_PREF:
+        if cu in conv:
+            return cu, 1.0
+    if product.base_unit in COUNT_PREF:
+        return product.base_unit, 1.0
+    return None, None
+
+
 def jushuitan_rows(rows) -> list[dict]:
     mapping, start = detect_header(rows, JUSHUITAN_COLS)
     if not mapping or "name" not in mapping:
@@ -472,6 +825,8 @@ def parse_jushuitan(file: UploadFile, db: Session = Depends(get_db), user: User 
             c = codes.setdefault(ext_name, {"external_code": ext_name, "count": 0})
             c["count"] += 1
     for c in codes.values():
+        su, sq = parse_jst_spec(c["external_code"])
+        c["spec"] = f"{fmt_qty(sq)} {su}/件" if su and sq else ""
         m = mapping_by_code.get(c["external_code"])
         if m and m.product_id:
             p = db.get(Product, m.product_id)
@@ -594,16 +949,15 @@ def import_jushuitan(file: UploadFile, db: Session = Depends(get_db), user: User
             if not p:
                 unmapped_codes.add(ext_name)
                 continue
-            if p.base_unit not in (p.conversions or {}):
-                p.conversions = dict(p.conversions or {})
-                p.conversions[p.base_unit] = 1.0
-            unit = "个" if "个" in (p.conversions or {}) else p.base_unit
-            if unit not in (p.conversions or {}):
-                unit = p.base_unit
-            if unit not in (p.conversions or {}):
-                failed.append({"doc": o["doc_no"], "reason": f"「{ext_name}」单位配置异常"})
+            unit, per_item = pick_jst_unit(p, ext_name)
+            if unit is None or per_item is None:
+                failed.append({"doc": o["doc_no"], "reason": f"「{ext_name}」未配置每件重量换算（如 1个=1000克 或 每件2斤），请在商品管理中补充换算后重试"})
                 continue
-            lines.append({"product": p, "ext_name": ext_name, "unit": unit, "qty": qty})
+            if unit not in (p.conversions or {}):
+                failed.append({"doc": o["doc_no"], "reason": f"「{ext_name}」换算单位「{unit}」未配置"})
+                continue
+            # 消耗量 = 件数 × 每件数量（如 1件×2斤=2斤）
+            lines.append({"product": p, "ext_name": ext_name, "unit": unit, "qty": round(qty * per_item, 4)})
         if not lines:
             failed.append({"doc": o["doc_no"], "reason": "无已关联商品（未关联编码）"})
             continue

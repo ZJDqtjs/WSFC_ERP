@@ -1,8 +1,8 @@
 """认证：密码哈希、会话令牌、代码注册用户、登录依赖。
 
-用户不开放注册，由开发者在此文件的 SEED_USERS 中维护。
-默认账号 admin1 / admin1。新增业务员只需按格式加一行：
-    {"username": "xw", "password": "123456", "name": "小万", "role": "user"},
+用户不开放注册。账号在项目根目录 product_rules.json 的 accounts 中维护
+（用于数据库初始化，重启自动同步），默认 admin1 / admin1。新增业务员示例：
+    {"username": "xiaowan", "password": "123456", "name": "小万", "role": "user"},
 """
 import base64
 import hashlib
@@ -22,14 +22,35 @@ from .models import User
 COOKIE_NAME = "erp_token"
 TOKEN_MAX_AGE = 60 * 60 * 24 * 7  # 7 天
 
-# ---------- 在这里维护系统用户（开发者手动注册） ----------
-SEED_USERS = [
+ROOT = Path(__file__).resolve().parent.parent
+CONFIG_FILE = ROOT / "product_rules.json"
+
+# 兜底账号（配置文件缺失/无 accounts 时使用）
+_FALLBACK_USERS = [
     {"username": "admin1", "password": "admin1", "name": "管理员", "role": "admin"},
-    # 示例：新增业务员（重启后生效）
-    # {"username": "xiaowan", "password": "123456", "name": "小万", "role": "user"},
-    # {"username": "xiaoli", "password": "123456", "name": "小李", "role": "user"},
 ]
-# -------------------------------------------------------
+
+
+def _load_seed_users() -> list[dict]:
+    """从 product_rules.json 读取账号配置，用于数据库初始化。"""
+    try:
+        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        accs = cfg.get("accounts") or []
+        return [
+            {
+                "username": str(a.get("username", "")).strip(),
+                "password": str(a.get("password", "")),
+                "name": str(a.get("name", "")).strip(),
+                "role": str(a.get("role", "user")).strip() or "user",
+            }
+            for a in accs
+            if a.get("username")
+        ]
+    except Exception:
+        return _FALLBACK_USERS
+
+
+SEED_USERS = _load_seed_users()
 
 SECRET_FILE = DATA_DIR / ".secret"
 

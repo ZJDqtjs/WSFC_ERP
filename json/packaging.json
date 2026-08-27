@@ -1,0 +1,96 @@
+{
+  "category": "包材",
+  "unit": "个",
+  "products": [
+    {
+      "name": "纸箱10号",
+      "unit_cost": 0.33,
+      "spec": "纸箱 10号（参考 0.33 元/个）",
+      "product_type": "stock"
+    },
+    {
+      "name": "纸箱11号",
+      "unit_cost": 0.3,
+      "spec": "纸箱 11号（参考 0.30 元/个）",
+      "product_type": "stock"
+    },
+    {
+      "name": "纸箱3号",
+      "unit_cost": 1.85,
+      "spec": "纸箱 3号（参考 1.85 元/个）",
+      "product_type": "stock"
+    },
+    {
+      "name": "纸箱4号",
+      "unit_cost": 1.1,
+      "spec": "纸箱 4号（参考 1.10 元/个）",
+      "product_type": "stock"
+    },
+    {
+      "name": "纸箱5号",
+      "unit_cost": 0.9,
+      "spec": "纸箱 5号（参考 0.90 元/个）",
+      "product_type": "stock"
+    },
+    {
+      "name": "纸箱6号",
+      "unit_cost": 0.75,
+      "spec": "纸箱 6号（参考 0.75 元/个）",
+      "product_type": "stock"
+    },
+    {
+      "name": "纸箱7号",
+      "unit_cost": 0.6,
+      "spec": "纸箱 7号（参考 0.60 元/个）",
+      "product_type": "stock"
+    },
+    {
+      "name": "纸箱8号",
+      "unit_cost": 0.55,
+      "spec": "纸箱 8号（参考 0.55 元/个）",
+      "product_type": "stock"
+    },
+    {
+      "name": "8号拖箱",
+      "unit_cost": 1.0,
+      "spec": "纸箱 8号拖箱（参考 1.00 元/个）",
+      "product_type": "stock"
+    },
+    {
+      "name": "纸箱9号",
+      "unit_cost": 0.5,
+      "spec": "纸箱 9号（参考 0.50 元/个）",
+      "product_type": "stock"
+    },
+    {
+      "name": "松茸6号箱",
+      "unit_cost": 2.2,
+      "spec": "纸箱 松茸6号（参考 2.20 元/个）",
+      "product_type": "stock"
+    },
+    {
+      "name": "水果3号箱",
+      "unit_cost": 2.3,
+      "spec": "纸箱 水果3号（参考 2.30 元/个）",
+      "product_type": "stock"
+    },
+    {
+      "name": "水果5号箱",
+      "unit_cost": 3.0,
+      "spec": "纸箱 水果5号（参考 3.00 元/个）",
+      "product_type": "stock"
+    },
+    {
+      "name": "邮政6号箱",
+      "unit_cost": 1.8,
+      "spec": "纸箱 邮政6号（参考 1.80 元/个）",
+      "product_type": "stock"
+    },
+    {
+      "name": "高珍果箱",
+      "unit_cost": 2.3,
+      "spec": "纸箱 高珍果箱（参考 2.30 元/个）",
+      "product_type": "stock"
+    }
+  ]
+}

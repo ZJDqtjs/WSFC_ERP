@@ -1,0 +1,60 @@
+{
+  "source_files": {
+    "干货": "七月份干货统计表(1).xlsx",
+    "蔬菜": "七月份蔬菜统计表(2).xlsx"
+  },
+
+  "exclude_names": ["样品", "品类", "合计", "总计"],
+  "exclude_prefixes": ["备注", "不知道"],
+
+  "strip_suffix_pattern": "\\*\\d+(?:[盒个袋包件斤克g]*)?$",
+
+  "unit_rules": {
+    "weight_keywords": ["斤", "g", "克"],
+    "weight_base_unit": "克",
+    "weight_default_unit": "斤",
+    "weight_conversions": { "克": 1, "斤": 500, "公斤": 1000, "千克": 1000 },
+    "count_base_unit": "个",
+    "count_default_unit": "个",
+    "count_conversions": { "个": 1 }
+  },
+
+  "box_naming": {
+    "numbered_prefix": "纸箱",
+    "non_numbered_suffix": "箱"
+  },
+
+  "box_price": {
+    "mode": "mode",
+    "single_box_only": true,
+    "overrides": {}
+  },
+
+  "categories": {
+    "lemon": "商品",
+    "box": "包材",
+    "labor": "人工",
+    "shipping": "快递"
+  },
+
+  "labor": {
+    "product_name_template": "{name}打包",
+    "unit": "单",
+    "consume_per_order": 1,
+    "use_average": false
+  },
+
+  "shipping": {
+    "product_name": "快递费"
+  },
+
+  "accounts": [
+    { "username": "admin1", "password": "admin1", "name": "管理员", "role": "admin" }
+  ],
+
+  "code_mappings": [
+    { "source": "jushuitan", "external_code": "京鲜生七彩花生2斤", "product_name": "京鲜生七彩花生2斤", "score": 1.0 }
+  ],
+
+  "product_overrides": {}
+}

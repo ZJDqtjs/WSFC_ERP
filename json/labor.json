@@ -1,0 +1,648 @@
+{
+  "category": "人工",
+  "unit": "单",
+  "products": [
+    {
+      "name": "人工打包费",
+      "unit_cost": 0.0,
+      "spec": "人工打包服务（可调整成本）",
+      "product_type": "stock"
+    },
+    {
+      "name": "七彩土豆3斤打包",
+      "unit_cost": 0.7,
+      "spec": "七彩土豆3斤 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "七彩土豆5斤打包",
+      "unit_cost": 0.7,
+      "spec": "七彩土豆5斤 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "七彩花生1.5斤装打包",
+      "unit_cost": 0.5,
+      "spec": "七彩花生1.5斤装 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "七彩花生2.5斤装打包",
+      "unit_cost": 0.5,
+      "spec": "七彩花生2.5斤装 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "七彩花生米1斤（去壳）打包",
+      "unit_cost": 0.5,
+      "spec": "七彩花生米1斤（去壳） 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "京鲜生七彩花生1斤打包",
+      "unit_cost": 0.5,
+      "spec": "京鲜生七彩花生1斤 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "京鲜生七彩花生2斤打包",
+      "unit_cost": 0.5,
+      "spec": "京鲜生七彩花生2斤 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "京鲜生五指毛桃250g打包",
+      "unit_cost": 0.6,
+      "spec": "京鲜生五指毛桃250g 打包费（0.60 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "京鲜生松茸干片50g打包",
+      "unit_cost": 0.75,
+      "spec": "京鲜生松茸干片50g 打包费（0.75 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "京鲜生椴木小银耳500g打包",
+      "unit_cost": 0.75,
+      "spec": "京鲜生椴木小银耳500g 打包费（0.75 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（3-5）打包",
+      "unit_cost": 0.33,
+      "spec": "京鲜生羊肚菌干货30g（3-5） 打包费（0.33 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（5-7）打包",
+      "unit_cost": 0.5,
+      "spec": "京鲜生羊肚菌干货30g（5-7） 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "京鲜生茯苓250g打包",
+      "unit_cost": 0.5,
+      "spec": "京鲜生茯苓250g 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "京鲜生茯苓500g打包",
+      "unit_cost": 0.55,
+      "spec": "京鲜生茯苓500g 打包费（0.55 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "京鲜生鸡煲汤料包120g打包",
+      "unit_cost": 0.3,
+      "spec": "京鲜生鸡煲汤料包120g 打包费（0.30 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "京鲜生鸡骨草250g打包",
+      "unit_cost": 0.6,
+      "spec": "京鲜生鸡骨草250g 打包费（0.60 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "京鲜生鹿茸菇干货1000g打包",
+      "unit_cost": 1.1,
+      "spec": "京鲜生鹿茸菇干货1000g 打包费（1.10 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "京鲜生鹿茸菇干货200g打包",
+      "unit_cost": 0.6,
+      "spec": "京鲜生鹿茸菇干货200g 打包费（0.60 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "京鲜生黄芪250g打包",
+      "unit_cost": 0.5,
+      "spec": "京鲜生黄芪250g 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "京鲜生黄芪500g打包",
+      "unit_cost": 0.55,
+      "spec": "京鲜生黄芪500g 打包费（0.55 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "人参果中果3斤打包",
+      "unit_cost": 0.8,
+      "spec": "人参果中果3斤 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "人参果中果5斤打包",
+      "unit_cost": 0.8,
+      "spec": "人参果中果5斤 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "人参果大果3斤打包",
+      "unit_cost": 0.8,
+      "spec": "人参果大果3斤 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "人参果大果5斤打包",
+      "unit_cost": 0.8,
+      "spec": "人参果大果5斤 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "人参果特大果5斤打包",
+      "unit_cost": 0.8,
+      "spec": "人参果特大果5斤 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "佛手柑中果1个打包",
+      "unit_cost": 0.7,
+      "spec": "佛手柑中果1个 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "佛手柑中果2个打包",
+      "unit_cost": 0.8,
+      "spec": "佛手柑中果2个 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "佛手柑中果4个打包",
+      "unit_cost": 1.0,
+      "spec": "佛手柑中果4个 打包费（1.00 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "佛手柑大果3个打包",
+      "unit_cost": 1.0,
+      "spec": "佛手柑大果3个 打包费（1.00 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "佛手柑果王3个打包",
+      "unit_cost": 1.0,
+      "spec": "佛手柑果王3个 打包费（1.00 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "包浆豆腐300g*2盒打包",
+      "unit_cost": 0.7,
+      "spec": "包浆豆腐300g*2盒 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "小米辣1斤打包",
+      "unit_cost": 0.5,
+      "spec": "小米辣1斤 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "小米辣2斤打包",
+      "unit_cost": 0.5,
+      "spec": "小米辣2斤 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "小花糯玉米3斤打包",
+      "unit_cost": 0.7,
+      "spec": "小花糯玉米3斤 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "拇指小玉米1斤打包",
+      "unit_cost": 0.7,
+      "spec": "拇指小玉米1斤 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "拇指小玉米2斤打包",
+      "unit_cost": 0.7,
+      "spec": "拇指小玉米2斤 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "新鲜洋蓟1斤100g+打包",
+      "unit_cost": 0.7,
+      "spec": "新鲜洋蓟1斤100g+ 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "新鲜洋蓟3斤100g+打包",
+      "unit_cost": 0.7,
+      "spec": "新鲜洋蓟3斤100g+ 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "新鲜洋蓟5斤100g+打包",
+      "unit_cost": 0.7,
+      "spec": "新鲜洋蓟5斤100g+ 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "新鲜玉米笋3斤打包",
+      "unit_cost": 0.7,
+      "spec": "新鲜玉米笋3斤 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "新鲜玉米笋5斤打包",
+      "unit_cost": 0.7,
+      "spec": "新鲜玉米笋5斤 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "新鲜玉米笋9斤打包",
+      "unit_cost": 0.7,
+      "spec": "新鲜玉米笋9斤 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "新鲜芦笋1.5斤打包",
+      "unit_cost": 0.8,
+      "spec": "新鲜芦笋1.5斤 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "新鲜芦笋1斤打包",
+      "unit_cost": 0.8,
+      "spec": "新鲜芦笋1斤 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "新鲜芦笋250g打包",
+      "unit_cost": 0.8,
+      "spec": "新鲜芦笋250g 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "新鲜芦笋2斤打包",
+      "unit_cost": 0.8,
+      "spec": "新鲜芦笋2斤 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "新鲜芦笋3斤打包",
+      "unit_cost": 0.8,
+      "spec": "新鲜芦笋3斤 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "新鲜黑牛肝菌500g打包",
+      "unit_cost": 0.7,
+      "spec": "新鲜黑牛肝菌500g 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "松茸干片100g打包",
+      "unit_cost": 0.75,
+      "spec": "松茸干片100g 打包费（0.75 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "松茸干片50g打包",
+      "unit_cost": 0.75,
+      "spec": "松茸干片50g 打包费（0.75 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "椴木小银耳250g打包",
+      "unit_cost": 0.6,
+      "spec": "椴木小银耳250g 打包费（0.60 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "水果玉米1200g打包",
+      "unit_cost": 0.7,
+      "spec": "水果玉米1200g 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "水果西芹4斤打包",
+      "unit_cost": 0.7,
+      "spec": "水果西芹4斤 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "牛奶玉米笋2斤打包",
+      "unit_cost": 0.7,
+      "spec": "牛奶玉米笋2斤 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "牛奶玉米笋3斤打包",
+      "unit_cost": 0.7,
+      "spec": "牛奶玉米笋3斤 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "牛奶玉米笋5斤打包",
+      "unit_cost": 0.7,
+      "spec": "牛奶玉米笋5斤 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "牛奶芋头3斤打包",
+      "unit_cost": 0.4,
+      "spec": "牛奶芋头3斤 打包费（0.40 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "牛奶芋头3斤单果100g+打包",
+      "unit_cost": 0.4,
+      "spec": "牛奶芋头3斤单果100g+ 打包费（0.40 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "牛奶芋头5斤单果100g+打包",
+      "unit_cost": 0.6,
+      "spec": "牛奶芋头5斤单果100g+ 打包费（0.60 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "牛奶芋头9斤打包",
+      "unit_cost": 1.0,
+      "spec": "牛奶芋头9斤 打包费（1.00 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "玉米段2斤装打包",
+      "unit_cost": 0.7,
+      "spec": "玉米段2斤装 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "玉米段3斤装打包",
+      "unit_cost": 0.7,
+      "spec": "玉米段3斤装 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "玉米段5斤装打包",
+      "unit_cost": 0.7,
+      "spec": "玉米段5斤装 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "玉米粒2斤打包",
+      "unit_cost": 0.2,
+      "spec": "玉米粒2斤 打包费（0.20 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "甜龙笋20斤500g+打包",
+      "unit_cost": 0.8,
+      "spec": "甜龙笋20斤500g+ 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "甜龙笋2斤250g+打包",
+      "unit_cost": 0.8,
+      "spec": "甜龙笋2斤250g+ 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "甜龙笋2斤300g+打包",
+      "unit_cost": 0.8,
+      "spec": "甜龙笋2斤300g+ 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "甜龙笋3斤250g+打包",
+      "unit_cost": 0.8,
+      "spec": "甜龙笋3斤250g+ 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "甜龙笋3斤300g+打包",
+      "unit_cost": 0.8,
+      "spec": "甜龙笋3斤300g+ 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "甜龙笋3斤500g+打包",
+      "unit_cost": 0.8,
+      "spec": "甜龙笋3斤500g+ 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "甜龙笋5斤250g+打包",
+      "unit_cost": 0.8,
+      "spec": "甜龙笋5斤250g+ 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "甜龙笋5斤300g+打包",
+      "unit_cost": 0.8,
+      "spec": "甜龙笋5斤300g+ 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "甜龙笋5斤500g+打包",
+      "unit_cost": 0.8,
+      "spec": "甜龙笋5斤500g+ 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "甜龙笋8斤500g+打包",
+      "unit_cost": 0.8,
+      "spec": "甜龙笋8斤500g+ 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "甜龙笋9斤500g+打包",
+      "unit_cost": 0.8,
+      "spec": "甜龙笋9斤500g+ 打包费（0.80 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "石斛鲜条250g打包",
+      "unit_cost": 0.7,
+      "spec": "石斛鲜条250g 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "石斛鲜条500g打包",
+      "unit_cost": 0.7,
+      "spec": "石斛鲜条500g 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "紫拇指玉米1斤打包",
+      "unit_cost": 0.7,
+      "spec": "紫拇指玉米1斤 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "紫皮独头蒜中果1斤打包",
+      "unit_cost": 0.5,
+      "spec": "紫皮独头蒜中果1斤 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "紫皮独头蒜中果2斤打包",
+      "unit_cost": 0.5,
+      "spec": "紫皮独头蒜中果2斤 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "紫皮独头蒜中果3斤打包",
+      "unit_cost": 0.5,
+      "spec": "紫皮独头蒜中果3斤 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "紫皮独头蒜大果1斤打包",
+      "unit_cost": 0.5,
+      "spec": "紫皮独头蒜大果1斤 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "紫皮独头蒜大果2斤打包",
+      "unit_cost": 0.5,
+      "spec": "紫皮独头蒜大果2斤 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "紫皮独头蒜大果3斤打包",
+      "unit_cost": 0.5,
+      "spec": "紫皮独头蒜大果3斤 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "羊肚菌干货100g打包",
+      "unit_cost": 0.75,
+      "spec": "羊肚菌干货100g 打包费（0.75 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "羊肚菌干货50g打包",
+      "unit_cost": 0.75,
+      "spec": "羊肚菌干货50g 打包费（0.75 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "羊肚菌礼盒250g打包",
+      "unit_cost": 1.1,
+      "spec": "羊肚菌礼盒250g 打包费（1.10 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "羊肚菌礼盒500g打包",
+      "unit_cost": 1.1,
+      "spec": "羊肚菌礼盒500g 打包费（1.10 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "虫草花干货500g打包",
+      "unit_cost": 0.75,
+      "spec": "虫草花干货500g 打包费（0.75 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "西兰花2.5斤打包",
+      "unit_cost": 0.7,
+      "spec": "西兰花2.5斤 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "西红柿净重5斤120g+打包",
+      "unit_cost": 0.7,
+      "spec": "西红柿净重5斤120g+ 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "香菇干货500g打包",
+      "unit_cost": 0.75,
+      "spec": "香菇干货500g 打包费（0.75 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "马蹄番茄净重3斤180g+打包",
+      "unit_cost": 0.7,
+      "spec": "马蹄番茄净重3斤180g+ 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "马蹄番茄净重4.5斤180g+打包",
+      "unit_cost": 0.7,
+      "spec": "马蹄番茄净重4.5斤180g+ 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "马蹄番茄净重5斤120g+打包",
+      "unit_cost": 0.7,
+      "spec": "马蹄番茄净重5斤120g+ 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "马蹄番茄净重5斤150g+打包",
+      "unit_cost": 0.7,
+      "spec": "马蹄番茄净重5斤150g+ 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "马蹄番茄净重5斤180g+打包",
+      "unit_cost": 0.7,
+      "spec": "马蹄番茄净重5斤180g+ 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "鹿茸菇干货200g打包",
+      "unit_cost": 0.6,
+      "spec": "鹿茸菇干货200g 打包费（0.60 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "鹿茸菇干货500g打包",
+      "unit_cost": 0.75,
+      "spec": "鹿茸菇干货500g 打包费（0.75 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "黑木耳干货500g打包",
+      "unit_cost": 0.75,
+      "spec": "黑木耳干货500g 打包费（0.75 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "黑紫土豆3斤打包",
+      "unit_cost": 0.7,
+      "spec": "黑紫土豆3斤 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "黑紫土豆5斤打包",
+      "unit_cost": 0.7,
+      "spec": "黑紫土豆5斤 打包费（0.70 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "黑花生1.5斤打包",
+      "unit_cost": 0.5,
+      "spec": "黑花生1.5斤 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "黑花生1斤打包",
+      "unit_cost": 0.5,
+      "spec": "黑花生1斤 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "黑花生2.5斤打包",
+      "unit_cost": 0.5,
+      "spec": "黑花生2.5斤 打包费（0.50 元/单）",
+      "product_type": "stock"
+    },
+    {
+      "name": "黑花生米1斤（去壳）打包",
+      "unit_cost": 0.5,
+      "spec": "黑花生米1斤（去壳） 打包费（0.50 元/单）",
+      "product_type": "stock"
+    }
+  ]
+}

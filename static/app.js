@@ -4,6 +4,141 @@ let UNITS = [];
 let CURRENT_USER = null;
 let MP_CODES = [];  // 聚水潭解析出的编码列表
 
+/* 批量选择状态 */
+const prodSel = new Set();
+const inSel = new Set();
+const outSel = new Set();
+
+/* ---------- 批量选择工具 ---------- */
+function selSet(kind) {
+  return kind === "prod" ? prodSel : kind === "in" ? inSel : outSel;
+}
+function selBarId(kind) {
+  return kind === "prod" ? "prodBatch" : kind === "in" ? "inBatch" : "outBatch";
+}
+function selCountId(kind) {
+  return kind === "prod" ? "prodSelCount" : kind === "in" ? "inSelCount" : "outSelCount";
+}
+function updateBatchBar(kind) {
+  const bar = $(selBarId(kind));
+  if (!bar) return;
+  const set = selSet(kind);
+  bar.style.display = set.size ? "flex" : "none";
+  $(selCountId(kind)).textContent = set.size;
+}
+function toggleSel(kind, id, checked) {
+  const set = selSet(kind);
+  if (checked) set.add(id);
+  else set.delete(id);
+  updateBatchBar(kind);
+}
+function toggleAll(cb, kind) {
+  const set = selSet(kind);
+  set.clear();
+  const tableId = kind === "prod" ? "prodTable" : kind === "in" ? "inTable" : "outTable";
+  document.querySelectorAll(`#${tableId} input[type="checkbox"][value]`).forEach((c) => {
+    c.checked = cb.checked;
+    if (cb.checked) set.add(+c.value);
+  });
+  updateBatchBar(kind);
+}
+function clearBatch(kind) {
+  selSet(kind).clear();
+  if (kind === "prod") renderProducts();
+  else if (kind === "in") loadInbounds();
+  else loadOutbounds();
+}
+
+/* ---------- 可搜索下拉（点击选择，输入可快速筛选） ---------- */
+function bindSearchable(root = document) {
+  root.querySelectorAll("select.searchable").forEach((sel) => {
+    if (sel.dataset.scombo) return;
+    sel.dataset.scombo = "1";
+    const wrap = document.createElement("div");
+    wrap.className = "scombo";
+    const input = document.createElement("input");
+    input.className = "scombo-input";
+    input.placeholder = "点击选择 / 输入筛选…";
+    input.autocomplete = "off";
+    const list = document.createElement("div");
+    list.className = "scombo-list";
+    wrap.append(input, list);
+    sel.style.display = "none";
+    sel.parentNode.insertBefore(wrap, sel.nextSibling);
+
+    function syncInput() {
+      const o = sel.options[sel.selectedIndex];
+      input.value = o ? o.text : "";
+    }
+    sel.addEventListener("change", syncInput);
+
+    function renderList(filter) {
+      const f = (filter || "").toLowerCase().trim();
+      const items = [];
+      for (const o of sel.options) {
+        const text = o.text;
+        if (f && !text.toLowerCase().includes(f)) continue;
+        items.push(`<div class="scombo-item" data-v="${o.value}">${esc(text)}</div>`);
+      }
+      list.innerHTML = items.join("") || '<div class="scombo-empty">无匹配选项</div>';
+      list.querySelectorAll(".scombo-item").forEach((it) => {
+        it.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          sel.value = it.dataset.v;
+          sel.dispatchEvent(new Event("change", { bubbles: true }));
+          syncInput();
+          list.style.display = "none";
+          input.blur();
+        });
+      });
+    }
+    input.addEventListener("focus", () => {
+      // 聚焦即清空旧文本，展示全部选项供选择或输入筛选（否则只剩当前选中项）
+      input.value = "";
+      list.style.display = "block";
+      renderList("");
+    });
+    input.addEventListener("blur", () => { syncInput(); });
+    input.addEventListener("input", () => { renderList(input.value); list.style.display = "block"; });
+    document.addEventListener("click", (e) => {
+      if (!wrap.contains(e.target)) { list.style.display = "none"; syncInput(); }
+    });
+  });
+}
+
+/* ---------- 表格列排序（点击表头升/降序） ---------- */
+function sortArrow(tblId, key) {
+  const tbl = $(tblId);
+  const s = tbl && tbl._sort;
+  if (!s || s.key !== key) return "";
+  return s.dir === 1 ? " ▲" : " ▼";
+}
+function compareVal(a, b) {
+  if (a == null || a === "") a = -Infinity;
+  if (b == null || b === "") b = -Infinity;
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  const na = parseFloat(a), nb = parseFloat(b);
+  if (!isNaN(na) && !isNaN(nb)) return na - nb;
+  return String(a).localeCompare(String(b), "zh");
+}
+function applyTableSort(tbl, rows) {
+  if (tbl && tbl._sort && Array.isArray(rows)) {
+    const k = tbl._sort.key, d = tbl._sort.dir;
+    return rows.slice().sort((a, b) => compareVal(a[k], b[k]) * d);
+  }
+  return rows;
+}
+document.addEventListener("click", (e) => {
+  const th = e.target.closest("th[data-key]");
+  if (!th) return;
+  const tbl = th.closest("table");
+  if (!tbl || typeof tbl._render !== "function") return;
+  const key = th.dataset.key;
+  if (tbl._sort && tbl._sort.key === key) tbl._sort.dir *= -1;
+  else tbl._sort = { key, dir: 1 };
+  tbl._render();
+});
+
 /* ---------- 工具 ---------- */
 const $ = (id) => document.getElementById(id);
 
@@ -50,6 +185,20 @@ function fmtNum(v) {
   v = Number(v) || 0;
   return Math.abs(v - Math.round(v)) < 1e-6 ? String(Math.round(v)) : String(+v.toFixed(4));
 }
+/* 商品默认展示/出库单位，以及用默认单位展示库存与成本 */
+function defaultUnit(p) { return (p && p.default_unit) || (p && p.base_unit) || ""; }
+function unitFactor(p, unit) { return (p.conversions || {})[unit] || 1; }
+function fmtStock(p) {
+  const du = defaultUnit(p);
+  const f = unitFactor(p, du);
+  if (du && f && f !== 1) return `${fmtNum(p.stock / f)} ${du}`;
+  return `${fmtNum(p.stock)} ${p.base_unit}`;
+}
+function fmtCost(p) {
+  const du = defaultUnit(p);
+  const f = unitFactor(p, du);
+  return `${fmtMoney(p.avg_cost * f)}/${du}`;
+}
 function today() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -61,20 +210,38 @@ function monthStart() {
 /* ---------- 导航 ---------- */
 const PAGE_TITLES = {
   home: "工作台", stock: "库存管理", inbound: "入库", outbound: "出库 / 销售",
-  products: "商品", report: "财务报表", import: "导入与关联",
+  products: "商品", report: "财务报表", import: "批量导入", jushuitan: "聚水潭关联",
+  backup: "备份与恢复",
 };
+let prodForceCat = "";  // 包材 / 人工 / 快递 等独立入口强制筛选的商品分类
+let prodForceType = ""; // 关联结算 等独立入口强制筛选的商品类型（order）
+function goProducts() { prodForceCat = ""; prodForceType = ""; goPage("products"); }
 function goPage(name) {
-  document.querySelectorAll(".nav-item").forEach((x) => x.classList.toggle("active", x.dataset.page === name));
+  // 高亮当前导航项（商品页按 data-cat / data-type 精确匹配）
+  document.querySelectorAll(".nav-item").forEach((x) => {
+    const hit = x.dataset.page === name &&
+      (name !== "products" ||
+        ((x.dataset.cat || "") === (prodForceCat || "") &&
+         (x.dataset.type || "") === (prodForceType || "")));
+    x.classList.toggle("active", hit);
+  });
   document.querySelectorAll(".page").forEach((x) => x.classList.remove("active"));
   const page = $("page-" + name);
   page.classList.add("active");
   const loaders = {
     home: loadDashboard, stock: loadStock, inbound: initInbound, outbound: initOutbound,
-    products: renderProducts, report: loadReport, import: loadImportPage,
+    products: renderProducts, report: loadReport, import: loadImportPage, jushuitan: loadMappingPage,
+    backup: loadBackupPage,
   };
   (loaders[name] || (() => {}))();
 }
-document.querySelectorAll(".nav-item").forEach((b) => b.addEventListener("click", () => goPage(b.dataset.page)));
+document.querySelectorAll(".nav-item").forEach((b) => b.addEventListener("click", () => {
+  if (b.dataset.page === "products") {
+    prodForceCat = b.dataset.cat || "";
+    prodForceType = b.dataset.type || "";
+  }
+  goPage(b.dataset.page);
+}));
 
 /* 页面内分段切换 */
 function switchSeg(segId, btn) {
@@ -88,7 +255,6 @@ function switchSeg(segId, btn) {
     el.style.display = el.id === panel ? "" : "none";
   });
   if (panel === "stock-movements") loadMovements();
-  if (panel === "import-jst") loadMappingPage();
 }
 
 /* ---------- 认证 ---------- */
@@ -140,41 +306,65 @@ $("logoutBtn").addEventListener("click", async () => {
 function openModal(html) {
   $("modalBox").innerHTML = html;
   $("modalMask").classList.add("show");
+  bindSearchable($("modalBox"));
 }
 function closeModal() { $("modalMask").classList.remove("show"); }
 $("modalMask").addEventListener("click", (e) => { if (e.target.id === "modalMask") closeModal(); });
 
 /* =============== 库存 =============== */
+let STOCK_OVERVIEW = [];
 async function loadStock() {
   const [products, overview] = await Promise.all([api("/api/products"), api("/api/stock-overview")]);
   PRODUCTS = products;
+  STOCK_OVERVIEW = overview;
   renderStock(overview);
 }
 function renderStock(overview) {
+  if (!overview) overview = STOCK_OVERVIEW;
   if (!overview) return;
+  // 分类筛选下拉
+  const catSel = $("stockCategory");
+  if (catSel && catSel.options.length <= 1) {
+    const cats = [...new Set(overview.map((p) => p.category).filter(Boolean))];
+    cats.sort();
+    catSel.insertAdjacentHTML("beforeend", cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join(""));
+  }
   const kw = ($("stockSearch").value || "").trim().toLowerCase();
-  const rows = overview.filter((p) =>
-    !kw || p.name.toLowerCase().includes(kw) || p.category.toLowerCase().includes(kw)
+  const cat = catSel ? catSel.value : "";
+  let rows = overview.filter((p) =>
+    (!kw || p.name.toLowerCase().includes(kw) || p.category.toLowerCase().includes(kw)) &&
+    (!cat || p.category === cat)
   );
   const t = $("stockTable");
+  rows = applyTableSort(t, rows);
   if (!rows.length) {
-    t.innerHTML = `<tr><td colspan="5" class="empty">暂无数据，请先到「商品管理」添加商品</td></tr>`;
+    t.innerHTML = `<tr><td colspan="6" class="empty">暂无数据，请先到「商品管理」添加商品</td></tr>`;
+    t._rows = rows;
+    t._render = () => renderStock(overview);
     return;
   }
-  t.innerHTML = `<thead><tr><th>商品</th><th>分类</th><th class="num">当前库存</th><th class="num">平均成本</th><th class="num">库存价值</th><th>操作</th></tr></thead><tbody>` +
+  t.innerHTML = `<thead><tr>
+    <th data-key="name">商品${sortArrow("stockTable", "name")}</th>
+    <th data-key="category">分类${sortArrow("stockTable", "category")}</th>
+    <th data-key="stock" class="num">当前库存${sortArrow("stockTable", "stock")}</th>
+    <th data-key="avg_cost" class="num">平均成本${sortArrow("stockTable", "avg_cost")}</th>
+    <th data-key="stock_value" class="num">库存价值${sortArrow("stockTable", "stock_value")}</th>
+    <th>操作</th></tr></thead><tbody>` +
     rows.map((p) => {
       const low = p.stock <= 0 ? '<span class="badge out">缺货</span>' : "";
       return `<tr>
         <td><b>${esc(p.name)}</b> ${low}</td>
-        <td>${esc(p.category) || "—"}</td>
-        <td class="num mono">${fmtNum(p.stock)} ${p.base_unit}</td>
-        <td class="num mono">${fmtMoney(p.avg_cost)}/${p.base_unit}</td>
+        <td>${esc(p.category) ? `<span class="badge adjust">${esc(p.category)}</span>` : "—"}</td>
+        <td class="num mono">${fmtStock(p)}</td>
+        <td class="num mono">${fmtCost(p)}</td>
         <td class="num mono">${fmtMoney(p.stock_value)}</td>
         <td class="line-actions">
           <button class="btn sm secondary" onclick="viewProductMv(${p.id})">流水</button>
           <button class="btn sm" onclick="openAdjust(${p.id})">调整</button>
         </td></tr>`;
     }).join("") + `</tbody>`;
+  t._rows = rows;
+  t._render = () => renderStock(overview);
   $("statTypes").textContent = overview.length;
   const totalValue = overview.reduce((s, p) => s + p.stock_value, 0);
   $("statStockValue").textContent = fmtMoney(totalValue);
@@ -243,7 +433,7 @@ async function loadDashboard() {
           <div class="activity-ico" style="background:var(--red-light);">缺</div>
           <div class="activity-body">
             <div class="activity-title">${esc(p.name)}</div>
-            <div class="activity-sub">当前库存 ${fmtNum(p.stock)} ${p.base_unit}</div>
+            <div class="activity-sub">当前库存 ${fmtStock(p)}</div>
           </div>
           <button class="btn sm danger" onclick="goPage('inbound')">补货</button>
         </div>`).join("") +
@@ -274,13 +464,86 @@ async function loadDashboard() {
 
 function loadImportPage() {}
 
+/* =============== 备份与恢复 =============== */
+async function loadBackupPage() {
+  try {
+    const d = await api("/api/backups");
+    $("bkEnabled").checked = !!d.config.enabled;
+    $("bkInterval").value = d.config.interval_hours;
+    $("bkKeep").value = d.config.keep;
+    $("bkStatus").textContent = d.config.enabled
+      ? `自动备份已开启：每 ${d.config.interval_hours} 小时一次，保留最近 ${d.config.keep} 份`
+      : "自动备份已关闭";
+    renderBkTable(d.backups || []);
+  } catch (e) { toast("加载备份失败：" + e.message); }
+}
+function renderBkTable(list) {
+  const t = $("bkTable");
+  t.innerHTML = `<thead><tr>
+    <th>备份文件</th><th class="num">大小</th><th>创建时间</th><th>操作</th>
+  </tr></thead><tbody>` +
+    (list.length ? list.map((b) => `<tr>
+      <td class="mono">${esc(b.name)}</td>
+      <td class="num mono">${esc(b.size_human)}</td>
+      <td class="muted mono">${esc(b.mtime)}</td>
+      <td class="line-actions">
+        <button class="btn sm secondary" onclick="restoreBackup('${esc(b.name)}')">恢复</button>
+        <button class="btn sm danger" onclick="deleteBackup('${esc(b.name)}')">删除</button>
+      </td></tr>`).join("")
+      : `<tr><td colspan="4" class="empty">暂无备份，点击右上角「立即备份」</td></tr>`) +
+    `</tbody>`;
+}
+async function createBackup() {
+  try {
+    const r = await api("/api/backup", "POST");
+    toast("备份成功：" + r.name);
+    renderBkTable(r.backups || []);
+  } catch (e) { toast("备份失败：" + e.message); }
+}
+async function saveBkConfig() {
+  try {
+    await api("/api/backup/config", "POST", {
+      enabled: $("bkEnabled").checked,
+      interval_hours: +$("bkInterval").value || 2,
+      keep: +$("bkKeep").value || 30,
+    });
+    toast("自动备份设置已保存");
+    loadBackupPage();
+  } catch (e) { toast("保存失败：" + e.message); }
+}
+async function restoreBackup(name) {
+  if (!confirm(`确认用「${name}」恢复？\n当前数据库将被该备份覆盖，且不可撤销。`)) return;
+  if (!confirm("再次确认：恢复会覆盖现有全部数据，建议先「立即备份」一份。确定继续？")) return;
+  try {
+    const r = await api("/api/backup/restore", "POST", { name });
+    toast("恢复成功，正在刷新数据…");
+    setTimeout(() => location.reload(), 800);
+  } catch (e) { toast("恢复失败：" + e.message); }
+}
+async function deleteBackup(name) {
+  if (!confirm(`确认删除备份「${name}」？`)) return;
+  try {
+    const r = await api("/api/backup/" + encodeURIComponent(name), "DELETE");
+    toast("已删除备份");
+    renderBkTable(r.backups || []);
+  } catch (e) { toast("删除失败：" + e.message); }
+}
+
 /* =============== 商品 =============== */
 function productOptions(selected = 0, includeAll = false) {
+  const NO_STOCK_CATS = ["人工", "快递"]; // 无真实库存，不可盘点调整
   let html = includeAll ? '<option value="0">全部商品</option>' : "";
-  html += PRODUCTS.filter((p) => p.is_active).map((p) =>
+  html += PRODUCTS.filter((p) => p.is_active && !NO_STOCK_CATS.includes(p.category)).map((p) =>
     `<option value="${p.id}" ${p.id === selected ? "selected" : ""}>${esc(p.name)}</option>`
   ).join("");
   return html;
+}
+/* 销售行商品下拉：订单商品优先，库存商品其后 */
+function saleProductOptions(selected = 0) {
+  const order = PRODUCTS.filter((p) => p.is_active && p.product_type === "order");
+  const stock = PRODUCTS.filter((p) => p.is_active && p.product_type === "stock");
+  const opt = (p) => `<option value="${p.id}" ${p.id === selected ? "selected" : ""}>${p.product_type === "order" ? "〔订单〕" : "〔库存〕"}${esc(p.name)}</option>`;
+  return order.map(opt).join("") + stock.map(opt).join("");
 }
 function unitOptions(product, selected) {
   const convs = product?.conversions || {};
@@ -291,75 +554,139 @@ function unitOptions(product, selected) {
 
 async function renderProducts() {
   if (!PRODUCTS.length) PRODUCTS = await api("/api/products");
+  const EXCLUDED = ["包材", "人工", "快递"]; // 已独立成侧边栏入口的分类，商品页默认不显示
+  const forced = prodForceCat || "";
+  const isOrderPage = prodForceType === "order"; // 关联结算页：仅订单商品
+  // 独立页：改标题、提示
+  const ttl = $("prodPageTitle");
+  if (ttl) ttl.textContent = isOrderPage ? "关联结算管理" : (forced ? forced + "管理" : "商品管理");
+  const ph = $("prodPageHint");
+  if (ph) ph.textContent = isOrderPage
+    ? "仅显示订单商品，可在此维护库存扣减与关联结算清单"
+    : (forced ? `仅显示「${forced}」分类，可在此新增 / 编辑 / 批量操作` : "已按分类独立管理 包材 / 人工 / 快递 / 关联结算");
+  const catSel = $("prodCategory");
+  if (catSel) {
+    catSel.style.display = forced ? "none" : "";
+    const scombo = catSel.nextElementSibling;
+    if (scombo && scombo.classList.contains("scombo")) scombo.style.display = forced ? "none" : "";
+    // 进入独立页时重置分类筛选，避免沿用主页面残留的分类（联动可搜索下拉文本）
+    if ((forced || isOrderPage) && catSel.value) {
+      catSel.value = "";
+      const inp = scombo && scombo.querySelector && scombo.querySelector(".scombo-input");
+      if (inp) inp.value = "";
+    }
+  }
+  // 类型筛选下拉：独立入口（包材/人工/快递/关联结算）隐藏
+  const typeSel = $("prodType");
+  if (typeSel) {
+    typeSel.style.display = (forced || isOrderPage) ? "none" : "";
+    const tcombo = typeSel.nextElementSibling;
+    if (tcombo && tcombo.classList.contains("scombo")) tcombo.style.display = (forced || isOrderPage) ? "none" : "";
+  }
+  // 分类筛选下拉（仅商品页展示，排除独立分类）
+  if (catSel && catSel.options.length <= 1) {
+    const cats = [...new Set(PRODUCTS.map((p) => p.category).filter((c) => c && !EXCLUDED.includes(c)))];
+    cats.sort();
+    catSel.insertAdjacentHTML("beforeend", cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join(""));
+  }
   const kw = ($("prodSearch")?.value || "").trim().toLowerCase();
-  const rows = PRODUCTS.filter((p) => !kw || p.name.toLowerCase().includes(kw));
+  const cat = forced ? "" : (catSel ? catSel.value : "");
+  const ptype = $("prodType")?.value || "";
+  let rows = PRODUCTS.filter((p) =>
+    (!kw || p.name.toLowerCase().includes(kw) || p.category.toLowerCase().includes(kw)) &&
+    (!cat || p.category === cat) &&
+    (isOrderPage ? p.product_type === "order"
+      : (forced ? p.category === forced : !EXCLUDED.includes(p.category))) &&
+    (isOrderPage || !ptype || p.product_type === ptype)
+  );
   const t = $("prodTable");
+  // 独立页默认按名称、商品页默认按库存升序排序（用户手动点击表头后保持其排序）
+  if (!t._sort) t._sort = isOrderPage ? { key: "name", dir: 1 } : { key: "stock", dir: 1 };
+  rows = applyTableSort(t, rows);
   t.innerHTML = `<thead><tr>
-    <th>编码</th><th>商品</th><th>分类</th><th>基础单位</th><th>单位换算</th><th>关联结算清单</th>
-    <th class="num">打包费/单</th><th class="num">库存</th><th>状态</th><th>操作</th></tr></thead><tbody>` +
+    <th class="cb-col"><input type="checkbox" onclick="toggleAll(this,'prod')" /></th>
+    <th data-key="code">编码${sortArrow("prodTable", "code")}</th>
+    <th data-key="name">商品${sortArrow("prodTable", "name")}</th>
+    <th data-key="category">类型${sortArrow("prodTable", "category")}</th>
+    <th>关联结算清单</th>
+    <th data-key="unit_cost" class="num">参考成本${sortArrow("prodTable", "unit_cost")}</th>
+    <th data-key="pack_fee" class="num">打包费/单${sortArrow("prodTable", "pack_fee")}</th>
+    <th data-key="stock" class="num">库存(默认单位)${sortArrow("prodTable", "stock")}</th>
+    <th>状态</th><th>操作</th></tr></thead><tbody>` +
     rows.map((p) => {
-      const convs = Object.entries(p.conversions || {})
-        .map(([u, f]) => `1${u}=${fmtNum(f)}${p.base_unit}`).join("，");
       const packs = (p.pack_items || []).map((it) => {
         const m = PRODUCTS.find((x) => x.id === it.product_id);
         return `${esc(m ? m.name : "?")}×${fmtNum(it.quantity)}${it.unit}`;
       }).join("，");
+      const typeBadge = p.product_type === "order"
+        ? '<span class="badge income">订单</span>'
+        : '<span class="badge adjust">库存</span>';
+      const linkInfo = p.product_type === "order"
+        ? (p.stock_product_id ? `扣减：${esc(p.stock_product_name || "?")} ×${fmtNum(p.multiplier)}` : '<span style="color:var(--red)">未关联库存商品</span>')
+        : (p.spec || "");
+      const stockShown = p.product_type === "order" && p.stock_product_name
+        ? `<span class="muted">经库存商品</span>`
+        : fmtStock(p);
       return `<tr>
+        <td class="cb-col"><input type="checkbox" value="${p.id}" ${prodSel.has(p.id) ? "checked" : ""} onchange="toggleSel('prod',${p.id},this.checked)" /></td>
         <td class="muted mono">${esc(p.code) || "—"}</td>
-        <td><b>${esc(p.name)}</b>${p.spec ? `<div class="muted" style="font-size:12px;">${esc(p.spec)}</div>` : ""}</td>
-        <td>${esc(p.category) || "—"}</td>
-        <td>${p.base_unit}</td>
-        <td class="muted" style="max-width:200px;">${esc(convs) || "—"}</td>
-        <td class="muted" style="max-width:200px;">${esc(packs) || "—"}</td>
+        <td><b>${typeBadge} ${esc(p.name)}</b><div class="muted" style="font-size:12px;">${esc(linkInfo)}</div></td>
+        <td>${esc(p.category) ? `<span class="badge adjust">${esc(p.category)}</span>` : "—"}</td>
+        <td class="muted" style="max-width:170px;">${esc(packs) || "—"}</td>
+        <td class="num mono">${p.unit_cost ? fmtMoney(p.unit_cost) : (p.avg_cost ? fmtMoney(p.avg_cost) : "—")}</td>
         <td class="num">${fmtMoney(p.pack_fee)}</td>
-        <td class="num mono">${fmtNum(p.stock)} ${p.base_unit}</td>
+        <td class="num mono">${stockShown}</td>
         <td>${p.is_active ? '<span class="badge in">启用</span>' : '<span class="badge off">停用</span>'}</td>
         <td class="line-actions">
           <button class="btn sm secondary" onclick="openProductModal(${p.id})">编辑</button>
         </td></tr>`;
     }).join("") + `</tbody>`;
   if (!rows.length) t.innerHTML = `<tr><td colspan="10" class="empty">暂无商品</td></tr>`;
+  t._rows = rows;
+  t._render = renderProducts;
+  updateBatchBar("prod");
 }
 
-function convRowsHtml(convs, baseUnit) {
-  const entries = Object.entries(convs || {});
-  return entries.map(([u, f], i) => `
-    <div class="conv-row">
-      <input value="${esc(u)}" placeholder="单位" class="conv-unit" />
-      <div class="field"><input type="number" step="any" value="${f}" class="conv-factor" /></div>
-      <div class="muted">1 ${esc(u)} = ${fmtNum(f)} ${baseUnit}</div>
-      <button class="btn danger sm" onclick="this.closest('.conv-row').remove()">删</button>
-    </div>`).join("") + `
-    <div class="conv-row">
-      <input placeholder="新单位，如 包" class="conv-unit" />
-      <input type="number" step="any" placeholder="折算系数" class="conv-factor" />
-      <div class="muted">1 新单位 = ? ${baseUnit}</div>
-      <button class="btn secondary sm" onclick="addConvRow()">＋</button>
-    </div>`;
-}
-function addConvRow() {
-  const last = document.querySelector(".conv-row:last-child");
-  const u = last.querySelector(".conv-unit").value.trim();
-  const f = parseFloat(last.querySelector(".conv-factor").value);
-  if (!u || !f) { toast("请先填写单位与系数"); return; }
-  last.querySelector(".conv-unit").value = u;
-  last.querySelector(".conv-factor").value = f;
-  last.innerHTML = `
-    <input value="${esc(u)}" placeholder="单位" class="conv-unit" />
-    <div class="field"><input type="number" step="any" value="${f}" class="conv-factor" /></div>
-    <div class="muted">1 ${esc(u)} = ${fmtNum(f)} ${$("pBaseUnit").value}</div>
-    <button class="btn danger sm" onclick="this.closest('.conv-row').remove()">删</button>`;
-  addConvRowBlank();
-}
-function addConvRowBlank() {
-  const box = $("convRows");
-  box.insertAdjacentHTML("beforeend", `
-    <div class="conv-row">
-      <input placeholder="新单位，如 包" class="conv-unit" />
-      <input type="number" step="any" placeholder="折算系数" class="conv-factor" />
-      <div class="muted">1 新单位 = ? ${$("pBaseUnit").value}</div>
-      <button class="btn secondary sm" onclick="addConvRow()">＋</button>
+/* ---------- 计量单位管理 ---------- */
+async function openUnitsModal() {
+  const units = await api("/api/units");
+  openModal(`
+    <h3>计量单位管理 <button class="close" onclick="closeModal()">✕</button></h3>
+    <p class="hint" style="margin-bottom:12px;">重量类单位需填写「每单位克数」，如 斤=500克；计数类按商品自行设置换算。标准单位不可删除。</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>单位</th><th>类型</th><th>每单位克数</th><th></th></tr></thead>
+      <tbody>${units.map((u) => `<tr>
+        <td><b>${esc(u.name)}</b></td>
+        <td>${u.category === "weight" ? '<span class="badge adjust">重量</span>' : '<span class="badge off">计数</span>'}</td>
+        <td class="mono">${u.gram_per_unit ? `${fmtNum(u.gram_per_unit)} 克` : "—"}</td>
+        <td>${u.is_standard ? "" : `<button class="btn sm danger" onclick="deleteUnit(${u.id}, '${esc(u.name)}')">删</button>`}</td>
+      </tr>`).join("")}</tbody>
+    </table></div>
+    <hr />
+    <h4 class="block-title">新增单位</h4>
+    <div class="form-grid">
+      <div class="field"><label>单位名称 *</label><input id="unitName" placeholder="如：提、扎" /></div>
+      <div class="field"><label>类型 *</label><select id="unitCategory"><option value="count">计数（个/袋/包…）</option><option value="weight">重量（克/斤/公斤…）</option></select></div>
+      <div class="field"><label>每单位克数（重量类必填）</label><input id="unitGram" type="number" step="any" placeholder="如 500" /></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="submitUnit()">新增单位</button>
     </div>`);
+}
+async function submitUnit() {
+  try {
+    await api("/api/units", "POST", {
+      name: $("unitName").value, category: $("unitCategory").value,
+      gram_per_unit: $("unitCategory").value === "weight" ? (+$("unitGram").value || null) : null,
+    });
+    toast("单位已新增"); closeModal(); UNITS = await api("/api/units");
+  } catch (e) { toast("新增失败：" + e.message); }
+}
+async function deleteUnit(id, name) {
+  if (!confirm(`确认删除单位「${name}」？`)) return;
+  try { await api("/api/units/" + id, "DELETE"); toast("已删除"); closeModal(); openUnitsModal(); }
+  catch (e) { toast("删除失败：" + e.message); }
 }
 
 function packRowsHtml(packItems) {
@@ -369,17 +696,17 @@ function packRowsHtml(packItems) {
     const unitSel = m ? unitOptions(m, it.unit) : `<option>个</option>`;
     return `<div class="pack-row">
       <input value="${esc(m ? m.name : it.product_id)}" readonly style="background:#f9fafb;" />
-      <select class="pack-unit" onchange="packUnitChanged(this)">${unitSel}</select>
+      <select class="pack-unit searchable" onchange="packUnitChanged(this)">${unitSel}</select>
       <input type="number" step="any" value="${it.quantity}" class="pack-qty" />
       <button class="btn danger sm" onclick="this.closest('.pack-row').remove()">删</button>
     </div>`;
   }).join("") + `
     <div class="pack-row">
-      <select class="pack-product" onchange="packProductChanged(this)">
+      <select class="pack-product searchable" onchange="packProductChanged(this)">
         <option value="">选择关联商品…</option>
         ${PRODUCTS.filter((p) => p.is_active).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}
       </select>
-      <select class="pack-unit"><option>个</option></select>
+      <select class="pack-unit searchable"><option>个</option></select>
       <input type="number" step="any" value="1" class="pack-qty" />
       <button class="btn secondary sm" onclick="addPackRow()">＋</button>
     </div>`;
@@ -418,26 +745,31 @@ function addPackRow() {
 
 function openProductModal(pid = 0) {
   const p = pid ? PRODUCTS.find((x) => x.id === pid) : null;
-  const baseUnit = p ? p.base_unit : "克";
+  const ptype = p ? p.product_type : "stock";
+  const curUnit = p ? (p.default_unit || p.base_unit) : "斤";
+  const curCat = p ? p.category : (prodForceCat || ""); // 独立分类页新增时自动带上分类
   openModal(`
     <h3>${pid ? "编辑商品" : "新增商品"} <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="form-grid">
       <div class="field"><label>商品编码</label><input id="pCode" value="${esc(p?.code || "")}" placeholder="如 ydj001，可留空" /></div>
-      <div class="field"><label>商品名称 *</label><input id="pName" value="${esc(p?.name || "")}" placeholder="如：番茄" /></div>
-      <div class="field"><label>分类</label><input id="pCategory" value="${esc(p?.category || "")}" placeholder="如：蔬菜" /></div>
-      <div class="field"><label>基础单位 *</label>
-        <select id="pBaseUnit" onchange="baseUnitChanged()">
-          <option value="克" ${baseUnit === "克" ? "selected" : ""}>克（重量类）</option>
-          <option value="个" ${baseUnit === "个" ? "selected" : ""}>个（计数类）</option>
+      <div class="field"><label>商品名称 *</label><input id="pName" value="${esc(p?.name || "")}" placeholder="如：佛手柑大果2个" /></div>
+      <div class="field"><label>分类</label><input id="pCategory" value="${esc(curCat)}" placeholder="如：蔬菜" /></div>
+      <div class="field"><label>商品类型 *</label>
+        <select id="pType" onchange="pTypeChanged()">
+          <option value="stock" ${ptype === "stock" ? "selected" : ""}>库存商品（大类·真实库存）</option>
+          <option value="order" ${ptype === "order" ? "selected" : ""}>订单商品（小类·出库销售）</option>
         </select></div>
+      <div class="field"><label>单位</label><select id="pUnit" class="searchable"></select><div class="field-hint">重量类按克记账（1斤=500克），计数类按个记账；订单商品固定为「单」</div></div>
       <div class="field"><label>默认售价（每基础单位）</label><input id="pSalePrice" type="number" step="any" value="${p?.sale_price || 0}" /></div>
+      <div class="field"><label>参考成本（每基础单位）</label><input id="pUnitCost" type="number" step="any" value="${p?.unit_cost || 0}" /><div class="field-hint">包材/人工等无入库时按此成本结算，如纸箱0.9元/个</div></div>
+    </div>
+    <div id="pStockBox" class="form-grid" style="margin-top:10px;display:${ptype === "order" ? "grid" : "none"};">
+      <div class="field"><label>关联库存商品（大类）*</label><select id="pStockLink" class="searchable"><option value="">— 加载中… —</option></select><div class="field-hint">出库时从该大类扣减库存，可输入名称快速筛选</div></div>
+      <div class="field"><label>倍数（1单订单 = ? 库存单位）*</label><input id="pMultiplier" type="number" step="any" value="${p?.multiplier || 1}" /><div class="field-hint">如 佛手柑大果2个 → 倍数2：卖1单扣 2个 佛手柑大果</div></div>
     </div>
     <div class="field" style="margin-top:10px;"><label>规格说明</label><input id="pSpec" value="${esc(p?.spec || "")}" placeholder="如：每个约150克；或每袋5斤" /></div>
     <hr />
-    <h3>单位换算 <span class="hint">1个=多少基础单位？重量类固定 1斤=500克、1公斤=1000克</span></h3>
-    <div id="convRows">${convRowsHtml(p?.conversions, baseUnit)}</div>
-    <hr />
-    <h3>出库关联结算清单 <span class="hint">卖1单本商品时，自动扣减这些商品的库存</span></h3>
+    <h3>出库关联结算清单 <span class="hint">卖1单本商品时，自动扣减这些商品的库存（包材/人工等）</span></h3>
     <div id="packRows">${packRowsHtml(p?.pack_items)}</div>
     <div class="field" style="margin-top:10px;">
       <label>固定费用（每单，如人工打包费，元）</label>
@@ -449,21 +781,43 @@ function openProductModal(pid = 0) {
       <button class="btn secondary" onclick="closeModal()">取消</button>
       <button class="btn" onclick="saveProduct(${pid || 0})">保存</button>
     </div>`);
+  initProductUnitSelect(ptype, curUnit);
+  // 加载库存商品（大类）列表
+  if (ptype === "order") {
+    api("/api/stocks").then((stocks) => {
+      const sel = $("pStockLink");
+      sel.innerHTML = '<option value="">— 不关联（扣减自身）—</option>' +
+        stocks.map((s) => `<option value="${s.id}" ${s.id === p?.stock_product_id ? "selected" : ""}>${esc(s.name)}（${esc(s.category) || "—"}·单位${esc(s.default_unit || s.base_unit)}）</option>`).join("");
+      sel.dispatchEvent(new Event("change", { bubbles: true })); // 让可搜索下拉同步显示
+    }).catch(() => { $("pStockLink").innerHTML = '<option value="">— 加载失败 —</option>'; });
+  } else {
+    $("pStockLink").innerHTML = '<option value="">—</option>';
+  }
 }
-function baseUnitChanged() {
-  const bu = $("pBaseUnit").value;
-  // 清空换算行重新给默认值
-  const defs = bu === "克" ? { 克: 1, 斤: 500, 公斤: 1000, 千克: 1000 } : { 个: 1 };
-  $("convRows").innerHTML = convRowsHtml(defs, bu);
+function initProductUnitSelect(ptype, curUnit) {
+  const units = ptype === "order" ? ["单"] : ["克", "斤", "公斤", "千克", "个", "袋", "包", "盒", "箱", "件", "份", "单"];
+  const sel = $("pUnit");
+  const cur = ptype === "order" ? "单" : (units.includes(curUnit) ? curUnit : "斤");
+  sel.innerHTML = units.map((u) => `<option value="${u}" ${u === cur ? "selected" : ""}>${u}</option>`).join("");
 }
-function collectConvs() {
-  const out = {};
-  document.querySelectorAll("#convRows .conv-row").forEach((row) => {
-    const u = row.querySelector(".conv-unit").value.trim();
-    const f = parseFloat(row.querySelector(".conv-factor").value);
-    if (u && f > 0) out[u] = f;
-  });
-  return out;
+function deriveUnitPayload(ptype, unit) {
+  if (ptype === "order" || unit === "单") return { base_unit: "单", default_unit: "单", conversions: { 单: 1 } };
+  if (["克", "斤", "公斤", "千克"].includes(unit))
+    return { base_unit: "克", default_unit: unit, conversions: { 克: 1, 斤: 500, 公斤: 1000, 千克: 1000 } };
+  const convs = { 个: 1, [unit]: 1 };
+  return { base_unit: "个", default_unit: unit, conversions: convs };
+}
+function pTypeChanged() {
+  const t = $("pType").value;
+  $("pStockBox").style.display = t === "order" ? "grid" : "none";
+  initProductUnitSelect(t, $("pUnit").value);
+  if (t === "order" && $("pStockLink").options.length <= 1) {
+    api("/api/stocks").then((stocks) => {
+      const sel = $("pStockLink");
+      sel.innerHTML = '<option value="">— 不关联（扣减自身）—</option>' +
+        stocks.map((s) => `<option value="${s.id}">${esc(s.name)}（${esc(s.category) || "—"}·单位${esc(s.default_unit || s.base_unit)}）</option>`).join("");
+    });
+  }
 }
 function collectPacks() {
   const out = [];
@@ -486,20 +840,28 @@ function collectPacks() {
   return out;
 }
 async function saveProduct(pid) {
+  const ptype = $("pType").value;
+  const unit = $("pUnit") ? $("pUnit").value : "斤";
+  const unitPayload = deriveUnitPayload(ptype, unit);
   const payload = {
     code: $("pCode").value,
     name: $("pName").value,
     category: $("pCategory").value,
-    base_unit: $("pBaseUnit").value,
+    product_type: ptype,
+    base_unit: unitPayload.base_unit,
+    default_unit: unitPayload.default_unit,
     spec: $("pSpec").value,
     sale_price: +$("pSalePrice").value || 0,
-    conversions: collectConvs(),
+    unit_cost: +$("pUnitCost").value || 0,
+    conversions: unitPayload.conversions,
     pack_items: collectPacks(),
     pack_fee: +$("pPackFee").value || 0,
+    stock_product_id: ptype === "order" && $("pStockLink") ? (+$("pStockLink").value || null) : null,
+    multiplier: +$("pMultiplier").value || 1,
     is_active: $("pActive") ? $("pActive").checked : true,
   };
   if (!payload.name.trim()) { toast("请填写商品名称"); return; }
-  if (!Object.keys(payload.conversions).length) { toast("请至少配置一个单位换算"); return; }
+  if (payload.product_type === "order" && payload.stock_product_id == null) { toast("订单商品请选择关联的库存商品（大类），或改为库存商品"); return; }
   try {
     if (pid) await api("/api/products/" + pid, "PUT", payload);
     else await api("/api/products", "POST", payload);
@@ -518,7 +880,7 @@ async function deleteProduct(pid) {
 function initInbound() {
   if (!$("inProduct").options.length) {
     $("inProduct").innerHTML = `<option value="">选择商品…</option>` +
-      PRODUCTS.filter((p) => p.is_active).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+      PRODUCTS.filter((p) => p.is_active && p.product_type === "stock").map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
   }
   if (!$("inDate").value) $("inDate").value = today();
   $("inProduct").onchange = inProductChanged;
@@ -528,7 +890,13 @@ function initInbound() {
 function inProductChanged() {
   const p = PRODUCTS.find((x) => x.id === +$("inProduct").value);
   $("inUnit").innerHTML = p ? unitOptions(p) : `<option value="">—</option>`;
-  $("inStockHint").textContent = p ? `当前库存 ${fmtNum(p.stock)} ${p.base_unit}` : "";
+  if (p) {
+    const du = p.default_unit || p.base_unit;
+    if ([...($("inUnit").options)].some((o) => o.value === du)) $("inUnit").value = du;
+    $("inStockHint").textContent = `当前库存 ${fmtStock(p)}`;
+  } else {
+    $("inStockHint").textContent = "";
+  }
   calcInbound();
 }
 function calcInbound() {
@@ -566,12 +934,26 @@ async function submitInbound() {
 }
 async function loadInbounds() {
   const from = $("inDateFrom").value, to = $("inDateTo").value;
-  const rows = await api(`/api/inbounds?date_from=${from || ""}&date_to=${to || ""}`);
+  let rows = await api(`/api/inbounds?date_from=${from || ""}&date_to=${to || ""}`);
+  const kw = ($("inSearch")?.value || "").trim().toLowerCase();
+  if (kw) rows = rows.filter((r) => [r.code, r.product_name, r.supplier, r.operator].join(" ").toLowerCase().includes(kw));
+  const t = $("inTable");
+  rows = applyTableSort(t, rows);
   $("inListHint").textContent = `共 ${rows.length} 条`;
-  $("inTable").innerHTML = `<thead><tr>
-    <th>单号</th><th>商品</th><th>数量</th><th>折算</th><th class="num">单价</th><th class="num">金额</th>
-    <th>供应商</th><th>操作员</th><th>日期</th><th></th></tr></thead><tbody>` +
+  t.innerHTML = `<thead><tr>
+    <th class="cb-col"><input type="checkbox" onclick="toggleAll(this,'in')" /></th>
+    <th data-key="code">单号${sortArrow("inTable", "code")}</th>
+    <th data-key="product_name">商品${sortArrow("inTable", "product_name")}</th>
+    <th data-key="quantity">数量${sortArrow("inTable", "quantity")}</th>
+    <th>折算</th>
+    <th data-key="unit_price" class="num">单价${sortArrow("inTable", "unit_price")}</th>
+    <th data-key="total_amount" class="num">金额${sortArrow("inTable", "total_amount")}</th>
+    <th data-key="supplier">供应商${sortArrow("inTable", "supplier")}</th>
+    <th data-key="operator">操作员${sortArrow("inTable", "operator")}</th>
+    <th data-key="date">日期${sortArrow("inTable", "date")}</th>
+    <th></th></tr></thead><tbody>` +
     rows.map((r) => `<tr>
+      <td class="cb-col"><input type="checkbox" value="${r.id}" ${inSel.has(r.id) ? "checked" : ""} onchange="toggleSel('in',${r.id},this.checked)" /></td>
       <td class="mono">${r.code}</td>
       <td><b>${esc(r.product_name)}</b></td>
       <td>${fmtNum(r.quantity)} ${r.unit}</td>
@@ -582,6 +964,9 @@ async function loadInbounds() {
       <td>${esc(r.operator) || "—"}</td>
       <td>${r.date}</td>
       <td><button class="btn sm danger" onclick="deleteInbound(${r.id})">删</button></td></tr>`).join("") + `</tbody>`;
+  t._rows = rows;
+  t._render = loadInbounds;
+  updateBatchBar("in");
 }
 async function deleteInbound(id) {
   if (!confirm("确认删除该入库单？将回退库存与成本。")) return;
@@ -601,20 +986,25 @@ function addSaleRow() {
   const tr = document.createElement("tr");
   tr.dataset.id = id;
   tr.innerHTML = `
-    <td><select onchange="saleProductChanged(this)">${productOptions()}</select></td>
-    <td><select onchange="saleUnitChanged(this)"></select></td>
+    <td><select class="searchable" onchange="saleProductChanged(this)">${saleProductOptions()}</select></td>
+    <td><select class="searchable" onchange="saleUnitChanged(this)"></select></td>
     <td><input type="number" step="any" value="1" oninput="saleCalcRow(this)" style="width:90px;" /></td>
     <td><input type="number" step="any" value="0" oninput="saleCalcRow(this)" style="width:100px;" /></td>
     <td class="muted sale-conv">—</td>
     <td class="num sale-sub">¥0.00</td>
     <td><button class="btn sm danger" onclick="this.closest('tr').remove()">✕</button></td>`;
   $("outSaleBody").appendChild(tr);
+  bindSearchable(tr);
 }
 function saleProductChanged(sel) {
   const tr = sel.closest("tr");
   const p = PRODUCTS.find((x) => x.id === +sel.value);
   const unitSel = tr.querySelectorAll("select")[1];
   unitSel.innerHTML = p ? unitOptions(p) : "";
+  if (p) {
+    const du = p.default_unit || p.base_unit;
+    if ([...unitSel.options].some((o) => o.value === du)) unitSel.value = du;
+  }
   saleUnitChanged(unitSel);
 }
 function saleUnitChanged(sel) {
@@ -636,7 +1026,11 @@ function saleCalcRow(inp) {
   if (p && unit) {
     const factor = (p.conversions || {})[unit] || 1;
     const qb = qty * factor;
-    tr.querySelector(".sale-conv").textContent = `= ${fmtNum(qb)} ${p.base_unit}`;
+    if (p.product_type === "order" && p.stock_product_id) {
+      tr.querySelector(".sale-conv").textContent = `扣 ${esc(p.stock_product_name || "?")} ×${fmtNum(qb * p.multiplier)}`;
+    } else {
+      tr.querySelector(".sale-conv").textContent = `= ${fmtNum(qb)} ${p.base_unit}`;
+    }
   }
   tr.querySelector(".sale-sub").textContent = fmtMoney(qty * price);
 }
@@ -667,7 +1061,7 @@ function renderPackPreview(r) {
     const m = PRODUCTS.find((x) => x.id === pl.product_id);
     return `<tr data-idx="${i}">
       <td><b>${esc(pl.product_name)}</b></td>
-      <td><select onchange="packLineUnitChanged(this)">${m ? unitOptions(m, pl.unit) : `<option>${pl.unit}</option>`}</select></td>
+      <td><select class="searchable" onchange="packLineUnitChanged(this)">${m ? unitOptions(m, pl.unit) : `<option>${pl.unit}</option>`}</select></td>
       <td><input type="number" step="any" value="${pl.quantity}" oninput="packLineChanged(this)" style="width:90px;" /></td>
       <td><span class="badge pack">包装消耗</span></td>
       <td class="num mono">${fmtMoney(pl.unit_price)}/${pl.unit}</td>
@@ -675,6 +1069,7 @@ function renderPackPreview(r) {
       <td><button class="btn sm danger" onclick="this.closest('tr').remove()">✕</button></td></tr>`;
   }).join("");
   if (!r.pack_lines.length) $("outPackBody").innerHTML = `<tr><td colspan="7" class="empty">无关联结算项（该商品未配置包装清单）</td></tr>`;
+  bindSearchable($("outPackBody"));
   calcOutboundTotals();
 }
 function packLineUnitChanged(sel) {
@@ -748,11 +1143,25 @@ async function submitOutbound() {
 }
 async function loadOutbounds() {
   const from = $("outDateFrom").value, to = $("outDateTo").value;
-  const rows = await api(`/api/outbounds?date_from=${from || ""}&date_to=${to || ""}`);
+  let rows = await api(`/api/outbounds?date_from=${from || ""}&date_to=${to || ""}`);
+  const kw = ($("outSearch")?.value || "").trim().toLowerCase();
+  if (kw) rows = rows.filter((o) => [o.code, o.customer].join(" ").toLowerCase().includes(kw));
+  const t = $("outTable");
+  rows = applyTableSort(t, rows);
   $("outListHint").textContent = `共 ${rows.length} 单`;
-  $("outTable").innerHTML = `<thead><tr>
-    <th>单号</th><th>客户</th><th>明细</th><th class="num">收入</th><th class="num">成本</th><th class="num">费用</th><th class="num">净利</th><th>日期</th><th></th></tr></thead><tbody>` +
+  t.innerHTML = `<thead><tr>
+    <th class="cb-col"><input type="checkbox" onclick="toggleAll(this,'out')" /></th>
+    <th data-key="code">单号${sortArrow("outTable", "code")}</th>
+    <th data-key="customer">客户${sortArrow("outTable", "customer")}</th>
+    <th>明细</th>
+    <th data-key="total_amount" class="num">收入${sortArrow("outTable", "total_amount")}</th>
+    <th data-key="total_cogs" class="num">成本${sortArrow("outTable", "total_cogs")}</th>
+    <th data-key="total_fee" class="num">费用${sortArrow("outTable", "total_fee")}</th>
+    <th data-key="net_profit" class="num">净利${sortArrow("outTable", "net_profit")}</th>
+    <th data-key="date">日期${sortArrow("outTable", "date")}</th>
+    <th></th></tr></thead><tbody>` +
     rows.map((o) => `<tr>
+      <td class="cb-col"><input type="checkbox" value="${o.id}" ${outSel.has(o.id) ? "checked" : ""} onchange="toggleSel('out',${o.id},this.checked)" /></td>
       <td class="mono">${o.code}</td>
       <td>${esc(o.customer) || "—"}</td>
       <td><button class="detail-toggle" onclick="toggleOutDetail(${o.id})">▸ 查看明细</button></td>
@@ -762,7 +1171,7 @@ async function loadOutbounds() {
       <td class="num mono" style="color:${o.net_profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(o.net_profit)}</td>
       <td>${o.date}</td>
       <td><button class="btn sm danger" onclick="deleteOutbound(${o.id})">删</button></td></tr>
-      <tr id="od-${o.id}" style="display:none;"><td colspan="9"><div class="subtable"><table>` +
+      <tr id="od-${o.id}" style="display:none;"><td colspan="10"><div class="subtable"><table>` +
       o.lines.map((l) => `<tr>
         <td>${esc(l.product_name)}</td>
         <td>${l.line_type === "sale" ? '<span class="badge out">销售</span>' : '<span class="badge pack">包装消耗</span>'}</td>
@@ -772,6 +1181,9 @@ async function loadOutbounds() {
         <td class="num">成本 ${fmtMoney(l.cogs)}</td>
         <td class="num">${l.pack_fee ? "费 " + fmtMoney(l.pack_fee) : ""}</td>
       </tr>`).join("") + `</table></div></td></tr>`).join("") + `</tbody>`;
+  t._rows = rows;
+  t._render = loadOutbounds;
+  updateBatchBar("out");
 }
 function toggleOutDetail(id) {
   const tr = $("od-" + id);
@@ -785,6 +1197,79 @@ async function deleteOutbound(id) {
   catch (e) { toast("删除失败：" + e.message); }
 }
 
+/* =============== 批量操作 =============== */
+async function batchDeleteProducts() {
+  if (!prodSel.size) return;
+  if (!confirm(`确认删除选中的 ${prodSel.size} 个商品？已有出入库记录、被其他商品关联的商品将自动跳过。`)) return;
+  try {
+    const r = await api("/api/products/batch-delete", "POST", { ids: [...prodSel] });
+    prodSel.clear();
+    PRODUCTS = await api("/api/products");
+    renderProducts();
+    let msg = `已删除 ${r.deleted} 个商品`;
+    if (r.blocked && r.blocked.length) msg += `；${r.blocked.length} 个因被引用已跳过（${r.blocked.slice(0, 5).join("、")}${r.blocked.length > 5 ? "…" : ""}）`;
+    toast(msg, 4200);
+  } catch (e) { toast("批量删除失败：" + e.message); }
+}
+function openBatchProductModal() {
+  if (!prodSel.size) return;
+  openModal(`
+    <h3>批量修改属性（${prodSel.size} 个商品） <button class="close" onclick="closeModal()">✕</button></h3>
+    <p class="hint" style="margin-bottom:12px;">仅修改填写的项，留空表示不修改。适合：把选中商品统一改分类、启用/停用等。</p>
+    <div class="form-grid">
+      <div class="field"><label>修改分类</label><input id="bpCategory" placeholder="如：蔬菜 / 干货 / 包材，留空不改" /></div>
+      <div class="field"><label>状态</label><select id="bpActive"><option value="">保持不变</option><option value="1">启用</option><option value="0">停用</option></select></div>
+      <div class="field"><label>参考成本（元/基础单位）</label><input id="bpCost" type="number" step="any" placeholder="留空不改" /></div>
+      <div class="field"><label>默认售价（元/基础单位）</label><input id="bpPrice" type="number" step="any" placeholder="留空不改" /></div>
+      <div class="field"><label>打包费（元/单）</label><input id="bpFee" type="number" step="any" placeholder="留空不改" /></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="submitBatchProduct()">确认修改</button>
+    </div>`);
+}
+async function submitBatchProduct() {
+  const payload = { ids: [...prodSel] };
+  const cat = $("bpCategory").value.trim();
+  const act = $("bpActive").value;
+  if (cat) payload.category = cat;
+  if (act !== "") payload.is_active = act === "1";
+  const cost = parseFloat($("bpCost").value);
+  const price = parseFloat($("bpPrice").value);
+  const fee = parseFloat($("bpFee").value);
+  if (!isNaN(cost)) payload.unit_cost = cost;
+  if (!isNaN(price)) payload.sale_price = price;
+  if (!isNaN(fee)) payload.pack_fee = fee;
+  if (Object.keys(payload).length <= 1) { toast("请至少填写一项要修改的属性"); return; }
+  try {
+    const r = await api("/api/products/batch-update", "POST", payload);
+    closeModal(); prodSel.clear();
+    PRODUCTS = await api("/api/products");
+    renderProducts();
+    toast(`已修改 ${r.updated} 个商品`);
+  } catch (e) { toast("批量修改失败：" + e.message); }
+}
+async function batchDeleteInbounds() {
+  if (!inSel.size) return;
+  if (!confirm(`确认删除选中的 ${inSel.size} 条入库单？将回退库存与成本。`)) return;
+  try {
+    const r = await api("/api/inbounds/batch-delete", "POST", { ids: [...inSel] });
+    inSel.clear();
+    loadInbounds(); loadStock();
+    toast(`已删除 ${r.deleted} 条入库单`);
+  } catch (e) { toast("批量删除失败：" + e.message); }
+}
+async function batchDeleteOutbounds() {
+  if (!outSel.size) return;
+  if (!confirm(`确认删除选中的 ${outSel.size} 张出库单？将回退库存、成本与财务记录。`)) return;
+  try {
+    const r = await api("/api/outbounds/batch-delete", "POST", { ids: [...outSel] });
+    outSel.clear();
+    loadOutbounds(); loadStock();
+    toast(`已删除 ${r.deleted} 张出库单`);
+  } catch (e) { toast("批量删除失败：" + e.message); }
+}
+
 /* =============== 报表 =============== */
 function quickRange(kind) {
   if (kind === "today") { $("repDateFrom").value = today(); $("repDateTo").value = today(); }
@@ -792,7 +1277,14 @@ function quickRange(kind) {
   else { $("repDateFrom").value = ""; $("repDateTo").value = ""; }
   loadReport();
 }
+let reportInited = false;
 async function loadReport() {
+  // 首次进入默认显示当天数据（之后尊重手动选择的日期，「全部」可清空）
+  if (!reportInited) {
+    reportInited = true;
+    if (!$("repDateFrom").value) $("repDateFrom").value = today();
+    if (!$("repDateTo").value) $("repDateTo").value = today();
+  }
   const from = $("repDateFrom").value, to = $("repDateTo").value;
   const [rep, finance] = await Promise.all([
     api(`/api/report/summary?date_from=${from || ""}&date_to=${to || ""}`),
@@ -808,16 +1300,35 @@ async function loadReport() {
     <div class="stat blue"><div class="label">当前库存总值</div><div class="value">${fmtMoney(rep.stock_value)}</div></div>`;
 
   const pt = $("repProductTable");
-  if (!rep.by_product.length) pt.innerHTML = `<tr><td class="empty" colspan="4">本期无销售</td></tr>`;
-  else pt.innerHTML = `<thead><tr><th>商品</th><th class="num">销量(基础单位)</th><th class="num">收入</th><th class="num">成本</th><th class="num">毛利</th></tr></thead><tbody>` +
-    rep.by_product.map((p) => `<tr>
+  let prodRows = applyTableSort(pt, rep.by_product || []);
+  if (!prodRows.length) pt.innerHTML = `<tr><td class="empty" colspan="5">本期无销售</td></tr>`;
+  else pt.innerHTML = `<thead><tr>
+    <th data-key="name">商品${sortArrow("repProductTable", "name")}</th>
+    <th data-key="qty" class="num">销量(基础单位)${sortArrow("repProductTable", "qty")}</th>
+    <th data-key="amount" class="num">收入${sortArrow("repProductTable", "amount")}</th>
+    <th data-key="cogs" class="num">成本${sortArrow("repProductTable", "cogs")}</th>
+    <th data-key="gross" class="num">毛利${sortArrow("repProductTable", "gross")}</th></tr></thead><tbody>` +
+    prodRows.map((p) => `<tr>
       <td>${esc(p.name)}</td><td class="num mono">${fmtNum(p.qty)}</td>
       <td class="num mono">${fmtMoney(p.amount)}</td><td class="num mono">${fmtMoney(p.cogs)}</td>
       <td class="num mono" style="color:var(--green)">${fmtMoney(p.amount - p.cogs)}</td></tr>`).join("") + `</tbody>`;
+  pt._rows = prodRows;
+  pt._render = loadReport;
 
   const ft = $("financeTable");
-  ft.innerHTML = `<thead><tr><th>类型</th><th>分类</th><th>商品</th><th class="num">金额</th><th>操作员</th><th>日期</th><th>备注</th><th></th></tr></thead><tbody>` +
-    finance.map((f) => `<tr>
+  let finRows = finance;
+  const fkw = ($("repSearch")?.value || "").trim().toLowerCase();
+  if (fkw) finRows = finRows.filter((f) => [f.category, f.product_name, f.remark, f.operator, f.type].join(" ").toLowerCase().includes(fkw));
+  finRows = applyTableSort(ft, finRows);
+  ft.innerHTML = `<thead><tr>
+    <th>类型</th>
+    <th data-key="category">分类${sortArrow("financeTable", "category")}</th>
+    <th data-key="product_name">商品${sortArrow("financeTable", "product_name")}</th>
+    <th data-key="amount" class="num">金额${sortArrow("financeTable", "amount")}</th>
+    <th data-key="operator">操作员${sortArrow("financeTable", "operator")}</th>
+    <th data-key="date">日期${sortArrow("financeTable", "date")}</th>
+    <th>备注</th><th></th></tr></thead><tbody>` +
+    finRows.map((f) => `<tr>
       <td>${f.type === "income" ? '<span class="badge income">收入</span>' : '<span class="badge expense">支出</span>'}</td>
       <td>${esc(f.category)}</td>
       <td>${esc(f.product_name) || "—"}</td>
@@ -825,7 +1336,9 @@ async function loadReport() {
       <td>${esc(f.operator) || "—"}</td><td>${f.date}</td>
       <td class="muted">${esc(f.remark)}</td>
       <td>${f.ref_type === "manual" ? `<button class="btn sm danger" onclick="deleteFinance(${f.id})">删</button>` : ""}</td></tr>`).join("") + `</tbody>`;
-  if (!finance.length) ft.innerHTML = `<tr><td colspan="8" class="empty">本期无财务流水</td></tr>`;
+  if (!finRows.length) ft.innerHTML = `<tr><td colspan="8" class="empty">本期无财务流水</td></tr>`;
+  ft._rows = finRows;
+  ft._render = loadReport;
 }
 function openFinanceModal() {
   openModal(`
@@ -865,10 +1378,20 @@ async function deleteFinance(id) {
 async function loadMovements() {
   const pid = $("mvProduct").value || "0";
   const from = $("mvDateFrom").value, to = $("mvDateTo").value;
-  const rows = await api(`/api/movements?product_id=${pid}&date_from=${from || ""}&date_to=${to || ""}`);
+  let rows = await api(`/api/movements?product_id=${pid}&date_from=${from || ""}&date_to=${to || ""}`);
+  const kw = ($("mvSearch")?.value || "").trim().toLowerCase();
+  if (kw) rows = rows.filter((m) => [m.date, m.product_name, m.remark, m.operator].join(" ").toLowerCase().includes(kw));
+  const t = $("mvTable");
+  rows = applyTableSort(t, rows);
   const typeBadge = { in: '<span class="badge in">入库</span>', out: '<span class="badge out">出库</span>', pack_out: '<span class="badge pack">包装消耗</span>', adjust: '<span class="badge adjust">盘点</span>' };
-  $("mvTable").innerHTML = `<thead><tr>
-    <th>时间</th><th>商品</th><th>类型</th><th class="num">变动(基础单位)</th><th class="num">金额</th><th>操作员</th><th>备注</th></tr></thead><tbody>` +
+  t.innerHTML = `<thead><tr>
+    <th data-key="date">时间${sortArrow("mvTable", "date")}</th>
+    <th data-key="product_name">商品${sortArrow("mvTable", "product_name")}</th>
+    <th data-key="move_type">类型${sortArrow("mvTable", "move_type")}</th>
+    <th data-key="quantity_base" class="num">变动(基础单位)${sortArrow("mvTable", "quantity_base")}</th>
+    <th data-key="amount" class="num">金额${sortArrow("mvTable", "amount")}</th>
+    <th data-key="operator">操作员${sortArrow("mvTable", "operator")}</th>
+    <th>备注</th></tr></thead><tbody>` +
     rows.map((m) => `<tr>
       <td class="mono">${m.date}</td>
       <td>${esc(m.product_name)}</td>
@@ -877,7 +1400,9 @@ async function loadMovements() {
       <td class="num mono">${fmtMoney(m.amount)}</td>
       <td>${esc(m.operator) || "—"}</td>
       <td class="muted">${esc(m.remark)}</td></tr>`).join("") + `</tbody>`;
-  if (!rows.length) $("mvTable").innerHTML = `<tr><td colspan="7" class="empty">暂无流水</td></tr>`;
+  if (!rows.length) t.innerHTML = `<tr><td colspan="7" class="empty">暂无流水</td></tr>`;
+  t._rows = rows;
+  t._render = loadMovements;
 }
 
 /* ---------- HTML 转义 ---------- */
@@ -899,15 +1424,20 @@ function esc(s) {
   PRODUCTS = await api("/api/products");
   UNITS = await api("/api/units");
   $("mvProduct").innerHTML = `<option value="0">全部商品</option>` +
-    PRODUCTS.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+    PRODUCTS.filter((p) => !["人工", "快递"].includes(p.category)).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
   $("inProduct").innerHTML = `<option value="">选择商品…</option>` +
-    PRODUCTS.filter((p) => p.is_active).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+    PRODUCTS.filter((p) => p.is_active && p.product_type === "stock").map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
   $("inProduct").onchange = inProductChanged;
   $("inUnit").onchange = calcInbound;
   $("inDate").value = today();
   $("outDate").value = today();
   $("inDateFrom").value = monthStart();
   $("inDateTo").value = today();
+  $("outDateFrom").value = today();
+  $("outDateTo").value = today();
+  $("mvDateFrom").value = today(); // 库存流水默认显示当天
+  $("mvDateTo").value = today();
+  bindSearchable(document);
   loadDashboard();
 })();
 
@@ -944,6 +1474,229 @@ async function doImport(kind) {
   }
 }
 
+/* =============== 批量导入弹窗（入库/出库/聚水潭） =============== */
+const BATCH_MODAL = {
+  inbound: {
+    title: "批量入库",
+    tpl: "/api/templates/inbounds",
+    preview: "/api/import/inbounds/preview",
+    confirm: "/api/import/inbounds/confirm",
+    hint: "按模板填写后上传，先解析预览（可勾选、改数量单价），确认后才真正入库并更新库存。",
+  },
+  outbound: {
+    title: "批量出库",
+    tpl: "/api/templates/outbounds",
+    preview: "/api/import/outbounds/preview",
+    confirm: "/api/import/outbounds/confirm",
+    hint: "按模板填写后上传，先解析到列表供你检查（可勾选、改数量单价），确认后才真正出库。",
+  },
+  jushuitan: {
+    title: "导入聚水潭出库单",
+    tpl: "",
+    preview: "/api/jushuitan/import/preview",
+    confirm: "/api/jushuitan/import/confirm",
+    hint: "上传聚水潭导出的「销售出库单_*.xlsx」，自动识别商品并按件数×每件规格结算。先解析预览，确认后才出库。需先在「编码关联」中把商品名关联到系统商品。",
+  },
+};
+function openBatchModal(kind) {
+  const cfg = BATCH_MODAL[kind];
+  if (!cfg) return;
+  openModal(`
+    <h3>${cfg.title} <button class="close" onclick="closeModal()">✕</button></h3>
+    <p class="hint" style="margin-bottom:12px;">${cfg.hint}</p>
+    ${cfg.tpl ? `<a class="btn secondary" href="${cfg.tpl}" download style="margin-bottom:12px;">⬇ 下载批量模板</a>` : ""}
+    <div class="field"><label>选择 Excel 文件</label><input type="file" id="bmFile" accept=".xlsx" /></div>
+    <div id="bmResult"></div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="runBatchModal('${kind}')">${cfg.preview ? "解析预览" : "开始导入"}</button>
+    </div>`);
+}
+/* 从「导入与关联」页带文件打开批量弹窗 */
+function batchFromImport(kind) {
+  const src = kind === "outbound" ? $("impOutFile") : kind === "inbound" ? $("impInFile") : $("mpImportFile");
+  const f = src && src.files[0];
+  openBatchModal(kind);
+  if (f && $("bmFile")) {
+    const dt = new DataTransfer();
+    dt.items.add(f);
+    $("bmFile").files = dt.files;
+  }
+}
+async function runBatchModal(kind) {
+  const cfg = BATCH_MODAL[kind];
+  const file = $("bmFile").files[0];
+  if (!file) { toast("请先选择 Excel 文件"); return; }
+  const box = $("bmResult");
+  box.innerHTML = `<div class="alert ok">⏳ 正在解析…</div>`;
+  try {
+    const r = await apiUpload(cfg.preview, file);
+    if (kind === "inbound") renderInboundReview(kind, r);
+    else renderDraftReview(kind, r);
+  } catch (e) { box.innerHTML = `<div class="alert err">解析失败：${esc(e.message)}</div>`; }
+}
+function renderDraftReview(kind, r) {
+  const orders = r.orders || [];
+  let warn = "";
+  if (r.unmapped_codes && r.unmapped_codes.length) warn += `<div class="alert warn">⚠ 未关联商品：${r.unmapped_codes.map(esc).join("、")}（请到「编码关联」关联后重新解析）</div>`;
+  if (r.skip && Object.values(r.skip).some((v) => v > 0)) warn += `<div class="alert warn">⚠ 跳过：${Object.entries(r.skip).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}单`).join("、")}</div>`;
+  if (r.failed && r.failed.length) warn += `<div class="alert err">解析失败 ${r.failed.length} 条：${r.failed.slice(0, 5).map((f) => esc(f.reason)).join("；")}</div>`;
+  if (!orders.length) {
+    $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3>
+      <div class="alert warn">未解析出可出库的单据。</div>${warn}
+      <div class="modal-foot"><button class="btn secondary" onclick="openBatchModal('${kind}')">返回重新选择</button></div>`;
+    return;
+  }
+  const body = orders.map((o, oi) => `
+    <div class="draft-order" data-doc="${esc(o.doc_no)}" data-date="${esc(o.date)}" data-customer="${esc(o.customer || "")}"
+         data-operator="${esc(o.operator || "")}" data-remark="${esc(o.remark || "")}" data-packfee="${o.pack_fee || 0}">
+      <div class="draft-head">
+        <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" class="draft-check" checked onchange="updateDraftCount('${kind}')" /> 出库</label>
+        <b>${esc(o.doc_no || "（无单号）")}</b>
+        <span class="muted">${esc(o.customer || "—")} · ${esc(o.date)}${o.pack_fee ? " · 打包费 " + fmtMoney(o.pack_fee) : ""}</span>
+      </div>
+      <table class="subtable">
+        <thead><tr><th>商品</th><th>单位</th><th>数量</th><th>单价</th><th>金额</th></tr></thead>
+        <tbody>${(o.lines || []).map((l) => `
+          <tr class="draft-line" data-pid="${l.product_id}" data-unit="${esc(l.unit)}">
+            <td>${esc(l.product_name)}${l.deduct ? `<div class="muted" style="font-size:12px;">${esc(l.deduct)}</div>` : ""}</td>
+            <td>${esc(l.unit)}</td>
+            <td><input class="draft-qty" type="number" step="any" value="${l.quantity}" oninput="draftLineCalc(this)" style="width:80px;" /></td>
+            <td><input class="draft-price" type="number" step="any" value="${l.price}" oninput="draftLineCalc(this)" style="width:90px;" /></td>
+            <td class="draft-amt">${fmtMoney(l.amount)}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`).join("");
+  $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} — 确认出库 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="alert ok">解析出 <b>${orders.length}</b> 单。可勾选、修改数量/单价后点击「确认出库」。</div>
+    ${warn}
+    <div class="draft-list">${body}</div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="openBatchModal('${kind}')">重新选择文件</button>
+      <button class="btn green" onclick="confirmDraft('${kind}')">✓ 确认出库（<span id="draftCount">${orders.length}</span> 单）</button>
+    </div>`;
+}
+function draftLineCalc(inp) {
+  const tr = inp.closest("tr");
+  const qty = parseFloat(tr.querySelector(".draft-qty").value) || 0;
+  const price = parseFloat(tr.querySelector(".draft-price").value) || 0;
+  tr.querySelector(".draft-amt").textContent = fmtMoney(qty * price);
+}
+function updateDraftCount(kind) {
+  const n = document.querySelectorAll("#modalBox .draft-order .draft-check:checked").length;
+  $("draftCount").textContent = n;
+}
+async function confirmDraft(kind) {
+  const orders = [];
+  document.querySelectorAll("#modalBox .draft-order").forEach((od) => {
+    if (!od.querySelector(".draft-check").checked) return;
+    const lines = [];
+    od.querySelectorAll(".draft-line").forEach((tr) => {
+      const pid = +tr.dataset.pid;
+      const unit = tr.dataset.unit;
+      const qty = parseFloat(tr.querySelector(".draft-qty").value);
+      const price = parseFloat(tr.querySelector(".draft-price").value) || 0;
+      if (pid && unit && qty > 0) lines.push({ product_id: pid, unit, quantity: qty, price });
+    });
+    if (!lines.length) return;
+    orders.push({
+      doc_no: od.dataset.doc, date: od.dataset.date, customer: od.dataset.customer,
+      operator: od.dataset.operator, remark: od.dataset.remark,
+      pack_fee: parseFloat(od.dataset.packfee) || 0, lines,
+    });
+  });
+  if (!orders.length) { toast("没有勾选任何单据"); return; }
+  try {
+    const r = await api(BATCH_MODAL[kind].confirm, "POST", { orders });
+    let html = `<div class="alert ok">✓ 已创建 <b>${r.created}</b> 个出库单`;
+    if (r.failed_count) html += `，失败 <b>${r.failed_count}</b>`;
+    html += `</div>`;
+    if (r.warnings && r.warnings.length) html += `<div class="alert warn">⚠ ${r.warnings.map(esc).join("；")}</div>`;
+    if (r.failed && r.failed.length) html += `<div class="alert err">失败：${r.failed.map((f) => esc(f.reason)).join("；")}</div>`;
+    $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3>${html}
+      <div class="modal-foot"><button class="btn" onclick="closeModal()">完成</button></div>`;
+    // 把出库记录列表日期切到这批单据的日期范围，确保刚导入的单据可见
+    const dates = orders.map((o) => o.date).filter(Boolean);
+    if (dates.length) {
+      const ds = [...dates].sort();
+      $("outDateFrom").value = ds[0];
+      $("outDateTo").value = ds[ds.length - 1];
+    }
+    loadOutbounds(); loadStock();
+  } catch (e) { toast("确认出库失败：" + e.message); }
+}
+
+/* ---------- 批量入库预览/确认 ---------- */
+function renderInboundReview(kind, r) {
+  const items = r.items || [];
+  window.__INBOUND_DRAFT__ = items; // 供确认时取回完整数据
+  let warn = "";
+  if (r.failed && r.failed.length) warn += `<div class="alert err">解析失败 ${r.failed.length} 条：${r.failed.slice(0, 5).map((f) => esc(f.reason)).join("；")}</div>`;
+  if (!items.length) {
+    $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3>
+      <div class="alert warn">未解析出可入库的数据。</div>${warn}
+      <div class="modal-foot"><button class="btn secondary" onclick="openBatchModal('${kind}')">返回重新选择</button></div>`;
+    return;
+  }
+  const rows = items.map((it, i) => `
+    <tr class="draft-line" data-i="${i}">
+      <td>${esc(it.product_name)}</td>
+      <td>${esc(it.unit)}</td>
+      <td><input class="draft-qty" type="number" step="any" value="${it.quantity}" oninput="draftLineCalc(this)" style="width:80px;" /></td>
+      <td><input class="draft-price" type="number" step="any" value="${it.unit_price}" oninput="draftLineCalc(this)" style="width:90px;" /></td>
+      <td class="draft-amt">${fmtMoney(it.quantity * it.unit_price)}</td>
+      <td class="muted">${esc(it.supplier || "—")} · ${esc(it.date)}</td>
+    </tr>`).join("");
+  $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} — 确认入库 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="alert ok">解析出 <b>${items.length}</b> 行。可勾选、修改数量/单价后点击「确认入库」。</div>
+    ${warn}
+    <table class="subtable" style="width:100%;">
+      <thead><tr><th style="width:34px;"><input type="checkbox" checked onchange="toggleDraftAll(this)" /></th><th>商品</th><th>单位</th><th>数量</th><th>单价</th><th>金额</th><th>供应商 · 日期</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="openBatchModal('${kind}')">重新选择文件</button>
+      <button class="btn green" onclick="confirmInbound('${kind}')">✓ 确认入库（<span id="inDraftCount">${items.length}</span> 行）</button>
+    </div>`;
+}
+function toggleDraftAll(cb) {
+  document.querySelectorAll("#modalBox .draft-line").forEach((tr) => { tr.classList.toggle("draft-off", !cb.checked); });
+  const n = cb.checked ? document.querySelectorAll("#modalBox .draft-line").length : 0;
+  const el = $("inDraftCount");
+  if (el) el.textContent = n;
+}
+async function confirmInbound(kind) {
+  const all = document.querySelectorAll("#modalBox .draft-line");
+  const items = [];
+  const off = document.querySelector("#modalBox thead input[type=checkbox]")?.checked !== false;
+  all.forEach((tr) => {
+    if (!off) return;
+    const i = +tr.dataset.i;
+    const it = window.__INBOUND_DRAFT__[i];
+    const qty = parseFloat(tr.querySelector(".draft-qty").value);
+    const price = parseFloat(tr.querySelector(".draft-price").value) || 0;
+    if (qty > 0) items.push({ ...it, quantity: qty, unit_price: price });
+  });
+  if (!items.length) { toast("没有可入库的数据"); return; }
+  try {
+    const r = await api(BATCH_MODAL[kind].confirm, "POST", { items });
+    let html = `<div class="alert ok">✓ 已入库 <b>${r.created}</b> 条`;
+    if (r.failed_count) html += `，失败 <b>${r.failed_count}</b>`;
+    html += `</div>`;
+    if (r.failed && r.failed.length) html += `<div class="alert err">失败：${r.failed.map((f) => esc(f.reason)).join("；")}</div>`;
+    $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3>${html}
+      <div class="modal-foot"><button class="btn" onclick="closeModal()">完成</button></div>`;
+    const dates = items.map((it) => it.date).filter(Boolean);
+    if (dates.length) {
+      const ds = [...dates].sort();
+      $("inDateFrom").value = ds[0];
+      $("inDateTo").value = ds[ds.length - 1];
+    }
+    loadInbounds(); loadStock();
+  } catch (e) { toast("确认入库失败：" + e.message); }
+}
+
 /* =============== 聚水潭编码关联 =============== */
 async function loadMappingPage() {
   populateMpNewProduct();
@@ -972,9 +1725,10 @@ function renderSavedMappings(rows) {
     <th>外部商品编码（聚水潭）</th><th>关联到系统商品</th><th>来源</th><th>操作</th></tr></thead><tbody>` +
     rows.map((m) => `<tr data-id="${m.id}">
       <td><b>${esc(m.external_code)}</b></td>
-      <td><select class="saved-select" data-code="${esc(m.external_code)}">${optHtml(m.product_id)}</select></td>
+      <td><select class="saved-select searchable" data-code="${esc(m.external_code)}">${optHtml(m.product_id)}</select></td>
       <td class="muted">${m.auto_score ? `自动匹配 ${Math.round(m.auto_score * 100)}%` : "手动"}</td>
       <td><button class="btn sm danger" onclick="deleteMappingRow(${m.id}, '${esc(m.external_code)}')">删除</button></td></tr>`).join("") + `</tbody>`;
+  bindSearchable(t);
 }
 async function saveSavedMappings() {
   const items = [];
@@ -1021,7 +1775,7 @@ function renderMpTable(codes) {
     `<option value="">— 不关联 —</option>` +
     PRODUCTS.map((p) => `<option value="${p.id}" ${String(p.id) === String(pid) ? "selected" : ""}>${esc(p.name)}</option>`).join("");
   $("mpTable").innerHTML = `<thead><tr>
-    <th>聚水潭商品</th><th class="num">出现次数</th><th>推荐匹配</th><th>关联到系统商品</th><th>状态</th></tr></thead><tbody>` +
+    <th>聚水潭商品</th><th class="num">出现次数</th><th>每件规格</th><th>推荐匹配</th><th>关联到系统商品</th><th>状态</th></tr></thead><tbody>` +
     codes.map((c) => {
       const matched = !!c.product_id;
       const selId = c.product_id || c.suggest_id || "";
@@ -1032,8 +1786,9 @@ function renderMpTable(codes) {
       return `<tr>
         <td><b>${esc(c.external_code)}</b></td>
         <td class="num">${c.count}</td>
+        <td class="muted">${esc(c.spec) || "—"}</td>
         <td class="muted">${c.suggest_name ? `${esc(c.suggest_name)} <span class="muted">(${Math.round(score * 100)}%)</span>` : "—"}</td>
-        <td><select class="mp-select" data-code="${esc(c.external_code)}" onchange="mpSelectChanged(this)">${optHtml(selId)}</select></td>
+        <td><select class="mp-select searchable" data-code="${esc(c.external_code)}" onchange="mpSelectChanged(this)">${optHtml(selId)}</select></td>
         <td>${tag}</td></tr>`;
     }).join("") + `</tbody>`;
   // 未保存过的：匹配度>=50% 的自动选中，弱匹配留待人工确认
@@ -1041,6 +1796,7 @@ function renderMpTable(codes) {
     const c = MP_CODES.find((x) => x.external_code === sel.dataset.code);
     if (c && !c.product_id && c.suggest_id && (c.score || 0) >= 0.5) sel.value = String(c.suggest_id);
   });
+  bindSearchable($("mpTable"));
 }
 function mpSelectChanged(sel) {
   const c = MP_CODES.find((x) => x.external_code === sel.dataset.code);
