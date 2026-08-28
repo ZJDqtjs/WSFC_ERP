@@ -442,12 +442,12 @@ async function loadDashboard() {
 
     const acts = [];
     (d.recent_outbounds || []).forEach((o) => acts.push({
-      ico: "⬆️", cls: "out", title: `出库 ${o.code}`,
+      ico: '<svg class="ic"><use href="#i-out"/></svg>', cls: "out", title: `出库 ${o.code}`,
       sub: `${o.customer || "散客"} · ${o.date}${o.operator ? " · " + o.operator : ""}`,
       amt: fmtMoney(o.amount), color: "var(--primary)",
     }));
     (d.recent_inbounds || []).forEach((i) => acts.push({
-      ico: "⬇️", cls: "in", title: `入库 ${i.code}`,
+      ico: '<svg class="ic"><use href="#i-in"/></svg>', cls: "in", title: `入库 ${i.code}`,
       sub: `${i.product_name} × ${fmtNum(i.quantity)}${i.unit} · ${i.date}`,
       amt: fmtMoney(i.amount), color: "var(--green)",
     }));
@@ -460,6 +460,213 @@ async function loadDashboard() {
         </div>`).join("")
       : `<div class="empty-tip">还没有出入库记录，点击右上角开始记账吧</div>`;
   } catch (e) { /* 忽略 */ }
+}
+
+/* =============== AI 智能录入 =============== */
+let AI_CTRL = null;   // 当前识别任务的 AbortController（后台挂起，可取消）
+let AI_TIMER = null;  // 用时刷新定时器
+let AI_START = 0;
+
+function aiShowThinking() {
+  $("aiThinking").style.display = "";
+  $("aiThinkBody").textContent = "";
+  AI_START = Date.now();
+  clearInterval(AI_TIMER);
+  AI_TIMER = setInterval(() => {
+    $("aiThinkTime").textContent = `${((Date.now() - AI_START) / 1000).toFixed(0)}s`;
+  }, 500);
+}
+function aiHideThinking() {
+  clearInterval(AI_TIMER);
+  AI_TIMER = null;
+  $("aiThinking").style.display = "none";
+}
+function aiCancel() {
+  if (AI_CTRL) AI_CTRL.abort();
+  aiHideThinking();
+  toast("已取消识别");
+}
+function aiAppendThink(s) {
+  const el = $("aiThinkBody");
+  el.textContent += s;
+  el.scrollTop = el.scrollHeight;
+}
+function aiStartTask(btnHtml = '<svg class="ic"><use href="#i-ai"/></svg> 识别中…') {
+  if (AI_CTRL) AI_CTRL.abort();           // 取消上一次任务
+  AI_CTRL = new AbortController();
+  $("aiBtn").disabled = true;
+  $("aiBtn").innerHTML = btnHtml;
+  aiShowThinking();
+}
+function aiResetBtn() {
+  AI_CTRL = null;
+  $("aiBtn").disabled = false;
+  $("aiBtn").innerHTML = '<svg class="ic"><use href="#i-ai"/></svg> 识别并录入';
+}
+async function aiCollectStream(res) {
+  if (res.status === 401) { showLogin(); throw new Error("请先登录"); }
+  if (!res.ok) {
+    let msg = "识别失败";
+    try { const j = await res.json(); msg = j.detail || msg; } catch (e) {}
+    throw new Error(msg);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buf = "", result = null;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const parts = buf.split("\n\n");
+    buf = parts.pop();
+    for (const part of parts) {
+      const line = part.trim();
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (!data) continue;
+      let obj;
+      try { obj = JSON.parse(data); } catch (e) { continue; }
+      if (obj.delta) {
+        aiAppendThink(obj.delta);          // 实时展示 AI 思考过程
+      } else if (obj.result) {
+        result = obj.result;
+      } else if (obj.error) {
+        throw new Error(obj.error);
+      }
+    }
+  }
+  if (!result) throw new Error("识别未返回结果");
+  return result;
+}
+async function aiFinishOk(result) {
+  aiHideThinking();
+  // 可能自动新增了商品/单位，刷新后确认框才能选到新商品
+  PRODUCTS = await api("/api/products");
+  openAiConfirm(result);
+  aiResetBtn();
+}
+function aiFinishErr(e) {
+  if (e.name === "AbortError") return;     // 用户手动取消
+  aiAppendThink("\n⚠ 识别失败：" + e.message);
+  setTimeout(aiHideThinking, 2500);
+  toast("识别失败：" + e.message);
+  aiResetBtn();
+}
+async function aiParse() {
+  const text = $("aiText").value.trim();
+  if (!text) { toast("请输入入库/出库描述"); return; }
+  aiStartTask();
+  try {
+    const res = await fetch("/api/ai/parse/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal: AI_CTRL.signal,
+    });
+    await aiFinishOk(await aiCollectStream(res));
+  } catch (e) { aiFinishErr(e); }
+}
+function aiPickImage() { $("aiImgFile").click(); }
+async function aiParseImage() {
+  const f = $("aiImgFile").files[0];
+  if (!f) return;
+  aiStartTask('<svg class="ic"><use href="#i-camera"/></svg> 发票识别中…');
+  try {
+    const fd = new FormData();
+    fd.append("file", f);
+    const res = await fetch("/api/ai/parse-image/stream", {
+      method: "POST",
+      body: fd,
+      signal: AI_CTRL.signal,
+    });
+    await aiFinishOk(await aiCollectStream(res));
+  } catch (e) { aiFinishErr(e); }
+  finally { $("aiImgFile").value = ""; }
+}
+function aiProductOptions(selectedId, orderFirst) {
+  const sorted = PRODUCTS.filter((p) => p.is_active).slice().sort((a, b) =>
+    orderFirst ? (b.product_type === "order") - (a.product_type === "order")
+               : (a.product_type === "order") - (b.product_type === "order")
+  );
+  return sorted.map((p) =>
+    `<option value="${p.id}" ${p.id === selectedId ? "selected" : ""}>${p.product_type === "order" ? "〔订单〕" : "〔库存〕"}${esc(p.name)}</option>`
+  ).join("");
+}
+let AI_CONFIRM = null;   // 当前确认框对应的识别结果（供提交时标注）
+function openAiConfirm(r) {
+  AI_CONFIRM = r;
+  const isIn = r.type === "inbound";
+  const linesHtml = (r.lines || []).map((ln, i) => `
+    <tr data-idx="${i}">
+      <td style="min-width:220px;"><select class="searchable ai-pid">${aiProductOptions(ln.product_id, !isIn)}</select>
+        ${ln.auto_created ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 自动新增</span>' : ""}</td>
+      <td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.quantity)}" style="width:90px;" /></td>
+      <td><input class="ai-unit" value="${esc(ln.unit || "")}" style="width:70px;" /></td>
+      <td><input type="number" step="any" class="ai-price" value="${ln.unit_price}" style="width:100px;" /></td>
+      <td class="muted" style="font-size:12px;">${esc(ln.hint || "")}</td>
+    </tr>`).join("");
+  openModal(`
+    <h3>确认录入（${isIn ? "入库" : "出库"}） <button class="close" onclick="closeModal()">✕</button></h3>
+    <p class="hint" style="margin-bottom:12px;">已自动识别以下内容，请核对（可修改）后提交；🆕 标记的商品为新物品（系统已自动新增档案）。</p>
+    <div class="form-grid">
+      <div class="field"><label>业务类型</label><select id="aiType" onchange="aiTypeChanged()">
+        <option value="inbound" ${isIn ? "selected" : ""}>入库（进货）</option>
+        <option value="outbound" ${isIn ? "" : "selected"}>出库（销售）</option>
+      </select></div>
+      <div class="field"><label>日期</label><input type="date" id="aiDate" value="${esc(r.date)}" /></div>
+      <div class="field"><label>${isIn ? "供应商" : "客户"}</label><input id="aiParty" value="${esc(isIn ? r.supplier : r.customer)}" /></div>
+      <div class="field"><label>备注</label><input id="aiRemark" value="${esc(r.remark)}" /></div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>商品</th><th>数量</th><th>单位</th><th>${isIn ? "单价" : "售价"}</th><th>说明</th></tr></thead>
+      <tbody id="aiLines">${linesHtml || '<tr><td colspan="5" class="empty">未识别到明细</td></tr>'}</tbody>
+    </table></div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn green" onclick="aiSubmit()">✓ 确认提交</button>
+    </div>`);
+}
+function aiTypeChanged() {
+  // 切换类型时重排商品下拉（出库订单优先，入库库存优先）
+  const isIn = $("aiType").value === "inbound";
+  document.querySelectorAll("#aiLines tr[data-idx]").forEach((tr) => {
+    const sel = tr.querySelector(".ai-pid");
+    const cur = +sel.value;
+    sel.innerHTML = aiProductOptions(cur, !isIn);
+  });
+}
+async function aiSubmit() {
+  const type = $("aiType").value;
+  const date = $("aiDate").value;
+  const party = $("aiParty").value.trim();
+  const remark = $("aiRemark").value.trim();
+  const autoFlags = (AI_CONFIRM && AI_CONFIRM.lines) || [];
+  const rows = [...document.querySelectorAll("#aiLines tr[data-idx]")].map((tr, i) => ({
+    product_id: +tr.querySelector(".ai-pid").value,
+    quantity: parseFloat(tr.querySelector(".ai-qty").value),
+    unit: tr.querySelector(".ai-unit").value.trim(),
+    unit_price: parseFloat(tr.querySelector(".ai-price").value),
+    auto_created: !!(autoFlags[i] && autoFlags[i].auto_created),
+  })).filter((r) => r.product_id);
+  if (!rows.length) { toast("请至少填写一条商品"); return; }
+  if (rows.some((r) => !(r.quantity > 0) || isNaN(r.unit_price) || !r.unit)) { toast("请完整填写数量、单位与金额"); return; }
+  const op = (CURRENT_USER && (CURRENT_USER.name || CURRENT_USER.username)) || "";
+  try {
+    if (type === "inbound") {
+      for (const r of rows) {
+        const rmk = (r.auto_created ? "[AI自动新增]" + (remark ? " " + remark : "") : remark);
+        await api("/api/inbounds", "POST", { product_id: r.product_id, unit: r.unit, quantity: r.quantity, unit_price: r.unit_price, supplier: party, operator: op, date, remark: rmk });
+      }
+    } else {
+      const lines = rows.map((r) => ({ product_id: r.product_id, unit: r.unit, quantity: r.quantity, price: r.unit_price }));
+      await api("/api/outbounds", "POST", { customer: party, operator: op, date, remark, lines, pack_lines: [] });
+    }
+    closeModal();
+    AI_CONFIRM = null;
+    toast(type === "inbound" ? "入库成功" : "出库成功");
+    loadDashboard(); loadStock();
+    $("aiText").value = "";
+  } catch (e) { toast("提交失败：" + e.message); }
 }
 
 function loadImportPage() {}
@@ -1504,7 +1711,7 @@ function openBatchModal(kind) {
   openModal(`
     <h3>${cfg.title} <button class="close" onclick="closeModal()">✕</button></h3>
     <p class="hint" style="margin-bottom:12px;">${cfg.hint}</p>
-    ${cfg.tpl ? `<a class="btn secondary" href="${cfg.tpl}" download style="margin-bottom:12px;">⬇ 下载批量模板</a>` : ""}
+    ${cfg.tpl ? `<a class="btn secondary" href="${cfg.tpl}" download style="margin-bottom:12px;"><svg class="ic"><use href="#i-download"/></svg> 下载批量模板</a>` : ""}
     <div class="field"><label>选择 Excel 文件</label><input type="file" id="bmFile" accept=".xlsx" /></div>
     <div id="bmResult"></div>
     <div class="modal-foot">

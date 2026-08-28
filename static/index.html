@@ -7,6 +7,39 @@
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
+  <!-- 内联 SVG 图标库（简约线性风格，随文字颜色变色） -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+    <symbol id="i-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></symbol>
+    <symbol id="i-in" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
+    <symbol id="i-out" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></symbol>
+    <symbol id="i-tag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></symbol>
+    <symbol id="i-receipt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></symbol>
+    <symbol id="i-package" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/><line x1="7" y1="8" x2="17" y2="8"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+    <symbol id="i-truck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+    <symbol id="i-database" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></symbol>
+    <symbol id="i-ai" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></symbol>
+    <symbol id="i-ruler" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z"/><path d="m14.5 12.5 2-2"/><path d="m11.5 9.5 2-2"/><path d="m8.5 6.5 2-2"/><path d="m17.5 15.5 2-2"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></symbol>
+    <symbol id="i-coins" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/></symbol>
+    <symbol id="i-paperclip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
+  </svg>
   <div class="app" id="app">
     <!-- 左侧导航 -->
     <aside class="sidebar">
@@ -15,23 +48,23 @@
         <span class="brand-name">企业台账</span>
       </div>
       <nav class="side-nav">
-        <button class="nav-item active" data-page="home"><span class="nav-ico">🏠</span>工作台</button>
+        <button class="nav-item active" data-page="home"><span class="nav-ico"><svg class="ic"><use href="#i-home"/></svg></span>工作台</button>
         <div class="nav-group">业务管理</div>
-        <button class="nav-item" data-page="stock"><span class="nav-ico">📦</span>库存管理</button>
-        <button class="nav-item" data-page="inbound"><span class="nav-ico">⬇️</span>入库</button>
-        <button class="nav-item" data-page="outbound"><span class="nav-ico">⬆️</span>出库 / 销售</button>
+        <button class="nav-item" data-page="stock"><span class="nav-ico"><svg class="ic"><use href="#i-box"/></svg></span>库存管理</button>
+        <button class="nav-item" data-page="inbound"><span class="nav-ico"><svg class="ic"><use href="#i-in"/></svg></span>入库</button>
+        <button class="nav-item" data-page="outbound"><span class="nav-ico"><svg class="ic"><use href="#i-out"/></svg></span>出库 / 销售</button>
         <div class="nav-group">商品资料</div>
-        <button class="nav-item" data-page="products"><span class="nav-ico">🏷️</span>商品</button>
-        <button class="nav-item" data-page="products" data-type="order"><span class="nav-ico">🧾</span>关联结算</button>
-        <button class="nav-item" data-page="products" data-cat="包材"><span class="nav-ico">🧰</span>包材</button>
-        <button class="nav-item" data-page="products" data-cat="人工"><span class="nav-ico">👷</span>人工</button>
-        <button class="nav-item" data-page="products" data-cat="快递"><span class="nav-ico">🚚</span>快递</button>
+        <button class="nav-item" data-page="products"><span class="nav-ico"><svg class="ic"><use href="#i-tag"/></svg></span>商品</button>
+        <button class="nav-item" data-page="products" data-type="order"><span class="nav-ico"><svg class="ic"><use href="#i-receipt"/></svg></span>关联结算</button>
+        <button class="nav-item" data-page="products" data-cat="包材"><span class="nav-ico"><svg class="ic"><use href="#i-package"/></svg></span>包材</button>
+        <button class="nav-item" data-page="products" data-cat="人工"><span class="nav-ico"><svg class="ic"><use href="#i-user"/></svg></span>人工</button>
+        <button class="nav-item" data-page="products" data-cat="快递"><span class="nav-ico"><svg class="ic"><use href="#i-truck"/></svg></span>快递</button>
         <div class="nav-group">经营分析</div>
-        <button class="nav-item" data-page="report"><span class="nav-ico">📊</span>财务报表</button>
+        <button class="nav-item" data-page="report"><span class="nav-ico"><svg class="ic"><use href="#i-chart"/></svg></span>财务报表</button>
         <div class="nav-group">数据工具</div>
-        <button class="nav-item" data-page="jushuitan"><span class="nav-ico">🔗</span>聚水潭关联</button>
-        <button class="nav-item" data-page="import"><span class="nav-ico">📥</span>批量导入</button>
-        <button class="nav-item" data-page="backup"><span class="nav-ico">💾</span>备份与恢复</button>
+        <button class="nav-item" data-page="jushuitan"><span class="nav-ico"><svg class="ic"><use href="#i-link"/></svg></span>聚水潭关联</button>
+        <button class="nav-item" data-page="import"><span class="nav-ico"><svg class="ic"><use href="#i-database"/></svg></span>批量导入</button>
+        <button class="nav-item" data-page="backup"><span class="nav-ico"><svg class="ic"><use href="#i-save"/></svg></span>备份与恢复</button>
       </nav>
       <div class="side-user">
         <div class="user-avatar" id="userAvatar">管</div>
@@ -53,9 +86,28 @@
             <p id="dashDate"></p>
           </div>
           <div class="welcome-actions">
-            <button class="btn" onclick="goPage('inbound')">⬇️ 快速入库</button>
-            <button class="btn green" onclick="goPage('outbound')">⬆️ 快速出库</button>
-            <button class="btn secondary" onclick="goProducts()">🏷️ 新增商品</button>
+            <button class="btn" onclick="goPage('inbound')"><svg class="ic"><use href="#i-in"/></svg> 快速入库</button>
+            <button class="btn green" onclick="goPage('outbound')"><svg class="ic"><use href="#i-out"/></svg> 快速出库</button>
+            <button class="btn secondary" onclick="goProducts()"><svg class="ic"><use href="#i-plus"/></svg> 新增商品</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3><svg class="ic"><use href="#i-ai"/></svg> AI 智能录入</h3><span class="hint">用大白话描述入库/出库，AI 自动拆分成系统格式，确认后再提交；识别在后台进行，可先做别的</span></div>
+          <div class="toolbar">
+            <input id="aiText" placeholder='例如：今天入库了100斤木耳，25一斤；或 出库2单七彩土豆3斤，每单15元，客户张三' style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')aiParse()" />
+            <button class="btn green" id="aiBtn" onclick="aiParse()"><svg class="ic"><use href="#i-ai"/></svg> 识别并录入</button>
+            <button class="btn secondary" onclick="aiPickImage()"><svg class="ic"><use href="#i-camera"/></svg> 识别发票</button>
+            <input type="file" id="aiImgFile" accept="image/*" style="display:none;" onchange="aiParseImage()" />
+          </div>
+          <div id="aiThinking" class="ai-thinking" style="display:none;">
+            <div class="ai-think-head">
+              <span class="ai-think-title"><svg class="ic"><use href="#i-ai"/></svg> AI 思考中</span>
+              <span class="ai-think-time" id="aiThinkTime">0s</span>
+              <span class="grow"></span>
+              <button class="btn sm secondary" onclick="aiCancel()"><svg class="ic"><use href="#i-x"/></svg> 取消</button>
+            </div>
+            <pre class="ai-think-body" id="aiThinkBody"></pre>
           </div>
         </div>
 
@@ -64,14 +116,14 @@
         <div class="grid-2">
           <div class="card">
             <div class="card-head">
-              <h3>⚠️ 缺货预警</h3>
+              <h3><svg class="ic"><use href="#i-alert"/></svg> 缺货预警</h3>
               <button class="btn-link" onclick="goPage('stock')">去补货 →</button>
             </div>
             <div id="dashLow"></div>
           </div>
           <div class="card">
             <div class="card-head">
-              <h3>📋 最近动态</h3>
+              <h3><svg class="ic"><use href="#i-activity"/></svg> 最近动态</h3>
               <button class="btn-link" onclick="goPage('outbound')">查看出库 →</button>
             </div>
             <div id="dashActivity"></div>
@@ -92,8 +144,8 @@
               <select id="stockCategory" class="searchable" onchange="renderStock()"><option value="">全部分类</option></select>
               <input id="stockSearch" placeholder="🔍 搜索商品名称 / 分类..." oninput="renderStock()" />
               <div class="grow"></div>
-              <button class="btn secondary" onclick="openAdjust()">⚖️ 盘点调整</button>
-              <button class="btn secondary" onclick="loadStock()">🔄 刷新</button>
+              <button class="btn secondary" onclick="openAdjust()"><svg class="ic"><use href="#i-edit"/></svg> 盘点调整</button>
+              <button class="btn secondary" onclick="loadStock()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
             </div>
             <div class="table-wrap"><table id="stockTable"></table></div>
           </div>
@@ -122,7 +174,7 @@
         <div class="card">
           <div class="card-head">
             <h3>新增入库单</h3><span class="hint">按采购单位录入，系统自动折算到基础单位</span>
-            <button class="btn secondary" style="margin-left:auto;" onclick="openBatchModal('inbound')">📥 批量入库</button>
+            <button class="btn secondary" style="margin-left:auto;" onclick="openBatchModal('inbound')"><svg class="ic"><use href="#i-download"/></svg> 批量入库</button>
           </div>
           <div class="form-grid">
             <div class="field">
@@ -164,8 +216,8 @@
         <div class="card">
           <div class="card-head">
             <h3>新增出库 / 销售单</h3><span class="hint">卖商品自动结转关联包装材料与打包费</span>
-            <button class="btn" style="margin-left:auto;" onclick="openBatchModal('jushuitan')">📦 导入聚水潭出库单</button>
-            <button class="btn secondary" onclick="openBatchModal('outbound')">📤 批量出库</button>
+            <button class="btn" style="margin-left:auto;" onclick="openBatchModal('jushuitan')"><svg class="ic"><use href="#i-download"/></svg> 导入聚水潭出库单</button>
+            <button class="btn secondary" onclick="openBatchModal('outbound')"><svg class="ic"><use href="#i-out"/></svg> 批量出库</button>
           </div>
           <div class="form-grid">
             <div class="field"><label>日期 *</label><input id="outDate" type="date" /></div>
@@ -242,8 +294,8 @@
             <select id="prodCategory" class="searchable" onchange="renderProducts()"><option value="">全部分类</option></select>
             <input id="prodSearch" placeholder="🔍 搜索商品..." oninput="renderProducts()" />
             <div class="grow"></div>
-            <button class="btn secondary" onclick="openUnitsModal()">📐 计量单位管理</button>
-            <button class="btn" onclick="openProductModal()">＋ 新增商品</button>
+            <button class="btn secondary" onclick="openUnitsModal()"><svg class="ic"><use href="#i-ruler"/></svg> 计量单位管理</button>
+            <button class="btn" onclick="openProductModal()"><svg class="ic"><use href="#i-plus"/></svg> 新增商品</button>
           </div>
           <div class="batch-bar" id="prodBatch" style="display:none;">
             <span class="muted">已选 <b id="prodSelCount">0</b> 项</span>
@@ -284,9 +336,9 @@
         <div class="card">
           <div class="card-head"><h3>导入模板下载</h3></div>
           <div class="toolbar">
-            <button class="btn secondary" onclick="downloadTpl('products')">⬇ 商品导入模板</button>
-            <button class="btn secondary" onclick="downloadTpl('inbounds')">⬇ 入库导入模板</button>
-            <button class="btn secondary" onclick="downloadTpl('outbounds')">⬇ 出库导入模板</button>
+            <button class="btn secondary" onclick="downloadTpl('products')"><svg class="ic"><use href="#i-download"/></svg> 商品导入模板</button>
+            <button class="btn secondary" onclick="downloadTpl('inbounds')"><svg class="ic"><use href="#i-download"/></svg> 入库导入模板</button>
+            <button class="btn secondary" onclick="downloadTpl('outbounds')"><svg class="ic"><use href="#i-download"/></svg> 出库导入模板</button>
           </div>
           <div class="alert ok" style="margin-top:10px;">商品模板兼容「柠檬云商品导入模板.xlsx」，整表上传自动识别（编码/类别/名称/规格/单位）。</div>
         </div>
@@ -325,7 +377,7 @@
           <div class="toolbar">
             <input type="file" id="mpFile" accept=".xlsx" />
             <button class="btn" onclick="parseJushuitan()">解析并匹配</button>
-            <button class="btn secondary" onclick="autoMapping()">🤖 自动匹配未关联</button>
+            <button class="btn secondary" onclick="autoMapping()"><svg class="ic"><use href="#i-ai"/></svg> 自动匹配未关联</button>
             <button class="btn secondary" onclick="clearMapping()">清空关联</button>
           </div>
           <div id="mpParseInfo"></div>
@@ -373,7 +425,7 @@
             </label>
             <button class="btn" onclick="saveBkConfig()">保存设置</button>
             <div class="grow"></div>
-            <button class="btn green" onclick="createBackup()">💾 立即备份</button>
+            <button class="btn green" onclick="createBackup()"><svg class="ic"><use href="#i-save"/></svg> 立即备份</button>
           </div>
           <p class="hint" id="bkStatus" style="margin-top:10px;"></p>
         </div>

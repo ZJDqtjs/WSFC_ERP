@@ -10,7 +10,7 @@ from sqlalchemy import select, text
 from .auth import ensure_seed_users
 from .database import Base, DATA_DIR, SessionLocal, engine
 from .models import Product
-from .routers import auth, backup, imports, inbound, inventory, outbound, products, report
+from .routers import ai, auth, backup, imports, inbound, inventory, outbound, products, report
 from .routers.backup import create_backup_file, load_config
 from .services import seed_units
 
@@ -99,5 +99,6 @@ app.include_router(inventory.router)
 app.include_router(report.router)
 app.include_router(imports.router)
 app.include_router(backup.router)
+app.include_router(ai.router)
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
