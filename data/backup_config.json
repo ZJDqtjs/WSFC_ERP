@@ -1,5 +1,5 @@
 {
   "enabled": true,
-  "interval_hours": 2.0,
+  "interval_hours": 4.0,
   "keep": 30
 }

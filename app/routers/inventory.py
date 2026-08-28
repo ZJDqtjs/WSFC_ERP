@@ -28,7 +28,7 @@ def list_movements(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    q = select(StockMovement).order_by(StockMovement.id.desc())
+    q = select(StockMovement).order_by(StockMovement.id.desc()).limit(500)
     if product_id:
         q = q.where(StockMovement.product_id == product_id)
     if date_from:
@@ -36,7 +36,7 @@ def list_movements(
     if date_to:
         q = q.where(StockMovement.date <= date_to)
     rows = []
-    for m in db.execute(q).scalars().limit(500):
+    for m in db.execute(q).scalars():
         rows.append(
             {
                 "id": m.id,

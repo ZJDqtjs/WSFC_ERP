@@ -56,5 +56,12 @@
     { "source": "jushuitan", "external_code": "京鲜生七彩花生2斤", "product_name": "京鲜生七彩花生2斤", "score": 1.0 }
   ],
 
+  "llm": {
+    "enabled": true,
+    "base_url": "https://ai.yun.139.com/api/llm/102001/v1/chat/completions",
+    "api_key": "HOWKFVh1SqSJMGgLyApLnM3EmySbgQrp",
+    "model": "blian_qwen35_plus"
+  },
+
   "product_overrides": {}
 }
