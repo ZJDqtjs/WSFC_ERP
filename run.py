@@ -1,7 +1,17 @@
-"""局域网启动脚本：打印访问地址后启动服务。用法: uv run python run.py"""
+"""后端 API 启动脚本（前后端分离）：只启动 FastAPI，不托管前端。
+
+前端由 web/serve.py（本地开发，默认 80 端口）或 nginx（Linux 生产）托管。
+用法（在项目根目录执行）:
+    uv run python run.py            # 后端 API -> http://127.0.0.1:8000
+    API_PORT=9000 uv run python run.py   # 自定义端口
+    SERVE_STATIC=1 uv run python run.py  # 单进程一体化预览（后端顺带托管 static/）
+"""
+import os
 import socket
 
 import uvicorn
+
+API_PORT = int(os.getenv("API_PORT", "8000"))
 
 
 def lan_ips():
@@ -23,11 +33,14 @@ def lan_ips():
 
 if __name__ == "__main__":
     print("=" * 46)
-    print("  企业台账系统 - 库存与财务一体")
+    print("  企业台账系统 - 后端 API（前后端分离）")
     print("-" * 46)
-    print("  本机访问: http://127.0.0.1:8000")
+    print(f"  后端 API:   http://127.0.0.1:{API_PORT}")
     for ip in lan_ips():
-        print(f"  局域网访问: http://{ip}:8000   (同一局域网内其他电脑用这个地址)")
-    print("  关闭服务: 按 Ctrl+C")
+        print(f"  局域网 API: http://{ip}:{API_PORT}")
+    print("-" * 46)
+    print("  前端页面:   运行  python web/serve.py   (默认 http://localhost:80)")
+    print("  或一键开发: 运行  python dev.py")
+    print("  关闭服务:   按 Ctrl+C")
     print("=" * 46)
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=API_PORT)

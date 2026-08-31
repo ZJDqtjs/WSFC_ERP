@@ -25,9 +25,6 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG_FILE = ROOT / "product_rules.json"
 
-# AI 票据图片保存目录：记录备注可引用 /uploads/xxx.jpg 预览
-UPLOAD_DIR = ROOT / "data" / "uploads"
-
 # 单位别名 -> 系统换算表里的标准名
 UNIT_ALIASES = {
     "g": "克", "克": "克",
@@ -416,6 +413,9 @@ def _image_data_uri(data: bytes, filename: str) -> str:
     }.get(ext, "image/jpeg")
     b64 = base64.b64encode(data).decode("ascii")
     return f"data:{mime};base64,{b64}"
+
+
+UPLOAD_DIR = ROOT / "data" / "uploads"
 
 
 def _save_invoice(data: bytes, filename: str) -> str:

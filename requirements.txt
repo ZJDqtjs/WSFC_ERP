@@ -1,0 +1,8 @@
+# Linux 部署依赖（与 pyproject.toml 一致，供 python3 -m venv + pip 安装）
+fastapi>=0.141.1
+openai>=3.5.0
+openpyxl>=3.1.5
+pydantic>=2.13.4
+python-multipart>=0.0.32
+sqlalchemy>=2.0.52
+uvicorn[standard]>=0.52.4

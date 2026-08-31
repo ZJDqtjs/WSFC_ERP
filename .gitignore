@@ -218,6 +218,23 @@ __marimo__/
 .streamlit/secrets.toml
 *.xlsx
 
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+/build/
+*.dart.plugin.stamp
+
+# 压缩文件
+*.zip
+*.tar
+*.gz
+*.rar
+*.7z
+
 # 敏感票据/发票图片
 *发票*.jpg
 *发票*.png

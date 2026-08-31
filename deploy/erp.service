@@ -1,0 +1,19 @@
+# 企业台账系统 - 后端 API systemd 服务
+# 只监听本机 127.0.0.1:8000，由 nginx(80) 反向代理对外提供服务（前后端分离）
+[Unit]
+Description=企业台账系统 - 后端 API
+After=network.target
+
+[Service]
+Type=simple
+User=azureuser
+Group=azureuser
+WorkingDirectory=/opt/erp
+Environment=API_PORT=8000
+Environment=SERVE_STATIC=0
+ExecStart=/opt/erp/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

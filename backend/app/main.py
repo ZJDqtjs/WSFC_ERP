@@ -1,5 +1,4 @@
 import asyncio
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -15,12 +14,8 @@ from .routers import ai, auth, backup, fresh, imports, inbound, inventory, outbo
 from .routers.backup import create_backup_file, load_config
 from .services import seed_units
 
-# 桌面 Web 前端目录（app/main.py -> 项目根/static）
-STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
-
-# 前后端分离：默认后端只提供 API（SERVE_STATIC=0，由 nginx / web/serve.py 托管前端）。
-# 需要单进程一体化预览时，设 SERVE_STATIC=1 让后端顺带托管 static/。
-SERVE_STATIC = os.getenv("SERVE_STATIC", "0") in ("1", "true", "yes", "on")
+# 桌面 Web 前端目录（backend/app/main.py -> 项目根/web/static）
+STATIC_DIR = Path(__file__).resolve().parents[2] / "web" / "static"
 
 
 def migrate():
@@ -109,10 +104,8 @@ app.include_router(ai.router)
 app.include_router(fresh.router)
 
 # AI 票据图片上传目录：记录备注可引用 /uploads/xxx.jpg 预览
-UPLOAD_DIR = Path(__file__).resolve().parent.parent / "data" / "uploads"
+UPLOAD_DIR = Path(__file__).resolve().parents[1] / "data" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
-# 前后端分离：默认不托管前端静态文件（由 nginx / web/serve.py 提供）
-if SERVE_STATIC:
-    app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
