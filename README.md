@@ -1,18 +1,92 @@
 # 企业台账系统
 
-库存 + 财务一体化的 Web 台账系统（FastAPI + SQLite + 原生前端）。
+库存 + 财务一体化的台账系统（FastAPI + SQLite），含桌面 Web 端与移动端 PWA。
 
-## 启动
+## 目录结构
 
-```bash
-uv run python run.py
+```
+statistics_erp/          # 项目根（本地开发 = Linux 部署单元）
+├── app/                 # 后端 FastAPI 应用（API，前后端分离后不托管前端）
+│   └── routers/         #   auth / products / inbound / outbound / inventory / report /
+│                        #   imports / backup / ai / fresh
+├── static/              # 桌面 Web 前端（index.html / app.js / style.css，纯静态）
+├── web/serve.py         # 本地前端预览服务器（托管 static/ + 反代 /api、/uploads 到后端）
+├── data/                # 数据库 erp.db、上传图片 data/uploads、自动备份 data/backups
+├── json/                # 包材 / 人工 / 鲜货展示清单 等 JSON 配置
+├── product_rules.json   # 账号 / 单位 / LLM / 关联规则等配置
+├── run.py               # 后端 API 启动脚本（默认 8000 端口）
+├── dev.py               # 本地一键开发：后端 + 前端预览
+├── deploy/              # Linux 部署：nginx.conf / erp.service / deploy.sh / deploy.ps1
+├── mobile/              # 移动端 PWA（Vue3 + Vant4 + Vite）
+├── requirements.txt     # Linux 部署依赖
+└── pyproject.toml / uv.lock / .venv
 ```
 
-- 本机访问：http://127.0.0.1:8000
-- 局域网其他电脑：http://<本机IP>:8000
-- 数据保存在 `data/erp.db`，重启不丢数据。
+## 端口说明
 
-## 账号系统
+- **网页（前端）默认端口 80**（原 8000 改为 80）：本地用 `web/serve.py`，Linux 用 nginx 监听 80。
+- **后端 API 端口 8000**（仅本机/内网）：本地 `uv run python run.py`，Linux 由 systemd 托管于 127.0.0.1:8000，nginx 反代对外。
+
+## 本地开发（前后端分离）
+
+**方式一：一键启动（推荐）**
+
+```bash
+uv run python dev.py      # 后端 :8000  +  前端 :80
+```
+
+- 前端：http://localhost/（Windows 非管理员绑定 80 会失败，自动改用 8001 并提示）
+- 后端 API：http://127.0.0.1:8000
+
+**方式二：分开启动**
+
+```bash
+uv run python run.py        # 终端 1：后端 API -> 127.0.0.1:8000
+uv run python web/serve.py  # 终端 2：前端 -> localhost:80（WEB_PORT 可覆盖）
+```
+
+自定义端口：`API_PORT=9000`、`WEB_PORT=8001`、`API_TARGET=http://127.0.0.1:9000` 均为环境变量。
+
+**单进程一体化预览**（不需要时忽略）：`SERVE_STATIC=1 uv run python run.py`，后端顺带托管 static/。
+
+**移动端 PWA**（进入 mobile 目录，需 Node.js ≥ 18）：
+
+```bash
+cd mobile
+npm install                 # 首次；国内建议 npm install --registry=https://registry.npmmirror.com
+npm run dev                 # 开发：http://localhost:5173（已代理 /api 到 8000）
+npm run build               # 生产构建 → mobile/dist
+```
+
+## Linux 部署（nginx 反代 80）
+
+前置：Linux 服务器（Ubuntu），已装 OpenSSH，本地能 `ssh -i <key> azureuser@<ip>`。
+
+**一键部署（Windows PowerShell，在项目根目录执行）：**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\deploy.ps1
+# 自定义密钥/主机/用户：
+deploy\deploy.ps1 -Key E:\other.pem -Srv 1.2.3.4 -User ubuntu
+```
+
+默认使用 `E:/ZJDqtjs_key..pem` 连接 `azureuser@20.24.210.119`。脚本会：合并本地数据库 → 打包 `app/static/json/data/配置` → 上传到 `/opt/erp` → 在服务器安装依赖、nginx（监听 80、反代 `/api` `/uploads` 到 127.0.0.1:8000）、systemd 服务并启动。
+
+**部署后的架构：**
+
+```
+浏览器 --:80--> nginx (Ubuntu)
+                ├── /        → /opt/erp/static（前端静态）
+                └── /api、/uploads → 127.0.0.1:8000（FastAPI systemd 服务）
+```
+
+**服务器手动部署**（上传代码到 /opt/erp 后）：
+
+```bash
+bash /opt/erp/deploy/deploy.sh
+```
+
+**账号系统**
 
 - 默认账号：**admin1 / admin1**
 - 不开放注册。账号在项目根目录 **`product_rules.json` 的 `accounts`** 中维护（用于数据库初始化，重启自动同步）。新增业务员示例：
