@@ -70,20 +70,20 @@ powershell -ExecutionPolicy Bypass -File deploy\deploy.ps1
 deploy\deploy.ps1 -Key E:\other.pem -Srv 1.2.3.4 -User ubuntu
 ```
 
-默认使用 `E:/ZJDqtjs_key..pem` 连接 `azureuser@20.24.210.119`。脚本会：合并本地数据库 → 打包 `app/static/json/data/配置` → 上传到 `/opt/erp` → 在服务器安装依赖、nginx（监听 80、反代 `/api` `/uploads` 到 127.0.0.1:8000）、systemd 服务并启动。
+默认使用 `E:/ZJDqtjs_key..pem` 连接 `azureuser@20.24.210.119`。脚本会：合并本地数据库 → 打包 `app/static/json/data/配置` → 上传到 `/home/azureuser/WSFC_ERP` → 在服务器安装依赖、nginx（监听 80、反代 `/api` `/uploads` 到 127.0.0.1:8000）、systemd 服务并启动。
 
 **部署后的架构：**
 
 ```
 浏览器 --:80--> nginx (Ubuntu)
-                ├── /        → /opt/erp/static（前端静态）
+                ├── /        → /home/azureuser/WSFC_ERP/static（前端静态）
                 └── /api、/uploads → 127.0.0.1:8000（FastAPI systemd 服务）
 ```
 
-**服务器手动部署**（上传代码到 /opt/erp 后）：
+**服务器手动部署**（上传代码到 /home/azureuser/WSFC_ERP 后）：
 
 ```bash
-bash /opt/erp/deploy/deploy.sh
+bash /home/azureuser/WSFC_ERP/deploy/deploy.sh
 ```
 
 **账号系统**

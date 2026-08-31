@@ -10,6 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $Remote   = "$User@$Srv"
+$AppDir   = "/home/$User/WSFC_ERP"   # 服务器端部署目录
 $Root     = Split-Path -Parent $PSScriptRoot
 $Tgz      = Join-Path $Root "_deploy.tgz"
 $Stage    = Join-Path $Root "_deploy_stage"
@@ -44,17 +45,17 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "本地打包失败" }
 
   Write-Host "==> [3] 停止服务器旧服务并准备目录"
-  Invoke-SSH "sudo systemctl stop erp 2>/dev/null; sudo mkdir -p /opt/erp; sudo chown -R $User:$User /opt/erp"
+  Invoke-SSH "sudo systemctl stop erp 2>/dev/null; mkdir -p $AppDir; chown -R $User:$User $AppDir"
 
   Write-Host "==> [4] 上传到 $Remote"
   & scp @SSHOpts $Tgz "${Remote}:/tmp/erp_deploy.tgz"
   if ($LASTEXITCODE -ne 0) { throw "scp 上传失败，请检查密钥与网络" }
 
-  Write-Host "==> [5] 解压到 /opt/erp"
-  Invoke-SSH "sudo tar -xzf /tmp/erp_deploy.tgz -C /opt/erp && sudo chown -R $User:$User /opt/erp && rm -f /tmp/erp_deploy.tgz"
+  Write-Host "==> [5] 解压到 $AppDir"
+  Invoke-SSH "tar -xzf /tmp/erp_deploy.tgz -C $AppDir && chown -R $User:$User $AppDir && rm -f /tmp/erp_deploy.tgz"
 
   Write-Host "==> [6] 执行服务器端部署脚本（装依赖 / nginx / systemd）"
-  Invoke-SSH "bash /opt/erp/deploy/deploy.sh $User"
+  Invoke-SSH "bash $AppDir/deploy/deploy.sh $User"
 
   Write-Host ""
   Write-Host "======================================================"
