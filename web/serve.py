@@ -15,12 +15,19 @@ import http.server
 import os
 import sys
 import urllib.parse
+import json
 from pathlib import Path
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "static"
+ROOT = WEB_ROOT.parent
+with (ROOT / "config.json").open(encoding="utf-8") as f:
+    CONFIG = json.load(f)
+SERVER_CONFIG = CONFIG.get("server", {})
+ROUTE_CONFIG = CONFIG.get("routes", {})
 
-WEB_PORT = int(os.getenv("WEB_PORT", "80"))
-API_TARGET = os.getenv("API_TARGET", "http://127.0.0.1:8000").rstrip("/")
+WEB_HOST = os.getenv("WEB_HOST", SERVER_CONFIG.get("web_host", "0.0.0.0"))
+WEB_PORT = int(os.getenv("WEB_PORT", SERVER_CONFIG.get("web_port", 80)))
+API_TARGET = os.getenv("API_TARGET", CONFIG.get("api_target", "http://127.0.0.1:8000")).rstrip("/")
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -41,7 +48,7 @@ MIME = {
 }
 
 # 需要反代到后端的路径前缀
-PROXY_PREFIXES = ("/api", "/uploads")
+PROXY_PREFIXES = tuple(ROUTE_CONFIG.get(name, default) for name, default in (("api", "/api"), ("uploads", "/uploads")))
 
 
 def _split_target(target: str):
@@ -114,8 +121,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             p = "/index.html"
         rel = p.lstrip("/")
         # 防目录穿越
-        target = (WEB_ROOT / rel).resolve()
-        if WEB_ROOT not in target.parents and target != WEB_ROOT:
+        target = (ROOT / "config.json").resolve() if rel == "config.json" else (WEB_ROOT / rel).resolve()
+        if target != (ROOT / "config.json").resolve() and WEB_ROOT not in target.parents and target != WEB_ROOT:
             self.send_error(403)
             return
         if target.is_dir():
@@ -163,11 +170,11 @@ def main():
         sys.exit(1)
     port = WEB_PORT
     try:
-        srv = http.server.ThreadingHTTPServer(("0.0.0.0", port), Handler)
+        srv = http.server.ThreadingHTTPServer((WEB_HOST, port), Handler)
     except PermissionError:
         print(f"提示：{port} 端口需要管理员权限（Windows），已自动改用 8001。")
         port = 8001
-        srv = http.server.ThreadingHTTPServer(("0.0.0.0", port), Handler)
+        srv = http.server.ThreadingHTTPServer((WEB_HOST, port), Handler)
     except OSError as e:
         print(f"错误：端口 {port} 绑定失败：{e}")
         sys.exit(1)

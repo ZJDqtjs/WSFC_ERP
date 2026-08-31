@@ -6,13 +6,13 @@ import App from './App.vue'
 import routes from './router'
 import 'vant/lib/index.css'
 
-const router = createRouter({ history: createWebHistory(), routes })
+const router = createRouter({ history: createWebHistory(import.meta.env.BASE_URL), routes })
 
 router.beforeEach((to) => {
   // 后端登录 cookie 为 HttpOnly，document.cookie 读不到，改用 localStorage 记录登录态
   const authed = localStorage.getItem('erp_authed') === '1'
-  if (to.path !== '/login' && !authed) return '/login'
-  if (to.path === '/login' && authed) return '/home'
+  if (to.path !== '/login' && !authed) return { path: '/login' }
+  if (to.path === '/login' && authed) return { path: '/home' }
 })
 
 const app = createApp(App)

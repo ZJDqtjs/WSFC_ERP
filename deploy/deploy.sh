@@ -22,11 +22,20 @@ fi
 
 echo "==> [3/7] 创建 Python 虚拟环境并安装依赖"
 cd "$APP_DIR"
-if [ ! -d .venv ]; then
-  python3 -m venv .venv
+if command -v uv >/dev/null 2>&1; then
+  if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c 'import sys; raise SystemExit(sys.version_info < (3, 12))'; then
+    rm -rf .venv
+    uv venv --python 3.12 .venv
+  fi
+  uv pip install --python .venv/bin/python -r requirements.txt -q
+else
+  if [ ! -d .venv ]; then
+    python3 -m venv .venv
+  fi
+  .venv/bin/python -m ensurepip --upgrade >/dev/null 2>&1 || true
+  .venv/bin/python -m pip install --upgrade pip -q
+  .venv/bin/python -m pip install -r requirements.txt -q
 fi
-.venv/bin/pip install --upgrade pip -q
-.venv/bin/pip install -r requirements.txt -q
 
 echo "==> [4/7] 修正目录权限"
 sudo mkdir -p "$APP_DIR/data/uploads" "$APP_DIR/data/backups"
@@ -36,17 +45,26 @@ echo "==> [5/7] 同步前端静态到 /var/www/erp（nginx 可读，家目录默
 sudo mkdir -p /var/www/erp
 sudo rm -rf /var/www/erp/*
 sudo cp -r "$APP_DIR/static/." /var/www/erp/
+sudo cp "$APP_DIR/config.json" /var/www/erp/config.json
+sudo cp -r "$APP_DIR/mobile/." /var/www/erp/mobile/
 sudo chown -R www-data:www-data /var/www/erp
 
 echo "==> [6/7] 安装 nginx 站点配置（监听 80）"
-sudo cp "$APP_DIR/deploy/nginx.conf" "/etc/nginx/sites-available/$SERVICE"
+API_ROUTE=$(python3 -c 'import json; print(json.load(open("config.json"))["routes"]["api"].rstrip("/"))')
+UPLOAD_ROUTE=$(python3 -c 'import json; print(json.load(open("config.json"))["routes"]["uploads"].rstrip("/"))')
+MOBILE_ROUTE=$(python3 -c 'import json; print(json.load(open("config.json"))["routes"]["mobile"].rstrip("/"))')
+API_HOST=$(python3 -c 'import json; print(json.load(open("config.json"))["server"]["api_host"])')
+API_PORT=$(python3 -c 'import json; print(json.load(open("config.json"))["server"]["api_port"])')
+sed -e "s|__API_ROUTE__|$API_ROUTE|g" -e "s|__UPLOAD_ROUTE__|$UPLOAD_ROUTE|g" -e "s|__MOBILE_ROUTE__|$MOBILE_ROUTE|g" \
+  "$APP_DIR/deploy/nginx.conf" | sudo tee "/etc/nginx/sites-available/$SERVICE" >/dev/null
 sudo ln -sf "/etc/nginx/sites-available/$SERVICE" "/etc/nginx/sites-enabled/$SERVICE"
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
 sudo systemctl reload nginx || sudo systemctl restart nginx
 
 echo "==> [7/7] 安装并启动 systemd 服务"
-sudo cp "$APP_DIR/deploy/erp.service" "/etc/systemd/system/$SERVICE.service"
+sed -e "s|__API_HOST__|$API_HOST|g" -e "s|__API_PORT__|$API_PORT|g" \
+  "$APP_DIR/deploy/erp.service" | sudo tee "/etc/systemd/system/$SERVICE.service" >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable "$SERVICE"
 sudo systemctl restart "$SERVICE"

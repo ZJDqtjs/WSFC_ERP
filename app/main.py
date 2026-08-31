@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,6 +18,11 @@ from .services import seed_units
 
 # 桌面 Web 前端目录（app/main.py -> 项目根/static）
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
+with CONFIG_PATH.open(encoding="utf-8") as config_file:
+    ROUTES = json.load(config_file).get("routes", {})
+API_ROUTE = ROUTES.get("api", "/api").rstrip("/") or "/api"
+UPLOAD_ROUTE = ROUTES.get("uploads", "/uploads").rstrip("/") or "/uploads"
 
 # 前后端分离：默认后端只提供 API（SERVE_STATIC=0，由 nginx / web/serve.py 托管前端）。
 # 需要单进程一体化预览时，设 SERVE_STATIC=1 让后端顺带托管 static/。
@@ -90,6 +96,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="企业台账系统", lifespan=lifespan)
 
+
+@app.middleware("http")
+async def normalize_api_route(request, call_next):
+    if API_ROUTE != "/api" and request.scope["path"].startswith(API_ROUTE + "/"):
+        request.scope["path"] = "/api" + request.scope["path"][len(API_ROUTE):]
+    return await call_next(request)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -111,7 +124,7 @@ app.include_router(fresh.router)
 # AI 票据图片上传目录：记录备注可引用 /uploads/xxx.jpg 预览
 UPLOAD_DIR = Path(__file__).resolve().parent.parent / "data" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+app.mount(UPLOAD_ROUTE, StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 # 前后端分离：默认不托管前端静态文件（由 nginx / web/serve.py 提供）
 if SERVE_STATIC:
