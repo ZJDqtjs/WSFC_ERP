@@ -65,6 +65,8 @@ sudo systemctl reload nginx || sudo systemctl restart nginx
 echo "==> [7/7] 安装并启动 systemd 服务"
 sed -e "s|__API_HOST__|$API_HOST|g" -e "s|__API_PORT__|$API_PORT|g" \
   "$APP_DIR/deploy/erp.service" | sudo tee "/etc/systemd/system/$SERVICE.service" >/dev/null
+# 兼容此前手工启动或旧部署遗留的进程，避免占用 systemd 要使用的端口。
+sudo fuser -k "$API_PORT/tcp" 2>/dev/null || true
 sudo systemctl daemon-reload
 sudo systemctl enable "$SERVICE"
 sudo systemctl restart "$SERVICE"
