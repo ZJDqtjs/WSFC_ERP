@@ -38,8 +38,8 @@ try {
   & npm run build
   if ($LASTEXITCODE -ne 0) { throw "移动端构建失败" }
   Pop-Location
-  New-Item -ItemType Directory -Path "$Stage\mobile" -Force | Out-Null
-  Copy-Item (Join-Path $Root "mobile\dist\.") -Destination "$Stage\mobile" -Recurse
+  New-Item -ItemType Directory -Path "$Stage\mobile\dist" -Force | Out-Null
+  Copy-Item (Join-Path $Root "mobile\dist\.") -Destination "$Stage\mobile\dist" -Recurse
   Copy-Item (Join-Path $Root "config.json") -Destination $Stage
   Copy-Item product_rules.json, requirements.txt, pyproject.toml -Destination $Stage
   Copy-Item data\.secret, data\backup_config.json -Destination "$Stage\data" -ErrorAction SilentlyContinue

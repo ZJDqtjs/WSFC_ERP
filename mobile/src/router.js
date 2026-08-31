@@ -1,9 +1,9 @@
-import Login from './views/Login.vue'
-import Home from './views/Home.vue'
-import Outbound from './views/Outbound.vue'
-import Inbound from './views/Inbound.vue'
-import Stock from './views/Stock.vue'
-import Mine from './views/Mine.vue'
+import Login from './views/login.vue'
+import Home from './views/home.vue'
+import Outbound from './views/outbound.vue'
+import Inbound from './views/inbound.vue'
+import Stock from './views/stock.vue'
+import Mine from './views/mine.vue'
 
 const routes = [
   { path: '/login', component: Login },

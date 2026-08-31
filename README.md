@@ -59,6 +59,20 @@ npm run dev                 # 开发：http://localhost:5173（已代理 /api �
 npm run build               # 生产构建 → mobile/dist
 ```
 
+**Flutter Android 端**（`flutter/statistics_erp_app`，不参与 Web/PWA 部署）：
+
+当前 Flutter 端已接入登录、工作台、库存总览/流水、入库、出库和我的页面，对应 Python 后端的认证、仪表盘、商品、库存、入库和出库接口。Android 真机不能使用 `localhost` 访问服务器，生产构建时请通过 `API_BASE_URL` 指定 Nginx 公网地址：
+
+```powershell
+cd flutter\statistics_erp_app
+flutter pub get
+flutter analyze
+flutter test
+flutter build apk --release --dart-define=API_BASE_URL=http://20.24.210.119
+```
+
+默认 API 地址也是 `http://20.24.210.119`；如部署了 HTTPS 或更换域名，使用新的地址覆盖 `API_BASE_URL`。Android 当前已允许 HTTP 明文连接，切换 HTTPS 后可移除该兼容设置。
+
 ## Linux 部署（nginx 反代 80）
 
 前置：Linux 服务器（Ubuntu），已装 OpenSSH，本地能 `ssh -i <key> azureuser@<ip>`。
@@ -87,6 +101,41 @@ deploy\deploy.ps1 -Key E:\other.pem -Srv 1.2.3.4 -User ubuntu
 ```bash
 bash /home/azureuser/WSFC_ERP/deploy/deploy.sh
 ```
+
+说明：`bash -n deploy/deploy.sh` 只检查脚本语法，不会启动服务。部署完成后由 systemd 管理后端服务，服务名为 `erp`；Nginx 管理网页入口。
+
+**服务器服务管理**：
+
+```bash
+cd /home/azureuser/WSFC_ERP
+
+# 仅检查部署脚本语法，不执行部署
+bash -n deploy/deploy.sh
+
+# 查看服务状态
+sudo systemctl status erp
+sudo systemctl status nginx
+
+# 启动服务
+sudo systemctl start erp
+sudo systemctl start nginx
+
+# 停止服务
+sudo systemctl stop erp
+sudo systemctl stop nginx
+
+# 重启服务（修改后端代码或配置后使用）
+sudo systemctl restart erp
+sudo systemctl reload nginx
+
+# 查看后端实时日志
+sudo journalctl -u erp -f
+
+# 查看最近的后端日志
+sudo journalctl -u erp -n 100 --no-pager
+```
+
+通常不需要单独手动启动后端。服务器重启后，`erp` 已设置为自动启动；重新发布代码时，重新执行 `deploy.sh` 即可。
 
 **账号系统**
 
