@@ -8,10 +8,10 @@ After=network.target
 Type=simple
 User=azureuser
 Group=azureuser
-WorkingDirectory=/opt/erp
+WorkingDirectory=/home/azureuser/WSFC_ERP
 Environment=API_PORT=8000
 Environment=SERVE_STATIC=0
-ExecStart=/opt/erp/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+ExecStart=/home/azureuser/WSFC_ERP/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=3
 
