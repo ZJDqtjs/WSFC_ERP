@@ -217,3 +217,11 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 *.xlsx
+
+# 敏感票据/发票图片
+*发票*.jpg
+*发票*.png
+*票据*.jpg
+*票据*.png
+data-src/*发票*
+data-src/*票据*
