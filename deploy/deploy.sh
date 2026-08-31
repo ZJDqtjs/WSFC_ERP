@@ -46,7 +46,12 @@ sudo mkdir -p /var/www/erp
 sudo rm -rf /var/www/erp/*
 sudo cp -r "$APP_DIR/static/." /var/www/erp/
 sudo cp "$APP_DIR/config.json" /var/www/erp/config.json
-sudo cp -r "$APP_DIR/mobile/." /var/www/erp/mobile/
+if [ ! -f "$APP_DIR/mobile/dist/index.html" ]; then
+  echo "错误：找不到移动端生产构建 mobile/dist，请先在本地执行 npm --prefix mobile run build 并上传 mobile/dist" >&2
+  exit 1
+fi
+sudo mkdir -p /var/www/erp/mobile
+sudo cp -r "$APP_DIR/mobile/dist/." /var/www/erp/mobile/
 sudo chown -R www-data:www-data /var/www/erp
 
 echo "==> [6/7] 安装 nginx 站点配置（监听 80）"
