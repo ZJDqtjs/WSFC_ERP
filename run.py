@@ -8,10 +8,17 @@
 """
 import os
 import socket
+import json
+from pathlib import Path
 
 import uvicorn
 
-API_PORT = int(os.getenv("API_PORT", "8000"))
+ROOT = Path(__file__).resolve().parent
+with (ROOT / "config.json").open(encoding="utf-8") as f:
+    CONFIG = json.load(f)
+API_CONFIG = CONFIG.get("server", {})
+API_HOST = os.getenv("API_HOST", API_CONFIG.get("api_host", "127.0.0.1"))
+API_PORT = int(os.getenv("API_PORT", API_CONFIG.get("api_port", 8000)))
 
 
 def lan_ips():
@@ -43,4 +50,4 @@ if __name__ == "__main__":
     print("  或一键开发: 运行  python dev.py")
     print("  关闭服务:   按 Ctrl+C")
     print("=" * 46)
-    uvicorn.run("app.main:app", host="0.0.0.0", port=API_PORT)
+    uvicorn.run("app.main:app", host=API_HOST, port=API_PORT)

@@ -141,11 +141,18 @@ document.addEventListener("click", (e) => {
 
 /* ---------- 工具 ---------- */
 const $ = (id) => document.getElementById(id);
+const ROUTES = { api: "/api", uploads: "/uploads" };
+
+function routePath(path) {
+  if (path.startsWith("/api")) return ROUTES.api + path.slice(4);
+  if (path.startsWith("/uploads")) return ROUTES.uploads + path.slice(8);
+  return path;
+}
 
 async function api(path, method = "GET", body) {
   const opt = { method, headers: { "Content-Type": "application/json" } };
   if (body !== undefined) opt.body = JSON.stringify(body);
-  const res = await fetch(path, opt);
+  const res = await fetch(routePath(path), opt);
   if (res.status === 401) { showLogin(); throw new Error("请先登录"); }
   if (!res.ok) {
     let msg = "请求失败";
@@ -158,7 +165,7 @@ async function api(path, method = "GET", body) {
 async function apiUpload(path, file) {
   const fd = new FormData();
   fd.append("file", file);
-  const res = await fetch(path, { method: "POST", body: fd });
+  const res = await fetch(routePath(path), { method: "POST", body: fd });
   if (res.status === 401) { showLogin(); throw new Error("请先登录"); }
   if (!res.ok) {
     let msg = "请求失败";
@@ -297,7 +304,7 @@ async function doLogin() {
   const password = $("loginPass").value;
   if (!username || !password) { showLoginErr("请输入用户名和密码"); return; }
   try {
-    const r = await fetch("/api/auth/login", {
+    const r = await fetch(routePath("/api/auth/login"), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     });
@@ -315,7 +322,7 @@ function showLoginErr(msg) {
   el.style.display = "block";
 }
 $("logoutBtn").addEventListener("click", async () => {
-  try { await fetch("/api/auth/logout", { method: "POST" }); } catch (e) {}
+  try { await fetch(routePath("/api/auth/logout"), { method: "POST" }); } catch (e) {}
   CURRENT_USER = null;
   showLogin();
 });
@@ -575,7 +582,7 @@ async function aiParse() {
   if (!text) { toast("请输入入库/出库描述"); return; }
   aiStartTask();
   try {
-    const res = await fetch("/api/ai/parse/stream", {
+    const res = await fetch(routePath("/api/ai/parse/stream"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
@@ -594,7 +601,7 @@ async function aiParseImage(src) {
   try {
     const fd = new FormData();
     fd.append("file", f);
-    const res = await fetch("/api/ai/parse-image/stream", {
+    const res = await fetch(routePath("/api/ai/parse-image/stream"), {
       method: "POST",
       body: fd,
       signal: AI_CTRL.signal,
@@ -697,7 +704,7 @@ async function aiSubmit() {
 /* 备注渲染：把 /uploads/xxx.jpg 票据引用转成缩略图（可点击放大） */
 function renderRemarkHtml(rmk) {
   if (!rmk) return "—";
-  return esc(rmk).replace(/\/uploads\/[\w.\-]+/g, (u) =>
+  return esc(rmk).replace(new RegExp(ROUTES.uploads.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\/[\\w.\\-]+", "g"), (u) =>
     `<a href="${u}" target="_blank"><img src="${u}" alt="票据" style="height:34px;vertical-align:middle;border-radius:4px;margin-right:4px;border:1px solid var(--border-light);" /></a>`);
 }
 
@@ -1850,6 +1857,10 @@ function esc(s) {
 
 /* ---------- 初始化 ---------- */
 (async function init() {
+  try {
+    const cfg = await fetch("/config.json", { cache: "no-store" }).then((r) => r.json());
+    Object.assign(ROUTES, cfg.routes || {});
+  } catch (e) {}
   showLogin();
   try {
     const me = await api("/api/auth/me");
@@ -1881,7 +1892,7 @@ function esc(s) {
 
 /* =============== 批量导入 =============== */
 function downloadTpl(kind) {
-  window.location.href = `/api/templates/${kind}`;
+  window.location.href = routePath(`/api/templates/${kind}`);
 }
 async function doImport(kind) {
   const idMap = { products: "impProdFile", inbounds: "impInFile", outbounds: "impOutFile" };

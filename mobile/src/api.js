@@ -1,11 +1,16 @@
-const BASE = ''
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, '')
+const API_BASE = __API_BASE__
+
+function apiPath(path) {
+  return path.startsWith('/api') ? API_BASE + path.slice(4) : path
+}
 
 async function api(path, method = 'GET', body, formData) {
   const opt = { method, headers: {} }
   if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body) }
   if (formData) opt.body = formData
-  const res = await fetch(BASE + path, opt)
-  if (res.status === 401) { localStorage.removeItem('erp_authed'); location.href = '/login'; throw new Error('未登录') }
+  const res = await fetch(apiPath(path), opt)
+  if (res.status === 401) { localStorage.removeItem('erp_authed'); location.href = `${BASE}/login`; throw new Error('未登录') }
   if (!res.ok) {
     let msg = '请求失败'
     try { const j = await res.json(); msg = j.detail || msg } catch (e) {}
@@ -19,8 +24,8 @@ export async function aiStream(path, body, onDelta, formData) {
   const opt = { method: 'POST' }
   if (formData) opt.body = formData
   else { opt.headers = { 'Content-Type': 'application/json' }; opt.body = JSON.stringify(body) }
-  const res = await fetch(BASE + path, opt)
-  if (res.status === 401) { localStorage.removeItem('erp_authed'); location.href = '/login'; throw new Error('未登录') }
+  const res = await fetch(apiPath(path), opt)
+  if (res.status === 401) { localStorage.removeItem('erp_authed'); location.href = `${BASE}/login`; throw new Error('未登录') }
   if (!res.ok) {
     let msg = '请求失败'
     try { const j = await res.json(); msg = j.detail || msg } catch (e) {}

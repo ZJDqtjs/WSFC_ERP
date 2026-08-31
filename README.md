@@ -26,6 +26,7 @@ statistics_erp/          # 项目根（本地开发 = Linux 部署单元）
 
 - **网页（前端）默认端口 80**（原 8000 改为 80）：本地用 `web/serve.py`，Linux 用 nginx 监听 80。
 - **后端 API 端口 8000**（仅本机/内网）：本地 `uv run python run.py`，Linux 由 systemd 托管于 127.0.0.1:8000，nginx 反代对外。
+- 根目录 `config.json` 集中管理绑定地址、端口以及 `/api`、`/uploads`、`/mobile` 前缀。修改前缀后重新部署，Nginx、后端和前端会同步使用新值。
 
 ## 本地开发（前后端分离）
 
@@ -70,13 +71,14 @@ powershell -ExecutionPolicy Bypass -File deploy\deploy.ps1
 deploy\deploy.ps1 -Key E:\other.pem -Srv 1.2.3.4 -User ubuntu
 ```
 
-默认使用 `E:/ZJDqtjs_key..pem` 连接 `azureuser@20.24.210.119`。脚本会：合并本地数据库 → 打包 `app/static/json/data/配置` → 上传到 `/home/azureuser/WSFC_ERP` → 在服务器安装依赖、nginx（监听 80、反代 `/api` `/uploads` 到 127.0.0.1:8000）、systemd 服务并启动。
+默认使用 `E:/ZJDqtjs_key..pem` 连接 `azureuser@20.24.210.119`。脚本会：合并本地数据库 → 在本地构建 `mobile/dist` → 上传代码和产物 → 在服务器安装 Python 依赖、Nginx（监听 80、托管桌面端和 `/mobile`、反代 API/上传）、systemd 服务并启动。服务器不需要 Node.js。
 
 **部署后的架构：**
 
 ```
 浏览器 --:80--> nginx (Ubuntu)
                 ├── /        → /home/azureuser/WSFC_ERP/static（前端静态）
+                ├── /mobile/ → /var/www/erp/mobile（PWA 构建产物）
                 └── /api、/uploads → 127.0.0.1:8000（FastAPI systemd 服务）
 ```
 
