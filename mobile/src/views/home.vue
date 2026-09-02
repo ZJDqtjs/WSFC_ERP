@@ -18,9 +18,11 @@
       <van-field v-model="aiText" type="textarea" rows="2" autosize placeholder="例如：今天入库了100斤木耳，25一斤；或 出库2单七彩土豆3斤，每单15元" />
       <div class="row" style="margin-top:10px;">
         <van-button type="primary" block round :loading="busy" @click="aiParse">🤖 识别并录入</van-button>
-        <van-button type="success" block round :loading="busyImg" @click="file && file.click()">📷 拍单识别</van-button>
-        <input ref="file" type="file" accept="image/*" style="display:none" @change="aiParseImage" />
+        <van-button type="success" block round :loading="busyImg" @click="showPick">📷 拍单识别</van-button>
+        <input ref="cameraFile" type="file" accept="image/*" capture="environment" style="display:none" @change="pickImage" />
+        <input ref="albumFile" type="file" accept="image/*" style="display:none" @change="pickImage" />
       </div>
+      <van-action-sheet v-model:show="pickShow" :actions="pickActions" cancel-text="取消" @select="onPick" />
       <div v-if="thinking" class="think-box"><pre>{{ thinking }}</pre></div>
     </div>
 
@@ -44,7 +46,12 @@ import api, { aiStream } from '../api'
 
 const router = useRouter()
 const today = ref({}), month = ref({}), stockValue = ref(0), productCount = ref(0), lowStock = ref([])
-const aiText = ref(''), thinking = ref(''), busy = ref(false), busyImg = ref(false), file = ref(null)
+const aiText = ref(''), thinking = ref(''), busy = ref(false), busyImg = ref(false)
+const cameraFile = ref(null), albumFile = ref(null), pickShow = ref(false)
+const pickActions = [
+  { name: '📷 拍照', source: 'camera' },
+  { name: '🖼️ 从相册选择', source: 'album' },
+]
 
 const fmt = (v) => '¥' + (+v || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })
 const fmtStock = (p) => {
@@ -77,8 +84,14 @@ async function aiParse() {
     showAiConfirm(r)
   } catch (e) { busy.value = false; showToast('识别失败：' + e.message) }
 }
-async function aiParseImage() {
-  const f = file.value && file.value.files[0]
+function showPick() { pickShow.value = true }
+function onPick(action) {
+  pickShow.value = false
+  if (action.source === 'camera') cameraFile.value && cameraFile.value.click()
+  else albumFile.value && albumFile.value.click()
+}
+async function pickImage(e) {
+  const f = e.target.files && e.target.files[0]
   if (!f) return
   busyImg.value = true; thinking.value = ''
   try {
@@ -87,7 +100,7 @@ async function aiParseImage() {
     busyImg.value = false
     showAiConfirm(r)
   } catch (e) { busyImg.value = false; showToast('识别失败：' + e.message) }
-  if (file.value) file.value.value = ''
+  e.target.value = ''
 }
 
 function showAiConfirm(r) {
