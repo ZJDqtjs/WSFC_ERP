@@ -5,6 +5,7 @@ import Outbound from './views/outbound.vue'
 import Inbound from './views/inbound.vue'
 import Stock from './views/stock.vue'
 import Mine from './views/mine.vue'
+import Backups from './views/backups.vue'
 
 const routes = [
   { path: '/login', component: Login },
@@ -15,6 +16,7 @@ const routes = [
   { path: '/inbound', component: Inbound, meta: { tab: true, title: '入库' } },
   { path: '/stock', component: Stock, meta: { tab: true, title: '库存' } },
   { path: '/mine', component: Mine, meta: { tab: true, title: '我的' } },
+  { path: '/backups', component: Backups, meta: { title: '备份与恢复' } },
 ]
 
 export default routes

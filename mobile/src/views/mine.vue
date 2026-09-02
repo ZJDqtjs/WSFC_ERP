@@ -12,7 +12,7 @@
 
     <van-cell-group inset title="快捷入口">
       <van-cell title="📷 拍单识别" is-link to="/home" />
-      <van-cell title="备份与恢复" is-link to="/home" :label="'桌面端「备份与恢复」页可管理，自动备份每 ' + bkHours + ' 小时一次'" />
+      <van-cell title="备份与恢复" is-link to="/backups" />
     </van-cell-group>
 
     <div style="margin: 24px 18px;">
@@ -31,16 +31,11 @@ import api from '../api'
 
 const router = useRouter()
 const user = ref({})
-const bkHours = ref(2)
 
 onMounted(async () => {
   try {
     const me = await api('/api/auth/me')
     user.value = me
-  } catch (e) {}
-  try {
-    const b = await api('/api/backups')
-    bkHours.value = b.config.interval_hours || 2
   } catch (e) {}
 })
 

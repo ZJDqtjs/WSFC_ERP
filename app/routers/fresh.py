@@ -119,7 +119,8 @@ def fresh_plan(
     规则：订单商品（已关联库存商品）→ 按倍数折算到其关联的蔬菜；
           直接销售的库存蔬菜 → 按原数量折算。只统计蔬菜分类。
     """
-    drafts, failed, skip, unmapped = parse_jushuitan_draft(file, db, user)
+    # statuses=None：接受「待出库/已出库」等全部状态（需求预演算），仅排除作废单
+    drafts, failed, skip, unmapped = parse_jushuitan_draft(file, db, user, statuses=None)
 
     consume: dict[int, float] = {}  # 蔬菜 product_id -> 需求(基础单位)
     detail: list[dict] = []
@@ -136,7 +137,11 @@ def fresh_plan(
                 sp = db.get(Product, p.stock_product_id) if p.stock_product_id else None
                 if not sp or sp.category not in FRESH_CATS:
                     continue
-                base *= p.multiplier or 1
+                # multiplier 以库存默认单位计（如 0.5公斤）；再乘「默认单位→基础单位」系数，
+                # 统一折算到库存基础单位累计，与 stock_deduction 扣减口径一致
+                du = _unit(sp)
+                f = _factor(sp, du)
+                base = base * (p.multiplier or 1) * f
                 target = sp
             else:
                 if p.category not in FRESH_CATS:
@@ -171,6 +176,6 @@ def fresh_plan(
         "items": items,
         "order_count": len(drafts),
         "failed_count": len(failed),
-        "skip": len(skip),
+        "skip": sum(skip.values()),
         "unmapped": sorted(unmapped),
     }

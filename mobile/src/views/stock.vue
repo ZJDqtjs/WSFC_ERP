@@ -3,6 +3,10 @@
     <van-search v-model="kw" placeholder="搜索商品" shape="round" />
     <van-tabs v-model:active="tab" sticky>
       <van-tab title="库存总览">
+        <div class="sort-row">
+          <span class="muted">库存量</span>
+          <van-button size="mini" type="default" @click="toggleSort">{{ sortDir === 'asc' ? '正序 ↑' : '降序 ↓' }}</van-button>
+        </div>
         <van-pull-refresh v-model="refreshing" @refresh="loadStock">
           <div class="list">
             <div v-for="p in filtered" :key="p.id" class="card stock-item" @click="openMv(p.id)">
@@ -38,20 +42,25 @@ import { ref, computed, onMounted } from 'vue'
 import { showToast } from 'vant'
 import api from '../api'
 
-const kw = ref(''), tab = ref(0), refreshing = ref(false)
+const kw = ref(''), tab = ref(0), refreshing = ref(false), sortDir = ref('desc')
 const STOCK = ref([]), mvList = ref([])
 
 const fmt = (v) => '¥' + (+v || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })
 const convFactor = (p) => { const du = p.default_unit || p.base_unit; return (p.conversions || {})[du] }
 const fmtStock = (p) => {
+  if (p.stock_display) return p.stock_display
   const du = p.default_unit || p.base_unit || ''
   const f = (p.conversions || {})[du] || 1
   return `${f && f !== 1 ? +p.stock / f : +p.stock} ${f && f !== 1 ? du : p.base_unit}`
 }
 const filtered = computed(() => {
   const s = (kw.value || '').trim().toLowerCase()
-  return STOCK.value.filter((p) => !s || p.name.toLowerCase().includes(s) || (p.category || '').toLowerCase().includes(s))
+  const list = STOCK.value.filter((p) => !s || p.name.toLowerCase().includes(s) || (p.category || '').toLowerCase().includes(s))
+  const factor = sortDir.value
+  return list.sort((a, b) => factor === 'asc' ? stockNum(a) - stockNum(b) : stockNum(b) - stockNum(a))
 })
+const stockNum = (p) => { const f = (p.conversions || {})[p.default_unit || p.base_unit] || 1; return +p.stock / f }
+const toggleSort = () => { sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc' }
 
 async function loadStock() {
   try {
@@ -75,6 +84,7 @@ onMounted(() => { loadStock(); loadMv() })
 </script>
 
 <style scoped>
+.sort-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: #fff; }
 .list { padding: 4px 0; }
 .stock-item:active { background: #f5f6f7; }
 .stock-num { font-weight: 700; }

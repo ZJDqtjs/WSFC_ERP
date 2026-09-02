@@ -19,7 +19,7 @@
       <div class="row" style="margin-top:10px;">
         <van-button type="primary" block round :loading="busy" @click="aiParse">🤖 识别并录入</van-button>
         <van-button type="success" block round :loading="busyImg" @click="file && file.click()">📷 拍单识别</van-button>
-        <input ref="file" type="file" accept="image/*" capture="environment" style="display:none" @change="aiParseImage" />
+        <input ref="file" type="file" accept="image/*" style="display:none" @change="aiParseImage" />
       </div>
       <div v-if="thinking" class="think-box"><pre>{{ thinking }}</pre></div>
     </div>
@@ -48,6 +48,7 @@ const aiText = ref(''), thinking = ref(''), busy = ref(false), busyImg = ref(fal
 
 const fmt = (v) => '¥' + (+v || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })
 const fmtStock = (p) => {
+  if (p.stock_display) return p.stock_display
   const du = p.default_unit || p.base_unit || ''
   const f = (p.conversions || {})[du] || 1
   const n = f && f !== 1 ? (+p.stock / f) : +p.stock
