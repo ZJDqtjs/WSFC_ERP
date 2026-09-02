@@ -547,7 +547,7 @@ async function aiCollectStream(res) {
       if (obj.delta) {
         aiAppendThink(obj.delta);          // 实时展示 AI 思考过程
       } else if (obj.result) {
-        result = obj.result;
+        if (!result || obj.source === "quick") result = obj.result;
       } else if (obj.error) {
         throw new Error(obj.error);
       }
@@ -796,7 +796,7 @@ function renderFreshConfig() {
   const selHtml = FC_SEL.map((id, i) => {
     const p = FC_ALL.find((x) => x.id === id);
     if (!p) return "";
-    return `<div class="fc-sel-item">
+    return `<div class="fc-sel-item" draggable="true" data-id="${id}" data-index="${i}" ondragstart="fcDragStart(event, ${id})" ondragover="event.preventDefault()" ondrop="fcDrop(event, ${i})">
       <span class="grow">${i + 1}. ${esc(p.name)}</span>
       <button class="btn sm" onclick="fcMove(${i},-1)" title="上移">↑</button>
       <button class="btn sm" onclick="fcMove(${i},1)" title="下移">↓</button>
@@ -804,6 +804,27 @@ function renderFreshConfig() {
     </div>`;
   }).join("");
   $("fcSel").innerHTML = selHtml || '<div class="empty" style="padding:14px;">未选择（将展示全部）</div>';
+}
+let FC_DRAG_ID = null;
+function fcDragStart(event, id) {
+  FC_DRAG_ID = id;
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', String(id));
+}
+function fcDrop(event, targetIndex) {
+  event.preventDefault();
+  const draggedId = Number(event.dataTransfer.getData('text/plain') || FC_DRAG_ID || 0);
+  if (!draggedId) return;
+  const from = FC_SEL.indexOf(draggedId);
+  if (from < 0) return;
+  const to = targetIndex;
+  if (from === to) return;
+  const next = [...FC_SEL];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  FC_SEL = next;
+  FC_DRAG_ID = null;
+  renderFreshConfig();
 }
 function fcToggle(id) {
   const i = FC_SEL.indexOf(id);

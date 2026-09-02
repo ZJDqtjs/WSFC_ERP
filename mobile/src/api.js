@@ -48,7 +48,9 @@ export async function aiStream(path, body, onDelta, formData) {
       let obj
       try { obj = JSON.parse(data) } catch (e) { continue }
       if (obj.delta) onDelta && onDelta(obj.delta)
-      else if (obj.result) result = obj.result
+      else if (obj.result) {
+        if (!result || obj.source === 'quick') result = obj.result
+      }
       else if (obj.error) throw new Error(obj.error)
     }
   }

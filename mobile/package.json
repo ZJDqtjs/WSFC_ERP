@@ -6,6 +6,7 @@
   "description": "企业台账移动端 PWA（Vue3 + Vant4 + Vite）",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/make-icons.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },

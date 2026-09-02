@@ -134,10 +134,26 @@ def cell(row, idx, default=""):
 
 
 def to_float(v, default=0.0):
-    try:
-        return float(v)
-    except (TypeError, ValueError):
+    if v is None:
         return default
+    s = str(v).strip()
+    if not s:
+        return default
+    s = s.replace("￥", "").replace("¥", "").replace("元", "").replace("，", ",").replace("；", ";")
+    s = s.replace(" ", "").replace("\u00A0", "")
+    if s.endswith("元"):
+        s = s[:-1]
+    s = s.replace(",", "")
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        cleaned = re.sub(r"[^\d\-+\.]+", "", s)
+        if cleaned in ("", "-", "+", ".", "-.", "+."):
+            return default
+        try:
+            return float(cleaned)
+        except ValueError:
+            return default
 
 
 def infer_base_unit(unit: str) -> str:
@@ -709,23 +725,34 @@ def import_outbounds(file: UploadFile, db: Session = Depends(get_db), user: User
 
 
 # ---------------- 聚水潭：解析 / 关联 / 导入 ----------------
+def _normalize_jushuitan_status(value) -> str:
+    return re.sub(r"[\s\u3000]+", "", str(value or "")).strip()
+
+
 def parse_jushuitan_name(name: str) -> list[tuple[str, float]]:
-    """'2.京鲜生茯苓500g*1,山药片500g*1' → [(京鲜生茯苓500g,1),(山药片500g,1)]"""
+    """将聚水潭导出商品串拆成 (商品名, 数量) 列表，兼容中英文分隔符及序号前缀。"""
     out = []
     s = str(name or "").strip()
     if not s:
         return out
-    m = re.match(r"^(\d+\.?\d*)\.(.*)$", s)
-    rest = m.group(2).strip() if m else s
-    for part in rest.split(","):
+    s = s.replace("，", ",").replace("；", ";").replace("、", ",").replace("\n", ";").replace("\r", ";")
+    s = re.sub(r"^\d+\.?\d*\s*\.\s*", "", s)
+    for part in re.split(r"[;,]", s):
         part = part.strip()
         if not part:
             continue
-        pm = re.match(r"^(.*?)\*(\d+\.?\d*)$", part)
+        part = re.sub(r"^\d+\.?\d*\s*\.\s*", "", part)
+        pm = re.match(r"^(.*?)\*(\d+(?:\.\d+)?)\s*$", part)
         if pm:
-            out.append((pm.group(1).strip(), float(pm.group(2))))
+            product = pm.group(1).strip()
+            qty = float(pm.group(2))
         else:
-            out.append((part, 1.0))
+            product = part
+            qty = 1.0
+        product = product.strip("()[]{} ")
+        if not product:
+            continue
+        out.append((product, qty))
     return out
 
 
@@ -773,7 +800,7 @@ def jushuitan_rows(rows) -> list[dict]:
         raise HTTPException(400, "未识别到聚水潭出库单表头（需包含「出库单号」「商品名称」等列）")
     result, skip = [], {"待出库": 0, "作废": 0, "其他": 0}
     for row in rows[start:]:
-        status = cell(row, mapping.get("status"))
+        status = _normalize_jushuitan_status(cell(row, mapping.get("status")))
         if status != "已出库":
             skip[status if status in skip else "其他"] += 1
             continue
