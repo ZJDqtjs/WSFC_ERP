@@ -5,9 +5,11 @@
 // gestures. You can also use WidgetTester to find child widgets in the widget
 // tree, read text, and verify that the values of widget properties are correct.
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:statistics_erp_app/main.dart';
+import 'package:statistics_erp_app/screens/home_screen.dart';
 
 void main() {
   testWidgets('显示登录页面', (WidgetTester tester) async {
@@ -16,5 +18,16 @@ void main() {
 
     expect(find.text('企业台账'), findsOneWidget);
     expect(find.text('登 录'), findsOneWidget);
+  });
+
+  testWidgets('首页包含鲜货现采入口', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: HomeScreen(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('鲜货现采'), findsOneWidget);
   });
 }

@@ -554,7 +554,7 @@ async function aiCollectStream(res) {
       if (obj.delta) {
         aiAppendThink(obj.delta);          // 实时展示 AI 思考过程
       } else if (obj.result) {
-        result = obj.result;
+        if (!result || obj.source === "quick") result = obj.result;
       } else if (obj.error) {
         throw new Error(obj.error);
       }

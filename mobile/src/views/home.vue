@@ -7,6 +7,11 @@
       <div class="stat"><div class="label">库存总值</div><div class="value">{{ fmt(stockValue) }}</div><div class="sub">{{ productCount }} 种商品</div></div>
     </div>
 
+    <div class="card">
+      <div class="card-title">鲜货现采</div>
+      <van-button type="primary" block round icon="shop-o" @click="$router.push('/fresh')">查看今日鲜货预采</van-button>
+    </div>
+
     <!-- AI 智能录入 -->
     <div class="card">
       <div class="card-title">AI 智能录入</div>

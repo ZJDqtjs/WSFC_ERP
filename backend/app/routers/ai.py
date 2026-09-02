@@ -204,6 +204,84 @@ def _extract_json(content: str) -> dict:
     return json.loads(content)
 
 
+def _normalize_quick_product_name(name: str) -> str:
+    name = (name or "").strip().strip("，,。;；")
+    name = re.sub(r"^(?:的|约|大约|约为)\s*", "", name)
+    return name
+
+
+def _quick_parse_text(text: str) -> dict | None:
+    """针对简单口语文本做本地快速识别：适用于常见入库/出库描述，不依赖大模型。"""
+    s = re.sub(r"\s+", "", str(text or "")).strip()
+    if not s:
+        return None
+    lowered = s.lower()
+    if any(k in lowered for k in ("入库", "进货", "采购", "进仓", "收货")):
+        op_type = "inbound"
+    elif any(k in lowered for k in ("出库", "销售", "卖出", "发货", "出货")):
+        op_type = "outbound"
+    else:
+        return None
+
+    unit_pattern = r"斤|公斤|千克|个|件|袋|包|盒|箱|份|单|桶|瓶|扎|本"
+    line_pattern = re.compile(
+        rf"(?P<qty>\d+(?:\.\d+)?)\s*(?P<unit>{unit_pattern})\s*(?P<product>[A-Za-z0-9\u4e00-\u9fa5][^，,。!！?？;；\n]+?)(?=(?:\d+\s*(?:{unit_pattern})|(?:，|,|。|!|！|\?|？|;|；|$)))",
+        re.S,
+    )
+    matches = list(line_pattern.finditer(s))
+    if not matches:
+        alt_pattern = re.compile(
+            rf"(?P<product>[A-Za-z0-9\u4e00-\u9fa5][^\d，,。!！?？;；\n]{0,20}?)\s*(?P<qty>\d+(?:\.\d+)?)\s*(?P<unit>{unit_pattern})",
+            re.S,
+        )
+        matches = list(alt_pattern.finditer(s))
+    if not matches:
+        return None
+
+    lines = []
+    for idx, m in enumerate(matches):
+        qty = float(m.group("qty") or 0)
+        unit = m.group("unit") or "个"
+        product = _normalize_quick_product_name(m.group("product"))
+        if not product:
+            continue
+        tail = s[m.end():]
+        price = 0.0
+        price_patterns = [
+            rf"(?:每\s*(?:{unit_pattern})|单价|每单|每份|每袋|每盒|每箱|每包|每件|每斤|每公斤|每千克)\s*(?:￥|¥)?(?P<price>\d+(?:\.\d+)?)\s*(?:元|￥|¥)",
+            rf"(?:￥|¥)?(?P<price>\d+(?:\.\d+)?)\s*(?:一|两)?(?P<price_unit>{unit_pattern})\s*(?:元|￥|¥)",
+            rf"(?:￥|¥)?(?P<price>\d+(?:\.\d+)?)\s*(?:一|两)?(?P<price_unit>{unit_pattern})",
+            rf"(?:￥|¥)?(?P<price>\d+(?:\.\d+)?)\s*(?:元|￥|¥)",
+        ]
+        for pat in price_patterns:
+            pm = re.search(pat, tail, re.S)
+            if pm:
+                price = float(pm.group("price") or 0)
+                break
+        if idx == 0 and price == 0:
+            pm = re.search(r"(?:￥|¥)?(?P<price>\d+(?:\.\d+)?)\s*(?:一|两)?(?P<u>斤|公斤|千克|个|件|袋|包|盒|箱|份|单)", s, re.S)
+            if pm:
+                price = float(pm.group("price") or 0)
+
+        lines.append({
+            "product": product,
+            "quantity": qty,
+            "unit": unit,
+            "unit_price": price,
+        })
+    if not lines:
+        return None
+
+    return {
+        "type": op_type,
+        "date": date.today().isoformat(),
+        "supplier": "",
+        "customer": "",
+        "remark": "",
+        "lines": lines,
+    }
+
+
 def _match_product(db: Session, name: str, want: str | None) -> Product | None:
     """按名称匹配商品：先精确，再子串包含（取匹配更长的）。want: stock/order/None=不限。"""
     name = (name or "").strip()
@@ -360,6 +438,12 @@ def parse_ai(data: ParseIn, db: Session = Depends(get_db), user: User = Depends(
     text = (data.text or "").strip()
     if not text:
         raise HTTPException(400, "请输入描述文字")
+    quick = _quick_parse_text(text)
+    if quick:
+        try:
+            return _build_result(db, quick, text)
+        except HTTPException:
+            raise
     cfg = _llm_config()
     if not cfg.get("api_key"):
         raise HTTPException(400, "未配置 LLM（product_rules.json 的 llm 段）")
@@ -374,7 +458,7 @@ def parse_ai(data: ParseIn, db: Session = Depends(get_db), user: User = Depends(
 
 @router.post("/parse/stream")
 def parse_stream(data: ParseIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """流式解析：先把模型增量文本推给前端（首 token 约 1~2 秒），最后推送规范化结果。"""
+    """流式解析：优先返回本地快速识别结果，随后补全大模型精修结果。"""
     text = (data.text or "").strip()
     if not text:
         raise HTTPException(400, "请输入描述文字")
@@ -387,12 +471,19 @@ def parse_stream(data: ParseIn, db: Session = Depends(get_db), user: User = Depe
 
     def gen():
         try:
+            quick = _quick_parse_text(text)
+            if quick:
+                try:
+                    quick_result = _build_result(db, quick, text)
+                    yield event({"result": quick_result, "source": "quick", "confidence": "medium"})
+                except HTTPException:
+                    pass
             buf = ""
             for delta in _chat_stream(cfg, SYSTEM_PROMPT, _user_msg(text)):
                 buf += delta
                 yield event({"delta": delta})
             result = _build_result(db, _extract_json(buf), text)
-            yield event({"result": result})
+            yield event({"result": result, "source": "llm", "confidence": "high"})
         except HTTPException as e:
             yield event({"error": e.detail})
         except Exception as e:

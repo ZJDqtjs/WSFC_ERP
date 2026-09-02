@@ -229,7 +229,6 @@ __marimo__/
 *.dart.plugin.stamp
 
 # Node.js / Vite
-mobile/node_modules/
 node_modules/
 .npm/
 .pnpm-store/
