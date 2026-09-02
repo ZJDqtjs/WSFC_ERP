@@ -243,11 +243,20 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
     if not pack_specs:
         agg: dict[int, dict] = {}
         for ln in lines:
-            p = db.get(Product, ln.product_id if hasattr(ln, "product_id") else ln.get("product_id"))
+            if hasattr(ln, "product_id"):  # Pydantic 对象
+                pid, quantity = ln.product_id, ln.quantity
+            else:  # dict（批量导入）
+                pid, quantity = ln["product_id"], ln["quantity"]
+            p = db.get(Product, pid)
+            if not p:
+                continue
             for item in (p.pack_items or []):
                 mid = item["product_id"]
-                agg.setdefault(mid, {"quantity": 0.0, "unit": item.get("unit", "个")})
-                agg[mid]["quantity"] += item["quantity"]
+                # 关联结算按「单」计：每销售 1 单消耗一次包材/人工。
+                # 如 6单「佛手柑中果2个」→ 6个纸箱、6次人工；数量以销售行 quantity（单）为倍数。
+                q = float(item.get("quantity", 1)) * float(quantity)
+                d = agg.setdefault(mid, {"quantity": 0.0, "unit": item.get("unit", "个")})
+                d["quantity"] += q
         pack_specs = [
             {"product_id": mid, "unit": d["unit"], "quantity": d["quantity"]}
             for mid, d in agg.items()

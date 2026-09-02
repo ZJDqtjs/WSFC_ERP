@@ -1,0 +1,12 @@
+{
+  "appId": "com.erp.mobile",
+  "appName": "企业台账",
+  "webDir": "dist",
+  "server": {
+    "url": "http://47.108.13.20/mobile/",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

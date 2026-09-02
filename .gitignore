@@ -1,4 +1,4 @@
-# Byte-compiled / optimized / DLL files
+﻿# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
 *$py.class
@@ -256,3 +256,17 @@ coverage/
 *票据*.png
 data-src/*发票*
 data-src/*票据*
+# Capacitor 安卓应用 (capacitor/)
+capacitor/node_modules/
+capacitor/dist/
+# 本机构建环境（勿提交）
+capacitor/android-sdk/
+capacitor/tools/
+capacitor/android/.gradle/
+capacitor/android/build/
+capacitor/android/app/build/
+capacitor/android/local.properties
+capacitor/android/capacitor-cordova-android-plugins/
+capacitor/android/app/src/main/assets/
+capacitor/android/captures/
+
