@@ -94,14 +94,19 @@ def stock_overview(db: Session = Depends(get_db), user: User = Depends(get_curre
     ).scalars()
     result = []
     for p in rows:
+        # 用默认展示/出库单位显示库存与成本（如 斤/公斤/个），而非基础单位（克）
+        du = p.default_unit or p.base_unit
+        f = (p.conversions or {}).get(du, 1) or 1
         result.append(
             {
                 "id": p.id,
                 "name": p.name,
                 "category": p.category,
                 "base_unit": p.base_unit,
+                "default_unit": du,
+                "conversions": p.conversions or {},
                 "stock": p.stock,
-                "stock_display": f"{fmt_qty(p.stock)} {p.base_unit}",
+                "stock_display": f"{fmt_qty(p.stock / f)} {du}",
                 "avg_cost": p.avg_cost,
                 "stock_value": p.stock_value,
             }
