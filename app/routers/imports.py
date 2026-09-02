@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from openpyxl import Workbook, load_workbook
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
@@ -66,7 +66,7 @@ OUTBOUND_ALIASES = {
     "remark": ["备注"],
 }
 JUSHUITAN_COLS = {
-    "doc_no": ["出库单号"],
+    "doc_no": ["出库单号", "出仓单号"],
     "date": ["出库日期"],
     "status": ["状态"],
     "name": ["商品名称"],
@@ -565,10 +565,13 @@ def parse_outbound_draft(file: UploadFile, db: Session, user: User) -> tuple[lis
     return [DraftOrder(**o) for o in orders.values()], failed
 
 
-def parse_jushuitan_draft(file: UploadFile, db: Session, user: User) -> tuple[list[DraftOrder], list[dict], dict, set]:
-    """解析聚水潭出库单 → 草稿单（不建单）。"""
+def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: tuple | None = ("已出库",)) -> tuple[list[DraftOrder], list[dict], dict, set]:
+    """解析聚水潭出库单 → 草稿单（不建单）。
+
+    statuses 为 None 时接受全部状态（鲜货需求预演算用），默认只取「已出库」（正式导入用）。
+    """
     rows = read_rows(file)
-    orders, skip = jushuitan_rows(rows)
+    orders, skip = jushuitan_rows(rows, statuses)
     mapping_rows = list(db.execute(select(CodeMapping)).scalars())
     mapping_by_code = {m.external_code: m for m in mapping_rows}
 
@@ -579,6 +582,9 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User) -> tuple[li
             m = mapping_by_code.get(ext_name)
             pid = m.product_id if m else None
             p = db.get(Product, pid) if pid else None
+            if not p:
+                # 未配置编码关联时，回退按商品名称/编码精确匹配（如「佛手柑中果2个」）
+                p = db.scalar(select(Product).where(or_(Product.name == ext_name, Product.code == ext_name)))
             if not p:
                 unmapped_codes.add(ext_name)
                 continue
@@ -759,7 +765,8 @@ def parse_jushuitan_name(name: str) -> list[tuple[str, float]]:
 # 聚水潭商品名中的单件规格：如 "京鲜生七彩花生2斤" → 每件 2斤
 SPEC_RE = re.compile(r"([\d.]+)\s*(斤|公斤|千克|克|g|kg)")
 UNIT_ALIAS = {"g": "克", "kg": "千克"}
-COUNT_PREF = ["个", "袋", "包", "盒", "箱", "件", "份"]
+# 计数单位优先顺序（含订单商品的「单」：1件订单商品 = 1 单）
+COUNT_PREF = ["个", "单", "袋", "包", "盒", "箱", "件", "份"]
 
 
 def parse_jst_spec(name: str) -> tuple[str | None, float | None]:
@@ -794,14 +801,19 @@ def pick_jst_unit(product: Product, ext_name: str) -> tuple[str | None, float | 
     return None, None
 
 
-def jushuitan_rows(rows) -> list[dict]:
+def jushuitan_rows(rows, statuses: tuple | None = ("已出库",)) -> list[dict]:
+    """解析聚水潭行。statuses 为 None 时接受全部状态（鲜货需求预演算），仅排除 作废/已删除/空。"""
     mapping, start = detect_header(rows, JUSHUITAN_COLS)
     if not mapping or "name" not in mapping:
         raise HTTPException(400, "未识别到聚水潭出库单表头（需包含「出库单号」「商品名称」等列）")
     result, skip = [], {"待出库": 0, "作废": 0, "其他": 0}
     for row in rows[start:]:
         status = _normalize_jushuitan_status(cell(row, mapping.get("status")))
-        if status != "已出库":
+        if statuses is None:
+            if status in ("作废", "已删除", ""):
+                skip[status if status in skip else "其他"] += 1
+                continue
+        elif status not in statuses:
             skip[status if status in skip else "其他"] += 1
             continue
         result.append(
@@ -973,6 +985,9 @@ def import_jushuitan(file: UploadFile, db: Session = Depends(get_db), user: User
             m = mapping_by_code.get(ext_name)
             pid = m.product_id if m else None
             p = db.get(Product, pid) if pid else None
+            if not p:
+                # 未配置编码关联时，回退按商品名称/编码精确匹配（如「佛手柑中果2个」）
+                p = db.scalar(select(Product).where(or_(Product.name == ext_name, Product.code == ext_name)))
             if not p:
                 unmapped_codes.add(ext_name)
                 continue
