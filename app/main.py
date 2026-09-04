@@ -49,6 +49,17 @@ def migrate():
             conn.execute(text("ALTER TABLE products ADD COLUMN workload FLOAT DEFAULT 0"))
         conn.commit()
 
+    # 用户表：SSH 指纹认证所需字段
+    with engine.connect() as conn:
+        ucols = [r[1] for r in conn.execute(text("PRAGMA table_info(users)")).fetchall()]
+        if "public_key" not in ucols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN public_key VARCHAR(512)"))
+        if "fingerprint" not in ucols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN fingerprint VARCHAR(64)"))
+        if "key_created_at" not in ucols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN key_created_at DATETIME"))
+        conn.commit()
+
 
 async def auto_backup_loop():
     """每 60 秒检查一次；开启自动备份且距上次备份超过间隔则执行备份。"""

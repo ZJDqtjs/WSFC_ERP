@@ -465,15 +465,20 @@
       <p class="login-sub">库存 · 财务 · 一体化</p>
       <div class="field" style="margin-bottom:12px;">
         <label>用户名</label>
-        <input id="loginUser" autocomplete="username" placeholder="请输入用户名" />
+        <input id="loginUser" autocomplete="username" placeholder="请输入用户名" onkeydown="if(event.key==='Enter')doLogin()" />
       </div>
-      <div class="field" style="margin-bottom:16px;">
-        <label>密码</label>
-        <input id="loginPass" type="password" autocomplete="current-password" placeholder="请输入密码" onkeydown="if(event.key==='Enter')doLogin()" />
+      <div id="loginKeyRow" class="field" style="margin-bottom:16px;">
+        <label>私钥文件</label>
+        <div class="keyfile-row">
+          <input id="loginKeyFile" type="file" accept=".pem,.key,.txt,text/plain" style="display:none;" onchange="onKeyFileChange('loginKeyFile','loginKeyName')" />
+          <input id="loginKeyName" readonly placeholder="点击选择 Ed25519 私钥文件" onclick="$('loginKeyFile').click()" onkeydown="if(event.key==='Enter')doLogin()" style="cursor:pointer;background:var(--primary-50);" />
+          <button class="btn secondary" type="button" onclick="$('loginKeyFile').click()">选择文件</button>
+        </div>
+        <div class="field-hint" id="loginKeyHint" style="color:var(--muted);font-size:12px;margin-top:4px;">选择由私钥管理工具生成的私钥文件（.pem / id_ed25519）</div>
       </div>
       <div id="loginErr" class="alert err" style="display:none;"></div>
       <button class="btn" style="width:100%;" onclick="doLogin()">登 录</button>
-      <p class="login-foot">默认账号 admin1 / admin1</p>
+      <p class="login-foot">请使用管理员分发的私钥文件登录</p>
     </div>
   </div>
 

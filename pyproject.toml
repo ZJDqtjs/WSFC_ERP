@@ -12,4 +12,5 @@ dependencies = [
     "python-multipart>=0.0.32",
     "sqlalchemy>=2.0.52",
     "uvicorn[standard]>=0.52.4",
+    "cryptography>=42.0.0",
 ]

@@ -171,16 +171,20 @@ class FinanceRecord(Base):
 
 
 class User(Base):
-    """系统用户（业务员）。不开放注册，由开发者在代码中维护。"""
+    """系统用户（业务员）。业务员使用 SSH 指纹（Ed25519 私钥）登录；
+    管理员账号保留密码用于引导登录。不开放注册，由管理员在密钥管理页创建。"""
 
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(255))
+    password_hash: Mapped[str] = mapped_column(String(255), default="")  # 空串=仅密钥登录
     name: Mapped[str] = mapped_column(String(64), default="")  # 业务员姓名
     role: Mapped[str] = mapped_column(String(16), default="user")  # admin / user
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    public_key: Mapped[str | None] = mapped_column(String(512), nullable=True)  # OpenSSH 公钥
+    fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)  # SHA256 指纹
+    key_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 

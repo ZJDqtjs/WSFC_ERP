@@ -1058,6 +1058,9 @@ td.num, th.num {
   margin: 8px 0 24px; 
 }
 
+.keyfile-row { display: flex; gap: 8px; align-items: center; }
+.keyfile-row input { flex: 1; min-width: 0; }
+
 .login-foot { 
   text-align: center; 
   color: var(--muted); 
