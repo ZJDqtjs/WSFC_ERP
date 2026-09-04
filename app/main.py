@@ -14,7 +14,7 @@ from .database import Base, DATA_DIR, SessionLocal, engine
 from .models import Product
 from .routers import ai, auth, backup, fresh, imports, inbound, inventory, outbound, products, report
 from .routers.backup import create_backup_file, load_config
-from .services import seed_units
+from .services import recompute_product, seed_units
 
 # 桌面 Web 前端目录（app/main.py -> 项目根/static）
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -45,6 +45,8 @@ def migrate():
             conn.execute(text("ALTER TABLE products ADD COLUMN stock_product_id INTEGER"))
         if "multiplier" not in cols:
             conn.execute(text("ALTER TABLE products ADD COLUMN multiplier FLOAT DEFAULT 1"))
+        if "workload" not in cols:
+            conn.execute(text("ALTER TABLE products ADD COLUMN workload FLOAT DEFAULT 0"))
         conn.commit()
 
 
@@ -80,6 +82,9 @@ async def lifespan(app: FastAPI):
         for p in db.execute(select(Product).where(Product.default_unit == "")).scalars():
             conv = p.conversions or {}
             p.default_unit = "斤" if "斤" in conv else p.base_unit
+        # 回填人工商品的工作量（人工不记库存，重算后 stock=0、workload=历史绝对值之和）
+        for pid in db.execute(select(Product.id).where(Product.category == "人工")).scalars():
+            recompute_product(db, pid)
         db.commit()
     finally:
         db.close()

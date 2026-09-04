@@ -102,6 +102,11 @@ def recompute_product(db: Session, product_id: int) -> Product:
     product.stock = round(stock, 6)
     product.stock_value = round(value, 6)
     product.avg_cost = round(avg, 6)
+    # 人工分类不记库存：工作量 = 全部流水绝对值之和（单），库存恒为 0
+    if product.category == "人工":
+        product.workload = round(sum(abs(m.quantity_base) for m in moves), 6)
+        product.stock = 0.0
+        product.stock_value = 0.0
     db.flush()
     return product
 
@@ -335,7 +340,14 @@ def create_outbound(db: Session, payload: dict, operator: str = "") -> tuple[Out
         is_sale = r["line_type"] == "sale"
         # 库存流水扣在库存商品上（订单商品扣减其关联大类）
         move_pid = r["stock_product_id"] if is_sale else r["product_id"]
-        move_qty = -r["deduction_base"] if is_sale else -r["quantity_base"]
+        if is_sale:
+            move_qty, move_type = -r["deduction_base"], "out"
+        else:
+            # 人工打包记为正工作量（不扣库存）；包材等仍为负向包装消耗
+            pack_p = db.get(Product, r["product_id"])
+            is_labor = bool(pack_p and pack_p.category == "人工")
+            move_qty = r["quantity_base"] if is_labor else -r["quantity_base"]
+            move_type = "work" if is_labor else "pack_out"
         db.add(
             OutboundLine(
                 outbound_id=rec.id,
@@ -353,7 +365,7 @@ def create_outbound(db: Session, payload: dict, operator: str = "") -> tuple[Out
         db.add(
             StockMovement(
                 product_id=move_pid,
-                move_type="out" if is_sale else "pack_out",
+                move_type=move_type,
                 quantity_base=move_qty,
                 amount=r["cogs"],
                 ref_type="outbound",

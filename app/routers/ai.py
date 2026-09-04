@@ -1,4 +1,4 @@
-"""AI 智能录入：调用云端大模型，把用户口语拆分为 入库/出库 结构化参数。
+﻿"""AI 智能录入：调用云端大模型，把用户口语拆分为 入库/出库 结构化参数。
 
 - LLM 配置在 product_rules.json 的 llm 段（base_url / api_key / model）
 - 通过官方 openai 客户端调用（标准 OpenAI 兼容协议 /chat/completions），支持流式输出
@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Product, Unit, User
+from ..models import Inbound, OutboundLine, Product, Unit, User
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -48,6 +48,7 @@ SYSTEM_PROMPT = """你是「企业台账系统」的自然语言录入解析器�
 6. 一句话可能包含多行/多个商品，lines 里逐行列出；单价统一理解为"每 unit 单位的金额"。
 
 只输出一个 JSON 对象，禁止输出 JSON 以外的任何文字、解释、markdown 代码块标记。
+JSON 要紧凑输出：单行、无缩进无换行、字段间不留多余空格；supplier/customer/remark 为空时省略该字段。
 JSON 结构：
 {
   "type": "inbound" | "outbound",
@@ -71,6 +72,7 @@ IMAGE_SYSTEM_PROMPT = """你是「企业台账系统」的采购票据识别助�
 6. 票据可能有多张/多条，lines 逐条列出；金额合计不用输出。
 
 只输出一个 JSON 对象，禁止输出 JSON 以外的任何文字、解释、markdown 代码块标记。
+JSON 要紧凑输出：单行、无缩进无换行、字段间不留多余空格；supplier/customer/remark 为空时省略该字段。
 JSON 结构：
 {
   "type": "inbound",
@@ -118,6 +120,7 @@ def _chat(cfg: dict, system: str, user: str) -> str:
             {"role": "user", "content": user},
         ],
         temperature=0.1,
+        max_tokens=800,  # 限制输出长度，避免模型生成超长内容拖慢整体耗时
     )
     if not resp.choices or not resp.choices[0].message or not resp.choices[0].message.content:
         raise RuntimeError(f"大模型返回异常：{resp.model_dump() if hasattr(resp, 'model_dump') else resp}")
@@ -133,6 +136,7 @@ def _chat_stream(cfg: dict, system: str, user: str):
             {"role": "user", "content": user},
         ],
         temperature=0.1,
+        max_tokens=800,  # 限制输出长度，避免模型生成超长内容拖慢整体耗时
         stream=True,
     )
     for chunk in stream:
@@ -155,6 +159,7 @@ def _chat_stream_mm(cfg: dict, system: str, user: str, image_data_uri: str):
             },
         ],
         temperature=0.1,
+        max_tokens=800,  # 限制输出长度，避免模型生成超长内容拖慢整体耗时
         stream=True,
     )
     for chunk in stream:
@@ -341,8 +346,41 @@ def _norm_unit(unit: str, conv: dict) -> str | None:
     return unit  # 找不到标准名时原样返回，由前端兜底
 
 
-def _normalize_line(p: Product | None, line: dict, auto_created: bool = False) -> dict:
-    """把 数量/单价 换算到商品的默认展示单位（如 公斤），并保留原始值供前端参考。"""
+def _last_price_default(db: Session, p: Product | None, op_type: str) -> float:
+    """取该商品最近一次录入的价格（折算到默认展示单位）。
+
+    入库取最近一条入库单价（回退商品参考采购单价）；出库取最近一条出库单价（回退默认售价）。
+    供 AI 识别未提取到单价时默认填入。
+    """
+    if not p:
+        return 0.0
+    conv = p.conversions or {}
+    du = p.default_unit or p.base_unit
+
+    def to_du(price: float, unit: str) -> float:
+        price = float(price or 0)
+        if not price:
+            return 0.0
+        if unit and unit in conv and du in conv and conv.get(unit):
+            return round(price * conv[du] / conv[unit], 4)
+        return round(price, 4)
+
+    if op_type == "inbound":
+        row = db.query(Inbound).filter(Inbound.product_id == p.id).order_by(Inbound.id.desc()).first()
+        if row and row.unit_price:
+            return to_du(row.unit_price, row.unit)
+        return to_du(p.unit_cost, p.base_unit)
+    row = db.query(OutboundLine).filter(OutboundLine.product_id == p.id).order_by(OutboundLine.id.desc()).first()
+    if row and row.unit_price:
+        return to_du(row.unit_price, row.unit)
+    return to_du(p.sale_price, p.base_unit)
+
+
+def _normalize_line(db: Session, p: Product | None, line: dict, op_type: str, auto_created: bool = False) -> dict:
+    """把 数量/单价 换算到商品的默认展示单位（如 公斤），并保留原始值供前端参考。
+
+    若用户未录入单价，则按该商品上次录入的价格默认填入（不再换算为 0）。
+    """
     name = (line.get("product") or "").strip()
     qty = float(line.get("quantity") or 0)
     unit = str(line.get("unit") or "").strip()
@@ -356,6 +394,7 @@ def _normalize_line(p: Product | None, line: dict, auto_created: bool = False) -
         "unit_price": price,
         "matched": False,
         "auto_created": bool(auto_created),
+        "price_defaulted": False,
         "hint": "",
     }
     if not p:
@@ -373,22 +412,31 @@ def _normalize_line(p: Product | None, line: dict, auto_created: bool = False) -
     # 换算到默认展示单位：数量与单价都折算到 1 个默认单位
     if u and u in conv and du in conv and conv.get(u):
         qty_default = qty * conv[u] / conv[du]
-        price_default = price * conv[du] / conv[u] if price else 0
         out["quantity"] = round(qty_default, 4)
         out["unit"] = du
-        out["unit_price"] = round(price_default, 4)
+        if price:
+            out["unit_price"] = round(price * conv[du] / conv[u], 4)
     else:
         # 换算表没有该单位：尝试 斤<->公斤 兜底
         if u == "斤" and "公斤" in conv:
             out["quantity"] = round(qty * 0.5, 4)
             out["unit"] = "公斤"
-            out["unit_price"] = round(price * 2, 4) if price else 0
+            if price:
+                out["unit_price"] = round(price * 2, 4)
         elif u in ("公斤", "千克") and "公斤" in conv:
             out["quantity"] = round(qty, 4)
             out["unit"] = "公斤"
         else:
             out["unit"] = du if du else unit
-            out["hint"] += f"；未能换算单位，请核对"
+            out["hint"] += "；未能换算单位，请核对"
+
+    # 用户未录入单价（仍为 0）：按该商品上次录入的价格默认填入（已是默认单位，不再换算）
+    if not out["unit_price"]:
+        last = _last_price_default(db, p, op_type)
+        if last:
+            out["unit_price"] = round(last, 4)
+            out["price_defaulted"] = True
+            out["hint"] += "；价格未识别，已按上次录入单价默认填入，请核对"
     return out
 
 
@@ -415,7 +463,7 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
             # 入库的新物品：自动新增库存商品（含新单位），并标记 auto_created
             p = _auto_create_stock(db, ln.get("product", ""), ln.get("unit", ""))
             auto = True
-        lines.append(_normalize_line(p, ln, auto_created=auto))
+        lines.append(_normalize_line(db, p, ln, op_type, auto_created=auto))
     if any(ln.get("auto_created") for ln in lines):
         db.commit()  # 持久化自动新增的商品与单位，否则会话结束即回滚
 
@@ -479,7 +527,9 @@ def parse_stream(data: ParseIn, db: Session = Depends(get_db), user: User = Depe
             if quick:
                 try:
                     quick_result = _build_result(db, quick, text)
-                    yield event({"result": quick_result, "source": "quick", "confidence": "medium"})
+                    # 本地快速识别已成功：直接返回，不再调用慢速大模型（识别即出结果）
+                    yield event({"result": quick_result, "source": "quick", "confidence": "high"})
+                    return
                 except HTTPException:
                     pass
             buf = ""

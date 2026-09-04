@@ -139,6 +139,7 @@
         <div class="seg" id="stockSeg">
           <button class="seg-item active" data-panel="stock-overview" onclick="switchSeg('stockSeg', this)">库存总览</button>
           <button class="seg-item" data-panel="stock-movements" onclick="switchSeg('stockSeg', this)">库存流水</button>
+          <button class="seg-item" data-panel="stock-workload" onclick="switchSeg('stockSeg', this)">工作量统计</button>
         </div>
 
         <div id="stock-overview">
@@ -167,7 +168,24 @@
               <input id="mvSearch" placeholder="🔍 筛选流水..." oninput="loadMovements()" />
               <button class="btn" onclick="loadMovements()">查询</button>
             </div>
+            <div id="mvChart"></div>
             <div class="table-wrap"><table id="mvTable"></table></div>
+          </div>
+        </div>
+
+        <div id="stock-workload" style="display:none;">
+          <div class="card">
+            <div class="toolbar">
+              <input id="wlDateFrom" type="date" /><span>-</span><input id="wlDateTo" type="date" />
+              <button class="btn" onclick="loadWorkload()">查询</button>
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="loadWorkload()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+            </div>
+            <div id="wlChart"></div>
+            <div class="stat-grid">
+              <div class="stat accent"><div class="label">总工作量</div><div class="value" id="wlTotal">-</div><div class="sub" id="wlTotalSub"></div></div>
+            </div>
+            <div class="table-wrap"><table id="wlTable"></table></div>
           </div>
         </div>
       </section>
@@ -392,34 +410,18 @@
       <!-- 聚水潭关联 -->
       <section id="page-jushuitan" class="page">
         <div class="card">
-          <div class="card-head"><h3>① 上传聚水潭销售出库单并关联商品编码</h3><span class="hint">解析商品名称并自动推荐匹配，保存后即可自动结算</span></div>
+          <div class="card-head"><h3>① 上传聚水潭销售出库单并自动新增关联</h3><span class="hint">自动新增不存在的订单商品并关键词关联库存商品；需维护关联请前往出库页「关联结算」</span></div>
           <div class="toolbar">
             <input type="file" id="mpFile" accept=".xlsx" />
-            <button class="btn" onclick="parseJushuitan()">解析并匹配</button>
+            <button class="btn" onclick="parseJushuitan()">解析并自动新增</button>
             <button class="btn secondary" onclick="autoMapping()"><svg class="ic"><use href="#i-ai"/></svg> 自动匹配未关联</button>
             <button class="btn secondary" onclick="clearMapping()">清空关联</button>
           </div>
           <div id="mpParseInfo"></div>
-          <div class="table-wrap" style="margin-top:10px;"><table id="mpTable"></table></div>
-          <div class="form-actions">
-            <button class="btn green" onclick="saveMappings()">✓ 保存全部关联</button>
-            <span class="muted">下拉框已自动选中推荐项，核对后保存即可</span>
-          </div>
         </div>
 
         <div class="card">
-          <div class="card-head"><h3>② 已保存的关联关系</h3><span class="hint">查看 / 修改 / 删除，或手动新增</span></div>
-          <div class="toolbar">
-            <input id="mpNewCode" placeholder="外部商品编码（如：京鲜生七彩花生2斤）" style="flex:1;min-width:240px;" />
-            <select id="mpNewProduct" class="searchable"><option value="">选择关联到系统商品…</option></select>
-            <button class="btn secondary" onclick="addMappingRow()">＋ 手动新增</button>
-            <button class="btn" onclick="saveSavedMappings()">✓ 保存修改</button>
-          </div>
-          <div class="table-wrap" style="margin-top:10px;"><table id="mpSavedTable"></table></div>
-        </div>
-
-        <div class="card">
-          <div class="card-head"><h3>③ 导入聚水潭出库单（自动结算）</h3><span class="hint">按已保存的关联生成出库单并核算成本</span></div>
+          <div class="card-head"><h3>② 导入聚水潭出库单（自动结算）</h3><span class="hint">按已保存的关联生成出库单并核算成本</span></div>
           <div class="toolbar">
             <input type="file" id="mpImportFile" accept=".xlsx" />
             <button class="btn green" onclick="batchFromImport('jushuitan')">导入出库单（预览确认）</button>

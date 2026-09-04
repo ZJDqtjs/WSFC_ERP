@@ -61,6 +61,7 @@ class Product(Base):
     stock: Mapped[float] = mapped_column(Float, default=0.0)
     avg_cost: Mapped[float] = mapped_column(Float, default=0.0)
     stock_value: Mapped[float] = mapped_column(Float, default=0.0)
+    workload: Mapped[float] = mapped_column(Float, default=0.0)  # 人工分类的工作量（单，正数）
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
