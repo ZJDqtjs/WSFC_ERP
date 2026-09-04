@@ -288,7 +288,7 @@ function switchSeg(segId, btn) {
   if (panel === "stock-workload") loadWorkload();
 }
 
-/* ---------- 认证 ---------- */
+/* ---------- 认证（私钥登录） ---------- */
 function showLogin() {
   $("loginMask").classList.remove("hidden");
   $("loginUser").focus();
@@ -305,16 +305,37 @@ function setUser(u) {
     if (el && !el.value) el.value = disp;
   });
 }
+function onKeyFileChange(inputId, nameId) {
+  const f = $(inputId).files[0];
+  $(nameId).value = f ? f.name : "";
+}
+function readFileText(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(new Error("读取文件失败"));
+    fr.readAsText(file);
+  });
+}
 async function doLogin() {
   const username = $("loginUser").value.trim();
-  const password = $("loginPass").value;
-  if (!username || !password) { showLoginErr("请输入用户名和密码"); return; }
+  const f = $("loginKeyFile").files[0];
+  if (!username) { showLoginErr("请输入用户名"); return; }
+  if (!f) { showLoginErr("请选择私钥文件"); return; }
+  let private_key;
+  try { private_key = await readFileText(f); }
+  catch (e) { showLoginErr("读取私钥文件失败：" + e.message); return; }
   try {
     const r = await fetch(routePath("/api/auth/login"), {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, private_key }),
     });
-    if (!r.ok) { showLoginErr("用户名或密码错误"); return; }
+    if (!r.ok) {
+      let msg = r.status === 400 ? "私钥文件无法解析，请确认为 Ed25519 私钥" : "用户名或私钥不匹配";
+      try { const j = await r.json(); if (j.detail) msg = j.detail; } catch (e) {}
+      showLoginErr(msg);
+      return;
+    }
     const j = await r.json();
     setUser(j.user);
     hideLogin();
@@ -1988,7 +2009,6 @@ function esc(s) {
     PRODUCTS.filter((p) => !["人工", "快递"].includes(p.category)).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
   $("inProduct").innerHTML = `<option value="">选择商品…</option>` +
     PRODUCTS.filter((p) => p.is_active && p.product_type === "stock").map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
-  $("inProduct").onchange = inProductChanged;
   $("inUnit").onchange = calcInbound;
   $("inDate").value = today();
   $("outDate").value = today();
