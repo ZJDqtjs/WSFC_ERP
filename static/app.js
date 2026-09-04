@@ -231,6 +231,11 @@ function today() {
 function monthStart() {
   return today().slice(0, 8) + "01";
 }
+function daysAgo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 /* ---------- 导航 ---------- */
 const PAGE_TITLES = {
@@ -280,6 +285,7 @@ function switchSeg(segId, btn) {
     el.style.display = el.id === panel ? "" : "none";
   });
   if (panel === "stock-movements") loadMovements();
+  if (panel === "stock-workload") loadWorkload();
 }
 
 /* ---------- 认证 ---------- */
@@ -398,11 +404,14 @@ function renderStock(overview) {
 }
 
 function openAdjust(pid = 0) {
+  const opts = PRODUCTS.filter((p) => p.is_active && p.product_type === "stock" && !["人工", "快递"].includes(p.category))
+    .map((p) => `<option value="${p.id}" ${p.id === pid ? "selected" : ""}>${esc(p.name)}</option>`).join("");
   openModal(`
-    <h3>盘点调整 <button class="close" onclick="closeModal()">✕</button></h3>
+    <h3>盘点调整（相对增减） <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="form-grid">
-      <div class="field"><label>商品 *</label><select id="adjProduct">${productOptions(pid)}</select></div>
-      <div class="field"><label>调整数量（基础单位，正盘盈/负盘亏）*</label><input id="adjQty" type="number" step="any" placeholder="如 -5" /></div>
+      <div class="field" style="grid-column:1/-1;"><label>商品 *</label><select id="adjProduct" onchange="adjPreview()">${opts}</select></div>
+      <div class="field" style="grid-column:1/-1;"><span class="muted">当前库存：<b id="adjNow">—</b></span>　→　<span class="muted">调整后：<b id="adjAfter" style="color:var(--primary)">—</b></span></div>
+      <div class="field" style="grid-column:1/-1;"><label>调整数量 *（相对当前库存，必带 +/-）</label><input id="adjQty" oninput="adjPreview()" placeholder="如 +100 增加 / -100 减少；留空则不调整" style="width:100%;" /></div>
       <div class="field"><label>成本单价（仅盘盈用）</label><input id="adjPrice" type="number" step="any" value="0" /></div>
       <div class="field"><label>日期</label><input id="adjDate" type="date" value="${today()}" /></div>
       <div class="field"><label>操作员</label><input id="adjOperator" placeholder="谁操作的" /></div>
@@ -412,27 +421,56 @@ function openAdjust(pid = 0) {
       <button class="btn secondary" onclick="closeModal()">取消</button>
       <button class="btn" onclick="submitAdjust()">确认调整</button>
     </div>`);
+  adjPreview();
+}
+function adjPreview() {
+  const p = PRODUCTS.find((x) => x.id === +$("adjProduct").value);
+  const nowEl = $("adjNow"), afterEl = $("adjAfter");
+  if (!p) { nowEl.textContent = "—"; afterEl.textContent = "—"; return; }
+  const unit = p.default_unit || p.base_unit;
+  const f = (p.conversions || {})[unit] || 1;
+  const now = p.stock / f;
+  nowEl.textContent = `${fmtNum(now)} ${unit}`;
+  const raw = ($("adjQty").value || "").trim();
+  if (!raw) { afterEl.textContent = `${fmtNum(now)} ${unit}（不调整）`; return; }
+  if (!/^[+-]\d+(\.\d+)?$/.test(raw)) { afterEl.textContent = "⚠ 需以 + 或 - 开头，如 +100 / -100"; return; }
+  afterEl.textContent = `${fmtNum(now + parseFloat(raw))} ${unit}`;
 }
 async function submitAdjust() {
+  const raw = ($("adjQty").value || "").trim();
+  if (raw && !/^[+-]\d+(\.\d+)?$/.test(raw)) {
+    toast("调整数量必须以 + 或 - 开头（如 +100 增加 / -100 减少），不允许直接填裸数字；留空则不调整");
+    return;
+  }
+  const p = PRODUCTS.find((x) => x.id === +$("adjProduct").value);
+  if (!p) { toast("请选择商品"); return; }
   try {
     await api("/api/adjust", "POST", {
-      product_id: +$("adjProduct").value,
-      quantity: +$("adjQty").value,
+      product_id: p.id,
+      quantity: raw,
+      unit: p.default_unit || p.base_unit,
       unit_price: +$("adjPrice").value || 0,
       date: $("adjDate").value,
       operator: $("adjOperator").value,
       remark: $("adjRemark").value,
     });
-    closeModal(); toast("盘点调整成功"); loadStock();
+    closeModal();
+    toast(raw ? "盘点调整成功" : "数量留空，未调整库存");
+    loadStock();
   } catch (e) { toast("操作失败：" + e.message); }
 }
 
 function viewProductMv(pid) {
   goPage("stock");
-  $("mvProduct").value = String(pid);
+  const sel = $("mvProduct");
+  sel.value = String(pid);
+  // 触发 change 同步「可搜索下拉」的显示文本（否则仍显示旧商品/全部商品）
+  sel.dispatchEvent(new Event("change", { bubbles: true }));
+  // 默认查看该商品最近一个月的流水
+  $("mvDateFrom").value = daysAgo(29);
+  $("mvDateTo").value = today();
   const segBtn = document.querySelector('#stockSeg .seg-item[data-panel="stock-movements"]');
   if (segBtn) switchSeg("stockSeg", segBtn);
-  loadMovements();
 }
 
 /* =============== 工作台 =============== */
@@ -629,7 +667,7 @@ function openAiConfirm(r) {
         ${ln.auto_created ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 自动新增</span>' : ""}</td>
       <td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.quantity)}" style="width:90px;" /></td>
       <td><input class="ai-unit" value="${esc(ln.unit || "")}" style="width:70px;" /></td>
-      <td><input type="number" step="any" class="ai-price" value="${ln.unit_price}" style="width:100px;" /></td>
+      <td><input type="number" step="any" class="ai-price" value="${ln.unit_price}" style="width:100px;" />${ln.price_defaulted ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按上次价</span>' : ""}</td>
       <td class="muted" style="font-size:12px;">${esc(ln.hint || "")}</td>
     </tr>`).join("");
   const invImg = r.image_url
@@ -992,9 +1030,12 @@ async function renderProducts() {
       const linkInfo = p.product_type === "order"
         ? (p.stock_product_id ? `扣减：${esc(p.stock_product_name || "?")} ×${fmtNum(p.multiplier)}` : '<span style="color:var(--red)">未关联库存商品</span>')
         : (p.spec || "");
+      const isLabor = p.category === "人工";
       const stockShown = p.product_type === "order" && p.stock_product_name
         ? `<span class="muted">经库存商品</span>`
-        : fmtStock(p);
+        : isLabor
+          ? `<span class="badge income">工作量 ${fmtNum(p.workload)} 单</span>`
+          : fmtStock(p);
       return `<tr>
         <td class="cb-col"><input type="checkbox" value="${p.id}" ${prodSel.has(p.id) ? "checked" : ""} onchange="toggleSel('prod',${p.id},this.checked)" /></td>
         <td class="muted mono">${esc(p.code) || "—"}</td>
@@ -1824,11 +1865,12 @@ async function loadMovements() {
   const pid = $("mvProduct").value || "0";
   const from = $("mvDateFrom").value, to = $("mvDateTo").value;
   let rows = await api(`/api/movements?product_id=${pid}&date_from=${from || ""}&date_to=${to || ""}`);
+  renderMvChart(rows, +pid);
   const kw = ($("mvSearch")?.value || "").trim().toLowerCase();
   if (kw) rows = rows.filter((m) => [m.date, m.product_name, m.remark, m.operator].join(" ").toLowerCase().includes(kw));
   const t = $("mvTable");
   rows = applyTableSort(t, rows);
-  const typeBadge = { in: '<span class="badge in">入库</span>', out: '<span class="badge out">出库</span>', pack_out: '<span class="badge pack">包装消耗</span>', adjust: '<span class="badge adjust">盘点</span>' };
+  const typeBadge = { in: '<span class="badge in">入库</span>', out: '<span class="badge out">出库</span>', pack_out: '<span class="badge pack">包装消耗</span>', work: '<span class="badge income">工作量</span>', adjust: '<span class="badge adjust">盘点</span>' };
   t.innerHTML = `<thead><tr>
     <th data-key="date">时间${sortArrow("mvTable", "date")}</th>
     <th data-key="product_name">商品${sortArrow("mvTable", "product_name")}</th>
@@ -1837,17 +1879,87 @@ async function loadMovements() {
     <th data-key="amount" class="num">金额${sortArrow("mvTable", "amount")}</th>
     <th data-key="operator">操作员${sortArrow("mvTable", "operator")}</th>
     <th>备注</th></tr></thead><tbody>` +
-    rows.map((m) => `<tr>
+    rows.map((m) => {
+      const v = m.quantity_display != null ? m.quantity_display : m.quantity_base;
+      const unit = m.unit || "";
+      return `<tr>
       <td class="mono">${m.date}</td>
       <td>${esc(m.product_name)}</td>
       <td>${typeBadge[m.move_type] || m.move_type}</td>
-      <td class="num mono" style="color:${m.quantity_display >= 0 ? "var(--green)" : "var(--red)"}">${m.quantity_display >= 0 ? "+" : ""}${fmtNum(m.quantity_display)} ${esc(m.unit || "")}</td>
+      <td class="num mono" style="color:${v >= 0 ? "var(--green)" : "var(--red)"}">${v >= 0 ? "+" : ""}${fmtNum(v)} ${esc(unit)}</td>
       <td class="num mono">${fmtMoney(m.amount)}</td>
       <td>${esc(m.operator) || "—"}</td>
-      <td class="muted">${esc(m.remark)}</td></tr>`).join("") + `</tbody>`;
+      <td class="muted">${esc(m.remark)}</td></tr>`;
+    }).join("") + `</tbody>`;
   if (!rows.length) t.innerHTML = `<tr><td colspan="7" class="empty">暂无流水</td></tr>`;
   t._rows = rows;
   t._render = loadMovements;
+}
+
+/* 近一个月库存变动柱状图：按日聚合净变动（单商品用默认单位，全部商品用基础单位） */
+function renderMvChart(rows, pid) {
+  const box = $("mvChart");
+  if (!box) return;
+  const from = $("mvDateFrom").value, to = $("mvDateTo").value;
+  const useDisp = !!pid; // 选中具体商品时按默认单位展示
+  const byDate = {};
+  rows.forEach((m) => {
+    const v = useDisp ? (m.quantity_display != null ? m.quantity_display : m.quantity_base) : m.quantity_base;
+    byDate[m.date] = (byDate[m.date] || 0) + v;
+  });
+  const end = to ? new Date(to + "T00:00:00") : new Date();
+  const start = from ? new Date(from + "T00:00:00") : new Date(end.getTime() - 29 * 86400000);
+  const days = [];
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    days.push({ ds, v: byDate[ds] || 0 });
+  }
+  if (days.length > 62) days.splice(0, days.length - 62); // 防止日期范围过大
+  const p = useDisp ? PRODUCTS.find((x) => x.id === pid) : null;
+  const unit = p ? (p.default_unit || p.base_unit) : "基础单位";
+  const max = Math.max(1, ...days.map((d) => Math.abs(d.v)));
+  box.innerHTML = `<div class="mv-chart-title">近${days.length}天库存变动趋势（${unit}，绿=净入库/红=净出库）</div><div class="mv-chart">` +
+    days.map((d) => {
+      const h = Math.max(2, Math.round(Math.abs(d.v) / max * 100));
+      const cls = d.v > 0 ? "up" : d.v < 0 ? "down" : "zero";
+      const label = d.v ? (d.v > 0 ? "+" : "") + fmtNum(d.v) : "";
+      return `<div class="mv-col" title="${d.ds}：${d.v ? (d.v > 0 ? "+" : "") + fmtNum(d.v) : "0"} ${unit}">
+        <span class="mv-val">${label}</span>
+        <div class="mv-track"><div class="mv-bar ${cls}" style="height:${h}%"></div></div>
+        <div class="mv-x">${d.ds.slice(5)}</div></div>`;
+    }).join("") + `</div>`;
+}
+
+/* =============== 工作量统计（人工打包） =============== */
+async function loadWorkload() {
+  const from = $("wlDateFrom").value, to = $("wlDateTo").value;
+  const d = await api(`/api/workload?date_from=${from || ""}&date_to=${to || ""}`);
+  renderWorkload(d);
+}
+function renderWorkload(d) {
+  $("wlTotal").textContent = fmtNum(d.total_workload) + " 单";
+  $("wlTotalSub").textContent = `成本 ${fmtMoney(d.total_cost)} · ${d.by_product.length} 个打包工种`;
+  const max = Math.max(1, ...d.by_product.map((x) => x.workload));
+  $("wlChart").innerHTML = `<div class="mv-chart-title">各人工打包工作量（${d.by_product.length ? "单" : "—"}）</div><div class="wl-bars">` +
+    d.by_product.map((x) => {
+      const w = Math.round(x.workload / max * 100);
+      return `<div class="wl-row" title="${esc(x.name)}：${fmtNum(x.workload)} 单 · 成本 ${fmtMoney(x.cost)}">
+        <span class="wl-name">${esc(x.name)}</span>
+        <span class="wl-track"><span class="wl-bar" style="width:${Math.max(2, w)}%"></span></span>
+        <span class="wl-val">${fmtNum(x.workload)}</span></div>`;
+    }).join("") +
+    (d.by_product.length ? "" : `<div class="wl-empty">该时间段暂无人工作量</div>`) + `</div>`;
+  const t = $("wlTable");
+  t.innerHTML = `<thead><tr>
+    <th>人工工种</th><th class="num">工作量(单)</th><th class="num">单位单价</th><th class="num">成本</th></tr></thead><tbody>` +
+    d.by_product.map((x) => `<tr>
+      <td><b>${esc(x.name)}</b></td>
+      <td class="num mono">${fmtNum(x.workload)} ${esc(x.unit)}</td>
+      <td class="num mono">${fmtMoney(x.rate)}/${esc(x.unit)}</td>
+      <td class="num mono">${fmtMoney(x.cost)}</td></tr>`).join("") +
+    (d.by_product.length ? "" : `<tr><td colspan="4" class="empty">该时间段无人工工作量</td></tr>`) + `</tbody>`;
+  t._rows = d.by_product;
+  t._render = () => renderWorkload(d);
 }
 
 /* ---------- HTML 转义 ---------- */
@@ -1886,6 +1998,8 @@ function esc(s) {
   $("outDateTo").value = today();
   $("mvDateFrom").value = today(); // 库存流水默认显示当天
   $("mvDateTo").value = today();
+  $("wlDateFrom").value = monthStart(); // 工作量统计默认本月
+  $("wlDateTo").value = today();
   bindSearchable(document);
   loadDashboard();
 })();
@@ -2148,121 +2262,33 @@ async function confirmInbound(kind) {
 
 /* =============== 聚水潭编码关联 =============== */
 async function loadMappingPage() {
-  populateMpNewProduct();
+  // 页面已改为「解析即自动新增/关联」，这里仅展示当前关联数量供参考
   const r = await api("/api/mappings");
-  renderSavedMappings(r);
-  $("mpParseInfo").innerHTML = "";
-  $("mpTable").innerHTML = "";
-  if (r.length) {
-    $("mpParseInfo").innerHTML = `<div class="alert ok">已保存 <b>${r.length}</b> 条关联记录，可在「② 已保存的关联关系」中查看修改。</div>`;
-  }
-}
-function populateMpNewProduct() {
-  $("mpNewProduct").innerHTML = `<option value="">选择关联到系统商品…</option>` +
-    PRODUCTS.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
-}
-function renderSavedMappings(rows) {
-  const t = $("mpSavedTable");
-  if (!rows.length) {
-    t.innerHTML = `<tr><td class="empty" colspan="4">暂无已保存的关联关系。可在上方①解析后保存，或在此手动新增。</td></tr>`;
-    return;
-  }
-  const optHtml = (pid) =>
-    `<option value="">— 不关联 —</option>` +
-    PRODUCTS.map((p) => `<option value="${p.id}" ${String(p.id) === String(pid) ? "selected" : ""}>${esc(p.name)}</option>`).join("");
-  t.innerHTML = `<thead><tr>
-    <th>外部商品编码（聚水潭）</th><th>关联到系统商品</th><th>来源</th><th>操作</th></tr></thead><tbody>` +
-    rows.map((m) => `<tr data-id="${m.id}">
-      <td><b>${esc(m.external_code)}</b></td>
-      <td><select class="saved-select searchable" data-code="${esc(m.external_code)}">${optHtml(m.product_id)}</select></td>
-      <td class="muted">${m.auto_score ? `自动匹配 ${Math.round(m.auto_score * 100)}%` : "手动"}</td>
-      <td><button class="btn sm danger" onclick="deleteMappingRow(${m.id}, '${esc(m.external_code)}')">删除</button></td></tr>`).join("") + `</tbody>`;
-  bindSearchable(t);
-}
-async function saveSavedMappings() {
-  const items = [];
-  document.querySelectorAll("#mpSavedTable .saved-select").forEach((sel) => {
-    if (sel.value) items.push({ external_code: sel.dataset.code, product_id: +sel.value });
-  });
-  if (!items.length) { toast("没有有效的关联（未选择商品）"); return; }
-  try {
-    const r = await api("/api/mappings/bulk", "POST", { source: "jushuitan", items });
-    toast(`已保存修改 ${r.saved} 条`);
-    loadMappingPage();
-  } catch (e) { toast("保存失败：" + e.message); }
-}
-async function deleteMappingRow(id, code) {
-  if (!confirm(`确认删除关联「${code}」？`)) return;
-  try { await api("/api/mappings/" + id, "DELETE"); toast("已删除"); loadMappingPage(); }
-  catch (e) { toast("删除失败：" + e.message); }
-}
-async function addMappingRow() {
-  const code = $("mpNewCode").value.trim();
-  const pid = $("mpNewProduct").value;
-  if (!code) { toast("请输入外部商品编码"); return; }
-  if (!pid) { toast("请选择要关联的系统商品"); return; }
-  try {
-    await api("/api/mappings", "POST", { source: "jushuitan", external_code: code, product_id: +pid });
-    toast("已新增关联");
-    $("mpNewCode").value = "";
-    loadMappingPage();
-  } catch (e) { toast("新增失败：" + e.message); }
+  $("mpParseInfo").innerHTML = r.length
+    ? `<div class="alert ok">当前已保存 <b>${r.length}</b> 条商品编码关联（均指向库存商品），导入出库单时将按此关联结算。</div>`
+    : `<div class="alert">暂无商品编码关联，上传聚水潭出库单后会自动新增订单商品并关联库存商品。</div>`;
 }
 async function parseJushuitan() {
   const file = $("mpFile").files[0];
   if (!file) { toast("请先选择聚水潭出库单文件"); return; }
   try {
     const r = await apiUpload("/api/jushuitan/parse", file);
-    MP_CODES = r.codes;
+    MP_CODES = r.codes || [];
     const skip = Object.entries(r.skip).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}单`).join("、");
-    $("mpParseInfo").innerHTML = `<div class="alert ok">共 <b>${r.total_orders}</b> 单已出库，解析出 <b>${r.codes.length}</b> 种商品${skip ? `，跳过（${skip}）` : ""}。系统已自动推荐匹配，请核对后「保存全部关联」。</div>`;
-    renderMpTable(r.codes);
+    const codes = MP_CODES;
+    const created = codes.filter((c) => c.status === "自动新增");
+    const existed = codes.filter((c) => c.status === "已存在");
+    const linked = codes.filter((c) => !!c.stock_product_name);
+    const unlinked = codes.filter((c) => !c.stock_product_name);
+    let html = `<div class="alert ok">共 <b>${r.total_orders}</b> 单已出库，解析出 <b>${codes.length}</b> 种订单商品` +
+      (skip ? `，跳过（${skip}）` : "") + `。</div>`;
+    html += `<div class="mp-summary">
+      <div class="mp-sum-item ok"><b>${linked.length}</b> 种已关联库存商品${linked.length ? `（${linked.map((c) => `${esc(c.product_name)} → ${esc(c.stock_product_name)}`).join("、")}）` : ""}</div>
+      <div class="mp-sum-item">本次自动新增 <b>${created.length}</b> 种订单商品${existed.length ? `，已存在未新增 ${existed.length} 种` : ""}</div>` +
+      (unlinked.length ? `<div class="mp-sum-item warn">未匹配库存 <b>${unlinked.length}</b> 种：${unlinked.map((c) => esc(c.product_name)).join("、")}（可在出库页「关联结算」中维护）</div>` : "") + `
+    </div>`;
+    $("mpParseInfo").innerHTML = html;
   } catch (e) { $("mpParseInfo").innerHTML = `<div class="alert err">解析失败：${esc(e.message)}</div>`; }
-}
-function renderMpTable(codes) {
-  const optHtml = (pid) =>
-    `<option value="">— 不关联 —</option>` +
-    PRODUCTS.map((p) => `<option value="${p.id}" ${String(p.id) === String(pid) ? "selected" : ""}>${esc(p.name)}</option>`).join("");
-  $("mpTable").innerHTML = `<thead><tr>
-    <th>聚水潭商品</th><th class="num">出现次数</th><th>每件规格</th><th>推荐匹配</th><th>关联到系统商品</th><th>状态</th></tr></thead><tbody>` +
-    codes.map((c) => {
-      const matched = !!c.product_id;
-      const selId = c.product_id || c.suggest_id || "";
-      const score = c.score;
-      const tag = matched
-        ? `<span class="badge in">已关联</span>`
-        : (selId ? `<span class="badge adjust">建议匹配</span>` : `<span class="badge off">待关联</span>`);
-      return `<tr>
-        <td><b>${esc(c.external_code)}</b></td>
-        <td class="num">${c.count}</td>
-        <td class="muted">${esc(c.spec) || "—"}</td>
-        <td class="muted">${c.suggest_name ? `${esc(c.suggest_name)} <span class="muted">(${Math.round(score * 100)}%)</span>` : "—"}</td>
-        <td><select class="mp-select searchable" data-code="${esc(c.external_code)}" onchange="mpSelectChanged(this)">${optHtml(selId)}</select></td>
-        <td>${tag}</td></tr>`;
-    }).join("") + `</tbody>`;
-  // 未保存过的：匹配度>=50% 的自动选中，弱匹配留待人工确认
-  document.querySelectorAll("#mpTable .mp-select").forEach((sel) => {
-    const c = MP_CODES.find((x) => x.external_code === sel.dataset.code);
-    if (c && !c.product_id && c.suggest_id && (c.score || 0) >= 0.5) sel.value = String(c.suggest_id);
-  });
-  bindSearchable($("mpTable"));
-}
-function mpSelectChanged(sel) {
-  const c = MP_CODES.find((x) => x.external_code === sel.dataset.code);
-  if (c) c.product_id = sel.value ? +sel.value : null;
-}
-async function saveMappings() {
-  // 以表格下拉框的实际选择为准（自动选中的推荐项也在其中）
-  const items = [];
-  document.querySelectorAll("#mpTable .mp-select").forEach((sel) => {
-    if (sel.value) items.push({ external_code: sel.dataset.code, product_id: +sel.value });
-  });
-  if (!items.length) { toast("没有可保存的关联，请先在列表中选择要关联的商品"); return; }
-  try {
-    const r = await api("/api/mappings/bulk", "POST", { source: "jushuitan", items });
-    toast(`已保存 ${r.saved} 条关联`);
-    loadMappingPage();
-  } catch (e) { toast("保存失败：" + e.message); }
 }
 async function autoMapping() {
   try {

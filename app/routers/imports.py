@@ -850,11 +850,107 @@ def auto_suggest(name: str, products: list[Product]) -> tuple[int | None, float]
     return None, 0.0
 
 
+# 自动新增时排除的库存分类（人工/包材/快递不作为关联大类）
+_NO_AUTO_STOCK_CATS = ("人工", "包材", "快递")
+
+# 尾部规格剥离：如「新鲜芦笋2斤」「新鲜天麻2斤8-10个」「牛奶芋头3斤30g＋」→ 基础名
+_SPEC_TAIL_RE = re.compile(
+    r"[\d.]+(?:\s*[－\-–]\s*[\d.]+)?\s*(?:斤|公斤|千克|克|g|kg|个|袋|包|盒|箱|件|份|瓶|支)[+\＋]?$"
+)
+
+
+def _strip_spec(name: str) -> str:
+    """剥离商品名尾部的规格，得到基础名（如 新鲜芦笋2斤 → 新鲜芦笋）。"""
+    s = str(name or "").strip()
+    while True:
+        n = _SPEC_TAIL_RE.sub("", s).strip()
+        if n == s:
+            return s
+        s = n
+
+
+def _match_stock(db: Session, ext_name: str) -> Product | None:
+    """从外部商品名自动匹配对应的库存商品（大类，排除 人工/包材/快递）。
+
+    策略：先剥离尾部规格后按基础名精确匹配库存商品名/编码（安全）；
+          未命中时再按整名高阈值(0.7)模糊匹配，避免误配（如 西兰苔 ≠ 西兰花）。
+    """
+    base = _strip_spec(ext_name)
+    stocks = [
+        p for p in db.execute(select(Product).where(Product.product_type == "stock")).scalars()
+        if p.category not in _NO_AUTO_STOCK_CATS
+    ]
+    for s in stocks:
+        if s.name == base or s.code == base:
+            return s
+    if base == ext_name:
+        return None
+    pid, score = auto_suggest(base, stocks)
+    if pid and score >= 0.7:
+        return db.get(Product, pid)
+    return None
+
+
+def _spec_multiplier(stock: Product, ext_name: str) -> float:
+    """按外部商品名规格折算到库存默认单位的倍数（1 单订单商品消耗多少库存默认单位）。
+
+    如「新鲜芦笋2斤」→ 2斤=1公斤（库存默认公斤）；「佛手柑大果2个」→ 2个；「新鲜芦笋250g」→ 0.25公斤。
+    """
+    du = stock.default_unit or stock.base_unit
+    conv = stock.conversions or {}
+    factor_du = conv.get(du, 1) or 1
+    u, qty = parse_jst_spec(ext_name)  # 重量单位：斤/公斤/克
+    if u and u in conv:
+        return round(qty * conv[u] / factor_du, 6)
+    m = re.search(r"([\d.]+)\s*(个|袋|包|盒|箱|件|份|瓶|支)", ext_name)  # 计数单位
+    if m:
+        cu = m.group(2)
+        if du == cu:
+            return round(float(m.group(1)), 6)
+        f = conv.get(cu)
+        if f:
+            return round(float(m.group(1)) * f / factor_du, 6)
+    return 1.0
+
+
+def _auto_create_order(db: Session, ext_name: str, stock: Product | None = None) -> Product:
+    """为外部商品自动新增订单商品（小类）。stock 为空则仅新增、不关联库存（待后续维护）。"""
+    existing = db.scalar(select(Product).where(Product.name == ext_name))
+    if existing:
+        return existing
+    if stock:
+        mult = _spec_multiplier(stock, ext_name)
+        spec = f"每单约 {fmt_qty(mult)}{stock.default_unit or stock.base_unit}"
+        sid = stock.id
+        cat = stock.category
+    else:
+        mult = 1.0
+        spec = "未关联库存，待匹配"
+        sid = None
+        cat = "待分类"
+    p = Product(
+        code=ext_name,
+        name=ext_name,
+        category=cat,
+        product_type="order",
+        base_unit="单",
+        default_unit="单",
+        spec=spec,
+        conversions={"单": 1},
+        stock_product_id=sid,
+        multiplier=mult,
+        is_active=True,
+    )
+    db.add(p)
+    db.flush()
+    return p
+
+
 @router.post("/jushuitan/parse")
 def parse_jushuitan(file: UploadFile, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    # 关联页用于「发现商品并自动新增品类」，与出库状态无关：接受全部状态（仅排除作废）
     rows = read_rows(file)
-    orders, skip = jushuitan_rows(rows)
-    products = list(db.execute(select(Product)).scalars())
+    orders, skip = jushuitan_rows(rows, statuses=None)
     mapping_rows = list(db.execute(select(CodeMapping)).scalars())
     mapping_by_code = {m.external_code: m for m in mapping_rows}
 
@@ -863,23 +959,66 @@ def parse_jushuitan(file: UploadFile, db: Session = Depends(get_db), user: User 
         for ext_name, qty in parse_jushuitan_name(o["name"]):
             c = codes.setdefault(ext_name, {"external_code": ext_name, "count": 0})
             c["count"] += 1
+
+    auto_created = 0
     for c in codes.values():
         su, sq = parse_jst_spec(c["external_code"])
         c["spec"] = f"{fmt_qty(sq)} {su}/件" if su and sq else ""
         m = mapping_by_code.get(c["external_code"])
         if m and m.product_id:
-            p = db.get(Product, m.product_id)
+            # 已有映射：如指向订单商品（小类），修正为指向其关联的库存商品（大类）
+            c["stock_product_name"] = ""
+            tp = db.get(Product, m.product_id)
+            if tp and tp.product_type == "order" and tp.stock_product_id:
+                sp = db.get(Product, tp.stock_product_id)
+                if sp and sp.product_type == "stock":
+                    m.product_id = sp.id
+                    c["stock_product_name"] = sp.name
+            sp = db.get(Product, m.product_id)
             c["product_id"] = m.product_id
-            c["product_name"] = p.name if p else ""
+            c["product_name"] = tp.name if tp else ""
+            c["stock_product_id"] = m.product_id if sp and sp.product_type == "stock" else None
+            c["stock_product_name"] = c["stock_product_name"] or (sp.name if sp and sp.product_type == "stock" else "")
             c["score"] = m.auto_score
+            c["status"] = "已关联"
+            continue
+        # 订单商品（小类）是否已存在：存在则不新增
+        existed = db.scalar(select(Product).where(Product.name == c["external_code"]))
+        if existed:
+            order_p = existed
+            c["status"] = "已存在"
         else:
-            pid, score = auto_suggest(c["external_code"], products)
-            c["suggest_id"] = pid
-            c["suggest_name"] = next((p.name for p in products if p.id == pid), "") if pid else ""
-            c["score"] = score
+            # 不存在：自动新增订单商品品类，并尝试与库存商品（大类）关键词关联
+            stock = _match_stock(db, c["external_code"])
+            order_p = _auto_create_order(db, c["external_code"], stock)
+            auto_created += 1
+            c["status"] = "自动新增"
+        # 已存在但未关联库存的，补关键词关联
+        if c["status"] == "已存在" and not order_p.stock_product_id:
+            stock = _match_stock(db, c["external_code"])
+            if stock:
+                order_p.stock_product_id = stock.id
+                order_p.multiplier = _spec_multiplier(stock, c["external_code"])
+                order_p.spec = f"每单约 {fmt_qty(order_p.multiplier)}{stock.default_unit or stock.base_unit}"
+        # 编码关联统一指向库存商品（大类）；无匹配库存则不关联（留待人工）
+        sp = db.get(Product, order_p.stock_product_id) if order_p.stock_product_id else None
+        if sp and sp.product_type == "stock":
+            _upsert_mapping(db, "jushuitan", c["external_code"], sp.id)
+            c["product_id"] = sp.id
+            c["stock_product_id"] = sp.id
+            c["stock_product_name"] = sp.name
+        else:
+            c["product_id"] = order_p.id
+            c["stock_product_id"] = None
+            c["stock_product_name"] = ""
+        c["product_name"] = order_p.name
+        c["multiplier"] = order_p.multiplier
+        c["score"] = 1.0
+    db.commit()
     return {
         "total_orders": len(orders),
         "skip": skip,
+        "auto_created": auto_created,
         "codes": sorted(codes.values(), key=lambda x: -x["count"]),
     }
 
@@ -938,14 +1077,14 @@ def bulk_mappings(data: MappingBulkIn, db: Session = Depends(get_db), user: User
 
 @router.post("/mappings/auto")
 def auto_mappings(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    products = list(db.execute(select(Product)).scalars())
+    # 只自动关联到库存商品（大类），且用基础名精确/高阈值匹配，避免旧版模糊误配（如 西兰苔≠西兰花）
     rows = list(db.execute(select(CodeMapping).where(CodeMapping.product_id.is_(None))).scalars())
     matched = 0
     for m in rows:
-        pid, score = auto_suggest(m.external_code, products)
-        if pid:
-            m.product_id = pid
-            m.auto_score = score
+        stock = _match_stock(db, m.external_code)
+        if stock:
+            m.product_id = stock.id
+            m.auto_score = 1.0
             m.updated_at = datetime.now()
             matched += 1
     db.commit()

@@ -69,6 +69,7 @@ def _to_dict(p: Product, db: Session | None = None) -> dict:
         "stock": p.stock,
         "avg_cost": p.avg_cost,
         "stock_value": p.stock_value,
+        "workload": getattr(p, "workload", 0) or 0,
     }
 
 
