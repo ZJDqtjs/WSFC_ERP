@@ -191,6 +191,30 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
+class PackRule(Base):
+    """一单多货合并打包规则（多货打包）。区别于一单一货的 pack_items/pack_fee。
+
+    name 为组合标识(如 '七彩土豆3斤*1,京鲜生七彩花生1斤*1')；
+    items 为组合条目列表 [{product_id, name, quantity}]（product_id 可空=未关联订单商品）：
+    - box_type 纸箱型号(如 '7号+8号')
+    - labor_price 工人单价(元/单，可空)
+    - box_ratio 箱单比(默认 1)
+    - remark 备注
+    """
+
+    __tablename__ = "pack_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(512), unique=True, index=True)
+    items: Mapped[list] = mapped_column(JSON, default=list)
+    box_type: Mapped[str] = mapped_column(String(64), default="")
+    labor_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    box_ratio: Mapped[float] = mapped_column(Float, default=1.0)
+    remark: Mapped[str] = mapped_column(String(255), default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 class CodeMapping(Base):
     """外部单据商品编码 → 系统商品 的关联（如聚水潭商品名称）。"""
 
