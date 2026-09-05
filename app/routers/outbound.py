@@ -47,6 +47,7 @@ def _to_dict(o: Outbound) -> dict:
     return {
         "id": o.id,
         "code": o.code,
+        "import_group": o.import_group,
         "customer": o.customer,
         "operator": o.operator,
         "date": o.date,
@@ -83,12 +84,14 @@ def preview(data: PreviewIn, db: Session = Depends(get_db), user: User = Depends
 
 
 @router.get("")
-def list_outbounds(date_from: str = "", date_to: str = "", db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def list_outbounds(date_from: str = "", date_to: str = "", g: str = "", db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     q = select(Outbound).order_by(Outbound.id.desc())
     if date_from:
         q = q.where(Outbound.date >= date_from)
     if date_to:
         q = q.where(Outbound.date <= date_to)
+    if g:
+        q = q.where(Outbound.import_group.in_([x for x in g.split(",") if x]))
     return [_to_dict(o) for o in db.execute(q).scalars()]
 
 

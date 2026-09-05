@@ -304,6 +304,28 @@
         </div>
       </section>
 
+      <!-- 出库/销售批次明细（二级页） -->
+      <section id="page-outgroup" class="page">
+        <div class="card">
+          <div class="card-head">
+            <h3 id="ogTitle">出库批次明细</h3><span class="hint" id="ogHint"></span>
+            <button class="btn secondary" style="margin-left:auto;" onclick="goPage('outbound');loadOutbounds()">← 返回出库列表</button>
+          </div>
+          <div class="stat-grid" id="ogSummary" style="margin-bottom:12px;"></div>
+          <div class="toolbar">
+            <div class="seg" id="ogSeg">
+              <button class="seg-item active" data-panel="og-sale" onclick="switchOgSeg(this)">销售商品</button>
+              <button class="seg-item" data-panel="og-pack" onclick="switchOgSeg(this)">耗材 / 包装</button>
+            </div>
+            <input id="ogSearch" placeholder="🔍 搜索商品..." oninput="renderOutGroup()" />
+            <button class="btn secondary" onclick="renderOutGroup()">筛选</button>
+            <div class="grow"></div>
+            <button class="btn danger" onclick="deleteOutGroup()">🗑 删除本批（<span id="ogDelCount">0</span> 单）</button>
+          </div>
+          <div class="table-wrap"><table id="ogTable"></table></div>
+        </div>
+      </section>
+
       <!-- 商品管理 -->
       <section id="page-products" class="page">
         <div class="card">

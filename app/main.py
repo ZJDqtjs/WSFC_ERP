@@ -60,6 +60,13 @@ def migrate():
             conn.execute(text("ALTER TABLE users ADD COLUMN key_created_at DATETIME"))
         conn.commit()
 
+    # 出库单表：批量导入批次号（空=手动单条）
+    with engine.connect() as conn:
+        ocols = [r[1] for r in conn.execute(text("PRAGMA table_info(outbounds)")).fetchall()]
+        if "import_group" not in ocols:
+            conn.execute(text("ALTER TABLE outbounds ADD COLUMN import_group VARCHAR(32) DEFAULT ''"))
+        conn.commit()
+
 
 async def auto_backup_loop():
     """每 60 秒检查一次；开启自动备份且距上次备份超过间隔则执行备份。"""
