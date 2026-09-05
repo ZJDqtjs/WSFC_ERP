@@ -276,7 +276,7 @@ function goPage(name) {
   const loaders = {
     home: loadDashboard, stock: loadStock, inbound: initInbound, outbound: initOutbound,
     products: renderProducts, report: loadReport, import: loadImportPage, jushuitan: loadMappingPage,
-    backup: loadBackupPage, fresh: loadFresh, packrules: loadPackRules,
+    backup: loadBackupPage, fresh: loadFresh, packrules: loadPackRules, pdata: loadPdataPage,
   };
   (loaders[name] || (() => {}))();
 }
@@ -1031,6 +1031,110 @@ async function deleteBackup(name) {
   } catch (e) { toast("删除失败：" + e.message); }
 }
 
+/* =============== 设置 · 商品资料备份（解耦 JSON） =============== */
+const PDATA_KINDS = {
+  units: "units.json", products_stock: "products_stock.json",
+  products_order: "products_order.json", pack_rules: "pack_rules.json",
+  code_mappings: "code_mappings.json",
+};
+async function loadPdataPage() {
+  try {
+    const s = await api("/api/product-data/status");
+    $("pdataDir").textContent = "json 目录：" + s.dir;
+    renderPdataTable(s.rows || []);
+  } catch (e) { toast("加载商品资料状态失败：" + e.message); }
+}
+function renderPdataTable(rows) {
+  $("pdataTable").innerHTML = `<thead><tr>
+    <th>类型</th><th>json 文件</th><th class="num">库内数</th><th class="num">json 数</th><th>备份状态</th><th>操作</th>
+  </tr></thead><tbody>` +
+    (rows.length ? rows.map((r) => {
+      const state = !r.exists
+        ? `<span class="badge">未备份</span>`
+        : `<span class="badge" style="background:var(--ok,#16a34a);color:#fff;">已备份 ${esc(r.mtime || "")}</span>`;
+      return `<tr>
+        <td>${esc(r.label)}</td>
+        <td class="mono">${esc(r.file)}</td>
+        <td class="num mono">${r.count_in_db}</td>
+        <td class="num mono">${r.exists ? r.count_in_file : "-"}</td>
+        <td>${state}</td>
+        <td class="line-actions">
+          <button class="btn sm secondary" onclick="pdataDownload('${r.kind}')">下载</button>
+          <button class="btn sm" ${r.exists ? "" : "disabled"} onclick="pdataImportOne('${r.kind}')">导入</button>
+        </td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="6" class="empty">暂无数据</td></tr>`) + `</tbody>`;
+}
+async function pdataExportAll() {
+  try {
+    const r = await api("/api/product-data/export", "POST");
+    toast("已导出 " + (r.files || []).length + " 个 json 到服务器目录");
+    loadPdataPage();
+  } catch (e) { toast("导出失败：" + e.message); }
+}
+async function pdataImportAll() {
+  if (!confirm("从 json 目录一键导入全部 5 类？将按名称新增/更新（upsert），不会删除已有数据。")) return;
+  try {
+    const r = await api("/api/product-data/import", "POST");
+    renderPdataImportResult(r.results || []);
+    loadPdataPage();
+  } catch (e) { toast("导入失败：" + e.message); }
+}
+async function pdataImportOne(kind) {
+  if (!confirm("从 json 目录导入「" + kind + "」？将按名称新增/更新，不会删除已有数据。")) return;
+  try {
+    const r = await api("/api/product-data/import/" + kind, "POST");
+    renderPdataImportResult([r]);
+    loadPdataPage();
+  } catch (e) { toast("导入失败：" + e.message); }
+}
+function renderPdataImportResult(results) {
+  const rows = (results || []).map((s) => `<tr>
+    <td>${esc(s.label)}</td>
+    <td class="num">${s.created || 0} 新增</td>
+    <td class="num">${s.updated || 0} 更新</td>
+    <td>${s.loaded === false ? '<span class="badge">未加载</span>' : ""}
+      ${(s.warnings || []).map((w) => `<div class="hint">${esc(w)}</div>`).join("")}</td>
+  </tr>`).join("");
+  $("pdataResult").innerHTML = `<div class="alert ok">导入完成</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>类型</th><th class="num">新增</th><th class="num">更新</th><th>备注</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  bindSearchable($("pdataResult"));
+}
+async function pdataDownload(kind) {
+  try {
+    const data = await api("/api/product-data/" + kind);
+    if (data && data.error) { toast(data.error); return; }
+    downloadJson(data, PDATA_KINDS[kind]);
+  } catch (e) { toast("导出失败：" + e.message); }
+}
+function downloadJson(obj, filename) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 200);
+}
+async function pdataUploadImport() {
+  const f = $("pdataUploadFile").files[0];
+  if (!f) { toast("请先选择 json 文件"); return; }
+  let payload;
+  try { payload = JSON.parse(await readFileText(f)); }
+  catch (e) { toast("JSON 解析失败：" + e.message); return; }
+  const kind = payload && payload.kind;
+  if (!kind || !PDATA_KINDS[kind]) { toast("无法识别文件类型：json 需含 kind 字段（可在本页下载对应 json 参考结构）"); return; }
+  if (!confirm(`本地上传导入「${kind}」？将按名称新增/更新，不会删除已有数据。`)) return;
+  try {
+    const r = await api("/api/product-data/import-one", "POST", { payload });
+    renderPdataImportResult([r]);
+    loadPdataPage();
+    toast("导入完成");
+  } catch (e) { toast("导入失败：" + e.message); }
+}
+
 /* =============== 商品 =============== */
 function productOptions(selected = 0, includeAll = false) {
   const NO_STOCK_CATS = ["人工", "快递"]; // 无真实库存，不可盘点调整
@@ -1153,7 +1257,8 @@ async function renderProducts() {
 async function openUnitsModal() {
   const units = await api("/api/units");
   openModal(`
-    <h3>计量单位管理 <button class="close" onclick="closeModal()">✕</button></h3>
+    <h3>计量单位管理 <button class="close" onclick="closeModal()">✕</button>
+      <button class="btn sm secondary" style="float:right;" onclick="pdataDownload('units')"><svg class="ic"><use href="#i-download"/></svg> 导出JSON</button></h3>
     <p class="hint" style="margin-bottom:12px;">重量类单位需填写「每单位克数」，如 斤=500克；计数类按商品自行设置换算。标准单位不可删除。</p>
     <div class="table-wrap"><table>
       <thead><tr><th>单位</th><th>类型</th><th>每单位克数</th><th></th></tr></thead>
