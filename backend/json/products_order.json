@@ -2,7 +2,7 @@
   "kind": "products_order",
   "label": "订单商品",
   "file": "products_order.json",
-  "exported_at": "2026-09-05 14:57:22",
+  "exported_at": "2026-09-05 15:30:02",
   "items": [
     {
       "code": "",
@@ -19,7 +19,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
+          "name": "7号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -49,7 +49,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
+          "name": "6号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -79,13 +79,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱9号",
-          "quantity": 1,
+          "name": "9号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "七彩花生米1斤（去壳）打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -109,7 +109,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱8号",
+          "name": "8号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -139,7 +139,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
+          "name": "7号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -169,7 +169,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
+          "name": "7号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -218,13 +218,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
-          "quantity": 1,
+          "name": "6号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "京鲜生松茸干片50g打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -248,7 +248,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
+          "name": "6号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -278,13 +278,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱10号",
-          "quantity": 1,
+          "name": "10号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "京鲜生羊肚菌干货30g（3-5）打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -308,13 +308,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱9号",
-          "quantity": 1,
+          "name": "9号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "京鲜生羊肚菌干货30g（5-7）打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -338,13 +338,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱9号",
-          "quantity": 1,
+          "name": "9号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "京鲜生茯苓250g打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -368,7 +368,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱8号",
+          "name": "8号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -398,13 +398,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱11号",
-          "quantity": 1,
+          "name": "11号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "京鲜生鸡煲汤料包120g打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -428,7 +428,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
+          "name": "7号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -458,13 +458,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱4号",
-          "quantity": 1,
+          "name": "4号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "京鲜生鹿茸菇干货1000g打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -488,13 +488,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
-          "quantity": 1,
+          "name": "7号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "京鲜生鹿茸菇干货200g打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -518,7 +518,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱9号",
+          "name": "9号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -548,13 +548,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱8号",
-          "quantity": 1,
+          "name": "8号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "京鲜生黄芪500g打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -616,7 +616,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱9号",
+          "name": "9号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -647,7 +647,7 @@
       "pack_items": [
         {
           "name": "松茸6号箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         }
       ],
@@ -671,13 +671,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
-          "quantity": 1,
+          "name": "6号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "松茸干片100g打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -701,7 +701,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
+          "name": "6号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -731,7 +731,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
+          "name": "7号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -780,7 +780,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
+          "name": "6号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -848,13 +848,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
-          "quantity": 1,
+          "name": "6号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "羊肚菌干货50g打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -878,13 +878,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱4号",
-          "quantity": 1,
+          "name": "4号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "羊肚菌礼盒250g打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -908,7 +908,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱4号",
+          "name": "4号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -957,7 +957,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
+          "name": "6号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -987,7 +987,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
+          "name": "6号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -1036,13 +1036,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
-          "quantity": 1,
+          "name": "7号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "鹿茸菇干货200g打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1066,7 +1066,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
+          "name": "6号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -1096,7 +1096,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
+          "name": "6号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -1126,7 +1126,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
+          "name": "7号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -1156,7 +1156,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱8号",
+          "name": "8号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -1186,13 +1186,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
-          "quantity": 1,
+          "name": "6号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "黑花生2.5斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1216,13 +1216,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱8号",
-          "quantity": 1,
+          "name": "8号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "黑花生米1斤（去壳）打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1284,13 +1284,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
-          "quantity": 1,
+          "name": "7号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "七彩土豆3斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1314,13 +1314,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
-          "quantity": 1,
+          "name": "6号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "七彩土豆5斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1345,7 +1345,7 @@
       "pack_items": [
         {
           "name": "人参果中果3斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1370,7 +1370,7 @@
       "pack_items": [
         {
           "name": "人参果中果5斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1395,7 +1395,7 @@
       "pack_items": [
         {
           "name": "人参果大果3斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1420,7 +1420,7 @@
       "pack_items": [
         {
           "name": "人参果大果5斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1445,7 +1445,7 @@
       "pack_items": [
         {
           "name": "人参果特大果5斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1469,13 +1469,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱5号",
-          "quantity": 1,
+          "name": "5号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "佛手柑中果1个打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1499,13 +1499,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱4号",
-          "quantity": 1,
+          "name": "4号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "佛手柑中果2个打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1529,13 +1529,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱3号",
-          "quantity": 1,
+          "name": "3号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "佛手柑中果4个打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1597,13 +1597,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱3号",
-          "quantity": 1,
+          "name": "3号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "佛手柑大果3个打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1646,13 +1646,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱3号",
-          "quantity": 1,
+          "name": "3号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "佛手柑果王3个打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1734,12 +1734,12 @@
       "pack_items": [
         {
           "name": "邮政6号箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "包浆豆腐300g*2盒打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1820,13 +1820,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱9号",
-          "quantity": 1,
+          "name": "9号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "小米辣1斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1850,13 +1850,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
-          "quantity": 1,
+          "name": "7号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "小米辣2斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1880,13 +1880,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
-          "quantity": 1,
+          "name": "7号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "小花糯玉米3斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1910,8 +1910,8 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
-          "quantity": 1,
+          "name": "6号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         }
       ],
@@ -1935,13 +1935,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
-          "quantity": 1,
+          "name": "7号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "拇指小玉米2斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1966,12 +1966,12 @@
       "pack_items": [
         {
           "name": "松茸6号箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "新鲜洋蓟1斤100g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -1996,12 +1996,12 @@
       "pack_items": [
         {
           "name": "高珍果箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "新鲜洋蓟3斤100g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2026,12 +2026,12 @@
       "pack_items": [
         {
           "name": "水果5号箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "新鲜洋蓟5斤100g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2055,7 +2055,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
+          "name": "7号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -2085,7 +2085,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
+          "name": "6号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -2115,7 +2115,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱4号",
+          "name": "4号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -2146,12 +2146,12 @@
       "pack_items": [
         {
           "name": "水果3号箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "新鲜芦笋1.5斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2206,12 +2206,12 @@
       "pack_items": [
         {
           "name": "水果3号箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "新鲜芦笋250g打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2266,12 +2266,12 @@
       "pack_items": [
         {
           "name": "水果3号箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "新鲜芦笋3斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2296,7 +2296,7 @@
       "pack_items": [
         {
           "name": "高珍果箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         }
       ],
@@ -2321,12 +2321,12 @@
       "pack_items": [
         {
           "name": "松茸6号箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "新鲜黑牛肝菌500g打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2350,13 +2350,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
-          "quantity": 1,
+          "name": "7号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "水果玉米1200g打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2430,12 +2430,12 @@
       "pack_items": [
         {
           "name": "松茸6号箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "牛奶玉米笋2斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2460,12 +2460,12 @@
       "pack_items": [
         {
           "name": "高珍果箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "牛奶玉米笋3斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2490,12 +2490,12 @@
       "pack_items": [
         {
           "name": "水果5号箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "牛奶玉米笋5斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2519,13 +2519,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
-          "quantity": 1,
+          "name": "7号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "牛奶芋头3斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2587,13 +2587,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
-          "quantity": 1,
+          "name": "7号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "牛奶芋头3斤单果100g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2655,13 +2655,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
-          "quantity": 1,
+          "name": "6号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "牛奶芋头5斤单果100g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2685,13 +2685,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱5号",
-          "quantity": 1,
+          "name": "5号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "牛奶芋头9斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2734,13 +2734,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱8号",
-          "quantity": 1,
+          "name": "8号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "玉米段2斤装打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2764,13 +2764,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
-          "quantity": 1,
+          "name": "7号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "玉米段3斤装打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2794,13 +2794,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱5号",
-          "quantity": 1,
+          "name": "5号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "玉米段5斤装打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2824,13 +2824,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱9号",
-          "quantity": 1,
+          "name": "9号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "玉米粒2斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2874,7 +2874,7 @@
       "pack_items": [
         {
           "name": "甜龙笋20斤500g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2929,12 +2929,12 @@
       "pack_items": [
         {
           "name": "松茸6号箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "甜龙笋2斤300g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -2989,12 +2989,12 @@
       "pack_items": [
         {
           "name": "高珍果箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "甜龙笋3斤300g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -3019,12 +3019,12 @@
       "pack_items": [
         {
           "name": "高珍果箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "甜龙笋3斤500g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -3079,12 +3079,12 @@
       "pack_items": [
         {
           "name": "高珍果箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "甜龙笋5斤300g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -3109,12 +3109,12 @@
       "pack_items": [
         {
           "name": "高珍果箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "甜龙笋5斤500g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -3169,12 +3169,12 @@
       "pack_items": [
         {
           "name": "水果5号箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "甜龙笋9斤500g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -3199,12 +3199,12 @@
       "pack_items": [
         {
           "name": "邮政6号箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "石斛鲜条250g打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -3229,12 +3229,12 @@
       "pack_items": [
         {
           "name": "邮政6号箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "石斛鲜条500g打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -3258,7 +3258,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱9号",
+          "name": "9号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -3288,7 +3288,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱11号",
+          "name": "11号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -3318,7 +3318,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱9号",
+          "name": "9号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -3348,7 +3348,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱8号",
+          "name": "8号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -3378,7 +3378,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱11号",
+          "name": "11号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -3408,7 +3408,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱9号",
+          "name": "9号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -3438,7 +3438,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱8号",
+          "name": "8号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -3507,12 +3507,12 @@
       "pack_items": [
         {
           "name": "高珍果箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "西兰花2.5斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -3537,12 +3537,12 @@
       "pack_items": [
         {
           "name": "8号拖箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "西红柿净重5斤120g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -3586,12 +3586,12 @@
       "pack_items": [
         {
           "name": "8号拖箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "马蹄番茄净重3斤180g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -3616,12 +3616,12 @@
       "pack_items": [
         {
           "name": "8号拖箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "马蹄番茄净重4.5斤180g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -3646,12 +3646,12 @@
       "pack_items": [
         {
           "name": "8号拖箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "马蹄番茄净重5斤120g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -3676,12 +3676,12 @@
       "pack_items": [
         {
           "name": "8号拖箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "马蹄番茄净重5斤150g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -3706,12 +3706,12 @@
       "pack_items": [
         {
           "name": "8号拖箱",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "马蹄番茄净重5斤180g+打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],
@@ -3735,7 +3735,7 @@
       },
       "pack_items": [
         {
-          "name": "纸箱7号",
+          "name": "7号纸箱",
           "quantity": 1,
           "unit": "个"
         },
@@ -3765,13 +3765,13 @@
       },
       "pack_items": [
         {
-          "name": "纸箱6号",
-          "quantity": 1,
+          "name": "6号纸箱",
+          "quantity": 1.0,
           "unit": "个"
         },
         {
           "name": "黑紫土豆5斤打包",
-          "quantity": 1,
+          "quantity": 1.0,
           "unit": "单"
         }
       ],

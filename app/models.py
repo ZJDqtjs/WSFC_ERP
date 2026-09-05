@@ -208,6 +208,7 @@ class PackRule(Base):
     name: Mapped[str] = mapped_column(String(512), unique=True, index=True)
     items: Mapped[list] = mapped_column(JSON, default=list)
     box_type: Mapped[str] = mapped_column(String(64), default="")
+    box_items: Mapped[list] = mapped_column(JSON, default=list)  # [{product_id,name,quantity}] 箱型号关联的包材纸箱
     labor_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     box_ratio: Mapped[float] = mapped_column(Float, default=1.0)
     remark: Mapped[str] = mapped_column(String(255), default="")

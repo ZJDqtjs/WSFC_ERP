@@ -2,7 +2,7 @@
   "kind": "products_stock",
   "label": "库存商品",
   "file": "products_stock.json",
-  "exported_at": "2026-09-05 14:46:18",
+  "exported_at": "2026-09-05 15:16:06",
   "items": [
     {
       "code": "",
@@ -2039,6 +2039,139 @@
     },
     {
       "code": "",
+      "name": "10号纸箱",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 10号（参考 0.33 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 0.33,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "11号纸箱",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 11号（参考 0.30 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 0.3,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "3号纸箱",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 3号（参考 1.85 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 1.85,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "4号纸箱",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 4号（参考 1.10 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 1.1,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "5号纸箱",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 5号（参考 0.90 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 0.9,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "6号纸箱",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 6号（参考 0.75 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 0.75,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "7号纸箱",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 7号（参考 0.60 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 0.6,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
       "name": "8号拖箱",
       "category": "包材",
       "product_type": "stock",
@@ -2047,6 +2180,44 @@
       "spec": "纸箱 8号拖箱（参考 1.00 元/个）",
       "sale_price": 0.0,
       "unit_cost": 1.0,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "8号纸箱",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 8号（参考 0.55 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 0.55,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "9号纸箱",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 9号（参考 0.50 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
       "conversions": {
         "个": 1
       },
@@ -2104,177 +2275,6 @@
       "spec": "纸箱 水果5号（参考 3.00 元/个）",
       "sale_price": 0.0,
       "unit_cost": 3.0,
-      "conversions": {
-        "个": 1
-      },
-      "pack_items": [],
-      "pack_fee": 0.0,
-      "stock_product": "",
-      "multiplier": 1.0,
-      "is_active": true
-    },
-    {
-      "code": "",
-      "name": "纸箱10号",
-      "category": "包材",
-      "product_type": "stock",
-      "base_unit": "个",
-      "default_unit": "个",
-      "spec": "纸箱 10号（参考 0.33 元/个）",
-      "sale_price": 0.0,
-      "unit_cost": 0.33,
-      "conversions": {
-        "个": 1
-      },
-      "pack_items": [],
-      "pack_fee": 0.0,
-      "stock_product": "",
-      "multiplier": 1.0,
-      "is_active": true
-    },
-    {
-      "code": "",
-      "name": "纸箱11号",
-      "category": "包材",
-      "product_type": "stock",
-      "base_unit": "个",
-      "default_unit": "个",
-      "spec": "纸箱 11号（参考 0.30 元/个）",
-      "sale_price": 0.0,
-      "unit_cost": 0.3,
-      "conversions": {
-        "个": 1
-      },
-      "pack_items": [],
-      "pack_fee": 0.0,
-      "stock_product": "",
-      "multiplier": 1.0,
-      "is_active": true
-    },
-    {
-      "code": "",
-      "name": "纸箱3号",
-      "category": "包材",
-      "product_type": "stock",
-      "base_unit": "个",
-      "default_unit": "个",
-      "spec": "纸箱 3号（参考 1.85 元/个）",
-      "sale_price": 0.0,
-      "unit_cost": 1.85,
-      "conversions": {
-        "个": 1
-      },
-      "pack_items": [],
-      "pack_fee": 0.0,
-      "stock_product": "",
-      "multiplier": 1.0,
-      "is_active": true
-    },
-    {
-      "code": "",
-      "name": "纸箱4号",
-      "category": "包材",
-      "product_type": "stock",
-      "base_unit": "个",
-      "default_unit": "个",
-      "spec": "纸箱 4号（参考 1.10 元/个）",
-      "sale_price": 0.0,
-      "unit_cost": 1.1,
-      "conversions": {
-        "个": 1
-      },
-      "pack_items": [],
-      "pack_fee": 0.0,
-      "stock_product": "",
-      "multiplier": 1.0,
-      "is_active": true
-    },
-    {
-      "code": "",
-      "name": "纸箱5号",
-      "category": "包材",
-      "product_type": "stock",
-      "base_unit": "个",
-      "default_unit": "个",
-      "spec": "纸箱 5号（参考 0.90 元/个）",
-      "sale_price": 0.0,
-      "unit_cost": 0.9,
-      "conversions": {
-        "个": 1
-      },
-      "pack_items": [],
-      "pack_fee": 0.0,
-      "stock_product": "",
-      "multiplier": 1.0,
-      "is_active": true
-    },
-    {
-      "code": "",
-      "name": "纸箱6号",
-      "category": "包材",
-      "product_type": "stock",
-      "base_unit": "个",
-      "default_unit": "个",
-      "spec": "纸箱 6号（参考 0.75 元/个）",
-      "sale_price": 0.0,
-      "unit_cost": 0.75,
-      "conversions": {
-        "个": 1
-      },
-      "pack_items": [],
-      "pack_fee": 0.0,
-      "stock_product": "",
-      "multiplier": 1.0,
-      "is_active": true
-    },
-    {
-      "code": "",
-      "name": "纸箱7号",
-      "category": "包材",
-      "product_type": "stock",
-      "base_unit": "个",
-      "default_unit": "个",
-      "spec": "纸箱 7号（参考 0.60 元/个）",
-      "sale_price": 0.0,
-      "unit_cost": 0.6,
-      "conversions": {
-        "个": 1
-      },
-      "pack_items": [],
-      "pack_fee": 0.0,
-      "stock_product": "",
-      "multiplier": 1.0,
-      "is_active": true
-    },
-    {
-      "code": "",
-      "name": "纸箱8号",
-      "category": "包材",
-      "product_type": "stock",
-      "base_unit": "个",
-      "default_unit": "个",
-      "spec": "纸箱 8号（参考 0.55 元/个）",
-      "sale_price": 0.0,
-      "unit_cost": 0.55,
-      "conversions": {
-        "个": 1
-      },
-      "pack_items": [],
-      "pack_fee": 0.0,
-      "stock_product": "",
-      "multiplier": 1.0,
-      "is_active": true
-    },
-    {
-      "code": "",
-      "name": "纸箱9号",
-      "category": "包材",
-      "product_type": "stock",
-      "base_unit": "个",
-      "default_unit": "个",
-      "spec": "纸箱 9号（参考 0.50 元/个）",
-      "sale_price": 0.0,
-      "unit_cost": 0.5,
       "conversions": {
         "个": 1
       },
@@ -2626,25 +2626,6 @@
       "is_active": true
     },
     {
-      "code": "",
-      "name": "松茸箱 6#",
-      "category": "商品",
-      "product_type": "stock",
-      "base_unit": "套",
-      "default_unit": "套",
-      "spec": "AI 自动新增（票据识别）",
-      "sale_price": 0.0,
-      "unit_cost": 0.0,
-      "conversions": {
-        "套": 1
-      },
-      "pack_items": [],
-      "pack_fee": 0.0,
-      "stock_product": "",
-      "multiplier": 1.0,
-      "is_active": true
-    },
-    {
       "code": "dmxye",
       "name": "椴木小银耳",
       "category": "商品",
@@ -2659,44 +2640,6 @@
         "斤": 500,
         "公斤": 1000,
         "千克": 1000
-      },
-      "pack_items": [],
-      "pack_fee": 0.0,
-      "stock_product": "",
-      "multiplier": 1.0,
-      "is_active": true
-    },
-    {
-      "code": "",
-      "name": "水果箱 3#",
-      "category": "商品",
-      "product_type": "stock",
-      "base_unit": "套",
-      "default_unit": "套",
-      "spec": "AI 自动新增（票据识别）",
-      "sale_price": 0.0,
-      "unit_cost": 0.0,
-      "conversions": {
-        "套": 1
-      },
-      "pack_items": [],
-      "pack_fee": 0.0,
-      "stock_product": "",
-      "multiplier": 1.0,
-      "is_active": true
-    },
-    {
-      "code": "",
-      "name": "水果箱 5#",
-      "category": "商品",
-      "product_type": "stock",
-      "base_unit": "套",
-      "default_unit": "套",
-      "spec": "AI 自动新增（票据识别）",
-      "sale_price": 0.0,
-      "unit_cost": 0.0,
-      "conversions": {
-        "套": 1
       },
       "pack_items": [],
       "pack_fee": 0.0,
@@ -2809,28 +2752,6 @@
       "is_active": true
     },
     {
-      "code": "ydjgh（5-7）",
-      "name": "羊肚菌干货（5-7）",
-      "category": "商品",
-      "product_type": "stock",
-      "base_unit": "克",
-      "default_unit": "公斤",
-      "spec": "",
-      "sale_price": 0.0,
-      "unit_cost": 0.0,
-      "conversions": {
-        "克": 1,
-        "斤": 500,
-        "公斤": 1000,
-        "千克": 1000
-      },
-      "pack_items": [],
-      "pack_fee": 0.0,
-      "stock_product": "",
-      "multiplier": 1.0,
-      "is_active": true
-    },
-    {
       "code": "fl",
       "name": "茯苓",
       "category": "商品",
@@ -2875,26 +2796,6 @@
       "is_active": true
     },
     {
-      "code": "jtb",
-      "name": "菌汤包",
-      "category": "商品",
-      "product_type": "stock",
-      "base_unit": "个",
-      "default_unit": "包",
-      "spec": "",
-      "sale_price": 0.0,
-      "unit_cost": 0.0,
-      "conversions": {
-        "个": 1,
-        "包": 1.0
-      },
-      "pack_items": [],
-      "pack_fee": 0.0,
-      "stock_product": "",
-      "multiplier": 1.0,
-      "is_active": true
-    },
-    {
       "code": "cchgh",
       "name": "虫草花干货",
       "category": "商品",
@@ -2909,25 +2810,6 @@
         "斤": 500,
         "公斤": 1000,
         "千克": 1000
-      },
-      "pack_items": [],
-      "pack_fee": 0.0,
-      "stock_product": "",
-      "multiplier": 1.0,
-      "is_active": true
-    },
-    {
-      "code": "",
-      "name": "邮政箱 6#",
-      "category": "商品",
-      "product_type": "stock",
-      "base_unit": "套",
-      "default_unit": "套",
-      "spec": "AI 自动新增（票据识别）",
-      "sale_price": 0.0,
-      "unit_cost": 0.0,
-      "conversions": {
-        "套": 1
       },
       "pack_items": [],
       "pack_fee": 0.0,

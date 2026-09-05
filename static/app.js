@@ -8,17 +8,18 @@ let MP_CODES = [];  // 聚水潭解析出的编码列表
 const prodSel = new Set();
 const inSel = new Set();
 const outSel = new Set();
+const prSel = new Set();  // 一单多货批量选择
 let OUT_GROUP = null;  // 当前打开的出库批次（array of Outbound 记录）
 
 /* ---------- 批量选择工具 ---------- */
 function selSet(kind) {
-  return kind === "prod" ? prodSel : kind === "in" ? inSel : outSel;
+  return kind === "prod" ? prodSel : kind === "in" ? inSel : kind === "out" ? outSel : prSel;
 }
 function selBarId(kind) {
-  return kind === "prod" ? "prodBatch" : kind === "in" ? "inBatch" : "outBatch";
+  return kind === "prod" ? "prodBatch" : kind === "in" ? "inBatch" : kind === "out" ? "outBatch" : "prBatch";
 }
 function selCountId(kind) {
-  return kind === "prod" ? "prodSelCount" : kind === "in" ? "inSelCount" : "outSelCount";
+  return kind === "prod" ? "prodSelCount" : kind === "in" ? "inSelCount" : kind === "out" ? "outSelCount" : "prSelCount";
 }
 function updateBatchBar(kind) {
   const bar = $(selBarId(kind));
@@ -36,7 +37,7 @@ function toggleSel(kind, id, checked) {
 function toggleAll(cb, kind) {
   const set = selSet(kind);
   set.clear();
-  const tableId = kind === "prod" ? "prodTable" : kind === "in" ? "inTable" : "outTable";
+  const tableId = kind === "prod" ? "prodTable" : kind === "in" ? "inTable" : kind === "out" ? "outTable" : "prTable";
   document.querySelectorAll(`#${tableId} input[type="checkbox"][value]`).forEach((c) => {
     c.checked = cb.checked;
     if (cb.checked) set.add(+c.value);
@@ -61,7 +62,8 @@ function clearBatch(kind) {
   selSet(kind).clear();
   if (kind === "prod") renderProducts();
   else if (kind === "in") loadInbounds();
-  else loadOutbounds();
+  else if (kind === "out") loadOutbounds();
+  else renderPackRules();
 }
 
 /* ---------- 可搜索下拉（点击选择，输入可快速筛选） ---------- */
@@ -1524,6 +1526,54 @@ function prItemLinked(sel) {
 function addPrItemRow() {
   $("prItems").insertAdjacentHTML("beforeend", prItemRowHtml());
 }
+/* 箱型号→包材纸箱 关联 */
+function prBoxProducts() {
+  return PRODUCTS.filter((p) => p.is_active && p.category === "包材" && (p.name.includes("箱") || p.name.includes("纸")));
+}
+function prModelOf(pname) {
+  const n = String(pname || "");
+  if (n.endsWith("纸箱")) return n.slice(0, -2);
+  if (n.endsWith("号箱")) return n.slice(0, -1);
+  return n;
+}
+function prBoxOptions(selPid) {
+  return `<option value="">自定义（下方输入型号）</option>` +
+    prBoxProducts().map((p) => `<option value="${p.id}" ${selPid === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+}
+function prBoxRowHtml(bx) {
+  bx = bx || {};
+  let pid = bx.product_id || null;
+  let name = bx.name || "";
+  if (pid && !PRODUCTS.find((x) => x.id === pid)) { pid = null; }
+  if (pid) name = prModelOf(PRODUCTS.find((x) => x.id === pid)?.name) || name;
+  return `<div class="pr-box-row">
+    <select class="pr-box-product searchable" onchange="prBoxLinked(this)">${prBoxOptions(pid)}</select>
+    <input class="pr-box-name" value="${esc(name)}" placeholder="箱型号，如 3号 / 邮政6号" />
+    <input class="pr-box-qty" type="number" step="any" min="1" value="${bx.quantity != null ? bx.quantity : 1}" />
+    <button class="btn danger sm" onclick="this.closest('.pr-box-row').remove()">删</button>
+  </div>`;
+}
+function prBoxLinked(sel) {
+  const row = sel.closest(".pr-box-row");
+  if (sel.value) {
+    const m = PRODUCTS.find((x) => x.id === +sel.value);
+    if (m) row.querySelector(".pr-box-name").value = prModelOf(m.name);
+  }
+}
+function addPrBoxRow() {
+  $("prBoxItems").insertAdjacentHTML("beforeend", prBoxRowHtml());
+}
+function collectPrBoxItems() {
+  const out = [];
+  document.querySelectorAll("#prBoxItems .pr-box-row").forEach((row) => {
+    const sel = row.querySelector(".pr-box-product");
+    const n = (row.querySelector(".pr-box-name").value || "").trim();
+    const q = parseFloat(row.querySelector(".pr-box-qty").value);
+    if (!n) return;
+    out.push({ product_id: sel && sel.value ? +sel.value : null, name: n, quantity: q > 0 ? q : 1 });
+  });
+  return out;
+}
 function collectPrItems() {
   const out = [];
   document.querySelectorAll("#prItems .pr-item-row").forEach((row) => {
@@ -1539,13 +1589,23 @@ function openPackRuleModal(rid = 0) {
   const r = rid ? PACK_RULES.find((x) => x.id === rid) : null;
   const items = (r ? r.items || [] : []).map((it) => ({ product_id: it.product_id, name: it.name, quantity: it.quantity }));
   if (!items.length) items.push({ product_id: null, name: "", quantity: 1 });
+  const boxes = (r ? r.box_items || [] : []).map((bx) => ({ product_id: bx.product_id, name: bx.name, quantity: bx.quantity }));
+  if (!boxes.length && r && r.box_type) {
+    (r.box_type || "").split("+").forEach((part) => {
+      const m = part.trim().match(/^(.*?)(?:\*(\d+))?$/);
+      if (m && m[1]) boxes.push({ product_id: null, name: m[1], quantity: m[2] ? +m[2] : 1 });
+    });
+  }
+  if (!boxes.length) boxes.push({ product_id: null, name: "", quantity: 1 });
   openModal(`
     <h3>${rid ? "编辑" : "新增"}一单多货规则 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="block-title">组合商品（多货打包：一张订单含以下多种商品）</div>
     <div id="prItems">${items.map((it) => prItemRowHtml(it)).join("")}</div>
     <button class="btn secondary sm" style="margin-top:8px;" onclick="addPrItemRow()">＋ 添加组合商品</button>
+    <div class="block-title" style="margin-top:16px;">纸箱型号（关联包材纸箱） <span class="hint">选择包材商品并填数量，自动生成箱型号</span></div>
+    <div id="prBoxItems">${boxes.map((bx) => prBoxRowHtml(bx)).join("")}</div>
+    <button class="btn secondary sm" style="margin-top:8px;" onclick="addPrBoxRow()">＋ 添加箱型</button>
     <div class="form-grid" style="margin-top:14px;">
-      <div class="field"><label>纸箱型号</label><input id="prBoxType" value="${esc(r?.box_type || "")}" placeholder="如 7号+8号" /></div>
       <div class="field"><label>工人单价（元/单）</label><input id="prLabor" type="number" step="any" value="${r?.labor_price ?? ""}" placeholder="可空" /></div>
       <div class="field"><label>箱单比</label><input id="prRatio" type="number" step="any" min="1" value="${r?.box_ratio || 1}" /></div>
       <div class="field"><label>备注</label><input id="prRemark" value="${esc(r?.remark || "")}" placeholder="可选" /></div>
@@ -1562,7 +1622,7 @@ async function savePackRule(rid) {
   if (!items.length) { toast("至少填写一条组合商品"); return; }
   const body = {
     items,
-    box_type: $("prBoxType").value,
+    box_items: collectPrBoxItems(),
     labor_price: $("prLabor").value === "" ? null : +$("prLabor").value,
     box_ratio: +$("prRatio").value || 1,
     remark: $("prRemark").value,
@@ -1587,12 +1647,14 @@ function renderPackRules() {
   const rows = PACK_RULES.filter((r) =>
     (!kw || r.name.toLowerCase().includes(kw) ||
       (r.items || []).some((it) => (it.name || "").toLowerCase().includes(kw)) ||
-      (r.box_type || "").toLowerCase().includes(kw)) &&
+      (r.box_type || "").toLowerCase().includes(kw) ||
+      (r.box_items || []).some((it) => (it.name || "").toLowerCase().includes(kw))) &&
     (!box || (r.box_type || "") === box)
   );
   const t = $("prTable");
   t.innerHTML = `<thead><tr>
-    <th>组合（一单多货）</th><th>纸箱型号</th><th class="num">工人单价</th><th class="num">箱单比</th><th>备注</th><th>状态</th><th>操作</th>
+    <th class="cb-col"><input type="checkbox" onclick="toggleAll(this,'pr')" /></th>
+    <th>组合（一单多货）</th><th>纸箱型号（关联包材）</th><th class="num">工人单价</th><th class="num">箱单比</th><th>备注</th><th>状态</th><th>操作</th>
   </tr></thead><tbody>` +
     rows.map((r) => {
       const items = (r.items || []).map((it) => {
@@ -1600,9 +1662,16 @@ function renderPackRules() {
         const nm = m ? m.name : (it.name || "?");
         return `${esc(nm)}${it.quantity != 1 ? `×${fmtNum(it.quantity)}` : ""}`;
       }).join("，");
+      const boxChips = (r.box_items || []).map((bi) => {
+        const bm = bi.product_id ? PRODUCTS.find((x) => x.id === bi.product_id) : null;
+        const label = bm ? bm.name : (bi.name || "—");
+        const chip = bm ? "income" : "adjust";
+        return `<span class="badge ${chip}">${esc(label)}${bi.quantity != 1 ? ` ×${fmtNum(bi.quantity)}` : ""}</span>`;
+      }).join(" ") || "—";
       return `<tr>
+        <td class="cb-col"><input type="checkbox" value="${r.id}" ${prSel.has(r.id) ? "checked" : ""} onchange="toggleSel('pr',${r.id},this.checked)" /></td>
         <td><b>${esc(r.name)}</b><div class="muted" style="font-size:12px;">${esc(items)}</div></td>
-        <td>${r.box_type ? esc(r.box_type) : "—"}</td>
+        <td>${boxChips}</td>
         <td class="num">${r.labor_price != null ? fmtNum(r.labor_price) : "—"}</td>
         <td class="num">${r.box_ratio || 1}</td>
         <td class="muted">${esc(r.remark) || "—"}</td>
@@ -1610,7 +1679,21 @@ function renderPackRules() {
         <td class="line-actions"><button class="btn sm secondary" onclick="openPackRuleModal(${r.id})">编辑</button></td>
       </tr>`;
     }).join("") + `</tbody>`;
-  if (!rows.length) t.innerHTML = `<tr><td colspan="7" class="empty">暂无一单多货规则</td></tr>`;
+  if (!rows.length) t.innerHTML = `<tr><td colspan="8" class="empty">暂无一单多货规则</td></tr>`;
+  updateBatchBar("pr");
+}
+async function batchDeletePackRules() {
+  const ids = [...prSel];
+  if (!ids.length) { toast("请先勾选要删除的规则"); return; }
+  if (!confirm(`确认删除选中的 ${ids.length} 条一单多货规则？`)) return;
+  try {
+    let deleted = 0;
+    for (const id of ids) { await api("/api/pack-rules/" + id, "DELETE"); deleted++; }
+    prSel.clear();
+    toast(`已删除 ${deleted} 条规则`);
+    PACK_RULES = await api("/api/pack-rules");
+    renderPackRules();
+  } catch (e) { toast("删除失败：" + e.message); }
 }
 
 /* =============== 入库 =============== */
