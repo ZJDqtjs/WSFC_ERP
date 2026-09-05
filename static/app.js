@@ -360,7 +360,7 @@ function openModal(html) {
   $("modalMask").classList.add("show");
   bindSearchable($("modalBox"));
 }
-function closeModal() { $("modalMask").classList.remove("show"); }
+function closeModal() { $("modalMask").classList.remove("show"); const r = _aiDoneResolve; _aiDoneResolve = null; if (r) r(); }
 $("modalMask").addEventListener("click", (e) => { if (e.target.id === "modalMask") closeModal(); });
 
 /* =============== 库存 =============== */
@@ -652,11 +652,28 @@ async function aiParse() {
 }
 function aiPickImage() { $("aiImgFile").click(); }
 function aiCaptureImage() { $("aiCamFile").click(); }
-async function aiParseImage(src) {
+function aiParseImage(src) {
   const inp = src === "cam" ? $("aiCamFile") : $("aiImgFile");
-  const f = inp.files[0];
-  if (!f) return;
-  aiStartTask('<svg class="ic"><use href="#i-camera"/></svg> 发票识别中…');
+  const files = Array.from(inp.files || []);
+  if (!files.length) return;
+  aiParseImageFiles(files, src === "cam" ? "拍照" : "相册");
+  inp.value = "";
+}
+let _aiDoneResolve = null;   // 批量识别时，等待当前确认框关闭后再识别下一张
+async function aiParseImageFiles(files, label) {
+  const total = files.length;
+  if (total > 1) toast(`已选择 ${total} 张图片，逐张识别中…`);
+  for (let i = 0; i < total; i++) {
+    if (_batchAbort) { _batchAbort = false; break; }
+    if (i > 0) await new Promise((r) => setTimeout(r, 400));
+    const ok = await aiRecognizeOne(files[i], i, total, label);
+    if (!ok) return;  // 识别失败或用户取消，停止剩余批次
+  }
+}
+let _batchAbort = false;
+async function aiRecognizeOne(f, idx, total, label) {
+  const progress = total > 1 ? `（第 ${idx + 1}/${total} 张）` : "";
+  aiStartTask(`<svg class="ic"><use href="#i-camera"/></svg> ${label}识别中 ${progress}`);
   try {
     const fd = new FormData();
     fd.append("file", f);
@@ -665,10 +682,24 @@ async function aiParseImage(src) {
       body: fd,
       signal: AI_CTRL.signal,
     });
-    await aiFinishOk(await aiCollectStream(res));
-  } catch (e) { aiFinishErr(e); }
-  finally { inp.value = ""; }
+    const result = await aiCollectStream(res);
+    await aiFinishOk(result);
+    if (total > 1) await new Promise((resolve) => { _aiDoneResolve = resolve; }); // 等用户确认/取消后再识别下一张
+    return true;
+  } catch (e) {
+    if (e.name === "AbortError") { _batchAbort = true; aiFinishErr(e); }  // 用户取消：终止整批
+    else aiFinishErr(e);
+    return false;
+  }
 }
+// 支持 Ctrl+V 粘贴图片批量识别
+document.addEventListener("paste", (e) => {
+  const files = Array.from((e.clipboardData || {}).items || [])
+    .filter((it) => it.type.startsWith("image/"))
+    .map((it) => it.getAsFile())
+    .filter(Boolean);
+  if (files.length) { e.preventDefault(); aiParseImageFiles(files, "粘贴"); }
+});
 function aiProductOptions(selectedId, orderFirst) {
   const sorted = PRODUCTS.filter((p) => p.is_active).slice().sort((a, b) =>
     orderFirst ? (b.product_type === "order") - (a.product_type === "order")

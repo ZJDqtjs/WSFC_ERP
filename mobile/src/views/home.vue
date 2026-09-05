@@ -20,7 +20,7 @@
         <van-button type="primary" block round :loading="busy" @click="aiParse">🤖 识别并录入</van-button>
         <van-button type="success" block round :loading="busyImg" @click="showPick">📷 拍单识别</van-button>
         <input ref="cameraFile" type="file" accept="image/*" capture="environment" style="display:none" @change="pickImage" />
-        <input ref="albumFile" type="file" accept="image/*" style="display:none" @change="pickImage" />
+        <input ref="albumFile" type="file" accept="image/*" multiple style="display:none" @change="pickImages" />
       </div>
       <van-action-sheet v-model:show="pickShow" :actions="pickActions" cancel-text="取消" @select="onPick" />
       <div v-if="thinking" class="think-box"><pre>{{ thinking }}</pre></div>
@@ -101,6 +101,23 @@ async function pickImage(e) {
     showAiConfirm(r)
   } catch (e) { busyImg.value = false; showToast('识别失败：' + e.message) }
   e.target.value = ''
+}
+
+async function pickImages(e) {
+  const files = Array.from(e.target.files || [])
+  e.target.value = ''
+  if (!files.length) return
+  thinking.value = ''
+  for (let i = 0; i < files.length; i++) {
+    busyImg.value = true
+    try {
+      const fd = new FormData(); fd.append('file', files[i])
+      const r = await aiStream('/api/ai/parse-image/stream', null, (d) => { thinking.value += d }, fd)
+      showAiConfirm(r)
+    } catch (err) { showToast(`第 ${i + 1} 张识别失败：${err.message}`) }
+    if (i < files.length - 1) await new Promise((res) => setTimeout(res, 200))
+  }
+  busyImg.value = false
 }
 
 function showAiConfirm(r) {

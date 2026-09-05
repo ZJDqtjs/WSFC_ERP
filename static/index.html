@@ -100,7 +100,7 @@
             <button class="btn green" id="aiBtn" onclick="aiParse()"><svg class="ic"><use href="#i-ai"/></svg> 识别并录入</button>
             <button class="btn secondary" onclick="aiPickImage()"><svg class="ic"><use href="#i-paperclip"/></svg> 相册识别</button>
             <button class="btn secondary" onclick="aiCaptureImage()"><svg class="ic"><use href="#i-camera"/></svg> 拍照识别</button>
-            <input type="file" id="aiImgFile" accept="image/*" style="display:none;" onchange="aiParseImage('file')" />
+            <input type="file" id="aiImgFile" accept="image/*" multiple style="display:none;" onchange="aiParseImage('file')" />
             <input type="file" id="aiCamFile" accept="image/*" capture="environment" style="display:none;" onchange="aiParseImage('cam')" />
           </div>
           <div id="aiThinking" class="ai-thinking" style="display:none;">
