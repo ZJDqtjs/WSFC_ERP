@@ -1222,6 +1222,14 @@ td.num, th.num {
   grid-template-columns: 1.6fr 1fr 1fr auto; 
 }
 
+.pr-item-row {
+  display: grid;
+  grid-template-columns: 1.7fr 1.4fr 0.8fr auto;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
 /* ============ 库存流水柱状图 ============ */
 #mvChart { margin-bottom: 12px; }
 .mv-chart-title { font-size: 13px; color: var(--text-muted, #8a8f98); margin-bottom: 8px; }

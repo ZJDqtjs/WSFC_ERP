@@ -276,7 +276,7 @@ function goPage(name) {
   const loaders = {
     home: loadDashboard, stock: loadStock, inbound: initInbound, outbound: initOutbound,
     products: renderProducts, report: loadReport, import: loadImportPage, jushuitan: loadMappingPage,
-    backup: loadBackupPage, fresh: loadFresh,
+    backup: loadBackupPage, fresh: loadFresh, packrules: loadPackRules,
   };
   (loaders[name] || (() => {}))();
 }
@@ -715,28 +715,53 @@ document.addEventListener("paste", (e) => {
     .filter(Boolean);
   if (files.length) { e.preventDefault(); aiParseImageFiles(files, "粘贴"); }
 });
-function aiProductOptions(selectedId, orderFirst) {
-  const sorted = PRODUCTS.filter((p) => p.is_active).slice().sort((a, b) =>
-    orderFirst ? (b.product_type === "order") - (a.product_type === "order")
-               : (a.product_type === "order") - (b.product_type === "order")
-  );
-  return sorted.map((p) =>
-    `<option value="${p.id}" ${p.id === selectedId ? "selected" : ""}>${p.product_type === "order" ? "〔订单〕" : "〔库存〕"}${esc(p.name)}</option>`
+const AI_CAT_ORDER = [["stock", "库存商品"], ["order", "订单商品"], ["pack", "包材"], ["labor", "人工"]];
+function aiCatOptions(selectedCat) {
+  return AI_CAT_ORDER.map(([c, label]) =>
+    `<option value="${c}" ${c === selectedCat ? "selected" : ""}>${label}</option>`
   ).join("");
+}
+// 按 AI 分类过滤商品（stock=库存商品，order=订单商品，pack=包材，labor=人工）
+function aiProductsByCat(cat) {
+  return (PRODUCTS || []).filter((p) => p.is_active).filter((p) => {
+    const c = (p.category || "").trim();
+    if (cat === "order") return p.product_type === "order";
+    if (cat === "pack") return c === "包材" || c === "耗材" || c === "包装";
+    if (cat === "labor") return c === "人工" || /打包$/.test(p.name);
+    return p.product_type === "stock" && c !== "人工" && c !== "包材" && c !== "耗材" && c !== "包装";
+  });
+}
+function aiProductOptions(selectedId, cat) {
+  const catLabel = { stock: "库存", order: "订单", pack: "包材", labor: "人工" }[cat || "stock"] || "库存";
+  const list = aiProductsByCat(cat || "stock").slice().sort((a, b) => a.name.localeCompare(b.name, "zh"));
+  return list.map((p) =>
+    `<option value="${p.id}" ${p.id === selectedId ? "selected" : ""}>〔${catLabel}〕${esc(p.name)}</option>`
+  ).join("");
+}
+function aiCatChanged(i) {
+  const tr = document.querySelector(`#aiLines tr[data-idx="${i}"]`);
+  if (!tr) return;
+  const cat = tr.querySelector(".ai-cat").value;
+  const sel = tr.querySelector(".ai-pid");
+  const cur = +sel.value;
+  sel.innerHTML = aiProductOptions(aiProductsByCat(cat).some((p) => p.id === cur) ? cur : 0, cat);
 }
 let AI_CONFIRM = null;   // 当前确认框对应的识别结果（供提交时标注）
 function openAiConfirm(r) {
   AI_CONFIRM = r;
   const isIn = r.type === "inbound";
-  const linesHtml = (r.lines || []).map((ln, i) => `
-    <tr data-idx="${i}">
-      <td style="min-width:220px;"><select class="searchable ai-pid">${aiProductOptions(ln.product_id, !isIn)}</select>
+  const linesHtml = (r.lines || []).map((ln, i) => {
+    const cat = (["stock", "order", "pack", "labor"].includes(ln.category) ? ln.category : (isIn ? "stock" : "order"));
+    return `<tr data-idx="${i}">
+      <td><select class="ai-cat" onchange="aiCatChanged(${i})" style="width:92px;">${aiCatOptions(cat)}</select></td>
+      <td style="min-width:220px;"><select class="searchable ai-pid">${aiProductOptions(ln.product_id, cat)}</select>
         ${ln.auto_created ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 自动新增</span>' : ""}</td>
       <td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.quantity)}" style="width:90px;" /></td>
       <td><input class="ai-unit" value="${esc(ln.unit || "")}" style="width:70px;" /></td>
       <td><input type="number" step="any" class="ai-price" value="${ln.unit_price}" style="width:100px;" />${ln.price_defaulted ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按上次价</span>' : ""}</td>
       <td class="muted" style="font-size:12px;">${esc(ln.hint || "")}</td>
-    </tr>`).join("");
+    </tr>`;
+  }).join("");
   const invImg = r.image_url
     ? `<div class="ai-invoice"><span class="muted">📎 票据凭证</span><img src="${esc(r.image_url)}" alt="票据" onclick="window.open('${esc(r.image_url)}','_blank')" /></div>`
     : "";
@@ -754,8 +779,8 @@ function openAiConfirm(r) {
       <div class="field"><label>备注</label><input id="aiRemark" value="${esc(r.remark)}" /></div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>商品</th><th>数量</th><th>单位</th><th>${isIn ? "单价" : "售价"}</th><th>说明</th></tr></thead>
-      <tbody id="aiLines">${linesHtml || '<tr><td colspan="5" class="empty">未识别到明细</td></tr>'}</tbody>
+      <thead><tr><th>分类</th><th>商品</th><th>数量</th><th>单位</th><th>${isIn ? "单价" : "售价"}</th><th>说明</th></tr></thead>
+      <tbody id="aiLines">${linesHtml || '<tr><td colspan="6" class="empty">未识别到明细</td></tr>'}</tbody>
     </table></div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
@@ -763,12 +788,13 @@ function openAiConfirm(r) {
     </div>`);
 }
 function aiTypeChanged() {
-  // 切换类型时重排商品下拉（出库订单优先，入库库存优先）
+  // 切换类型时，未显式归类的行按业务类型重设默认分类（入库库存优先，出库订单优先）
   const isIn = $("aiType").value === "inbound";
   document.querySelectorAll("#aiLines tr[data-idx]").forEach((tr) => {
-    const sel = tr.querySelector(".ai-pid");
-    const cur = +sel.value;
-    sel.innerHTML = aiProductOptions(cur, !isIn);
+    const catSel = tr.querySelector(".ai-cat");
+    const cat = catSel.value;
+    if (!["stock", "order", "pack", "labor"].includes(cat)) catSel.value = isIn ? "stock" : "order";
+    aiCatChanged(+tr.dataset.idx);
   });
 }
 async function aiSubmit() {
@@ -1350,6 +1376,136 @@ async function deleteProduct(pid) {
   if (!confirm("确认删除该商品？其历史单据会一并删除，请谨慎。")) return;
   try { await api("/api/products/" + pid, "DELETE"); closeModal(); toast("已删除"); PRODUCTS = await api("/api/products"); renderProducts(); }
   catch (e) { toast("删除失败：" + e.message); }
+}
+
+/* =============== 一单多货（多货合并打包规则） =============== */
+let PACK_RULES = [];
+async function loadPackRules() {
+  if (!PRODUCTS.length) PRODUCTS = await api("/api/products");
+  PACK_RULES = await api("/api/pack-rules");
+  const boxes = [...new Set(PACK_RULES.map((r) => r.box_type).filter(Boolean))].sort();
+  const bs = $("prBox");
+  if (bs && boxes.join() !== (bs._boxes || []).join()) {
+    bs._boxes = boxes;
+    bs.innerHTML = '<option value="">全部纸箱型号</option>' + boxes.map((b) => `<option value="${esc(b)}">${esc(b)}</option>`).join("");
+  }
+  renderPackRules();
+}
+function prOrderProducts() { return PRODUCTS.filter((p) => p.product_type === "order"); }
+function prItemOptions(selPid, orderProds) {
+  return `<option value="">— 不关联（保留下方名称）—</option>` +
+    orderProds.map((p) => `<option value="${p.id}" ${selPid === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+}
+function prItemRowHtml(it) {
+  it = it || {};
+  const orderProds = prOrderProducts();
+  let pid = it.product_id || null;
+  // 商品已不存在的关联，降级为原文并取消关联
+  let name = it.name || "";
+  if (pid && !PRODUCTS.find((x) => x.id === pid)) { pid = null; }
+  if (pid) name = (PRODUCTS.find((x) => x.id === pid)?.name) || name;
+  return `<div class="pr-item-row">
+    <select class="pr-item-product searchable" onchange="prItemLinked(this)">${prItemOptions(pid, orderProds)}</select>
+    <input class="pr-item-name" value="${esc(name)}" placeholder="商品名称（未关联时原文）" />
+    <input class="pr-item-qty" type="number" step="any" value="${it.quantity != null ? it.quantity : 1}" />
+    <button class="btn danger sm" onclick="this.closest('.pr-item-row').remove()">删</button>
+  </div>`;
+}
+function prItemLinked(sel) {
+  const row = sel.closest(".pr-item-row");
+  const m = PRODUCTS.find((x) => x.id === +sel.value);
+  if (m) row.querySelector(".pr-item-name").value = m.name;
+}
+function addPrItemRow() {
+  $("prItems").insertAdjacentHTML("beforeend", prItemRowHtml());
+}
+function collectPrItems() {
+  const out = [];
+  document.querySelectorAll("#prItems .pr-item-row").forEach((row) => {
+    const sel = row.querySelector(".pr-item-product");
+    const n = (row.querySelector(".pr-item-name").value || "").trim();
+    const q = parseFloat(row.querySelector(".pr-item-qty").value);
+    if (!n) return;
+    out.push({ product_id: sel && sel.value ? +sel.value : null, name: n, quantity: q > 0 ? q : 1 });
+  });
+  return out;
+}
+function openPackRuleModal(rid = 0) {
+  const r = rid ? PACK_RULES.find((x) => x.id === rid) : null;
+  const items = (r ? r.items || [] : []).map((it) => ({ product_id: it.product_id, name: it.name, quantity: it.quantity }));
+  if (!items.length) items.push({ product_id: null, name: "", quantity: 1 });
+  openModal(`
+    <h3>${rid ? "编辑" : "新增"}一单多货规则 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="block-title">组合商品（多货打包：一张订单含以下多种商品）</div>
+    <div id="prItems">${items.map((it) => prItemRowHtml(it)).join("")}</div>
+    <button class="btn secondary sm" style="margin-top:8px;" onclick="addPrItemRow()">＋ 添加组合商品</button>
+    <div class="form-grid" style="margin-top:14px;">
+      <div class="field"><label>纸箱型号</label><input id="prBoxType" value="${esc(r?.box_type || "")}" placeholder="如 7号+8号" /></div>
+      <div class="field"><label>工人单价（元/单）</label><input id="prLabor" type="number" step="any" value="${r?.labor_price ?? ""}" placeholder="可空" /></div>
+      <div class="field"><label>箱单比</label><input id="prRatio" type="number" step="any" min="1" value="${r?.box_ratio || 1}" /></div>
+      <div class="field"><label>备注</label><input id="prRemark" value="${esc(r?.remark || "")}" placeholder="可选" /></div>
+    </div>
+    <label style="display:flex;gap:6px;align-items:center;margin-top:10px;"><input type="checkbox" id="prActive" ${r ? (r.is_active ? "checked" : "") : "checked"}/> 启用该规则</label>
+    <div class="modal-foot">
+      ${r ? `<button class="btn danger" onclick="deletePackRule(${r.id})" style="margin-right:auto;">删除</button>` : ""}
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="savePackRule(${rid || 0})">保存</button>
+    </div>`);
+}
+async function savePackRule(rid) {
+  const items = collectPrItems();
+  if (!items.length) { toast("至少填写一条组合商品"); return; }
+  const body = {
+    items,
+    box_type: $("prBoxType").value,
+    labor_price: $("prLabor").value === "" ? null : +$("prLabor").value,
+    box_ratio: +$("prRatio").value || 1,
+    remark: $("prRemark").value,
+    is_active: $("prActive").checked,
+  };
+  try {
+    if (rid) await api("/api/pack-rules/" + rid, "PUT", body);
+    else await api("/api/pack-rules", "POST", body);
+    closeModal(); toast("规则已保存");
+    PACK_RULES = await api("/api/pack-rules");
+    renderPackRules();
+  } catch (e) { toast("保存失败：" + e.message); }
+}
+async function deletePackRule(rid) {
+  if (!confirm("确认删除该一单多货规则？")) return;
+  try { await api("/api/pack-rules/" + rid, "DELETE"); closeModal(); toast("已删除"); PACK_RULES = await api("/api/pack-rules"); renderPackRules(); }
+  catch (e) { toast("删除失败：" + e.message); }
+}
+function renderPackRules() {
+  const kw = ($("prSearch")?.value || "").trim().toLowerCase();
+  const box = $("prBox")?.value || "";
+  const rows = PACK_RULES.filter((r) =>
+    (!kw || r.name.toLowerCase().includes(kw) ||
+      (r.items || []).some((it) => (it.name || "").toLowerCase().includes(kw)) ||
+      (r.box_type || "").toLowerCase().includes(kw)) &&
+    (!box || (r.box_type || "") === box)
+  );
+  const t = $("prTable");
+  t.innerHTML = `<thead><tr>
+    <th>组合（一单多货）</th><th>纸箱型号</th><th class="num">工人单价</th><th class="num">箱单比</th><th>备注</th><th>状态</th><th>操作</th>
+  </tr></thead><tbody>` +
+    rows.map((r) => {
+      const items = (r.items || []).map((it) => {
+        const m = it.product_id ? PRODUCTS.find((x) => x.id === it.product_id) : null;
+        const nm = m ? m.name : (it.name || "?");
+        return `${esc(nm)}${it.quantity != 1 ? `×${fmtNum(it.quantity)}` : ""}`;
+      }).join("，");
+      return `<tr>
+        <td><b>${esc(r.name)}</b><div class="muted" style="font-size:12px;">${esc(items)}</div></td>
+        <td>${r.box_type ? esc(r.box_type) : "—"}</td>
+        <td class="num">${r.labor_price != null ? fmtNum(r.labor_price) : "—"}</td>
+        <td class="num">${r.box_ratio || 1}</td>
+        <td class="muted">${esc(r.remark) || "—"}</td>
+        <td>${r.is_active ? '<span class="badge in">启用</span>' : '<span class="badge off">停用</span>'}</td>
+        <td class="line-actions"><button class="btn sm secondary" onclick="openPackRuleModal(${r.id})">编辑</button></td>
+      </tr>`;
+    }).join("") + `</tbody>`;
+  if (!rows.length) t.innerHTML = `<tr><td colspan="7" class="empty">暂无一单多货规则</td></tr>`;
 }
 
 /* =============== 入库 =============== */
