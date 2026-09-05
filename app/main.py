@@ -67,6 +67,52 @@ def migrate():
             conn.execute(text("ALTER TABLE outbounds ADD COLUMN import_group VARCHAR(32) DEFAULT ''"))
         conn.commit()
 
+    # 出库单行：pack 行所属销售商品（打包人工+耗材组合统计用）
+    with engine.connect() as conn:
+        lcols = [r[1] for r in conn.execute(text("PRAGMA table_info(outbound_lines)")).fetchall()]
+        if "sale_product_id" not in lcols:
+            conn.execute(text("ALTER TABLE outbound_lines ADD COLUMN sale_product_id INTEGER"))
+            conn.commit()
+    _backfill_sale_product()
+
+
+def _backfill_sale_product():
+    """回填 pack 行的 sale_product_id（幂等）：按同单内销售商品的 pack_items 匹配，无匹配保持空。"""
+    from .database import SessionLocal
+    from .models import OutboundLine
+
+    db = SessionLocal()
+    try:
+        pack_lines = (
+            db.query(OutboundLine)
+            .filter(OutboundLine.line_type == "pack", OutboundLine.sale_product_id.is_(None))
+            .all()
+        )
+        by_out: dict[int, list[OutboundLine]] = {}
+        for pl in pack_lines:
+            by_out.setdefault(pl.outbound_id, []).append(pl)
+        changed = False
+        for out_id, pls in by_out.items():
+            sale_lines = (
+                db.query(OutboundLine)
+                .filter(OutboundLine.outbound_id == out_id, OutboundLine.line_type == "sale")
+                .all()
+            )
+            for pl in pls:
+                for sl in sale_lines:
+                    p = sl.product
+                    if p and any((it.get("product_id") or 0) == pl.product_id for it in (p.pack_items or [])):
+                        pl.sale_product_id = sl.product_id
+                        changed = True
+                        break
+        if changed:
+            db.commit()
+    except Exception as e:  # 回填失败不影响主流程
+        print("[迁移] 回填 sale_product_id 失败:", e)
+        db.rollback()
+    finally:
+        db.close()
+
 
 async def auto_backup_loop():
     """每 60 秒检查一次；开启自动备份且距上次备份超过间隔则执行备份。"""

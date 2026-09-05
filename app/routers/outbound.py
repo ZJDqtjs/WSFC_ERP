@@ -62,6 +62,7 @@ def _to_dict(o: Outbound) -> dict:
                 "product_id": l.product_id,
                 "product_name": l.product.name if l.product else "",
                 "line_type": l.line_type,
+                "sale_product_id": l.sale_product_id,
                 "unit": l.unit,
                 "quantity": l.quantity,
                 "quantity_base": l.quantity_base,
@@ -69,6 +70,8 @@ def _to_dict(o: Outbound) -> dict:
                 "amount": l.amount,
                 "cogs": l.cogs,
                 "pack_fee": l.pack_fee,
+                "category": l.product.category if l.product else "",
+                "is_labor": bool(l.product and (l.product.category == "人工" or (l.product.name or "").strip().endswith("打包"))),
             }
             for l in o.lines
         ],

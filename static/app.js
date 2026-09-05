@@ -1821,24 +1821,45 @@ function openOutGroup(groupKey) {
 }
 /* 批次二级页渲染 */
 function outAggBy(rows, pool) {
-  // pool='sale' 汇总销售商品，pool='pack' 汇总耗材/包装
+  // pool='sale' 汇总销售商品；pool='pack' 汇总耗材/包装(不含人工)；pool='labor' 仅人工；
+  // pool='laborpack' 打包人工+耗材按销售商品组合（如 京鲜生茯苓500g打包+纸箱8号）
+  const isLaborPack = pool === "laborpack";
   const map = new Map();
   const aggKey = (l) => `${l.product_id}@@${l.unit}`;
   for (const o of rows) {
     for (const l of o.lines) {
+      const isLabor = !!l.is_labor; // 人工：category=人工 或 名称以「打包」结尾
       if (pool === "sale" && l.line_type !== "sale") continue;
-      if (pool === "pack" && l.line_type !== "pack") continue;
-      const k = aggKey(l);
-      if (!map.has(k)) map.set(k, { product_id: l.product_id, name: l.product_name, unit: l.unit, orders: new Set(), qty: 0, qty_base: 0, amount: 0, cogs: 0 });
+      if (pool === "pack" && (l.line_type !== "pack" || isLabor)) continue; // 耗材：排除人工
+      if (pool === "labor" && !(l.line_type === "pack" && isLabor)) continue; // 仅人工
+      if (pool === "laborpack" && l.line_type !== "pack") continue; // 打包人工+耗材
+      // 打包人工+耗材按所属销售商品组合；未关联（手动）则按包材自身
+      const k = isLaborPack
+        ? (l.sale_product_id != null ? `sp${l.sale_product_id}` : `p${l.product_id}`)
+        : aggKey(l);
+      if (!map.has(k)) {
+        map.set(k, {
+          product_id: k,
+          name: isLaborPack ? "" : l.product_name,
+          parts: isLaborPack ? [] : null,
+          unit: l.unit,
+          orders: new Set(), qty: 0, qty_base: 0, amount: 0, cogs: 0,
+        });
+      }
       const a = map.get(k);
       a.orders.add(o.id);
       a.qty += l.quantity || 0;
       a.qty_base += l.quantity_base || 0;
       a.amount += l.amount || 0;
       a.cogs += l.cogs || 0;
+      if (isLaborPack && !a.parts.includes(l.product_name)) a.parts.push(l.product_name);
     }
   }
-  return [...map.values()].map((a) => ({ ...a, order_count: a.orders.size }));
+  return [...map.values()].map((a) => ({
+    ...a,
+    name: isLaborPack ? (a.parts.join("+") || "(未关联)") : a.name,
+    order_count: a.orders.size,
+  }));
 }
 function renderOutGroup() {
   if (!OUT_GROUP) return;
@@ -1847,6 +1868,8 @@ function renderOutGroup() {
   const t = $("ogTable");
   const aggSale = outAggBy(rows, "sale").filter((a) => !kw || a.name.toLowerCase().includes(kw));
   const aggPack = outAggBy(rows, "pack").filter((a) => !kw || a.name.toLowerCase().includes(kw));
+  const aggLabor = outAggBy(rows, "labor").filter((a) => !kw || a.name.toLowerCase().includes(kw));
+  const aggLaborPack = outAggBy(rows, "laborpack").filter((a) => !kw || a.name.toLowerCase().includes(kw));
   const total = {
     amt: rows.reduce((s, o) => s + (o.total_amount || 0), 0),
     cogs: rows.reduce((s, o) => s + (o.total_cogs || 0), 0),
@@ -1854,38 +1877,45 @@ function renderOutGroup() {
   };
   const net = total.amt - total.cogs - total.fee;
   $("ogTitle").textContent = `出库批次明细（${rows.length} 单）`;
-  $("ogHint").textContent = "按商品聚合展示每种商品的总单数 / 总数量与金额，可搜索、排序；耗材另开页签。";
+  $("ogHint").textContent = "按商品聚合展示每种商品的单数/数量/金额或成本，可搜索、排序；耗材、人工、打包人工+耗材分开页签展示。";
   $("ogDelCount").textContent = rows.length;
   $("ogSummary").innerHTML =
     `<div class="stat"><div class="label">批次单数</div><div class="value">${rows.length}</div></div>
      <div class="stat"><div class="label">销售商品种数</div><div class="value">${outAggBy(rows, "sale").length}</div></div>
      <div class="stat"><div class="label">耗材种数</div><div class="value">${outAggBy(rows, "pack").length}</div></div>
+     <div class="stat"><div class="label">人工种数</div><div class="value">${outAggBy(rows, "labor").length}</div></div>
      <div class="stat"><div class="label">销售收入</div><div class="value">${fmtMoney(total.amt)}</div></div>
      <div class="stat"><div class="label">结转成本</div><div class="value">${fmtMoney(total.cogs)}</div></div>
      <div class="stat success"><div class="label">净利</div><div class="value" style="color:${net >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(net)}</div></div>`;
   const seg = segActive("ogSeg");
-  const isSale = seg === "og-sale";
-  let data = (isSale ? aggSale : aggPack).map((a) => ({ ...a, gp: (a.amount - a.cogs) || 0 }));
+  let isSale = false, isLaborPack = false, emptyText = "无记录";
+  let data;
+  if (seg === "og-sale") { isSale = true; data = aggSale; emptyText = "无销售商品"; }
+  else if (seg === "og-labor") { data = aggLabor; emptyText = "无人工记录"; }
+  else if (seg === "og-laborpack") { isLaborPack = true; data = aggLaborPack; emptyText = "无打包人工/耗材记录"; }
+  else { data = aggPack; emptyText = "无耗材/包装记录"; }
+  data = data.map((a) => ({ ...a, gp: (a.amount - a.cogs) || 0 }));
   if (t._sort) data = data.slice().sort((a, b) => compareVal(a[t._sort.key], b[t._sort.key]) * t._sort.dir);
+  const colSpan = isSale ? 7 : (isLaborPack ? 3 : 5);
   t.innerHTML = `<thead><tr>
     <th data-key="name">商品${sortArrow("ogTable", "name")}</th>
-    ${isSale ? `<th data-key="order_count" class="num">单数${sortArrow("ogTable", "order_count")}</th>` : ""}
-    <th>单位</th>
-    <th data-key="qty" class="num">${isSale ? "总数量" : "数量"}${sortArrow("ogTable", "qty")}</th>
-    <th data-key="amount" class="num">${isSale ? "金额" : "成本"}${sortArrow("ogTable", "amount")}</th>
+    <th data-key="order_count" class="num">单数${sortArrow("ogTable", "order_count")}</th>
+    ${isLaborPack ? "" : `<th>单位</th>`}
+    ${isLaborPack ? "" : `<th data-key="qty" class="num">${isSale ? "总数量" : "数量"}${sortArrow("ogTable", "qty")}</th>`}
+    ${isSale ? `<th data-key="amount" class="num">金额${sortArrow("ogTable", "amount")}</th>` : ""}
     <th data-key="cogs" class="num">成本${sortArrow("ogTable", "cogs")}</th>
     ${isSale ? `<th data-key="gp" class="num">毛利${sortArrow("ogTable", "gp")}</th>` : ""}
   </tr></thead><tbody>` +
     (data.length ? data.map((a) => `<tr>
       <td>${esc(a.name)}</td>
-      ${isSale ? `<td class="num">${a.order_count} 单</td>` : ""}
-      <td>${esc(a.unit)}</td>
-      <td class="num mono">${fmtNum(a.qty)}</td>
-      <td class="num mono">${fmtMoney(a.amount)}</td>
+      <td class="num">${a.order_count} 单</td>
+      ${isLaborPack ? "" : `<td>${esc(a.unit)}</td>`}
+      ${isLaborPack ? "" : `<td class="num mono">${fmtNum(a.qty)}</td>`}
+      ${isSale ? `<td class="num mono">${fmtMoney(a.amount)}</td>` : ""}
       <td class="num mono">${fmtMoney(a.cogs)}</td>
       ${isSale ? `<td class="num mono" style="color:${(a.amount - a.cogs) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(a.amount - a.cogs)}</td>` : ""}
     </tr>`).join("")
-      : `<tr><td colspan="7" class="muted">${isSale ? "无销售商品" : "无耗材/包装记录"}</td></tr>`) + `</tbody>`;
+      : `<tr><td colspan="${colSpan}" class="muted">${emptyText}</td></tr>`) + `</tbody>`;
   // 点击表头排序
   t._rows = data;
   t._render = function () { renderOutGroup(); };
@@ -2227,14 +2257,7 @@ function esc(s) {
   } catch (e) {
     return; // 未登录，停留在登录页
   }
-  $("mvProduct").innerHTML = `<option value="0">全部商品</option>`;
-  PRODUCTS = await api("/api/products");
-  UNITS = await api("/api/units");
-  $("mvProduct").innerHTML = `<option value="0">全部商品</option>` +
-    PRODUCTS.filter((p) => !["人工", "快递"].includes(p.category)).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
-  $("inProduct").innerHTML = `<option value="">选择商品…</option>` +
-    PRODUCTS.filter((p) => p.is_active && p.product_type === "stock").map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
-  $("inUnit").onchange = calcInbound;
+  // 预设默认日期范围：入库记录本月，出库记录当天
   $("inDate").value = today();
   $("outDate").value = today();
   $("inDateFrom").value = monthStart();
@@ -2245,7 +2268,20 @@ function esc(s) {
   $("mvDateTo").value = today();
   $("wlDateFrom").value = monthStart(); // 工作量统计默认本月
   $("wlDateTo").value = today();
-  bindSearchable(document);
+
+  // 加载基础数据（失败不阻塞初始化，保证默认范围与首页可用）
+  try {
+    PRODUCTS = await api("/api/products");
+    UNITS = await api("/api/units");
+  } catch (e) { PRODUCTS = PRODUCTS || []; UNITS = UNITS || []; }
+  try {
+    $("mvProduct").innerHTML = `<option value="0">全部商品</option>` +
+      PRODUCTS.filter((p) => !["人工", "快递"].includes(p.category)).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+    $("inProduct").innerHTML = `<option value="">选择商品…</option>` +
+      PRODUCTS.filter((p) => p.is_active && p.product_type === "stock").map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+    $("inUnit").onchange = calcInbound;
+  } catch (e) {}
+  try { bindSearchable(document); } catch (e) {}
   loadDashboard();
 })();
 

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
@@ -76,12 +76,48 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
         ]
 
     def outbound_snapshot():
-        rows = list(db.execute(select(Outbound).order_by(Outbound.id.desc()).limit(6)).scalars())
-        return [
-            {"code": r.code, "customer": r.customer, "date": r.date, "operator": r.operator,
-             "amount": r.total_amount, "net": round(r.total_amount - r.total_cogs - r.total_fee, 2)}
-            for r in rows
-        ]
+        # 最近一批出库（窗口内取足够多行以覆盖近期批次+手动单）
+        recent = list(db.execute(select(Outbound).order_by(Outbound.id.desc()).limit(200)).scalars())
+        groups: dict[str, list] = {}
+        singles = []
+        for r in recent:
+            if r.import_group:
+                groups.setdefault(r.import_group, []).append(r)
+            else:
+                singles.append(r)
+        entries = []
+        for g in groups.values():
+            key = g[0].import_group
+            # 整批真实规模与合计（批次可能远大于窗口）
+            cnt, amt, net = db.execute(
+                select(
+                    func.count(),
+                    func.coalesce(func.sum(Outbound.total_amount), 0),
+                    func.coalesce(func.sum(Outbound.total_amount - Outbound.total_cogs - Outbound.total_fee), 0),
+                ).where(Outbound.import_group == key)
+            ).one()
+            ls = list(db.execute(
+                select(Outbound).where(Outbound.import_group == key).order_by(Outbound.id.desc()).limit(6)
+            ).scalars())
+            if not ls:
+                continue
+            entries.append({
+                "code": f"批量 · {cnt}单",
+                "customer": "/".join(dict.fromkeys(x.customer for x in ls if x.customer)),
+                "date": max(x.date for x in ls),
+                "operator": ls[0].operator,
+                "amount": round(float(amt), 2),
+                "net": round(float(net), 2),
+                "_sort": max(x.id for x in ls),
+            })
+        for s in singles:
+            entries.append({
+                "code": s.code, "customer": s.customer, "date": s.date, "operator": s.operator,
+                "amount": s.total_amount, "net": round(s.total_amount - s.total_cogs - s.total_fee, 2),
+                "_sort": s.id,
+            })
+        entries.sort(key=lambda e: -e["_sort"])
+        return [{k: v for k, v in e.items() if k != "_sort"} for e in entries[:6]]
 
     return {
         "user_name": user.name,
