@@ -246,7 +246,7 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
 
     pack_specs = list(pack_lines)
     if not pack_specs:
-        agg: dict[int, dict] = {}
+        agg: dict[tuple[int, int], dict] = {}
         for ln in lines:
             if hasattr(ln, "product_id"):  # Pydantic 对象
                 pid, quantity = ln.product_id, ln.quantity
@@ -260,11 +260,19 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
                 # 关联结算按「单」计：每销售 1 单消耗一次包材/人工。
                 # 如 6单「佛手柑中果2个」→ 6个纸箱、6次人工；数量以销售行 quantity（单）为倍数。
                 q = float(item.get("quantity", 1)) * float(quantity)
-                d = agg.setdefault(mid, {"quantity": 0.0, "unit": item.get("unit", "个")})
+                d = agg.setdefault(
+                    (pid, mid),
+                    {"quantity": 0.0, "unit": item.get("unit", "个"), "sale_product_id": pid},
+                )
                 d["quantity"] += q
         pack_specs = [
-            {"product_id": mid, "unit": d["unit"], "quantity": d["quantity"]}
-            for mid, d in agg.items()
+            {
+                "product_id": mid,
+                "unit": d["unit"],
+                "quantity": d["quantity"],
+                "sale_product_id": d["sale_product_id"],
+            }
+            for (pid, mid), d in agg.items()
         ]
 
     for spec in pack_specs:
@@ -281,6 +289,7 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
                 "unit": spec["unit"], "quantity": spec["quantity"], "quantity_base": qty_base,
                 "unit_price": cost, "amount": cogs, "cogs": cogs, "pack_fee": 0,
                 "line_type": "pack",
+                "sale_product_id": spec.get("sale_product_id"),
             }
         )
         total_cogs += cogs
@@ -356,6 +365,7 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
                 outbound_id=rec.id,
                 product_id=r["product_id"],
                 line_type=r["line_type"],
+                sale_product_id=r.get("sale_product_id"),  # pack 行所属销售商品（组合统计用）
                 unit=r["unit"],
                 quantity=r["quantity"],
                 quantity_base=r["quantity_base"],

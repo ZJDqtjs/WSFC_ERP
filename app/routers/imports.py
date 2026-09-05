@@ -580,6 +580,7 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
     mapping_by_code = {m.external_code: m for m in mapping_rows}
 
     drafts, failed, unmapped_codes = [], [], set()
+    unmapped_detail: dict[str, dict] = {}
     for o in orders:
         lines = []
         for ext_name, qty in parse_jushuitan_name(o["name"]):
@@ -591,6 +592,11 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                 p = db.scalar(select(Product).where(or_(Product.name == ext_name, Product.code == ext_name)))
             if not p:
                 unmapped_codes.add(ext_name)
+                d = unmapped_detail.setdefault(ext_name, {"external_code": ext_name, "count": 0})
+                d["count"] += 1
+                if d["count"] == 1:
+                    su, sq = parse_jst_spec(ext_name)
+                    d["spec"] = f"{fmt_qty(sq)} {su}/件" if su and sq else ""
                 continue
             unit, per_item = pick_jst_unit(p, ext_name)
             if unit is None or per_item is None:
@@ -638,7 +644,13 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                 pack_fee=0.0, lines=draft_lines,
             )
         )
-    return drafts, failed, skip, unmapped_codes
+    # 组装未关联商品明细：附带推荐候选，供导入页手动匹配
+    unmapped_list = [
+        {**unmapped_detail[code], "suggest": _suggest_candidates(db, code)}
+        for code in sorted(unmapped_codes)
+    ]
+    unmapped_list.sort(key=lambda x: -x["count"])
+    return drafts, failed, skip, unmapped_codes, unmapped_list
 
 
 @router.post("/import/outbounds/preview")
@@ -649,11 +661,12 @@ def preview_import_outbounds(file: UploadFile, db: Session = Depends(get_db), us
 
 @router.post("/jushuitan/import/preview")
 def preview_import_jushuitan(file: UploadFile, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    drafts, failed, skip, unmapped = parse_jushuitan_draft(file, db, user)
+    drafts, failed, skip, unmapped, unmapped_list = parse_jushuitan_draft(file, db, user)
     return {
         "orders": [o.model_dump() for o in drafts],
         "skip": skip, "failed": failed, "failed_count": len(failed),
         "unmapped_codes": sorted(unmapped),
+        "unmapped": unmapped_list,
     }
 
 
@@ -895,6 +908,54 @@ def _match_stock(db: Session, ext_name: str) -> Product | None:
     if pid and score >= 0.7:
         return db.get(Product, pid)
     return None
+
+
+def _suggest_candidates(db: Session, ext_name: str, top: int = 8) -> list[dict]:
+    """为未关联的外部商品名返回候选系统商品（库存大类优先，排除 人工/包材/快递），带匹配分数。
+
+    「凑零为整 / 全名归一」策略与 _match_stock 保持一致：先按剥离规格后的基础名精确匹配，
+    再按整名与基础名做模糊匹配，为用户在导入页手动选择提供推荐（分数>=0.35 的才进入候选）。
+    """
+    base = _strip_spec(ext_name)
+    stocks = [
+        p for p in db.execute(select(Product).where(Product.product_type == "stock")).scalars()
+        if p.category not in _NO_AUTO_STOCK_CATS
+    ]
+    scored: list[tuple[float, int]] = []
+    seen: set[int] = set()
+
+    def _push(pid: int, score: float) -> None:
+        if pid in seen:
+            return
+        seen.add(pid)
+        scored.append((score, pid))
+
+    n, b = _norm(ext_name), _norm(base)
+    # 1) 基础名精确匹配优先（安全，绝不误配）
+    for s in stocks:
+        if s.name == base or s.code == base:
+            _push(s.id, 1.0)
+    # 2) 整名/基础名模糊匹配
+    for s in stocks:
+        sc = 0.0
+        for cand in (s.name, s.code):
+            c = _norm(cand)
+            if not c:
+                continue
+            if c == n or c == b:
+                sc = max(sc, 1.0)
+            else:
+                sc = max(sc, difflib.SequenceMatcher(None, n, c).ratio())
+                if b != n:
+                    sc = max(sc, difflib.SequenceMatcher(None, b, c).ratio())
+        if sc >= 0.35:
+            _push(s.id, sc)
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [
+        {"id": pid, "name": db.get(Product, pid).name, "score": round(sc, 3)}
+        for sc, pid in scored[:top]
+        if db.get(Product, pid)
+    ]
 
 
 def _spec_multiplier(stock: Product, ext_name: str) -> float:

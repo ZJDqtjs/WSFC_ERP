@@ -1954,7 +1954,7 @@ const BATCH_MODAL = {
     tpl: "",
     preview: "/api/jushuitan/import/preview",
     confirm: "/api/jushuitan/import/confirm",
-    hint: "上传聚水潭导出的「销售出库单_*.xlsx」，自动识别商品并按件数×每件规格结算。先解析预览，确认后才出库。需先在「编码关联」中把商品名关联到系统商品。",
+    hint: "上传聚水潭导出的「销售出库单_*.xlsx」，自动识别商品并按件数×每件规格结算。一单多货自动拆行；遇未关联的系统外商品，会在本页提示手动匹配并自动记录到关联结算（持续进化），确认后才出库。",
   },
 };
 function openBatchModal(kind) {
@@ -1986,6 +1986,7 @@ async function runBatchModal(kind) {
   const cfg = BATCH_MODAL[kind];
   const file = $("bmFile").files[0];
   if (!file) { toast("请先选择 Excel 文件"); return; }
+  window.__BM_FILE__ = file; // 供「保存关联后重新解析」复用同一文件
   const box = $("bmResult");
   box.innerHTML = `<div class="alert ok">⏳ 正在解析…</div>`;
   try {
@@ -1997,7 +1998,11 @@ async function runBatchModal(kind) {
 function renderDraftReview(kind, r) {
   const orders = r.orders || [];
   let warn = "";
-  if (r.unmapped_codes && r.unmapped_codes.length) warn += `<div class="alert warn">⚠ 未关联商品：${r.unmapped_codes.map(esc).join("、")}（请到「编码关联」关联后重新解析）</div>`;
+  // 聚水潭导入页：发现未关联商品时，先引导用户在当前页面手动匹配（保存后自动重解析）；跳过时 r.forceReview=1 直接进入单据确认
+  if (kind === "jushuitan" && r.unmapped && r.unmapped.length && !r.forceReview) return renderJstMatchScreen(kind, r, "");
+  if (r.unmapped_codes && r.unmapped_codes.length) warn += r.forceReview
+      ? `<div class="alert warn">⚠ 已跳过 <b>${r.unmapped_codes.length}</b> 种未关联商品（${r.unmapped_codes.map(esc).join("、")}），未计入出库，请留意。</div>`
+      : `<div class="alert warn">⚠ 未关联商品：${r.unmapped_codes.map(esc).join("、")}（请到「编码关联」关联后重新解析）</div>`;
   if (r.skip && Object.values(r.skip).some((v) => v > 0)) warn += `<div class="alert warn">⚠ 跳过：${Object.entries(r.skip).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}单`).join("、")}</div>`;
   if (r.failed && r.failed.length) warn += `<div class="alert err">解析失败 ${r.failed.length} 条：${r.failed.slice(0, 5).map((f) => esc(f.reason)).join("；")}</div>`;
   if (!orders.length) {
@@ -2036,6 +2041,84 @@ function renderDraftReview(kind, r) {
       <button class="btn green" onclick="confirmDraft('${kind}')">✓ 确认出库（<span id="draftCount">${orders.length}</span> 单）</button>
     </div>`;
 }
+
+/* ---------- 聚水潭导入：未关联商品手动匹配（自动记录关联，持续进化） ---------- */
+function jstMatchOpts(u) {
+  const list = [];
+  (u.suggest || []).forEach((s) => list.push({ id: s.id, name: `${s.name}（推荐 ${Math.round(s.score * 100)}%）` }));
+  PRODUCTS.forEach((p) => { if (!list.some((x) => +x.id === +p.id)) list.push({ id: p.id, name: p.name }); });
+  const best = (u.suggest || [])[0];
+  const selected = best && best.score >= 0.7 ? best.id : "";
+  return `<option value="">— 选择系统商品 —</option>` +
+    list.map((o) => `<option value="${o.id}" ${String(o.id) === String(selected) ? "selected" : ""}>${esc(o.name)}</option>`).join("");
+}
+function renderJstMatchScreen(kind, r, note) {
+  const codes = r.unmapped || [];
+  const saved = r.saved || 0;
+  if (!PRODUCTS.length) { api("/api/products").then((p) => { PRODUCTS = p; redrawJstMatchScreen(kind, r, note, saved); }).catch(() => {}); return; }
+  drawJstMatchScreen(kind, r, note, saved);
+}
+function redrawJstMatchScreen(kind, r, note, saved) { r = r || {}; drawJstMatchScreen(kind, { ...r, saved }, note || "", saved); }
+function drawJstMatchScreen(kind, r, note, saved) {
+  const codes = r.unmapped || [];
+  const title = BATCH_MODAL[kind] ? BATCH_MODAL[kind].title : "导入聚水潭出库单";
+  const info = note || (saved ? `<div class="alert ok">已自动保存 <b>${saved}</b> 条关联，系统已重新解析。本次还有 <b>${codes.length}</b> 种商品未关联，请继续匹配或直接确认出库。</div>`
+                                    : `<div class="alert warn">本次导入发现 <b>${codes.length}</b> 种商品在系统中尚未关联。请为每种商品选择关联系统商品，保存后会自动记录到「关联结算」并重新解析，下次导入即自动匹配。</div>`);
+  $("modalBox").innerHTML = `<h3>${title} — 🔗 匹配未关联商品</h3>
+    ${info}
+    <table class="subtable" style="width:100%;">
+      <thead><tr><th style="width:40%;">聚水潭商品</th><th class="num">出现次数</th><th>每件规格</th><th>关联到系统商品</th></tr></thead>
+      <tbody>${codes.map((u) => `
+        <tr>
+          <td><b>${esc(u.external_code)}</b></td>
+          <td class="num">${u.count}</td>
+          <td class="muted">${esc(u.spec) || "—"}</td>
+          <td><select class="jst-map-select searchable" data-code="${esc(u.external_code)}">${jstMatchOpts(u)}</select></td>
+        </tr>`).join("")}
+      </tbody>
+    </table>
+    <p class="hint" style="margin:10px 0;">匹配后点击「保存关联并继续」：自动写入关联结算 → 重新解析 → 返回确认出库。</p>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="skipJstMatch('${kind}')">跳过，先行出库已关联商品</button>
+      <button class="btn green" onclick="saveJstMappingsAndContinue('${kind}')">✓ 保存关联并继续</button>
+    </div>`;
+  bindSearchable($("modalBox"));
+}
+function skipJstMatch(kind) {
+  // 无法复用已在内存中被丢弃的草稿，直接重新解析后强制进入单据确认
+  const file = window.__BM_FILE__;
+  if (!file) { toast("文件丢失，请重新选择"); openBatchModal(kind); return; }
+  $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3><div class="alert ok">⏳ 重新解析…</div>`;
+  apiUpload(BATCH_MODAL[kind].preview, file).then((rr) => {
+    rr.forceReview = 1;
+    renderDraftReview(kind, rr);
+  }).catch((e) => toast("解析失败：" + e.message));
+}
+async function saveJstMappingsAndContinue(kind) {
+  const items = [];
+  document.querySelectorAll("#modalBox .jst-map-select").forEach((sel) => {
+    if (sel.value) items.push({ external_code: sel.dataset.code, product_id: +sel.value });
+  });
+  const file = window.__BM_FILE__;
+  if (!file) { toast("文件丢失，请重新选择"); openBatchModal(kind); return; }
+  if (!items.length && !confirm("未选择任何关联，确定仅查看已关联单据吗？")) return;
+  $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3><div class="alert ok">⏳ 正在保存关联并重新解析…</div>`;
+  try {
+    if (items.length) {
+      await api("/api/mappings/bulk", "POST", { source: "jushuitan", items });
+      toast(`已自动保存 ${items.length} 条关联`);
+    }
+    const r = await apiUpload(BATCH_MODAL[kind].preview, file);
+    if (r.unmapped && r.unmapped.length) {
+      r.saved = items.length;
+      renderJstMatchScreen(kind, r, "");
+    } else {
+      renderDraftReview(kind, r);
+      toast("关联已生效，可确认出库");
+    }
+  } catch (e) { toast("保存/解析失败：" + e.message); }
+}
+
 function draftLineCalc(inp) {
   const tr = inp.closest("tr");
   const qty = parseFloat(tr.querySelector(".draft-qty").value) || 0;

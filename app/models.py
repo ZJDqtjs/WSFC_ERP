@@ -111,7 +111,8 @@ class Outbound(Base):
 
 
 class OutboundLine(Base):
-    """出库单行。line_type: sale=销售商品, pack=关联结算的包装材料。"""
+    """出库单行。line_type: sale=销售商品, pack=关联结算的包装材料。
+    sale_product_id：pack 行所属的销售商品（小类）ID，用于打包人工+耗材按销售商品组合统计；sale 行为空。"""
 
     __tablename__ = "outbound_lines"
 
@@ -119,6 +120,7 @@ class OutboundLine(Base):
     outbound_id: Mapped[int] = mapped_column(ForeignKey("outbounds.id"))
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
     line_type: Mapped[str] = mapped_column(String(8), default="sale")  # sale / pack
+    sale_product_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # pack 行所属销售商品 ID
     unit: Mapped[str] = mapped_column(String(32))
     quantity: Mapped[float] = mapped_column(Float)
     quantity_base: Mapped[float] = mapped_column(Float)
