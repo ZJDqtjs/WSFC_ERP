@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -74,6 +75,64 @@ def migrate():
             conn.execute(text("ALTER TABLE outbound_lines ADD COLUMN sale_product_id INTEGER"))
             conn.commit()
     _backfill_sale_product()
+
+    # 一单多货规则表：箱型号关联清单（新增列）
+    with engine.connect() as conn:
+        prcols = [r[1] for r in conn.execute(text("PRAGMA table_info(pack_rules)")).fetchall()]
+        if "box_items" not in prcols:
+            conn.execute(text("ALTER TABLE pack_rules ADD COLUMN box_items JSON"))
+            conn.commit()
+    _backfill_pack_rule_box_items()
+
+
+def _backfill_pack_rule_box_items():
+    """回填 pack_rules.box_items：把旧 box_type 文本解析并关联到包材纸箱（幂等）。"""
+    from .database import SessionLocal
+    from .models import PackRule
+
+    db = SessionLocal()
+    try:
+        for r in db.execute(select(PackRule)).scalars():
+            if r.box_items:
+                continue
+            items = None
+            # 从 box_type 解析：'7号+8号' / '6号*2+7号*2'
+            for part in str(r.box_type or "").split("+"):
+                part = part.strip()
+                if not part:
+                    continue
+                m = re.search(r"\*(\d+)$", part)
+                if m:
+                    name, qty = part[: m.start()], int(m.group(1))
+                else:
+                    name, qty = part, 1
+                pid = None
+                for cand in (name, name + "纸箱", name + "箱"):
+                    p = db.scalar(select(Product).where(Product.name == cand))
+                    if p:
+                        pid = p.id
+                        name = _box_model_name(p.name)
+                        break
+                if items is None:
+                    items = []
+                items.append({"product_id": pid, "name": name, "quantity": qty})
+            if items:
+                r.box_items = items
+        db.commit()
+    except Exception as e:  # 回填失败不影响主流程
+        print("[迁移] 回填 pack_rules.box_items 失败:", e)
+        db.rollback()
+    finally:
+        db.close()
+
+
+def _box_model_name(pname: str) -> str:
+    n = (pname or "").strip()
+    if n.endswith("纸箱"):
+        return n[:-2]
+    if n.endswith("号箱"):
+        return n[:-1]
+    return n
 
 
 def _backfill_sale_product():

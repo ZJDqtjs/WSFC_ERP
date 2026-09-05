@@ -68,7 +68,7 @@
         <button class="nav-item" data-page="import"><span class="nav-ico"><svg class="ic"><use href="#i-database"/></svg></span>批量导入</button>
         <button class="nav-item" data-page="backup"><span class="nav-ico"><svg class="ic"><use href="#i-save"/></svg></span>备份与恢复</button>
         <div class="nav-group">设置</div>
-        <button class="nav-item" data-page="pdata"><span class="nav-ico"><svg class="ic"><use href="#i-database"/></svg></span>商品资料备份</button>
+        <button class="nav-item" data-page="pdata"><span class="nav-ico"><svg class="ic"><use href="#i-sliders"/></svg></span>商品资料备份</button>
       </nav>
       <div class="side-user">
         <div class="user-avatar" id="userAvatar">管</div>
@@ -368,6 +368,11 @@
             <button class="btn secondary" onclick="pdataDownload('pack_rules')"><svg class="ic"><use href="#i-download"/></svg> 导出JSON</button>
             <button class="btn secondary" onclick="loadPackRules()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
             <button class="btn" onclick="openPackRuleModal()"><svg class="ic"><use href="#i-plus"/></svg> 新增一单多货规则</button>
+          </div>
+          <div class="batch-bar" id="prBatch" style="display:none;">
+            <span class="muted">已选 <b id="prSelCount">0</b> 条</span>
+            <button class="btn danger" onclick="batchDeletePackRules()">批量删除</button>
+            <button class="btn secondary" onclick="clearBatch('pr')">取消选择</button>
           </div>
           <div class="table-wrap"><table id="prTable"></table></div>
         </div>

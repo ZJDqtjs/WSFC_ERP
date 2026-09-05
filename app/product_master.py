@@ -99,7 +99,10 @@ def export_payload(db, kind: str) -> dict:
         rows = db.execute(select(PackRule).order_by(PackRule.id)).scalars()
         data = [
             {
-                "name": r.name, "items": r.items or [], "box_type": r.box_type,
+                "name": r.name,
+                # 组合条目只保留 名称+数量（含 order 商品名），导入时按名称解析成 id，跨库不依赖 id
+                "items": [{"name": it.get("name", ""), "quantity": it.get("quantity", 1)} for it in (r.items or [])],
+                "box_type": r.box_type,
                 "labor_price": r.labor_price, "box_ratio": r.box_ratio,
                 "remark": r.remark, "is_active": r.is_active,
             }
