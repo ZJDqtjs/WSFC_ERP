@@ -1,0 +1,8368 @@
+{
+  "kind": "pack_rules",
+  "label": "一单多货规则",
+  "file": "pack_rules.json",
+  "exported_at": "2026-09-05 14:46:18",
+  "rules": [
+    {
+      "name": "七彩土豆3斤*1",
+      "items": [
+        {
+          "name": "七彩土豆3斤",
+          "quantity": 1.0,
+          "product_id": 43
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩土豆3斤*1,京鲜生七彩花生1斤*1",
+      "items": [
+        {
+          "name": "七彩土豆3斤",
+          "quantity": 1.0,
+          "product_id": 43
+        },
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 1.0,
+          "product_id": 53
+        }
+      ],
+      "box_type": "7号+8号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩土豆3斤*1,拇指小玉米1斤*1",
+      "items": [
+        {
+          "name": "七彩土豆3斤",
+          "quantity": 1.0,
+          "product_id": 43
+        },
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 1.0,
+          "product_id": 133
+        }
+      ],
+      "box_type": "7号+9号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩土豆3斤*1,紫皮洋葱5斤*1",
+      "items": [
+        {
+          "name": "七彩土豆3斤",
+          "quantity": 1.0,
+          "product_id": 43
+        },
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号+6号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩土豆3斤*1,紫皮独头蒜大果1斤*1",
+      "items": [
+        {
+          "name": "七彩土豆3斤",
+          "quantity": 1.0,
+          "product_id": 43
+        },
+        {
+          "name": "紫皮独头蒜大果1斤",
+          "quantity": 1.0,
+          "product_id": 248
+        }
+      ],
+      "box_type": "7号+9号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩土豆3斤*1,黑紫土豆3斤*1",
+      "items": [
+        {
+          "name": "七彩土豆3斤",
+          "quantity": 1.0,
+          "product_id": 43
+        },
+        {
+          "name": "黑紫土豆3斤",
+          "quantity": 1.0,
+          "product_id": 297
+        }
+      ],
+      "box_type": "7号+7号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩土豆3斤*1,黑紫土豆5斤*1",
+      "items": [
+        {
+          "name": "七彩土豆3斤",
+          "quantity": 1.0,
+          "product_id": 43
+        },
+        {
+          "name": "黑紫土豆5斤",
+          "quantity": 1.0,
+          "product_id": 299
+        }
+      ],
+      "box_type": "7号+6号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩土豆3斤*2",
+      "items": [
+        {
+          "name": "七彩土豆3斤",
+          "quantity": 2.0,
+          "product_id": 43
+        }
+      ],
+      "box_type": "7号*2",
+      "labor_price": null,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩土豆3斤*3",
+      "items": [
+        {
+          "name": "七彩土豆3斤",
+          "quantity": 3.0,
+          "product_id": 43
+        }
+      ],
+      "box_type": "7号*3",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩土豆3斤*4",
+      "items": [
+        {
+          "name": "七彩土豆3斤",
+          "quantity": 4.0,
+          "product_id": 43
+        }
+      ],
+      "box_type": "7号*4",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩土豆5斤*1",
+      "items": [
+        {
+          "name": "七彩土豆5斤",
+          "quantity": 1.0,
+          "product_id": 45
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩土豆5斤*1,黑紫土豆5斤*1",
+      "items": [
+        {
+          "name": "七彩土豆5斤",
+          "quantity": 1.0,
+          "product_id": 45
+        },
+        {
+          "name": "黑紫土豆5斤",
+          "quantity": 1.0,
+          "product_id": 299
+        }
+      ],
+      "box_type": "6号+6号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩土豆5斤*2",
+      "items": [
+        {
+          "name": "七彩土豆5斤",
+          "quantity": 2.0,
+          "product_id": 45
+        }
+      ],
+      "box_type": "6号*2",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩土豆5斤*2,黑紫土豆3斤*2",
+      "items": [
+        {
+          "name": "七彩土豆5斤",
+          "quantity": 2.0,
+          "product_id": 45
+        },
+        {
+          "name": "黑紫土豆3斤",
+          "quantity": 2.0,
+          "product_id": 297
+        }
+      ],
+      "box_type": "6号*2+7号*2",
+      "labor_price": 2.8,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩土豆5斤*3",
+      "items": [
+        {
+          "name": "七彩土豆5斤",
+          "quantity": 3.0,
+          "product_id": 45
+        }
+      ],
+      "box_type": "6号*3",
+      "labor_price": null,
+      "box_ratio": 3.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩土豆5斤*4",
+      "items": [
+        {
+          "name": "七彩土豆5斤",
+          "quantity": 4.0,
+          "product_id": 45
+        }
+      ],
+      "box_type": "6号*4",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩土豆5斤*8",
+      "items": [
+        {
+          "name": "七彩土豆5斤",
+          "quantity": 8.0,
+          "product_id": 45
+        }
+      ],
+      "box_type": "6号*8",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生1.5斤装*1",
+      "items": [
+        {
+          "name": "七彩花生1.5斤装",
+          "quantity": 1.0,
+          "product_id": 47
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生1.5斤装*1,包浆豆腐300g*2盒*1",
+      "items": [
+        {
+          "name": "七彩花生1.5斤装",
+          "quantity": 1.0,
+          "product_id": 47
+        },
+        {
+          "name": "包浆豆腐300g*2盒",
+          "quantity": 1.0,
+          "product_id": 113
+        }
+      ],
+      "box_type": "7号+邮政6号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生1.5斤装*1,黑花生1.5斤*1",
+      "items": [
+        {
+          "name": "七彩花生1.5斤装",
+          "quantity": 1.0,
+          "product_id": 47
+        },
+        {
+          "name": "黑花生1.5斤",
+          "quantity": 1.0,
+          "product_id": 301
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生1.5斤装*1,黑花生2.5斤*1",
+      "items": [
+        {
+          "name": "七彩花生1.5斤装",
+          "quantity": 1.0,
+          "product_id": 47
+        },
+        {
+          "name": "黑花生2.5斤",
+          "quantity": 1.0,
+          "product_id": 305
+        }
+      ],
+      "box_type": "7号+6号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生2.5斤装*1",
+      "items": [
+        {
+          "name": "七彩花生2.5斤装",
+          "quantity": 1.0,
+          "product_id": 49
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生2.5斤装*1,玉米段5斤装*1",
+      "items": [
+        {
+          "name": "七彩花生2.5斤装",
+          "quantity": 1.0,
+          "product_id": 49
+        },
+        {
+          "name": "玉米段5斤装",
+          "quantity": 1.0,
+          "product_id": 203
+        }
+      ],
+      "box_type": "9号+7号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生2.5斤装*1,黑花生1.5斤*1",
+      "items": [
+        {
+          "name": "七彩花生2.5斤装",
+          "quantity": 1.0,
+          "product_id": 49
+        },
+        {
+          "name": "黑花生1.5斤",
+          "quantity": 1.0,
+          "product_id": 301
+        }
+      ],
+      "box_type": "6号+7号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生2.5斤装*1,黑花生2.5斤*1",
+      "items": [
+        {
+          "name": "七彩花生2.5斤装",
+          "quantity": 1.0,
+          "product_id": 49
+        },
+        {
+          "name": "黑花生2.5斤",
+          "quantity": 1.0,
+          "product_id": 305
+        }
+      ],
+      "box_type": "7号+7号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生2.5斤装*2",
+      "items": [
+        {
+          "name": "七彩花生2.5斤装",
+          "quantity": 2.0,
+          "product_id": 49
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 0.8,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生2.5斤装*2,黑花生2.5斤*2",
+      "items": [
+        {
+          "name": "七彩花生2.5斤装",
+          "quantity": 2.0,
+          "product_id": 49
+        },
+        {
+          "name": "黑花生2.5斤",
+          "quantity": 2.0,
+          "product_id": 305
+        }
+      ],
+      "box_type": "4号+4号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生2.5斤装*3",
+      "items": [
+        {
+          "name": "七彩花生2.5斤装",
+          "quantity": 3.0,
+          "product_id": 49
+        }
+      ],
+      "box_type": "4号+6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生2.5斤装*5",
+      "items": [
+        {
+          "name": "七彩花生2.5斤装",
+          "quantity": 5.0,
+          "product_id": 49
+        }
+      ],
+      "box_type": "4号+4号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生米1斤（去壳）*1",
+      "items": [
+        {
+          "name": "七彩花生米1斤（去壳）",
+          "quantity": 1.0,
+          "product_id": 51
+        }
+      ],
+      "box_type": "9号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生米1斤（去壳）*1,京鲜生七彩花生1斤*1",
+      "items": [
+        {
+          "name": "七彩花生米1斤（去壳）",
+          "quantity": 1.0,
+          "product_id": 51
+        },
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 1.0,
+          "product_id": 53
+        }
+      ],
+      "box_type": "7号+9号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生米1斤（去壳）*1,黑花生米1斤（去壳）*1",
+      "items": [
+        {
+          "name": "七彩花生米1斤（去壳）",
+          "quantity": 1.0,
+          "product_id": 51
+        },
+        {
+          "name": "黑花生米1斤（去壳）",
+          "quantity": 1.0,
+          "product_id": 307
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生米1斤（去壳）*1,黑花生米1斤（去壳）*2",
+      "items": [
+        {
+          "name": "七彩花生米1斤（去壳）",
+          "quantity": 1.0,
+          "product_id": 51
+        },
+        {
+          "name": "黑花生米1斤（去壳）",
+          "quantity": 2.0,
+          "product_id": 307
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生米1斤（去壳）*2",
+      "items": [
+        {
+          "name": "七彩花生米1斤（去壳）",
+          "quantity": 2.0,
+          "product_id": 51
+        }
+      ],
+      "box_type": "9号",
+      "labor_price": 0.8,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生米1斤（去壳）*2,黑花生米1斤（去壳）*2",
+      "items": [
+        {
+          "name": "七彩花生米1斤（去壳）",
+          "quantity": 2.0,
+          "product_id": 51
+        },
+        {
+          "name": "黑花生米1斤（去壳）",
+          "quantity": 2.0,
+          "product_id": 307
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生米1斤（去壳）*3",
+      "items": [
+        {
+          "name": "七彩花生米1斤（去壳）",
+          "quantity": 3.0,
+          "product_id": 51
+        }
+      ],
+      "box_type": "9号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生米1斤（去壳）*4",
+      "items": [
+        {
+          "name": "七彩花生米1斤（去壳）",
+          "quantity": 4.0,
+          "product_id": 51
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生米1斤（去壳）*5",
+      "items": [
+        {
+          "name": "七彩花生米1斤（去壳）",
+          "quantity": 5.0,
+          "product_id": 51
+        }
+      ],
+      "box_type": "9号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "七彩花生米1斤（去壳）*7",
+      "items": [
+        {
+          "name": "七彩花生米1斤（去壳）",
+          "quantity": 7.0,
+          "product_id": 51
+        }
+      ],
+      "box_type": "9号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "五指毛桃250g*1,紫皮洋葱5斤*1,绿甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "五指毛桃250g",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号+6号+5号",
+      "labor_price": 1.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生1斤*1",
+      "items": [
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 1.0,
+          "product_id": 53
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生1斤*1,小花糯玉米3斤*1",
+      "items": [
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 1.0,
+          "product_id": 53
+        },
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 1.0,
+          "product_id": 127
+        }
+      ],
+      "box_type": "8号+7号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生1斤*1,拇指小玉米1斤*1",
+      "items": [
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 1.0,
+          "product_id": 53
+        },
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 1.0,
+          "product_id": 133
+        }
+      ],
+      "box_type": "7号+9号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生1斤*1,新鲜豌豆荚2.5斤*1",
+      "items": [
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 1.0,
+          "product_id": 53
+        },
+        {
+          "name": "新鲜豌豆荚2.5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "8号+7号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生1斤*1,石斛鲜条250g*1,紫皮洋葱5斤*1",
+      "items": [
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 1.0,
+          "product_id": 53
+        },
+        {
+          "name": "石斛鲜条250g",
+          "quantity": 1.0,
+          "product_id": 233
+        },
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "8号+邮政6号+6号",
+      "labor_price": 1.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生1斤*1,黑花生1斤*1",
+      "items": [
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 1.0,
+          "product_id": 53
+        },
+        {
+          "name": "黑花生1斤",
+          "quantity": 1.0,
+          "product_id": 303
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生1斤*1,黑花生1斤*2",
+      "items": [
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 1.0,
+          "product_id": 53
+        },
+        {
+          "name": "黑花生1斤",
+          "quantity": 2.0,
+          "product_id": 303
+        }
+      ],
+      "box_type": "8号+7号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生1斤*1,黑花生米1斤（去壳）*1",
+      "items": [
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 1.0,
+          "product_id": 53
+        },
+        {
+          "name": "黑花生米1斤（去壳）",
+          "quantity": 1.0,
+          "product_id": 307
+        }
+      ],
+      "box_type": "7号+7号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生1斤*10",
+      "items": [
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 10.0,
+          "product_id": 53
+        }
+      ],
+      "box_type": "4号*2",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生1斤*2",
+      "items": [
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 2.0,
+          "product_id": 53
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生1斤*3",
+      "items": [
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 3.0,
+          "product_id": 53
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生1斤*4",
+      "items": [
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 4.0,
+          "product_id": 53
+        }
+      ],
+      "box_type": "5号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生1斤*5",
+      "items": [
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 5.0,
+          "product_id": 53
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 1.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生1斤*6",
+      "items": [
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 6.0,
+          "product_id": 53
+        }
+      ],
+      "box_type": "6号*6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生1斤*7",
+      "items": [
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 7.0,
+          "product_id": 53
+        }
+      ],
+      "box_type": "6号+5号",
+      "labor_price": 2.3,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生2斤*1",
+      "items": [
+        {
+          "name": "京鲜生七彩花生2斤",
+          "quantity": 1.0,
+          "product_id": 55
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生2斤*1,紫皮独头蒜小果2斤*1",
+      "items": [
+        {
+          "name": "京鲜生七彩花生2斤",
+          "quantity": 1.0,
+          "product_id": 55
+        },
+        {
+          "name": "紫皮独头蒜小果2斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号+9号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生2斤*1,黑花生1.5斤*1",
+      "items": [
+        {
+          "name": "京鲜生七彩花生2斤",
+          "quantity": 1.0,
+          "product_id": 55
+        },
+        {
+          "name": "黑花生1.5斤",
+          "quantity": 1.0,
+          "product_id": 301
+        }
+      ],
+      "box_type": "2个7号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生2斤*1,黑花生1.5斤*2",
+      "items": [
+        {
+          "name": "京鲜生七彩花生2斤",
+          "quantity": 1.0,
+          "product_id": 55
+        },
+        {
+          "name": "黑花生1.5斤",
+          "quantity": 2.0,
+          "product_id": 301
+        }
+      ],
+      "box_type": "7号+6号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生2斤*10",
+      "items": [
+        {
+          "name": "京鲜生七彩花生2斤",
+          "quantity": 10.0,
+          "product_id": 55
+        }
+      ],
+      "box_type": "60*40*40",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生2斤*2",
+      "items": [
+        {
+          "name": "京鲜生七彩花生2斤",
+          "quantity": 2.0,
+          "product_id": 55
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 0.8,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生2斤*2,黑花生1.5斤*2",
+      "items": [
+        {
+          "name": "京鲜生七彩花生2斤",
+          "quantity": 2.0,
+          "product_id": 55
+        },
+        {
+          "name": "黑花生1.5斤",
+          "quantity": 2.0,
+          "product_id": 301
+        }
+      ],
+      "box_type": "5号+6号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生2斤*3",
+      "items": [
+        {
+          "name": "京鲜生七彩花生2斤",
+          "quantity": 3.0,
+          "product_id": 55
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 1.1,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生2斤*3,黑花生1.5斤*3",
+      "items": [
+        {
+          "name": "京鲜生七彩花生2斤",
+          "quantity": 3.0,
+          "product_id": 55
+        },
+        {
+          "name": "黑花生1.5斤",
+          "quantity": 3.0,
+          "product_id": 301
+        }
+      ],
+      "box_type": "4号+5号",
+      "labor_price": 2.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生2斤*4",
+      "items": [
+        {
+          "name": "京鲜生七彩花生2斤",
+          "quantity": 4.0,
+          "product_id": 55
+        }
+      ],
+      "box_type": "4号*2",
+      "labor_price": 1.4,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生2斤*5",
+      "items": [
+        {
+          "name": "京鲜生七彩花生2斤",
+          "quantity": 5.0,
+          "product_id": 55
+        }
+      ],
+      "box_type": "4号*2",
+      "labor_price": null,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生2斤*6",
+      "items": [
+        {
+          "name": "京鲜生七彩花生2斤",
+          "quantity": 6.0,
+          "product_id": 55
+        }
+      ],
+      "box_type": "4号+6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生七彩花生2斤*7",
+      "items": [
+        {
+          "name": "京鲜生七彩花生2斤",
+          "quantity": 7.0,
+          "product_id": 55
+        }
+      ],
+      "box_type": "4号*2",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生五指毛桃250g*1",
+      "items": [
+        {
+          "name": "京鲜生五指毛桃250g",
+          "quantity": 1.0,
+          "product_id": 57
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生五指毛桃250g*1,石斛鲜条250g*1",
+      "items": [
+        {
+          "name": "京鲜生五指毛桃250g",
+          "quantity": 1.0,
+          "product_id": 57
+        },
+        {
+          "name": "石斛鲜条250g",
+          "quantity": 1.0,
+          "product_id": 233
+        }
+      ],
+      "box_type": "7号+邮政6号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生五指毛桃250g*2",
+      "items": [
+        {
+          "name": "京鲜生五指毛桃250g",
+          "quantity": 2.0,
+          "product_id": 57
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生五指毛桃250g*3",
+      "items": [
+        {
+          "name": "京鲜生五指毛桃250g",
+          "quantity": 3.0,
+          "product_id": 57
+        }
+      ],
+      "box_type": "5号",
+      "labor_price": 1.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生四神汤200g*1",
+      "items": [
+        {
+          "name": "京鲜生四神汤200g",
+          "quantity": 1.0,
+          "product_id": 58
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生松茸干片50g*2",
+      "items": [
+        {
+          "name": "京鲜生松茸干片50g",
+          "quantity": 2.0,
+          "product_id": 60
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生松茸干片50g*5",
+      "items": [
+        {
+          "name": "京鲜生松茸干片50g",
+          "quantity": 5.0,
+          "product_id": 60
+        }
+      ],
+      "box_type": "6号*3",
+      "labor_price": 2.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（3-5）*1",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（3-5）",
+          "quantity": 1.0,
+          "product_id": 64
+        }
+      ],
+      "box_type": "9号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（3-5）*10",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（3-5）",
+          "quantity": 10.0,
+          "product_id": 64
+        }
+      ],
+      "box_type": "5号",
+      "labor_price": 5.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（3-5）*11",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（3-5）",
+          "quantity": 11.0,
+          "product_id": 64
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 5.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（3-5）*12",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（3-5）",
+          "quantity": 12.0,
+          "product_id": 64
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 7.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（3-5）*2",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（3-5）",
+          "quantity": 2.0,
+          "product_id": 64
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（3-5）*3",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（3-5）",
+          "quantity": 3.0,
+          "product_id": 64
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 2.1,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（3-5）*4",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（3-5）",
+          "quantity": 4.0,
+          "product_id": 64
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 2.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（3-5）*5",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（3-5）",
+          "quantity": 5.0,
+          "product_id": 64
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 2.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（3-5）*6",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（3-5）",
+          "quantity": 6.0,
+          "product_id": 64
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 3.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（3-5）*7",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（3-5）",
+          "quantity": 7.0,
+          "product_id": 64
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 3.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（5-7）*1",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（5-7）",
+          "quantity": 1.0,
+          "product_id": 66
+        }
+      ],
+      "box_type": "10号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（5-7）*2",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（5-7）",
+          "quantity": 2.0,
+          "product_id": 66
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（5-7）*3",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（5-7）",
+          "quantity": 3.0,
+          "product_id": 66
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 1.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（5-7）*4",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（5-7）",
+          "quantity": 4.0,
+          "product_id": 66
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 2.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（5-7）*5",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（5-7）",
+          "quantity": 5.0,
+          "product_id": 66
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 2.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（5-7）*7",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（5-7）",
+          "quantity": 7.0,
+          "product_id": 66
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 3.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生羊肚菌干货30g（5-7）*8",
+      "items": [
+        {
+          "name": "京鲜生羊肚菌干货30g（5-7）",
+          "quantity": 8.0,
+          "product_id": 66
+        }
+      ],
+      "box_type": "5号",
+      "labor_price": 4.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生茯苓250g*1",
+      "items": [
+        {
+          "name": "京鲜生茯苓250g",
+          "quantity": 1.0,
+          "product_id": 68
+        }
+      ],
+      "box_type": "9号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生茯苓250g*2",
+      "items": [
+        {
+          "name": "京鲜生茯苓250g",
+          "quantity": 2.0,
+          "product_id": 68
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生茯苓500g*1",
+      "items": [
+        {
+          "name": "京鲜生茯苓500g",
+          "quantity": 1.0,
+          "product_id": 70
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鸡煲汤料包100g*10",
+      "items": [
+        {
+          "name": "京鲜生鸡煲汤料包100g",
+          "quantity": 10.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 8.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鸡煲汤料包100g*2",
+      "items": [
+        {
+          "name": "京鲜生鸡煲汤料包100g",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": 1.6,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鸡煲汤料包100g*3",
+      "items": [
+        {
+          "name": "京鲜生鸡煲汤料包100g",
+          "quantity": 3.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 2.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鸡煲汤料包120g*1",
+      "items": [
+        {
+          "name": "京鲜生鸡煲汤料包120g",
+          "quantity": 1.0,
+          "product_id": 72
+        }
+      ],
+      "box_type": "11号",
+      "labor_price": 0.8,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鸡煲汤料包120g*2",
+      "items": [
+        {
+          "name": "京鲜生鸡煲汤料包120g",
+          "quantity": 2.0,
+          "product_id": 72
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": 1.6,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鸡煲汤料包120g*3",
+      "items": [
+        {
+          "name": "京鲜生鸡煲汤料包120g",
+          "quantity": 3.0,
+          "product_id": 72
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 2.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鸡煲汤料包120g*6",
+      "items": [
+        {
+          "name": "京鲜生鸡煲汤料包120g",
+          "quantity": 6.0,
+          "product_id": 72
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 6.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鸡骨草250g*1",
+      "items": [
+        {
+          "name": "京鲜生鸡骨草250g",
+          "quantity": 1.0,
+          "product_id": 74
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鸡骨草250g*1,石斛鲜条250g*1",
+      "items": [
+        {
+          "name": "京鲜生鸡骨草250g",
+          "quantity": 1.0,
+          "product_id": 74
+        },
+        {
+          "name": "石斛鲜条250g",
+          "quantity": 1.0,
+          "product_id": 233
+        }
+      ],
+      "box_type": "7号+邮政6号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鸡骨草250g*2",
+      "items": [
+        {
+          "name": "京鲜生鸡骨草250g",
+          "quantity": 2.0,
+          "product_id": 74
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鹿茸菇干货1000g*1",
+      "items": [
+        {
+          "name": "京鲜生鹿茸菇干货1000g",
+          "quantity": 1.0,
+          "product_id": 76
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鹿茸菇干货1000g*2",
+      "items": [
+        {
+          "name": "京鲜生鹿茸菇干货1000g",
+          "quantity": 2.0,
+          "product_id": 76
+        }
+      ],
+      "box_type": "4号*2",
+      "labor_price": 2.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鹿茸菇干货1000g*3",
+      "items": [
+        {
+          "name": "京鲜生鹿茸菇干货1000g",
+          "quantity": 3.0,
+          "product_id": 76
+        }
+      ],
+      "box_type": "4号*3",
+      "labor_price": 3.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鹿茸菇干货1000g*4",
+      "items": [
+        {
+          "name": "京鲜生鹿茸菇干货1000g",
+          "quantity": 4.0,
+          "product_id": 76
+        }
+      ],
+      "box_type": "4号*4",
+      "labor_price": 4.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鹿茸菇干货1000g*5",
+      "items": [
+        {
+          "name": "京鲜生鹿茸菇干货1000g",
+          "quantity": 5.0,
+          "product_id": 76
+        }
+      ],
+      "box_type": "4号*5",
+      "labor_price": 5.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鹿茸菇干货200g*1",
+      "items": [
+        {
+          "name": "京鲜生鹿茸菇干货200g",
+          "quantity": 1.0,
+          "product_id": 78
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鹿茸菇干货200g*2",
+      "items": [
+        {
+          "name": "京鲜生鹿茸菇干货200g",
+          "quantity": 2.0,
+          "product_id": 78
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生鹿茸菇干货200g*5",
+      "items": [
+        {
+          "name": "京鲜生鹿茸菇干货200g",
+          "quantity": 5.0,
+          "product_id": 78
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 2.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生黄芪250g*1",
+      "items": [
+        {
+          "name": "京鲜生黄芪250g",
+          "quantity": 1.0,
+          "product_id": 80
+        }
+      ],
+      "box_type": "9号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生黄芪250g*1,牛奶芋头5斤单果100g+*1,绿甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "京鲜生黄芪250g",
+          "quantity": 1.0,
+          "product_id": 80
+        },
+        {
+          "name": "牛奶芋头5斤单果100g+",
+          "quantity": 1.0,
+          "product_id": 194
+        },
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "9号+6号+5号",
+      "labor_price": 1.8,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生黄芪250g*2",
+      "items": [
+        {
+          "name": "京鲜生黄芪250g",
+          "quantity": 2.0,
+          "product_id": 80
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生黄芪250g*8",
+      "items": [
+        {
+          "name": "京鲜生黄芪250g",
+          "quantity": 8.0,
+          "product_id": 80
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 4.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生黄芪500g*1",
+      "items": [
+        {
+          "name": "京鲜生黄芪500g",
+          "quantity": 1.0,
+          "product_id": 82
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生黄芪500g*2",
+      "items": [
+        {
+          "name": "京鲜生黄芪500g",
+          "quantity": 2.0,
+          "product_id": 82
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 2.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生黄芪500g*3",
+      "items": [
+        {
+          "name": "京鲜生黄芪500g",
+          "quantity": 3.0,
+          "product_id": 82
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 3.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "京鲜生黄芪500g*4",
+      "items": [
+        {
+          "name": "京鲜生黄芪500g",
+          "quantity": 4.0,
+          "product_id": 82
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 4.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "人参果特大果5斤*2",
+      "items": [
+        {
+          "name": "人参果特大果5斤",
+          "quantity": 2.0,
+          "product_id": 95
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "人参薯3斤",
+      "items": [
+        {
+          "name": "人参薯3斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "人参薯3斤*2",
+      "items": [
+        {
+          "name": "人参薯3斤",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号*2",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "人参薯5斤",
+      "items": [
+        {
+          "name": "人参薯5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "佛手柑中果1个*1",
+      "items": [
+        {
+          "name": "佛手柑中果1个",
+          "quantity": 1.0,
+          "product_id": 98
+        }
+      ],
+      "box_type": "5号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "佛手柑中果1个*2",
+      "items": [
+        {
+          "name": "佛手柑中果1个",
+          "quantity": 2.0,
+          "product_id": 98
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "佛手柑中果1个*3",
+      "items": [
+        {
+          "name": "佛手柑中果1个",
+          "quantity": 3.0,
+          "product_id": 98
+        }
+      ],
+      "box_type": "3号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "佛手柑中果1个*4",
+      "items": [
+        {
+          "name": "佛手柑中果1个",
+          "quantity": 4.0,
+          "product_id": 98
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "佛手柑中果1个*5",
+      "items": [
+        {
+          "name": "佛手柑中果1个",
+          "quantity": 5.0,
+          "product_id": 98
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "佛手柑中果2个*1",
+      "items": [
+        {
+          "name": "佛手柑中果2个",
+          "quantity": 1.0,
+          "product_id": 100
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "佛手柑中果2个*10",
+      "items": [
+        {
+          "name": "佛手柑中果2个",
+          "quantity": 10.0,
+          "product_id": 100
+        }
+      ],
+      "box_type": "60*40*40",
+      "labor_price": 20.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "佛手柑中果4个*1",
+      "items": [
+        {
+          "name": "佛手柑中果4个",
+          "quantity": 1.0,
+          "product_id": 102
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "佛手柑中果4个*2",
+      "items": [
+        {
+          "name": "佛手柑中果4个",
+          "quantity": 2.0,
+          "product_id": 102
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "佛手柑大果3个*1",
+      "items": [
+        {
+          "name": "佛手柑大果3个",
+          "quantity": 1.0,
+          "product_id": 105
+        }
+      ],
+      "box_type": "3号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "佛手柑大果3个*3",
+      "items": [
+        {
+          "name": "佛手柑大果3个",
+          "quantity": 3.0,
+          "product_id": 105
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "佛手柑果王3个*1",
+      "items": [
+        {
+          "name": "佛手柑果王3个",
+          "quantity": 1.0,
+          "product_id": 108
+        }
+      ],
+      "box_type": "3号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "佛手柑果王3个*2",
+      "items": [
+        {
+          "name": "佛手柑果王3个",
+          "quantity": 2.0,
+          "product_id": 108
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "包浆豆腐300g*1盒*1,紫皮独头蒜中果1斤*1",
+      "items": [
+        {
+          "name": "包浆豆腐300g*1盒",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "紫皮独头蒜中果1斤",
+          "quantity": 1.0,
+          "product_id": 241
+        }
+      ],
+      "box_type": "邮政6号+11号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "包浆豆腐300g*2盒*1",
+      "items": [
+        {
+          "name": "包浆豆腐300g*2盒",
+          "quantity": 1.0,
+          "product_id": 113
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "包浆豆腐300g*2盒*1,黑花生2.5斤*1",
+      "items": [
+        {
+          "name": "包浆豆腐300g*2盒",
+          "quantity": 1.0,
+          "product_id": 113
+        },
+        {
+          "name": "黑花生2.5斤",
+          "quantity": 1.0,
+          "product_id": 305
+        }
+      ],
+      "box_type": "邮政6号+6号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "包浆豆腐300g*2盒*2",
+      "items": [
+        {
+          "name": "包浆豆腐300g*2盒",
+          "quantity": 2.0,
+          "product_id": 113
+        }
+      ],
+      "box_type": "邮政6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "包浆豆腐300g*2盒*3",
+      "items": [
+        {
+          "name": "包浆豆腐300g*2盒",
+          "quantity": 3.0,
+          "product_id": 113
+        }
+      ],
+      "box_type": "邮政6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "包浆豆腐300g*2盒*4",
+      "items": [
+        {
+          "name": "包浆豆腐300g*2盒",
+          "quantity": 4.0,
+          "product_id": 113
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "四合一蔬菜",
+      "items": [
+        {
+          "name": "四合一蔬菜",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "四季豆2.5斤*1",
+      "items": [
+        {
+          "name": "四季豆2.5斤",
+          "quantity": 1.0,
+          "product_id": 115
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "大娃娃菜2.5斤*2",
+      "items": [
+        {
+          "name": "大娃娃菜2.5斤",
+          "quantity": 2.0,
+          "product_id": 117
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "大香芋头3斤2-3个*1,新鲜莴笋5斤*1",
+      "items": [
+        {
+          "name": "大香芋头3斤2-3个",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "新鲜莴笋5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号+茴香",
+      "labor_price": 1.1,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "大香芋头3斤2-3个*1,新鲜豌豆荚2.5斤*2,绿甘蓝9斤单果200g+*1,螺丝椒5斤*1",
+      "items": [
+        {
+          "name": "大香芋头3斤2-3个",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "新鲜豌豆荚2.5斤",
+          "quantity": 2.0,
+          "product_id": null
+        },
+        {
+          "name": "绿甘蓝9斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "螺丝椒5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号+6号+茴香+4号",
+      "labor_price": 2.9,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "大香芋头3斤2-3个*1,紫皮洋葱5斤*1",
+      "items": [
+        {
+          "name": "大香芋头3斤2-3个",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号+6号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "大香芋头3斤2-3个*2",
+      "items": [
+        {
+          "name": "大香芋头3斤2-3个",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号+7号",
+      "labor_price": 0.8,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "大香芋头9斤4-5个*3",
+      "items": [
+        {
+          "name": "大香芋头9斤4-5个",
+          "quantity": 3.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "4号*3",
+      "labor_price": 3.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "大香芋头9斤4-5个*4",
+      "items": [
+        {
+          "name": "大香芋头9斤4-5个",
+          "quantity": 4.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "4号*4",
+      "labor_price": 4.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小油菜2.5斤*1",
+      "items": [
+        {
+          "name": "小油菜2.5斤",
+          "quantity": 1.0,
+          "product_id": 119
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小米辣1斤*1",
+      "items": [
+        {
+          "name": "小米辣1斤",
+          "quantity": 1.0,
+          "product_id": 122
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小米辣1斤*2",
+      "items": [
+        {
+          "name": "小米辣1斤",
+          "quantity": 2.0,
+          "product_id": 122
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小米辣1斤*3",
+      "items": [
+        {
+          "name": "小米辣1斤",
+          "quantity": 3.0,
+          "product_id": 122
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小米辣1斤*5",
+      "items": [
+        {
+          "name": "小米辣1斤",
+          "quantity": 5.0,
+          "product_id": 122
+        }
+      ],
+      "box_type": "5号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小米辣2斤*1",
+      "items": [
+        {
+          "name": "小米辣2斤",
+          "quantity": 1.0,
+          "product_id": 124
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小米辣2斤*2",
+      "items": [
+        {
+          "name": "小米辣2斤",
+          "quantity": 2.0,
+          "product_id": 124
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小米辣2斤*3",
+      "items": [
+        {
+          "name": "小米辣2斤",
+          "quantity": 3.0,
+          "product_id": 124
+        }
+      ],
+      "box_type": "5号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小米辣2斤*5",
+      "items": [
+        {
+          "name": "小米辣2斤",
+          "quantity": 5.0,
+          "product_id": 124
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小米辣2斤*6",
+      "items": [
+        {
+          "name": "小米辣2斤",
+          "quantity": 6.0,
+          "product_id": 124
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米3斤*1",
+      "items": [
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 1.0,
+          "product_id": 127
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米3斤*1,京鲜生七彩花生1斤*2",
+      "items": [
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 1.0,
+          "product_id": 127
+        },
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 2.0,
+          "product_id": 53
+        }
+      ],
+      "box_type": "7号+7号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米3斤*1,拇指小玉米1斤*1",
+      "items": [
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 1.0,
+          "product_id": 127
+        },
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 1.0,
+          "product_id": 133
+        }
+      ],
+      "box_type": "7号+9号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米3斤*1,拇指小玉米2斤*1",
+      "items": [
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 1.0,
+          "product_id": 127
+        },
+        {
+          "name": "拇指小玉米2斤",
+          "quantity": 1.0,
+          "product_id": 135
+        }
+      ],
+      "box_type": "7号+7号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米3斤*1,牛奶芋头3斤单果100g+*1",
+      "items": [
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 1.0,
+          "product_id": 127
+        },
+        {
+          "name": "牛奶芋头3斤单果100g+",
+          "quantity": 1.0,
+          "product_id": 192
+        }
+      ],
+      "box_type": "7号+7号",
+      "labor_price": 1.1,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米3斤*1,石斛鲜条250g*1",
+      "items": [
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 1.0,
+          "product_id": 127
+        },
+        {
+          "name": "石斛鲜条250g",
+          "quantity": 1.0,
+          "product_id": 233
+        }
+      ],
+      "box_type": "7号+邮政6号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米3斤*1,紫皮洋葱5斤*1,螺丝椒3斤*1",
+      "items": [
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 1.0,
+          "product_id": 127
+        },
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "螺丝椒3斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号+6号+5号",
+      "labor_price": 1.9,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米3斤*1,绿甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 1.0,
+          "product_id": 127
+        },
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号+5号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米3斤*10",
+      "items": [
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 10.0,
+          "product_id": 127
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米3斤*15",
+      "items": [
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 15.0,
+          "product_id": 127
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米3斤*2",
+      "items": [
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 2.0,
+          "product_id": 127
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 1.6,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米3斤*3",
+      "items": [
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 3.0,
+          "product_id": 127
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 1.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米3斤*4",
+      "items": [
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 4.0,
+          "product_id": 127
+        }
+      ],
+      "box_type": "3号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米3斤*5",
+      "items": [
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 5.0,
+          "product_id": 127
+        }
+      ],
+      "box_type": "6号*5",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米3斤*6",
+      "items": [
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 6.0,
+          "product_id": 127
+        }
+      ],
+      "box_type": "4号*2",
+      "labor_price": 4.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米4斤*1",
+      "items": [
+        {
+          "name": "小花糯玉米4斤",
+          "quantity": 1.0,
+          "product_id": 128
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米4斤*1,拇指小玉米1斤*1",
+      "items": [
+        {
+          "name": "小花糯玉米4斤",
+          "quantity": 1.0,
+          "product_id": 128
+        },
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 1.0,
+          "product_id": 133
+        }
+      ],
+      "box_type": "6号+9号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米4斤*1,拇指小玉米2斤*1",
+      "items": [
+        {
+          "name": "小花糯玉米4斤",
+          "quantity": 1.0,
+          "product_id": 128
+        },
+        {
+          "name": "拇指小玉米2斤",
+          "quantity": 1.0,
+          "product_id": 135
+        }
+      ],
+      "box_type": "6号+7号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米4斤*1,拇指小玉米2斤*2",
+      "items": [
+        {
+          "name": "小花糯玉米4斤",
+          "quantity": 1.0,
+          "product_id": 128
+        },
+        {
+          "name": "拇指小玉米2斤",
+          "quantity": 2.0,
+          "product_id": 135
+        }
+      ],
+      "box_type": "6号+6号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米4斤*2",
+      "items": [
+        {
+          "name": "小花糯玉米4斤",
+          "quantity": 2.0,
+          "product_id": 128
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 1.4,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米4斤*3",
+      "items": [
+        {
+          "name": "小花糯玉米4斤",
+          "quantity": 3.0,
+          "product_id": 128
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米4斤*4",
+      "items": [
+        {
+          "name": "小花糯玉米4斤",
+          "quantity": 4.0,
+          "product_id": 128
+        }
+      ],
+      "box_type": "6号*4",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米4斤*5",
+      "items": [
+        {
+          "name": "小花糯玉米4斤",
+          "quantity": 5.0,
+          "product_id": 128
+        }
+      ],
+      "box_type": "2个4号",
+      "labor_price": 3.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米4斤*6",
+      "items": [
+        {
+          "name": "小花糯玉米4斤",
+          "quantity": 6.0,
+          "product_id": 128
+        }
+      ],
+      "box_type": "6号*6",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "小花糯玉米4斤*8",
+      "items": [
+        {
+          "name": "小花糯玉米4斤",
+          "quantity": 8.0,
+          "product_id": 128
+        }
+      ],
+      "box_type": "6号*8",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*1",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 1.0,
+          "product_id": 133
+        }
+      ],
+      "box_type": "9号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*1,小花糯玉米3斤*3",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 1.0,
+          "product_id": 133
+        },
+        {
+          "name": "小花糯玉米3斤",
+          "quantity": 3.0,
+          "product_id": 127
+        }
+      ],
+      "box_type": "9号+4号",
+      "labor_price": 2.1,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*1,新鲜莴笋3斤*1,红皮白心萝卜3斤*1",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 1.0,
+          "product_id": 133
+        },
+        {
+          "name": "新鲜莴笋3斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "红皮白心萝卜3斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "9号+茴香+6号",
+      "labor_price": 2.1,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*1,新鲜豌豆荚2.5斤*1,绿甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 1.0,
+          "product_id": 133
+        },
+        {
+          "name": "新鲜豌豆荚2.5斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "9号+7号+5号",
+      "labor_price": 1.9,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*1,甜龙笋2斤300g+*1",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 1.0,
+          "product_id": 133
+        },
+        {
+          "name": "甜龙笋2斤300g+",
+          "quantity": 1.0,
+          "product_id": 214
+        }
+      ],
+      "box_type": "9号+松茸6号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*1,石斛鲜条250g*1",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 1.0,
+          "product_id": 133
+        },
+        {
+          "name": "石斛鲜条250g",
+          "quantity": 1.0,
+          "product_id": 233
+        }
+      ],
+      "box_type": "9号+邮政6号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*1,紫甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 1.0,
+          "product_id": 133
+        },
+        {
+          "name": "紫甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "9号+5号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*1,紫皮洋葱5斤*1",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 1.0,
+          "product_id": 133
+        },
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "9号+6号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*1,黑紫土豆3斤*1",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 1.0,
+          "product_id": 133
+        },
+        {
+          "name": "黑紫土豆3斤",
+          "quantity": 1.0,
+          "product_id": 297
+        }
+      ],
+      "box_type": "9号+7号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*1,黑紫土豆5斤*1",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 1.0,
+          "product_id": 133
+        },
+        {
+          "name": "黑紫土豆5斤",
+          "quantity": 1.0,
+          "product_id": 299
+        }
+      ],
+      "box_type": "9号+6号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*1,黑花生米1斤（去壳）*1",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 1.0,
+          "product_id": 133
+        },
+        {
+          "name": "黑花生米1斤（去壳）",
+          "quantity": 1.0,
+          "product_id": 307
+        }
+      ],
+      "box_type": "9号+9号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*10",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 10.0,
+          "product_id": 133
+        }
+      ],
+      "box_type": "5号*2",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*12",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 12.0,
+          "product_id": 133
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*2",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 2.0,
+          "product_id": 133
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*3",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 3.0,
+          "product_id": 133
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*4",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 4.0,
+          "product_id": 133
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*5",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 5.0,
+          "product_id": 133
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*6",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 6.0,
+          "product_id": 133
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米1斤*7",
+      "items": [
+        {
+          "name": "拇指小玉米1斤",
+          "quantity": 7.0,
+          "product_id": 133
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米2斤*1",
+      "items": [
+        {
+          "name": "拇指小玉米2斤",
+          "quantity": 1.0,
+          "product_id": 135
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米2斤*2",
+      "items": [
+        {
+          "name": "拇指小玉米2斤",
+          "quantity": 2.0,
+          "product_id": 135
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米2斤*3",
+      "items": [
+        {
+          "name": "拇指小玉米2斤",
+          "quantity": 3.0,
+          "product_id": 135
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米2斤*4",
+      "items": [
+        {
+          "name": "拇指小玉米2斤",
+          "quantity": 4.0,
+          "product_id": 135
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "拇指小玉米2斤*7",
+      "items": [
+        {
+          "name": "拇指小玉米2斤",
+          "quantity": 7.0,
+          "product_id": 135
+        }
+      ],
+      "box_type": "4号*2",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜洋蓟1斤100g+*1",
+      "items": [
+        {
+          "name": "新鲜洋蓟1斤100g+",
+          "quantity": 1.0,
+          "product_id": 137
+        }
+      ],
+      "box_type": "松茸6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜洋蓟1斤100g+*2",
+      "items": [
+        {
+          "name": "新鲜洋蓟1斤100g+",
+          "quantity": 2.0,
+          "product_id": 137
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜洋蓟3斤100g+*2",
+      "items": [
+        {
+          "name": "新鲜洋蓟3斤100g+",
+          "quantity": 2.0,
+          "product_id": 139
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜洋蓟3斤100g+*3",
+      "items": [
+        {
+          "name": "新鲜洋蓟3斤100g+",
+          "quantity": 3.0,
+          "product_id": 139
+        }
+      ],
+      "box_type": "高珍果箱*3",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜洋蓟3斤150g+*1",
+      "items": [
+        {
+          "name": "新鲜洋蓟3斤150g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜洋蓟3斤200g+*1",
+      "items": [
+        {
+          "name": "新鲜洋蓟3斤200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜洋蓟3斤200g+*2",
+      "items": [
+        {
+          "name": "新鲜洋蓟3斤200g+",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "高珍果箱*2",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜洋蓟5斤100g+*2",
+      "items": [
+        {
+          "name": "新鲜洋蓟5斤100g+",
+          "quantity": 2.0,
+          "product_id": 141
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜洋蓟5斤150g+*2",
+      "items": [
+        {
+          "name": "新鲜洋蓟5斤150g+",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "水果5号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜玉米笋9斤*4",
+      "items": [
+        {
+          "name": "新鲜玉米笋9斤",
+          "quantity": 4.0,
+          "product_id": 148
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜玉米笋9斤*6",
+      "items": [
+        {
+          "name": "新鲜玉米笋9斤",
+          "quantity": 6.0,
+          "product_id": 148
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜芦笋1.5斤*1",
+      "items": [
+        {
+          "name": "新鲜芦笋1.5斤",
+          "quantity": 1.0,
+          "product_id": 151
+        }
+      ],
+      "box_type": "水果3号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜芦笋1.5斤*1,甜龙笋3斤300g+*1",
+      "items": [
+        {
+          "name": "新鲜芦笋1.5斤",
+          "quantity": 1.0,
+          "product_id": 151
+        },
+        {
+          "name": "甜龙笋3斤300g+",
+          "quantity": 1.0,
+          "product_id": 218
+        }
+      ],
+      "box_type": "水果3号+松茸6号",
+      "labor_price": 1.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜芦笋1.5斤*2",
+      "items": [
+        {
+          "name": "新鲜芦笋1.5斤",
+          "quantity": 2.0,
+          "product_id": 151
+        }
+      ],
+      "box_type": "水果3号*2",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜芦笋1斤*1",
+      "items": [
+        {
+          "name": "新鲜芦笋1斤",
+          "quantity": 1.0,
+          "product_id": 153
+        }
+      ],
+      "box_type": "水果3号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜芦笋1斤*10",
+      "items": [
+        {
+          "name": "新鲜芦笋1斤",
+          "quantity": 10.0,
+          "product_id": 153
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜芦笋1斤*2",
+      "items": [
+        {
+          "name": "新鲜芦笋1斤",
+          "quantity": 2.0,
+          "product_id": 153
+        }
+      ],
+      "box_type": "水果3号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜芦笋250g*1",
+      "items": [
+        {
+          "name": "新鲜芦笋250g",
+          "quantity": 1.0,
+          "product_id": 155
+        }
+      ],
+      "box_type": "水果3号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜芦笋250g*2",
+      "items": [
+        {
+          "name": "新鲜芦笋250g",
+          "quantity": 2.0,
+          "product_id": 155
+        }
+      ],
+      "box_type": "水果3号*2",
+      "labor_price": 1.4,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜芦笋250g*4",
+      "items": [
+        {
+          "name": "新鲜芦笋250g",
+          "quantity": 4.0,
+          "product_id": 155
+        }
+      ],
+      "box_type": "水果3号*4",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜芦笋2斤*1",
+      "items": [
+        {
+          "name": "新鲜芦笋2斤",
+          "quantity": 1.0,
+          "product_id": 157
+        }
+      ],
+      "box_type": "水果3号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜芦笋2斤*1,紫甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "新鲜芦笋2斤",
+          "quantity": 1.0,
+          "product_id": 157
+        },
+        {
+          "name": "紫甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "水果3号+茴香",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜芦笋2斤*2",
+      "items": [
+        {
+          "name": "新鲜芦笋2斤",
+          "quantity": 2.0,
+          "product_id": 157
+        }
+      ],
+      "box_type": "水果3号*2",
+      "labor_price": 1.4,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜芦笋2斤*3",
+      "items": [
+        {
+          "name": "新鲜芦笋2斤",
+          "quantity": 3.0,
+          "product_id": 157
+        }
+      ],
+      "box_type": "水果3号*3",
+      "labor_price": 0.7,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜芦笋2斤*4",
+      "items": [
+        {
+          "name": "新鲜芦笋2斤",
+          "quantity": 4.0,
+          "product_id": 157
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜芦笋3斤*1",
+      "items": [
+        {
+          "name": "新鲜芦笋3斤",
+          "quantity": 1.0,
+          "product_id": 159
+        }
+      ],
+      "box_type": "水果3号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜芦笋3斤*2",
+      "items": [
+        {
+          "name": "新鲜芦笋3斤",
+          "quantity": 2.0,
+          "product_id": 159
+        }
+      ],
+      "box_type": "水果3号*2",
+      "labor_price": 1.4,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜茭白2斤*2",
+      "items": [
+        {
+          "name": "新鲜茭白2斤",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜茭白3斤*2",
+      "items": [
+        {
+          "name": "新鲜茭白3斤",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号*2",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜茭白9斤*4",
+      "items": [
+        {
+          "name": "新鲜茭白9斤",
+          "quantity": 4.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "水果5号*4",
+      "labor_price": 4.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜莴笋3斤",
+      "items": [
+        {
+          "name": "新鲜莴笋3斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜莴笋3斤*1,新鲜蚕豆1.8斤*1",
+      "items": [
+        {
+          "name": "新鲜莴笋3斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "新鲜蚕豆1.8斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香+7号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜莴笋3斤*1,新鲜豌豆荚2.5斤*1",
+      "items": [
+        {
+          "name": "新鲜莴笋3斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "新鲜豌豆荚2.5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香+7号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜莴笋3斤*1,新鲜豌豆荚2.5斤*2",
+      "items": [
+        {
+          "name": "新鲜莴笋3斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "新鲜豌豆荚2.5斤",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香+5号",
+      "labor_price": 1.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜莴笋3斤*1,紫皮洋葱5斤*1",
+      "items": [
+        {
+          "name": "新鲜莴笋3斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香+6号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜莴笋3斤*1,绿甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "新鲜莴笋3斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香+5号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜莴笋3斤*1,螺丝椒3斤*1",
+      "items": [
+        {
+          "name": "新鲜莴笋3斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "螺丝椒3斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香+5号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜莴笋3斤*1,螺丝椒3斤*2",
+      "items": [
+        {
+          "name": "新鲜莴笋3斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "螺丝椒3斤",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香+5号*2",
+      "labor_price": 2.3,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜莴笋3斤*1,黑花生1斤*1",
+      "items": [
+        {
+          "name": "新鲜莴笋3斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "黑花生1斤",
+          "quantity": 1.0,
+          "product_id": 303
+        }
+      ],
+      "box_type": "茴香+8号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜莴笋3斤*2",
+      "items": [
+        {
+          "name": "新鲜莴笋3斤",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "两个茴香箱子",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜莴笋5斤",
+      "items": [
+        {
+          "name": "新鲜莴笋5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜莴笋5斤*1,绿甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "新鲜莴笋5斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香+5号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜莴笋5斤*1,螺丝椒3斤*1",
+      "items": [
+        {
+          "name": "新鲜莴笋5斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "螺丝椒3斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香+5号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜莴笋5斤*1,螺丝椒5斤*1",
+      "items": [
+        {
+          "name": "新鲜莴笋5斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "螺丝椒5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香+5号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜蚕豆1.8斤",
+      "items": [
+        {
+          "name": "新鲜蚕豆1.8斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜蚕豆1.8斤*1,新鲜豌豆荚2.5斤*1",
+      "items": [
+        {
+          "name": "新鲜蚕豆1.8斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "新鲜豌豆荚2.5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号+7号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜蚕豆1.8斤*2",
+      "items": [
+        {
+          "name": "新鲜蚕豆1.8斤",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜蚕豆1.8斤*4",
+      "items": [
+        {
+          "name": "新鲜蚕豆1.8斤",
+          "quantity": 4.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 2.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜豌豆荚2.5斤",
+      "items": [
+        {
+          "name": "新鲜豌豆荚2.5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜豌豆荚2.5斤*1,石斛鲜条250g*1,绿甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "新鲜豌豆荚2.5斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "石斛鲜条250g",
+          "quantity": 1.0,
+          "product_id": 233
+        },
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号+邮政6号+5号",
+      "labor_price": 1.9,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜豌豆荚2.5斤*1,绿甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "新鲜豌豆荚2.5斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号+5号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜豌豆荚2.5斤*2",
+      "items": [
+        {
+          "name": "新鲜豌豆荚2.5斤",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "5号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜豌豆荚2.5斤*3",
+      "items": [
+        {
+          "name": "新鲜豌豆荚2.5斤",
+          "quantity": 3.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "5号",
+      "labor_price": 1.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜豌豆荚2.5斤*4",
+      "items": [
+        {
+          "name": "新鲜豌豆荚2.5斤",
+          "quantity": 4.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "5号*2",
+      "labor_price": 2.8,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜金耳菌250g*1",
+      "items": [
+        {
+          "name": "新鲜金耳菌250g",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "邮政6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜金耳菌250g*1,新鲜黑牛肝菌250g*1",
+      "items": [
+        {
+          "name": "新鲜金耳菌250g",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "新鲜黑牛肝菌250g",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "邮政6号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜金耳菌250g*11",
+      "items": [
+        {
+          "name": "新鲜金耳菌250g",
+          "quantity": 11.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜金耳菌250g*2",
+      "items": [
+        {
+          "name": "新鲜金耳菌250g",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "邮政6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜金耳菌250g*2,新鲜黑牛肝菌250g*2",
+      "items": [
+        {
+          "name": "新鲜金耳菌250g",
+          "quantity": 2.0,
+          "product_id": null
+        },
+        {
+          "name": "新鲜黑牛肝菌250g",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "邮政6号+邮政6号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜金耳菌250g*3",
+      "items": [
+        {
+          "name": "新鲜金耳菌250g",
+          "quantity": 3.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "邮政6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜金耳菌250g*4",
+      "items": [
+        {
+          "name": "新鲜金耳菌250g",
+          "quantity": 4.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "松茸6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜金耳菌250g*5",
+      "items": [
+        {
+          "name": "新鲜金耳菌250g",
+          "quantity": 5.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "松茸6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜金耳菌250g*6",
+      "items": [
+        {
+          "name": "新鲜金耳菌250g",
+          "quantity": 6.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "松茸6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜韭菜2.5斤",
+      "items": [
+        {
+          "name": "新鲜韭菜2.5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜香蕈菌250g*1",
+      "items": [
+        {
+          "name": "新鲜香蕈菌250g",
+          "quantity": 1.0,
+          "product_id": 161
+        }
+      ],
+      "box_type": "邮政6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜香蕈菌250g*2",
+      "items": [
+        {
+          "name": "新鲜香蕈菌250g",
+          "quantity": 2.0,
+          "product_id": 161
+        }
+      ],
+      "box_type": "邮政6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜香蕈菌250g*3",
+      "items": [
+        {
+          "name": "新鲜香蕈菌250g",
+          "quantity": 3.0,
+          "product_id": 161
+        }
+      ],
+      "box_type": "松茸6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜黑牛肝菌250g*1",
+      "items": [
+        {
+          "name": "新鲜黑牛肝菌250g",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "邮政6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜黑牛肝菌250g*2",
+      "items": [
+        {
+          "name": "新鲜黑牛肝菌250g",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "邮政6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜黑牛肝菌250g*3",
+      "items": [
+        {
+          "name": "新鲜黑牛肝菌250g",
+          "quantity": 3.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "松茸6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜黑牛肝菌250g*4",
+      "items": [
+        {
+          "name": "新鲜黑牛肝菌250g",
+          "quantity": 4.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "松茸6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "新鲜黑牛肝菌500g*2",
+      "items": [
+        {
+          "name": "新鲜黑牛肝菌500g",
+          "quantity": 2.0,
+          "product_id": 165
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "椴木小银耳250g*2",
+      "items": [
+        {
+          "name": "椴木小银耳250g",
+          "quantity": 2.0,
+          "product_id": 171
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "油麦菜2.5斤*1",
+      "items": [
+        {
+          "name": "油麦菜2.5斤",
+          "quantity": 1.0,
+          "product_id": 179
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "牛奶玉米笋2斤*1",
+      "items": [
+        {
+          "name": "牛奶玉米笋2斤",
+          "quantity": 1.0,
+          "product_id": 183
+        }
+      ],
+      "box_type": "松茸6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "牛奶玉米笋2斤*2",
+      "items": [
+        {
+          "name": "牛奶玉米笋2斤",
+          "quantity": 2.0,
+          "product_id": 183
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "牛奶玉米笋3斤*2",
+      "items": [
+        {
+          "name": "牛奶玉米笋3斤",
+          "quantity": 2.0,
+          "product_id": 185
+        }
+      ],
+      "box_type": "5号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "牛奶玉米笋5斤*1",
+      "items": [
+        {
+          "name": "牛奶玉米笋5斤",
+          "quantity": 1.0,
+          "product_id": 187
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "牛奶玉米笋5斤*2",
+      "items": [
+        {
+          "name": "牛奶玉米笋5斤",
+          "quantity": 2.0,
+          "product_id": 187
+        }
+      ],
+      "box_type": "6号*2",
+      "labor_price": null,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "牛奶芋头3斤单果100g+*1",
+      "items": [
+        {
+          "name": "牛奶芋头3斤单果100g+",
+          "quantity": 1.0,
+          "product_id": 192
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "牛奶芋头3斤单果100g+*2",
+      "items": [
+        {
+          "name": "牛奶芋头3斤单果100g+",
+          "quantity": 2.0,
+          "product_id": 192
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": null,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "牛奶芋头5斤",
+      "items": [
+        {
+          "name": "牛奶芋头5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "牛奶芋头5斤单果100g+*2",
+      "items": [
+        {
+          "name": "牛奶芋头5斤单果100g+",
+          "quantity": 2.0,
+          "product_id": 194
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 1.4,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "牛奶芋头5斤单果100g+*4",
+      "items": [
+        {
+          "name": "牛奶芋头5斤单果100g+",
+          "quantity": 4.0,
+          "product_id": 194
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "牛奶芋头5斤单果100g+*8",
+      "items": [
+        {
+          "name": "牛奶芋头5斤单果100g+",
+          "quantity": 8.0,
+          "product_id": 194
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "玉米段3斤装*1",
+      "items": [
+        {
+          "name": "玉米段3斤装",
+          "quantity": 1.0,
+          "product_id": 201
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "玉米段3斤装*2",
+      "items": [
+        {
+          "name": "玉米段3斤装",
+          "quantity": 2.0,
+          "product_id": 201
+        }
+      ],
+      "box_type": "7号+7号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "玉米段5斤装*1",
+      "items": [
+        {
+          "name": "玉米段5斤装",
+          "quantity": 1.0,
+          "product_id": 203
+        }
+      ],
+      "box_type": "5号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "玉米段5斤装*1,紫皮独头蒜中果1斤*1",
+      "items": [
+        {
+          "name": "玉米段5斤装",
+          "quantity": 1.0,
+          "product_id": 203
+        },
+        {
+          "name": "紫皮独头蒜中果1斤",
+          "quantity": 1.0,
+          "product_id": 241
+        }
+      ],
+      "box_type": "5号+11号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "玉米段5斤装*2",
+      "items": [
+        {
+          "name": "玉米段5斤装",
+          "quantity": 2.0,
+          "product_id": 203
+        }
+      ],
+      "box_type": "5号*2",
+      "labor_price": 1.4,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "玉米段5斤装*3",
+      "items": [
+        {
+          "name": "玉米段5斤装",
+          "quantity": 3.0,
+          "product_id": 203
+        }
+      ],
+      "box_type": "5号*3",
+      "labor_price": null,
+      "box_ratio": 3.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "玉米段5斤装*4",
+      "items": [
+        {
+          "name": "玉米段5斤装",
+          "quantity": 4.0,
+          "product_id": 203
+        }
+      ],
+      "box_type": "5号*4",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "玉米段5斤装*5",
+      "items": [
+        {
+          "name": "玉米段5斤装",
+          "quantity": 5.0,
+          "product_id": 203
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "玉米段5斤装*8",
+      "items": [
+        {
+          "name": "玉米段5斤装",
+          "quantity": 8.0,
+          "product_id": 203
+        }
+      ],
+      "box_type": "5号*8",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "玉米粒2斤*1",
+      "items": [
+        {
+          "name": "玉米粒2斤",
+          "quantity": 1.0,
+          "product_id": 206
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "玉米粒2斤*2",
+      "items": [
+        {
+          "name": "玉米粒2斤",
+          "quantity": 2.0,
+          "product_id": 206
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "玉米粒2斤*3",
+      "items": [
+        {
+          "name": "玉米粒2斤",
+          "quantity": 3.0,
+          "product_id": 206
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "玉米粒2斤*4",
+      "items": [
+        {
+          "name": "玉米粒2斤",
+          "quantity": 4.0,
+          "product_id": 206
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "球生菜2.5斤*1",
+      "items": [
+        {
+          "name": "球生菜2.5斤",
+          "quantity": 1.0,
+          "product_id": 208
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋20斤500g+*2",
+      "items": [
+        {
+          "name": "甜龙笋20斤500g+",
+          "quantity": 2.0,
+          "product_id": 210
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋2斤250g+*1",
+      "items": [
+        {
+          "name": "甜龙笋2斤250g+",
+          "quantity": 1.0,
+          "product_id": 212
+        }
+      ],
+      "box_type": "松茸6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋2斤250g+*2",
+      "items": [
+        {
+          "name": "甜龙笋2斤250g+",
+          "quantity": 2.0,
+          "product_id": 212
+        }
+      ],
+      "box_type": "松茸6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋2斤300g+*1",
+      "items": [
+        {
+          "name": "甜龙笋2斤300g+",
+          "quantity": 1.0,
+          "product_id": 214
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋2斤300g+*1,紫皮洋葱5斤*1",
+      "items": [
+        {
+          "name": "甜龙笋2斤300g+",
+          "quantity": 1.0,
+          "product_id": 214
+        },
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "松茸6号+6号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋2斤300g+*1,绿甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "甜龙笋2斤300g+",
+          "quantity": 1.0,
+          "product_id": 214
+        },
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "松茸6号+5号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋2斤300g+*10",
+      "items": [
+        {
+          "name": "甜龙笋2斤300g+",
+          "quantity": 10.0,
+          "product_id": 214
+        }
+      ],
+      "box_type": "水果5号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋2斤300g+*2",
+      "items": [
+        {
+          "name": "甜龙笋2斤300g+",
+          "quantity": 2.0,
+          "product_id": 214
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋2斤500g+",
+      "items": [
+        {
+          "name": "甜龙笋2斤500g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋2斤500g+*2",
+      "items": [
+        {
+          "name": "甜龙笋2斤500g+",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋3斤300g+*1",
+      "items": [
+        {
+          "name": "甜龙笋3斤300g+",
+          "quantity": 1.0,
+          "product_id": 218
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋3斤300g+*2",
+      "items": [
+        {
+          "name": "甜龙笋3斤300g+",
+          "quantity": 2.0,
+          "product_id": 218
+        }
+      ],
+      "box_type": "水果5号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋3斤500g+*1",
+      "items": [
+        {
+          "name": "甜龙笋3斤500g+",
+          "quantity": 1.0,
+          "product_id": 220
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋3斤500g+*2",
+      "items": [
+        {
+          "name": "甜龙笋3斤500g+",
+          "quantity": 2.0,
+          "product_id": 220
+        }
+      ],
+      "box_type": "水果5号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋5斤250g+*1",
+      "items": [
+        {
+          "name": "甜龙笋5斤250g+",
+          "quantity": 1.0,
+          "product_id": 222
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋5斤250g+*2",
+      "items": [
+        {
+          "name": "甜龙笋5斤250g+",
+          "quantity": 2.0,
+          "product_id": 222
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋5斤300g+*1",
+      "items": [
+        {
+          "name": "甜龙笋5斤300g+",
+          "quantity": 1.0,
+          "product_id": 224
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋5斤300g+*2",
+      "items": [
+        {
+          "name": "甜龙笋5斤300g+",
+          "quantity": 2.0,
+          "product_id": 224
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋5斤300g+*4",
+      "items": [
+        {
+          "name": "甜龙笋5斤300g+",
+          "quantity": 4.0,
+          "product_id": 224
+        }
+      ],
+      "box_type": "水果5号*2",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋5斤500g+*1",
+      "items": [
+        {
+          "name": "甜龙笋5斤500g+",
+          "quantity": 1.0,
+          "product_id": 226
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋5斤500g+*10",
+      "items": [
+        {
+          "name": "甜龙笋5斤500g+",
+          "quantity": 10.0,
+          "product_id": 226
+        }
+      ],
+      "box_type": "水果5号*5",
+      "labor_price": 2.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋5斤500g+*2",
+      "items": [
+        {
+          "name": "甜龙笋5斤500g+",
+          "quantity": 2.0,
+          "product_id": 226
+        }
+      ],
+      "box_type": "水果5号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋8斤500g+*1",
+      "items": [
+        {
+          "name": "甜龙笋8斤500g+",
+          "quantity": 1.0,
+          "product_id": 228
+        }
+      ],
+      "box_type": "水果5号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋8斤500g+*2",
+      "items": [
+        {
+          "name": "甜龙笋8斤500g+",
+          "quantity": 2.0,
+          "product_id": 228
+        }
+      ],
+      "box_type": "水果5号*2",
+      "labor_price": null,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "甜龙笋9斤500g+*2",
+      "items": [
+        {
+          "name": "甜龙笋9斤500g+",
+          "quantity": 2.0,
+          "product_id": 230
+        }
+      ],
+      "box_type": "水果5号*2",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "石斛鲜条250g*1",
+      "items": [
+        {
+          "name": "石斛鲜条250g",
+          "quantity": 1.0,
+          "product_id": 233
+        }
+      ],
+      "box_type": "邮政6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "石斛鲜条250g*2",
+      "items": [
+        {
+          "name": "石斛鲜条250g",
+          "quantity": 2.0,
+          "product_id": 233
+        }
+      ],
+      "box_type": "邮政6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "石斛鲜条250g*4",
+      "items": [
+        {
+          "name": "石斛鲜条250g",
+          "quantity": 4.0,
+          "product_id": 233
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "石斛鲜条250g*5",
+      "items": [
+        {
+          "name": "石斛鲜条250g",
+          "quantity": 5.0,
+          "product_id": 233
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "石斛鲜条250g*6",
+      "items": [
+        {
+          "name": "石斛鲜条250g",
+          "quantity": 6.0,
+          "product_id": 233
+        }
+      ],
+      "box_type": "松茸6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "石斛鲜条250g*8",
+      "items": [
+        {
+          "name": "石斛鲜条250g",
+          "quantity": 8.0,
+          "product_id": 233
+        }
+      ],
+      "box_type": "松茸6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "石斛鲜条500g*1",
+      "items": [
+        {
+          "name": "石斛鲜条500g",
+          "quantity": 1.0,
+          "product_id": 235
+        }
+      ],
+      "box_type": "邮政6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "石斛鲜条500g*2",
+      "items": [
+        {
+          "name": "石斛鲜条500g",
+          "quantity": 2.0,
+          "product_id": 235
+        }
+      ],
+      "box_type": "邮政6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "石斛鲜条500g*3",
+      "items": [
+        {
+          "name": "石斛鲜条500g",
+          "quantity": 3.0,
+          "product_id": 235
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "石斛鲜条500g*4",
+      "items": [
+        {
+          "name": "石斛鲜条500g",
+          "quantity": 4.0,
+          "product_id": 235
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫拇指玉米1斤*1",
+      "items": [
+        {
+          "name": "紫拇指玉米1斤",
+          "quantity": 1.0,
+          "product_id": 238
+        }
+      ],
+      "box_type": "9号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫拇指玉米1斤*2",
+      "items": [
+        {
+          "name": "紫拇指玉米1斤",
+          "quantity": 2.0,
+          "product_id": 238
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫拇指玉米1斤*3",
+      "items": [
+        {
+          "name": "紫拇指玉米1斤",
+          "quantity": 3.0,
+          "product_id": 238
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫拇指玉米1斤*4",
+      "items": [
+        {
+          "name": "紫拇指玉米1斤",
+          "quantity": 4.0,
+          "product_id": 238
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫拇指玉米1斤*5",
+      "items": [
+        {
+          "name": "紫拇指玉米1斤",
+          "quantity": 5.0,
+          "product_id": 238
+        }
+      ],
+      "box_type": "5号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫拇指玉米1斤*6",
+      "items": [
+        {
+          "name": "紫拇指玉米1斤",
+          "quantity": 6.0,
+          "product_id": 238
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "紫甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫甘蓝5斤单果200g+*1,紫皮洋葱5斤*1",
+      "items": [
+        {
+          "name": "紫甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "5号+6号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫甘蓝5斤单果200g+*1,绿甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "紫甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "5号+5号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "4*0.9",
+      "is_active": true
+    },
+    {
+      "name": "紫甘蓝5斤单果200g+*1,绿甘蓝9斤单果200g+*1",
+      "items": [
+        {
+          "name": "紫甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "绿甘蓝9斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "4号+茴香",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫甘蓝5斤单果200g+*2",
+      "items": [
+        {
+          "name": "紫甘蓝5斤单果200g+",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "4号*2",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫甘蓝5斤单果200g+*3",
+      "items": [
+        {
+          "name": "紫甘蓝5斤单果200g+",
+          "quantity": 3.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "3个5号纸箱",
+      "labor_price": 2.1,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫甘蓝5斤单果200g+*4",
+      "items": [
+        {
+          "name": "紫甘蓝5斤单果200g+",
+          "quantity": 4.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "4号*4",
+      "labor_price": 2.8,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫甘蓝9斤单果350g+",
+      "items": [
+        {
+          "name": "紫甘蓝9斤单果350g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫甘蓝9斤单果350g+*1,绿甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "紫甘蓝9斤单果350g+",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香+5号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫甘蓝9斤单果350g+*1,螺丝椒3斤*1",
+      "items": [
+        {
+          "name": "紫甘蓝9斤单果350g+",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "螺丝椒3斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香+5号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫甘蓝9斤单果350g+*2",
+      "items": [
+        {
+          "name": "紫甘蓝9斤单果350g+",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香*2",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮洋葱5斤",
+      "items": [
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮洋葱5斤*1,紫皮独头蒜中果3斤*1",
+      "items": [
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "紫皮独头蒜中果3斤",
+          "quantity": 1.0,
+          "product_id": 245
+        }
+      ],
+      "box_type": "6号+8号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮洋葱5斤*1,紫皮独头蒜大果1斤*1",
+      "items": [
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "紫皮独头蒜大果1斤",
+          "quantity": 1.0,
+          "product_id": 248
+        }
+      ],
+      "box_type": "6号+11号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮洋葱5斤*1,绿甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "6号+5号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮洋葱5斤*1,螺丝椒3斤*1",
+      "items": [
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "螺丝椒3斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "6号+5号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮洋葱5斤*1,黑紫土豆3斤*1",
+      "items": [
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "黑紫土豆3斤",
+          "quantity": 1.0,
+          "product_id": 297
+        }
+      ],
+      "box_type": "6号+7号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮洋葱5斤*2",
+      "items": [
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮洋葱5斤*3",
+      "items": [
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 3.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "3个6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮洋葱5斤*5",
+      "items": [
+        {
+          "name": "紫皮洋葱5斤",
+          "quantity": 5.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "5个6号箱",
+      "labor_price": 2.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果1斤*1",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果1斤",
+          "quantity": 1.0,
+          "product_id": 241
+        }
+      ],
+      "box_type": "11号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果1斤*1,黑花生2.5斤*1",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果1斤",
+          "quantity": 1.0,
+          "product_id": 241
+        },
+        {
+          "name": "黑花生2.5斤",
+          "quantity": 1.0,
+          "product_id": 305
+        }
+      ],
+      "box_type": "11号+7号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果1斤*2",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果1斤",
+          "quantity": 2.0,
+          "product_id": 241
+        }
+      ],
+      "box_type": "9号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果1斤*3",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果1斤",
+          "quantity": 3.0,
+          "product_id": 241
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果1斤*5",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果1斤",
+          "quantity": 5.0,
+          "product_id": 241
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果2斤*1",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果2斤",
+          "quantity": 1.0,
+          "product_id": 243
+        }
+      ],
+      "box_type": "9号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果2斤*2",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果2斤",
+          "quantity": 2.0,
+          "product_id": 243
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果2斤*3",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果2斤",
+          "quantity": 3.0,
+          "product_id": 243
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果3斤*1",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果3斤",
+          "quantity": 1.0,
+          "product_id": 245
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果3斤*1,紫皮独头蒜大果2斤*1",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果3斤",
+          "quantity": 1.0,
+          "product_id": 245
+        },
+        {
+          "name": "紫皮独头蒜大果2斤",
+          "quantity": 1.0,
+          "product_id": 250
+        }
+      ],
+      "box_type": "8号+9号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "2*0.55+2*0.5",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果3斤*1,紫皮独头蒜小果5斤*1",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果3斤",
+          "quantity": 1.0,
+          "product_id": 245
+        },
+        {
+          "name": "紫皮独头蒜小果5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "8号+7号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果3斤*1,绿甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果3斤",
+          "quantity": 1.0,
+          "product_id": 245
+        },
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "8号+5号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果3斤*2",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果3斤",
+          "quantity": 2.0,
+          "product_id": 245
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果3斤*3",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果3斤",
+          "quantity": 3.0,
+          "product_id": 245
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果3斤*6",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果3斤",
+          "quantity": 6.0,
+          "product_id": 245
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果5斤",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果5斤*2",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果5斤",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号+7号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜中果5斤*3",
+      "items": [
+        {
+          "name": "紫皮独头蒜中果5斤",
+          "quantity": 3.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜大果1斤*1",
+      "items": [
+        {
+          "name": "紫皮独头蒜大果1斤",
+          "quantity": 1.0,
+          "product_id": 248
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜大果1斤*2",
+      "items": [
+        {
+          "name": "紫皮独头蒜大果1斤",
+          "quantity": 2.0,
+          "product_id": 248
+        }
+      ],
+      "box_type": "9号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜大果2斤*1",
+      "items": [
+        {
+          "name": "紫皮独头蒜大果2斤",
+          "quantity": 1.0,
+          "product_id": 250
+        }
+      ],
+      "box_type": "9号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜大果2斤*2",
+      "items": [
+        {
+          "name": "紫皮独头蒜大果2斤",
+          "quantity": 2.0,
+          "product_id": 250
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜大果2斤*3",
+      "items": [
+        {
+          "name": "紫皮独头蒜大果2斤",
+          "quantity": 3.0,
+          "product_id": 250
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜大果2斤*5",
+      "items": [
+        {
+          "name": "紫皮独头蒜大果2斤",
+          "quantity": 5.0,
+          "product_id": 250
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜大果3斤*1",
+      "items": [
+        {
+          "name": "紫皮独头蒜大果3斤",
+          "quantity": 1.0,
+          "product_id": 252
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜大果3斤*2",
+      "items": [
+        {
+          "name": "紫皮独头蒜大果3斤",
+          "quantity": 2.0,
+          "product_id": 252
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜大果3斤*3",
+      "items": [
+        {
+          "name": "紫皮独头蒜大果3斤",
+          "quantity": 3.0,
+          "product_id": 252
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜大果3斤*4",
+      "items": [
+        {
+          "name": "紫皮独头蒜大果3斤",
+          "quantity": 4.0,
+          "product_id": 252
+        }
+      ],
+      "box_type": "5号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜大果3斤*5",
+      "items": [
+        {
+          "name": "紫皮独头蒜大果3斤",
+          "quantity": 5.0,
+          "product_id": 252
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜大果3斤*7",
+      "items": [
+        {
+          "name": "紫皮独头蒜大果3斤",
+          "quantity": 7.0,
+          "product_id": 252
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜小果2斤",
+      "items": [
+        {
+          "name": "紫皮独头蒜小果2斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜小果2斤*2",
+      "items": [
+        {
+          "name": "紫皮独头蒜小果2斤",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜小果5斤",
+      "items": [
+        {
+          "name": "紫皮独头蒜小果5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "紫皮独头蒜小果5斤*2",
+      "items": [
+        {
+          "name": "紫皮独头蒜小果5斤",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "红皮白心萝卜3斤",
+      "items": [
+        {
+          "name": "红皮白心萝卜3斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "红皮白心萝卜3斤*1,黑紫土豆5斤*1",
+      "items": [
+        {
+          "name": "红皮白心萝卜3斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "黑紫土豆5斤",
+          "quantity": 1.0,
+          "product_id": 299
+        }
+      ],
+      "box_type": "6号*2",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "红皮白心萝卜5斤",
+      "items": [
+        {
+          "name": "红皮白心萝卜5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "红皮白心萝卜5斤*2",
+      "items": [
+        {
+          "name": "红皮白心萝卜5斤",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "4号+4号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "绿甘蓝5斤单果200g+*1",
+      "items": [
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "5号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "绿甘蓝5斤单果200g+*1,绿甘蓝9斤单果200g+*1",
+      "items": [
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "绿甘蓝9斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香+茴香",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "绿甘蓝5斤单果200g+*1,苤蓝9斤*1",
+      "items": [
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "苤蓝9斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香+水果3号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "绿甘蓝5斤单果200g+*1,螺丝椒3斤*1",
+      "items": [
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "螺丝椒3斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "5号+5号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "绿甘蓝5斤单果200g+*1,螺丝椒5斤*1",
+      "items": [
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "螺丝椒5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "5号+4号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "绿甘蓝5斤单果200g+*2",
+      "items": [
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香箱子",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "绿甘蓝5斤单果200g+*3",
+      "items": [
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 3.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "5号*3",
+      "labor_price": 2.1,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "绿甘蓝5斤单果200g+*3,紫甘蓝5斤单果200g+*4",
+      "items": [
+        {
+          "name": "绿甘蓝5斤单果200g+",
+          "quantity": 3.0,
+          "product_id": null
+        },
+        {
+          "name": "紫甘蓝5斤单果200g+",
+          "quantity": 4.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香*3+4号*4",
+      "labor_price": 4.9,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "绿甘蓝9斤单果200g+",
+      "items": [
+        {
+          "name": "绿甘蓝9斤单果200g+",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "绿甘蓝9斤单果200g+*2",
+      "items": [
+        {
+          "name": "绿甘蓝9斤单果200g+",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香2个",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "1.03*4",
+      "is_active": true
+    },
+    {
+      "name": "绿甘蓝9斤单果200g+*4",
+      "items": [
+        {
+          "name": "绿甘蓝9斤单果200g+",
+          "quantity": 4.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香*4",
+      "labor_price": 2.8,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "羊肚菌干货100g*1",
+      "items": [
+        {
+          "name": "羊肚菌干货100g",
+          "quantity": 1.0,
+          "product_id": 254
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "羊肚菌干货100g*15",
+      "items": [
+        {
+          "name": "羊肚菌干货100g",
+          "quantity": 15.0,
+          "product_id": 254
+        }
+      ],
+      "box_type": "",
+      "labor_price": 17.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "羊肚菌干货100g*2",
+      "items": [
+        {
+          "name": "羊肚菌干货100g",
+          "quantity": 2.0,
+          "product_id": 254
+        }
+      ],
+      "box_type": "6号*2",
+      "labor_price": 2.8,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "羊肚菌干货100g*3",
+      "items": [
+        {
+          "name": "羊肚菌干货100g",
+          "quantity": 3.0,
+          "product_id": 254
+        }
+      ],
+      "box_type": "5号",
+      "labor_price": 4.2,
+      "box_ratio": 1.0,
+      "remark": "50g一盒",
+      "is_active": true
+    },
+    {
+      "name": "羊肚菌干货100g*4",
+      "items": [
+        {
+          "name": "羊肚菌干货100g",
+          "quantity": 4.0,
+          "product_id": 254
+        }
+      ],
+      "box_type": "6号*2",
+      "labor_price": 4.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "羊肚菌干货100g*5",
+      "items": [
+        {
+          "name": "羊肚菌干货100g",
+          "quantity": 5.0,
+          "product_id": 254
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 7.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "羊肚菌干货50g*3",
+      "items": [
+        {
+          "name": "羊肚菌干货50g",
+          "quantity": 3.0,
+          "product_id": 258
+        }
+      ],
+      "box_type": "6号*2",
+      "labor_price": 1.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "苤蓝5斤*1",
+      "items": [
+        {
+          "name": "苤蓝5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "高珍果箱",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "苤蓝9斤*1",
+      "items": [
+        {
+          "name": "苤蓝9斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香箱子",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "苤蓝9斤*3",
+      "items": [
+        {
+          "name": "苤蓝9斤",
+          "quantity": 3.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "茴香箱子*3",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "菠菜2.5斤*1",
+      "items": [
+        {
+          "name": "菠菜2.5斤",
+          "quantity": 1.0,
+          "product_id": 266
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "虫草花干货500g*1",
+      "items": [
+        {
+          "name": "虫草花干货500g",
+          "quantity": 1.0,
+          "product_id": 268
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "虫草花干货500g*10",
+      "items": [
+        {
+          "name": "虫草花干货500g",
+          "quantity": 10.0,
+          "product_id": 268
+        }
+      ],
+      "box_type": "",
+      "labor_price": 6.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "虫草花干货500g*2",
+      "items": [
+        {
+          "name": "虫草花干货500g",
+          "quantity": 2.0,
+          "product_id": 268
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "虫草花干货500g*3",
+      "items": [
+        {
+          "name": "虫草花干货500g",
+          "quantity": 3.0,
+          "product_id": 268
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 2.1,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "虫草花干货500g*4",
+      "items": [
+        {
+          "name": "虫草花干货500g",
+          "quantity": 4.0,
+          "product_id": 268
+        }
+      ],
+      "box_type": "4号*2",
+      "labor_price": 2.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "虫草花干货500g*5",
+      "items": [
+        {
+          "name": "虫草花干货500g",
+          "quantity": 5.0,
+          "product_id": 268
+        }
+      ],
+      "box_type": "4号*2",
+      "labor_price": 3.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "螺丝椒3斤",
+      "items": [
+        {
+          "name": "螺丝椒3斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "螺丝椒3斤*2",
+      "items": [
+        {
+          "name": "螺丝椒3斤",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "5号*2",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "螺丝椒3斤*32",
+      "items": [
+        {
+          "name": "螺丝椒3斤",
+          "quantity": 32.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "5号*32",
+      "labor_price": 22.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "螺丝椒5斤",
+      "items": [
+        {
+          "name": "螺丝椒5斤",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "螺丝椒5斤*1,新鲜蚕豆1.8斤*2",
+      "items": [
+        {
+          "name": "螺丝椒5斤",
+          "quantity": 1.0,
+          "product_id": null
+        },
+        {
+          "name": "新鲜蚕豆1.8斤",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "4号+6号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "西兰花2.5斤*1",
+      "items": [
+        {
+          "name": "西兰花2.5斤",
+          "quantity": 1.0,
+          "product_id": 271
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "西红柿净重5斤120g+*2",
+      "items": [
+        {
+          "name": "西红柿净重5斤120g+",
+          "quantity": 2.0,
+          "product_id": 273
+        }
+      ],
+      "box_type": "8号拖箱*2",
+      "labor_price": null,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "西红柿净重5斤120g+*3",
+      "items": [
+        {
+          "name": "西红柿净重5斤120g+",
+          "quantity": 3.0,
+          "product_id": 273
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "西红柿净重5斤120g+*4",
+      "items": [
+        {
+          "name": "西红柿净重5斤120g+",
+          "quantity": 4.0,
+          "product_id": 273
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "豆腐300*1盒",
+      "items": [
+        {
+          "name": "豆腐300*1盒",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "豆腐300*2盒",
+      "items": [
+        {
+          "name": "豆腐300*2盒",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "豆腐300*3盒",
+      "items": [
+        {
+          "name": "豆腐300*3盒",
+          "quantity": 1.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "青梗松花菜2.5斤*1",
+      "items": [
+        {
+          "name": "青梗松花菜2.5斤",
+          "quantity": 1.0,
+          "product_id": 275
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "香菇干货500g*1",
+      "items": [
+        {
+          "name": "香菇干货500g",
+          "quantity": 1.0,
+          "product_id": 277
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "香菇干货500g*10",
+      "items": [
+        {
+          "name": "香菇干货500g",
+          "quantity": 10.0,
+          "product_id": 277
+        }
+      ],
+      "box_type": "",
+      "labor_price": 6.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "香菇干货500g*2",
+      "items": [
+        {
+          "name": "香菇干货500g",
+          "quantity": 2.0,
+          "product_id": 277
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "香菇干货500g*20",
+      "items": [
+        {
+          "name": "香菇干货500g",
+          "quantity": 20.0,
+          "product_id": 277
+        }
+      ],
+      "box_type": "60*40*47",
+      "labor_price": 12.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "香菇干货500g*3",
+      "items": [
+        {
+          "name": "香菇干货500g",
+          "quantity": 3.0,
+          "product_id": 277
+        }
+      ],
+      "box_type": "4号+6号",
+      "labor_price": 2.1,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "香菇干货500g*4",
+      "items": [
+        {
+          "name": "香菇干货500g",
+          "quantity": 4.0,
+          "product_id": 277
+        }
+      ],
+      "box_type": "4号*2",
+      "labor_price": 2.8,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "香菇干货500g*5",
+      "items": [
+        {
+          "name": "香菇干货500g",
+          "quantity": 5.0,
+          "product_id": 277
+        }
+      ],
+      "box_type": "4号*2",
+      "labor_price": 2.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "香菇干货500g*6",
+      "items": [
+        {
+          "name": "香菇干货500g",
+          "quantity": 6.0,
+          "product_id": 277
+        }
+      ],
+      "box_type": "4号*2",
+      "labor_price": 3.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "香菇干货500g*8",
+      "items": [
+        {
+          "name": "香菇干货500g",
+          "quantity": 8.0,
+          "product_id": 277
+        }
+      ],
+      "box_type": "",
+      "labor_price": 5.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "马蹄番茄净重3斤180g+*1",
+      "items": [
+        {
+          "name": "马蹄番茄净重3斤180g+",
+          "quantity": 1.0,
+          "product_id": 279
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "马蹄番茄净重3斤180g+*2",
+      "items": [
+        {
+          "name": "马蹄番茄净重3斤180g+",
+          "quantity": 2.0,
+          "product_id": 279
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "马蹄番茄净重3斤180g+*8",
+      "items": [
+        {
+          "name": "马蹄番茄净重3斤180g+",
+          "quantity": 8.0,
+          "product_id": 279
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "马蹄番茄净重4.5斤180g+*2",
+      "items": [
+        {
+          "name": "马蹄番茄净重4.5斤180g+",
+          "quantity": 2.0,
+          "product_id": 281
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "马蹄番茄净重5斤180g+*1",
+      "items": [
+        {
+          "name": "马蹄番茄净重5斤180g+",
+          "quantity": 1.0,
+          "product_id": 287
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "马蹄番茄净重5斤180g+*2",
+      "items": [
+        {
+          "name": "马蹄番茄净重5斤180g+",
+          "quantity": 2.0,
+          "product_id": 287
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "鹿茸菇干货500g*1",
+      "items": [
+        {
+          "name": "鹿茸菇干货500g",
+          "quantity": 1.0,
+          "product_id": 292
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "鹿茸菇干货500g*10",
+      "items": [
+        {
+          "name": "鹿茸菇干货500g",
+          "quantity": 10.0,
+          "product_id": 292
+        }
+      ],
+      "box_type": "",
+      "labor_price": 6.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "鹿茸菇干货500g*11",
+      "items": [
+        {
+          "name": "鹿茸菇干货500g",
+          "quantity": 11.0,
+          "product_id": 292
+        }
+      ],
+      "box_type": "",
+      "labor_price": 6.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "鹿茸菇干货500g*16",
+      "items": [
+        {
+          "name": "鹿茸菇干货500g",
+          "quantity": 16.0,
+          "product_id": 292
+        }
+      ],
+      "box_type": "",
+      "labor_price": 9.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "鹿茸菇干货500g*2",
+      "items": [
+        {
+          "name": "鹿茸菇干货500g",
+          "quantity": 2.0,
+          "product_id": 292
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "鹿茸菇干货500g*3",
+      "items": [
+        {
+          "name": "鹿茸菇干货500g",
+          "quantity": 3.0,
+          "product_id": 292
+        }
+      ],
+      "box_type": "4号+6号",
+      "labor_price": 2.1,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "鹿茸菇干货500g*4",
+      "items": [
+        {
+          "name": "鹿茸菇干货500g",
+          "quantity": 4.0,
+          "product_id": 292
+        }
+      ],
+      "box_type": "4号*2",
+      "labor_price": 4.2,
+      "box_ratio": 1.0,
+      "remark": "装5毛，打包2毛",
+      "is_active": true
+    },
+    {
+      "name": "鹿茸菇干货500g*5",
+      "items": [
+        {
+          "name": "鹿茸菇干货500g",
+          "quantity": 5.0,
+          "product_id": 292
+        }
+      ],
+      "box_type": "4号*2",
+      "labor_price": 3.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "鹿茸菇干货500g*6",
+      "items": [
+        {
+          "name": "鹿茸菇干货500g",
+          "quantity": 6.0,
+          "product_id": 292
+        }
+      ],
+      "box_type": "",
+      "labor_price": 4.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "鹿茸菇干货500g*7",
+      "items": [
+        {
+          "name": "鹿茸菇干货500g",
+          "quantity": 7.0,
+          "product_id": 292
+        }
+      ],
+      "box_type": "",
+      "labor_price": 4.0,
+      "box_ratio": 1.0,
+      "remark": "多单数目比较多的打包费1元或5角",
+      "is_active": true
+    },
+    {
+      "name": "鹿茸菇干货500g*8",
+      "items": [
+        {
+          "name": "鹿茸菇干货500g",
+          "quantity": 8.0,
+          "product_id": 292
+        }
+      ],
+      "box_type": "",
+      "labor_price": 4.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑木耳干货500g*2",
+      "items": [
+        {
+          "name": "黑木耳干货500g",
+          "quantity": 2.0,
+          "product_id": 294
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑木耳干货500g*3",
+      "items": [
+        {
+          "name": "黑木耳干货500g",
+          "quantity": 3.0,
+          "product_id": 294
+        }
+      ],
+      "box_type": "4号+6号",
+      "labor_price": 1.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑木耳干货500g*5",
+      "items": [
+        {
+          "name": "黑木耳干货500g",
+          "quantity": 5.0,
+          "product_id": 294
+        }
+      ],
+      "box_type": "",
+      "labor_price": 3.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑木耳干货500g*6",
+      "items": [
+        {
+          "name": "黑木耳干货500g",
+          "quantity": 6.0,
+          "product_id": 294
+        }
+      ],
+      "box_type": "",
+      "labor_price": 3.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑紫土豆3斤*1",
+      "items": [
+        {
+          "name": "黑紫土豆3斤",
+          "quantity": 1.0,
+          "product_id": 297
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑紫土豆3斤*1,新鲜豌豆荚2.5斤*2",
+      "items": [
+        {
+          "name": "黑紫土豆3斤",
+          "quantity": 1.0,
+          "product_id": 297
+        },
+        {
+          "name": "新鲜豌豆荚2.5斤",
+          "quantity": 2.0,
+          "product_id": null
+        }
+      ],
+      "box_type": "7号+5号",
+      "labor_price": 1.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑紫土豆3斤*2",
+      "items": [
+        {
+          "name": "黑紫土豆3斤",
+          "quantity": 2.0,
+          "product_id": 297
+        }
+      ],
+      "box_type": "7号*2",
+      "labor_price": 1.4,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑紫土豆3斤*3",
+      "items": [
+        {
+          "name": "黑紫土豆3斤",
+          "quantity": 3.0,
+          "product_id": 297
+        }
+      ],
+      "box_type": "7号*3",
+      "labor_price": null,
+      "box_ratio": 3.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑紫土豆3斤*6",
+      "items": [
+        {
+          "name": "黑紫土豆3斤",
+          "quantity": 6.0,
+          "product_id": 297
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑紫土豆5斤*1",
+      "items": [
+        {
+          "name": "黑紫土豆5斤",
+          "quantity": 1.0,
+          "product_id": 299
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 0.7,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑紫土豆5斤*2",
+      "items": [
+        {
+          "name": "黑紫土豆5斤",
+          "quantity": 2.0,
+          "product_id": 299
+        }
+      ],
+      "box_type": "6号*2",
+      "labor_price": 1.4,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑紫土豆5斤*3",
+      "items": [
+        {
+          "name": "黑紫土豆5斤",
+          "quantity": 3.0,
+          "product_id": 299
+        }
+      ],
+      "box_type": "6号*3",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑紫土豆5斤*4",
+      "items": [
+        {
+          "name": "黑紫土豆5斤",
+          "quantity": 4.0,
+          "product_id": 299
+        }
+      ],
+      "box_type": "6号*4",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1.5斤*1",
+      "items": [
+        {
+          "name": "黑花生1.5斤",
+          "quantity": 1.0,
+          "product_id": 301
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1.5斤*1,京鲜生七彩花生2斤*2",
+      "items": [
+        {
+          "name": "黑花生1.5斤",
+          "quantity": 1.0,
+          "product_id": 301
+        },
+        {
+          "name": "京鲜生七彩花生2斤",
+          "quantity": 2.0,
+          "product_id": 55
+        }
+      ],
+      "box_type": "7号+5号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1.5斤*1,黑花生2.5斤*1",
+      "items": [
+        {
+          "name": "黑花生1.5斤",
+          "quantity": 1.0,
+          "product_id": 301
+        },
+        {
+          "name": "黑花生2.5斤",
+          "quantity": 1.0,
+          "product_id": 305
+        }
+      ],
+      "box_type": "7号+6号",
+      "labor_price": 1.0,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1.5斤*10",
+      "items": [
+        {
+          "name": "黑花生1.5斤",
+          "quantity": 10.0,
+          "product_id": 301
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1.5斤*2",
+      "items": [
+        {
+          "name": "黑花生1.5斤",
+          "quantity": 2.0,
+          "product_id": 301
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 0.8,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1.5斤*3",
+      "items": [
+        {
+          "name": "黑花生1.5斤",
+          "quantity": 3.0,
+          "product_id": 301
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1.5斤*4",
+      "items": [
+        {
+          "name": "黑花生1.5斤",
+          "quantity": 4.0,
+          "product_id": 301
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1.5斤*5",
+      "items": [
+        {
+          "name": "黑花生1.5斤",
+          "quantity": 5.0,
+          "product_id": 301
+        }
+      ],
+      "box_type": "4号+7号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1.5斤*6",
+      "items": [
+        {
+          "name": "黑花生1.5斤",
+          "quantity": 6.0,
+          "product_id": 301
+        }
+      ],
+      "box_type": "4号+6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1.5斤*7",
+      "items": [
+        {
+          "name": "黑花生1.5斤",
+          "quantity": 7.0,
+          "product_id": 301
+        }
+      ],
+      "box_type": "4号+4号",
+      "labor_price": 2.3,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1斤*1",
+      "items": [
+        {
+          "name": "黑花生1斤",
+          "quantity": 1.0,
+          "product_id": 303
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1斤*1,京鲜生七彩花生1斤*2",
+      "items": [
+        {
+          "name": "黑花生1斤",
+          "quantity": 1.0,
+          "product_id": 303
+        },
+        {
+          "name": "京鲜生七彩花生1斤",
+          "quantity": 2.0,
+          "product_id": 53
+        }
+      ],
+      "box_type": "8号+7号",
+      "labor_price": 1.2,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1斤*2",
+      "items": [
+        {
+          "name": "黑花生1斤",
+          "quantity": 2.0,
+          "product_id": 303
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1斤*3",
+      "items": [
+        {
+          "name": "黑花生1斤",
+          "quantity": 3.0,
+          "product_id": 303
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1斤*4",
+      "items": [
+        {
+          "name": "黑花生1斤",
+          "quantity": 4.0,
+          "product_id": 303
+        }
+      ],
+      "box_type": "5号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1斤*5",
+      "items": [
+        {
+          "name": "黑花生1斤",
+          "quantity": 5.0,
+          "product_id": 303
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生1斤*6",
+      "items": [
+        {
+          "name": "黑花生1斤",
+          "quantity": 6.0,
+          "product_id": 303
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生2.5斤*1",
+      "items": [
+        {
+          "name": "黑花生2.5斤",
+          "quantity": 1.0,
+          "product_id": 305
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生2.5斤*2",
+      "items": [
+        {
+          "name": "黑花生2.5斤",
+          "quantity": 2.0,
+          "product_id": 305
+        }
+      ],
+      "box_type": "4号",
+      "labor_price": 0.8,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生2.5斤*3",
+      "items": [
+        {
+          "name": "黑花生2.5斤",
+          "quantity": 3.0,
+          "product_id": 305
+        }
+      ],
+      "box_type": "4号+7号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生2.5斤*4",
+      "items": [
+        {
+          "name": "黑花生2.5斤",
+          "quantity": 4.0,
+          "product_id": 305
+        }
+      ],
+      "box_type": "4号*2",
+      "labor_price": null,
+      "box_ratio": 2.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生2.5斤*5",
+      "items": [
+        {
+          "name": "黑花生2.5斤",
+          "quantity": 5.0,
+          "product_id": 305
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生2.5斤*6",
+      "items": [
+        {
+          "name": "黑花生2.5斤",
+          "quantity": 6.0,
+          "product_id": 305
+        }
+      ],
+      "box_type": "",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生2.5斤*8",
+      "items": [
+        {
+          "name": "黑花生2.5斤",
+          "quantity": 8.0,
+          "product_id": 305
+        }
+      ],
+      "box_type": "4号*4",
+      "labor_price": 2.6,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生米1斤（去壳）*1",
+      "items": [
+        {
+          "name": "黑花生米1斤（去壳）",
+          "quantity": 1.0,
+          "product_id": 307
+        }
+      ],
+      "box_type": "9号",
+      "labor_price": 0.5,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生米1斤（去壳）*2",
+      "items": [
+        {
+          "name": "黑花生米1斤（去壳）",
+          "quantity": 2.0,
+          "product_id": 307
+        }
+      ],
+      "box_type": "8号",
+      "labor_price": 0.8,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生米1斤（去壳）*3",
+      "items": [
+        {
+          "name": "黑花生米1斤（去壳）",
+          "quantity": 3.0,
+          "product_id": 307
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 1.1,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生米1斤（去壳）*4",
+      "items": [
+        {
+          "name": "黑花生米1斤（去壳）",
+          "quantity": 4.0,
+          "product_id": 307
+        }
+      ],
+      "box_type": "7号",
+      "labor_price": 1.4,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    },
+    {
+      "name": "黑花生米1斤（去壳）*5",
+      "items": [
+        {
+          "name": "黑花生米1斤（去壳）",
+          "quantity": 5.0,
+          "product_id": 307
+        }
+      ],
+      "box_type": "6号",
+      "labor_price": null,
+      "box_ratio": 1.0,
+      "remark": "",
+      "is_active": true
+    }
+  ]
+}

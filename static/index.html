@@ -67,6 +67,8 @@
         <button class="nav-item" data-page="jushuitan"><span class="nav-ico"><svg class="ic"><use href="#i-link"/></svg></span>聚水潭关联</button>
         <button class="nav-item" data-page="import"><span class="nav-ico"><svg class="ic"><use href="#i-database"/></svg></span>批量导入</button>
         <button class="nav-item" data-page="backup"><span class="nav-ico"><svg class="ic"><use href="#i-save"/></svg></span>备份与恢复</button>
+        <div class="nav-group">设置</div>
+        <button class="nav-item" data-page="pdata"><span class="nav-ico"><svg class="ic"><use href="#i-database"/></svg></span>商品资料备份</button>
       </nav>
       <div class="side-user">
         <div class="user-avatar" id="userAvatar">管</div>
@@ -341,6 +343,8 @@
             <input id="prodSearch" placeholder="🔍 搜索商品..." oninput="renderProducts()" />
             <div class="grow"></div>
             <button class="btn secondary" onclick="openUnitsModal()"><svg class="ic"><use href="#i-ruler"/></svg> 计量单位管理</button>
+            <button class="btn secondary" onclick="pdataDownload('products_stock')"><svg class="ic"><use href="#i-download"/></svg> 导出库存JSON</button>
+            <button class="btn secondary" onclick="pdataDownload('products_order')"><svg class="ic"><use href="#i-download"/></svg> 导出订单JSON</button>
             <button class="btn" onclick="openProductModal()"><svg class="ic"><use href="#i-plus"/></svg> 新增商品</button>
           </div>
           <div class="batch-bar" id="prodBatch" style="display:none;">
@@ -361,6 +365,7 @@
             <input id="prSearch" placeholder="🔍 搜索组合 / 商品 / 纸箱..." oninput="renderPackRules()" />
             <select id="prBox" class="searchable" onchange="renderPackRules()"><option value="">全部纸箱型号</option></select>
             <div class="grow"></div>
+            <button class="btn secondary" onclick="pdataDownload('pack_rules')"><svg class="ic"><use href="#i-download"/></svg> 导出JSON</button>
             <button class="btn secondary" onclick="loadPackRules()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
             <button class="btn" onclick="openPackRuleModal()"><svg class="ic"><use href="#i-plus"/></svg> 新增一单多货规则</button>
           </div>
@@ -456,6 +461,8 @@
             <button class="btn" onclick="parseJushuitan()">解析并自动新增</button>
             <button class="btn secondary" onclick="autoMapping()"><svg class="ic"><use href="#i-ai"/></svg> 自动匹配未关联</button>
             <button class="btn secondary" onclick="clearMapping()">清空关联</button>
+            <div class="grow"></div>
+            <button class="btn secondary" onclick="pdataDownload('code_mappings')"><svg class="ic"><use href="#i-download"/></svg> 导出JSON</button>
           </div>
           <div id="mpParseInfo"></div>
         </div>
@@ -493,6 +500,39 @@
         <div class="card">
           <div class="card-head"><h3>备份列表</h3><span class="hint">恢复会用所选备份覆盖当前数据库，请谨慎操作</span></div>
           <div class="table-wrap"><table id="bkTable"></table></div>
+        </div>
+      </section>
+
+      <!-- 设置 · 商品资料备份（解耦成 5 个 JSON 手动维护/迁移） -->
+      <section id="page-pdata" class="page">
+        <div class="card">
+          <div class="card-head">
+            <h3>商品资料备份（解耦维护）</h3>
+            <span class="hint" id="pdataDir"></span>
+            <div class="grow"></div>
+            <button class="btn green" onclick="pdataExportAll()"><svg class="ic"><use href="#i-save"/></svg> 一键导出到 json 目录</button>
+            <button class="btn" onclick="pdataImportAll()"><svg class="ic"><use href="#i-refresh"/></svg> 从 json 目录一键导入</button>
+          </div>
+          <p class="hint" style="margin-top:8px;">商品资料按「数据表」拆分为 5 个 JSON 独立保存于 <code>D:\code\statistics_erp\backend\json</code>，商品间相互引用用「名称」表达，可跨库/跨设备迁移。各业务页也提供单独的「导出 JSON」按钮。</p>
+          <div class="alert ok" style="margin-top:8px;" id="pdataNote">
+            独立脚本命令：<code>uv run python sync_product_data.py export|import|status</code>（在项目根目录执行，存在 json 时一键导入）。
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>5 类商品资料</h3><span class="hint">json 目录与数据库对照；点击「下载」保存单个 json，"导入"从 json 目录读入该类</span></div>
+          <div class="table-wrap"><table id="pdataTable"></table></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>从本地上传 json 导入</h3><span class="hint">可在任意电脑编辑 json 后上传，按名称导入（upsert），便于手动维护与迁移</span></div>
+          <div class="toolbar">
+            <input type="file" id="pdataUploadFile" accept=".json,.txt" />
+            <button class="btn" onclick="pdataUploadImport()"><svg class="ic"><use href="#i-refresh"/></svg> 上传并导入</button>
+            <span class="grow"></span>
+            <button class="btn secondary" onclick="loadPdataPage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新状态</button>
+          </div>
+          <div id="pdataResult" style="margin-top:10px;"></div>
         </div>
       </section>
     </main>

@@ -1,0 +1,86 @@
+{
+  "kind": "units",
+  "label": "计量单位",
+  "file": "units.json",
+  "exported_at": "2026-09-05 14:57:22",
+  "units": [
+    {
+      "name": "克",
+      "category": "weight",
+      "gram_per_unit": 1.0,
+      "is_standard": true
+    },
+    {
+      "name": "斤",
+      "category": "weight",
+      "gram_per_unit": 500.0,
+      "is_standard": true
+    },
+    {
+      "name": "公斤",
+      "category": "weight",
+      "gram_per_unit": 1000.0,
+      "is_standard": true
+    },
+    {
+      "name": "千克",
+      "category": "weight",
+      "gram_per_unit": 1000.0,
+      "is_standard": true
+    },
+    {
+      "name": "个",
+      "category": "count",
+      "gram_per_unit": null,
+      "is_standard": true
+    },
+    {
+      "name": "包",
+      "category": "count",
+      "gram_per_unit": null,
+      "is_standard": true
+    },
+    {
+      "name": "袋",
+      "category": "count",
+      "gram_per_unit": null,
+      "is_standard": true
+    },
+    {
+      "name": "盒",
+      "category": "count",
+      "gram_per_unit": null,
+      "is_standard": true
+    },
+    {
+      "name": "箱",
+      "category": "count",
+      "gram_per_unit": null,
+      "is_standard": true
+    },
+    {
+      "name": "件",
+      "category": "count",
+      "gram_per_unit": null,
+      "is_standard": true
+    },
+    {
+      "name": "份",
+      "category": "count",
+      "gram_per_unit": null,
+      "is_standard": true
+    },
+    {
+      "name": "张",
+      "category": "count",
+      "gram_per_unit": null,
+      "is_standard": false
+    },
+    {
+      "name": "套",
+      "category": "count",
+      "gram_per_unit": null,
+      "is_standard": false
+    }
+  ]
+}

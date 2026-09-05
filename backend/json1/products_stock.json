@@ -1,0 +1,3933 @@
+{
+  "kind": "products_stock",
+  "label": "库存商品",
+  "file": "products_stock.json",
+  "exported_at": "2026-09-05 14:46:18",
+  "items": [
+    {
+      "code": "",
+      "name": "七彩土豆3斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "七彩土豆3斤 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "七彩土豆5斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "七彩土豆5斤 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "七彩花生1.5斤装打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "七彩花生1.5斤装 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "七彩花生2.5斤装打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "七彩花生2.5斤装 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "七彩花生米1斤（去壳）打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "七彩花生米1斤（去壳） 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "京鲜生七彩花生1斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "京鲜生七彩花生1斤 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "京鲜生七彩花生2斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "京鲜生七彩花生2斤 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "京鲜生五指毛桃250g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "京鲜生五指毛桃250g 打包费（0.60 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.6,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "京鲜生松茸干片50g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "京鲜生松茸干片50g 打包费（0.75 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.75,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "京鲜生椴木小银耳500g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "京鲜生椴木小银耳500g 打包费（0.75 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.75,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "京鲜生羊肚菌干货30g（3-5）打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "京鲜生羊肚菌干货30g（3-5） 打包费（0.33 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.33,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "京鲜生羊肚菌干货30g（5-7）打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "京鲜生羊肚菌干货30g（5-7） 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "京鲜生茯苓250g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "京鲜生茯苓250g 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "京鲜生茯苓500g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "京鲜生茯苓500g 打包费（0.55 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.55,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "京鲜生鸡煲汤料包120g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "京鲜生鸡煲汤料包120g 打包费（0.30 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.3,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "京鲜生鸡骨草250g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "京鲜生鸡骨草250g 打包费（0.60 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.6,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "京鲜生鹿茸菇干货1000g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "京鲜生鹿茸菇干货1000g 打包费（1.10 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 1.1,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "京鲜生鹿茸菇干货200g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "京鲜生鹿茸菇干货200g 打包费（0.60 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.6,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "京鲜生黄芪250g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "京鲜生黄芪250g 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "京鲜生黄芪500g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "京鲜生黄芪500g 打包费（0.55 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.55,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "人参果中果3斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "人参果中果3斤 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "人参果中果5斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "人参果中果5斤 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "人参果大果3斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "人参果大果3斤 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "人参果大果5斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "人参果大果5斤 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "人参果特大果5斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "人参果特大果5斤 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "人工打包费",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "人工打包服务（可调整成本）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "佛手柑中果1个打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "佛手柑中果1个 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "佛手柑中果2个打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "佛手柑中果2个 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "佛手柑中果4个打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "佛手柑中果4个 打包费（1.00 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 1.0,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "佛手柑大果3个打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "佛手柑大果3个 打包费（1.00 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 1.0,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "佛手柑果王3个打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "佛手柑果王3个 打包费（1.00 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 1.0,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "包浆豆腐300g*2盒打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "包浆豆腐300g*2盒 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "小米辣1斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "小米辣1斤 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "小米辣2斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "小米辣2斤 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "小花糯玉米3斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "小花糯玉米3斤 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "拇指小玉米1斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "拇指小玉米1斤 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "拇指小玉米2斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "拇指小玉米2斤 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "新鲜洋蓟1斤100g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "新鲜洋蓟1斤100g+ 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "新鲜洋蓟3斤100g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "新鲜洋蓟3斤100g+ 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "新鲜洋蓟5斤100g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "新鲜洋蓟5斤100g+ 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "新鲜玉米笋3斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "新鲜玉米笋3斤 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "新鲜玉米笋5斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "新鲜玉米笋5斤 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "新鲜玉米笋9斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "新鲜玉米笋9斤 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "新鲜芦笋1.5斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "新鲜芦笋1.5斤 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "新鲜芦笋1斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "新鲜芦笋1斤 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "新鲜芦笋250g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "新鲜芦笋250g 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "新鲜芦笋2斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "新鲜芦笋2斤 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "新鲜芦笋3斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "新鲜芦笋3斤 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "新鲜黑牛肝菌500g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "新鲜黑牛肝菌500g 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "松茸干片100g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "松茸干片100g 打包费（0.75 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.75,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "松茸干片50g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "松茸干片50g 打包费（0.75 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.75,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "椴木小银耳250g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "椴木小银耳250g 打包费（0.60 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.6,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "水果玉米1200g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "水果玉米1200g 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "水果西芹4斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "水果西芹4斤 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "牛奶玉米笋2斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "牛奶玉米笋2斤 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "牛奶玉米笋3斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "牛奶玉米笋3斤 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "牛奶玉米笋5斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "牛奶玉米笋5斤 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "牛奶芋头3斤单果100g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "牛奶芋头3斤单果100g+ 打包费（0.40 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.4,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "牛奶芋头3斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "牛奶芋头3斤 打包费（0.40 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.4,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "牛奶芋头5斤单果100g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "牛奶芋头5斤单果100g+ 打包费（0.60 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.6,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "牛奶芋头9斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "牛奶芋头9斤 打包费（1.00 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 1.0,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "玉米段2斤装打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "玉米段2斤装 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "玉米段3斤装打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "玉米段3斤装 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "玉米段5斤装打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "玉米段5斤装 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "玉米粒2斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "玉米粒2斤 打包费（0.20 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.2,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "甜龙笋20斤500g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "甜龙笋20斤500g+ 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "甜龙笋2斤250g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "甜龙笋2斤250g+ 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "甜龙笋2斤300g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "甜龙笋2斤300g+ 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "甜龙笋3斤250g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "甜龙笋3斤250g+ 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "甜龙笋3斤300g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "甜龙笋3斤300g+ 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "甜龙笋3斤500g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "甜龙笋3斤500g+ 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "甜龙笋5斤250g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "甜龙笋5斤250g+ 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "甜龙笋5斤300g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "甜龙笋5斤300g+ 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "甜龙笋5斤500g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "甜龙笋5斤500g+ 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "甜龙笋8斤500g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "甜龙笋8斤500g+ 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "甜龙笋9斤500g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "甜龙笋9斤500g+ 打包费（0.80 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.8,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "石斛鲜条250g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "石斛鲜条250g 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "石斛鲜条500g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "石斛鲜条500g 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "紫拇指玉米1斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "紫拇指玉米1斤 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "紫皮独头蒜中果1斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "紫皮独头蒜中果1斤 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "紫皮独头蒜中果2斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "紫皮独头蒜中果2斤 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "紫皮独头蒜中果3斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "紫皮独头蒜中果3斤 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "紫皮独头蒜大果1斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "紫皮独头蒜大果1斤 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "紫皮独头蒜大果2斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "紫皮独头蒜大果2斤 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "紫皮独头蒜大果3斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "紫皮独头蒜大果3斤 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "羊肚菌干货100g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "羊肚菌干货100g 打包费（0.75 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.75,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "羊肚菌干货50g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "羊肚菌干货50g 打包费（0.75 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.75,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "羊肚菌礼盒250g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "羊肚菌礼盒250g 打包费（1.10 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 1.1,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "羊肚菌礼盒500g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "羊肚菌礼盒500g 打包费（1.10 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 1.1,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "虫草花干货500g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "虫草花干货500g 打包费（0.75 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.75,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "西兰花2.5斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "西兰花2.5斤 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "西红柿净重5斤120g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "西红柿净重5斤120g+ 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "香菇干货500g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "香菇干货500g 打包费（0.75 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.75,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "马蹄番茄净重3斤180g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "马蹄番茄净重3斤180g+ 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "马蹄番茄净重4.5斤180g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "马蹄番茄净重4.5斤180g+ 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "马蹄番茄净重5斤120g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "马蹄番茄净重5斤120g+ 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "马蹄番茄净重5斤150g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "马蹄番茄净重5斤150g+ 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "马蹄番茄净重5斤180g+打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "马蹄番茄净重5斤180g+ 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "鹿茸菇干货200g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "鹿茸菇干货200g 打包费（0.60 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.6,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "鹿茸菇干货500g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "鹿茸菇干货500g 打包费（0.75 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.75,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "黑木耳干货500g打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "黑木耳干货500g 打包费（0.75 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.75,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "黑紫土豆3斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "黑紫土豆3斤 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "黑紫土豆5斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "黑紫土豆5斤 打包费（0.70 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.7,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "黑花生1.5斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "黑花生1.5斤 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "黑花生1斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "黑花生1斤 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "黑花生2.5斤打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "黑花生2.5斤 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "黑花生米1斤（去壳）打包",
+      "category": "人工",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "黑花生米1斤（去壳） 打包费（0.50 元/单）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "8号拖箱",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 8号拖箱（参考 1.00 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 1.0,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "松茸6号箱",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 松茸6号（参考 2.20 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 2.2,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "水果3号箱",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 水果3号（参考 2.30 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 2.3,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "水果5号箱",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 水果5号（参考 3.00 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 3.0,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "纸箱10号",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 10号（参考 0.33 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 0.33,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "纸箱11号",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 11号（参考 0.30 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 0.3,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "纸箱3号",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 3号（参考 1.85 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 1.85,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "纸箱4号",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 4号（参考 1.10 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 1.1,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "纸箱5号",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 5号（参考 0.90 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 0.9,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "纸箱6号",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 6号（参考 0.75 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 0.75,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "纸箱7号",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 7号（参考 0.60 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 0.6,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "纸箱8号",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 8号（参考 0.55 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 0.55,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "纸箱9号",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 9号（参考 0.50 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 0.5,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "邮政6号箱",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 邮政6号（参考 1.80 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 1.8,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "高珍果箱",
+      "category": "包材",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "纸箱 高珍果箱（参考 2.30 元/个）",
+      "sale_price": 0.0,
+      "unit_cost": 2.3,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "10 号箱",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "AI 自动新增（票据识别）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "14*10 好评卡",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "张",
+      "default_unit": "张",
+      "spec": "AI 自动新增（票据识别）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "张": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "3 号平口保温袋",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "AI 自动新增（票据识别）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "4 号箱",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "AI 自动新增（票据识别）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "5 号箱",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "AI 自动新增（票据识别）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "6 号箱",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "AI 自动新增（票据识别）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "7 号箱",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "AI 自动新增（票据识别）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "8 号箱",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "AI 自动新增（票据识别）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "9 号箱",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "AI 自动新增（票据识别）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "qchh",
+      "name": "七彩花生",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "qchsm（qk）",
+      "name": "七彩花生米（去壳）",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "wzmt",
+      "name": "五指毛桃",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "sst",
+      "name": "四神汤",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "syp",
+      "name": "山药片",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "srgp",
+      "name": "松茸干片",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "松茸箱 6#",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "套",
+      "default_unit": "套",
+      "spec": "AI 自动新增（票据识别）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "套": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "dmxye",
+      "name": "椴木小银耳",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "水果箱 3#",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "套",
+      "default_unit": "套",
+      "spec": "AI 自动新增（票据识别）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "套": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "水果箱 5#",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "套",
+      "default_unit": "套",
+      "spec": "AI 自动新增（票据识别）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "套": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "水果花生米",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "公斤",
+      "default_unit": "公斤",
+      "spec": "AI 自动新增（票据识别）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "公斤": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "hshgh",
+      "name": "灰树花干货",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "紫捞甜玉米",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "公斤",
+      "default_unit": "公斤",
+      "spec": "AI 自动新增（票据识别）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "公斤": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "ydjgh",
+      "name": "羊肚菌干货",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "ydjgh（3-5）",
+      "name": "羊肚菌干货（3-5）",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "ydjgh（5-7）",
+      "name": "羊肚菌干货（5-7）",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "fl",
+      "name": "茯苓",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "csggh",
+      "name": "茶树菇干货",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "jtb",
+      "name": "菌汤包",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "包",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "个": 1,
+        "包": 1.0
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "cchgh",
+      "name": "虫草花干货",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "邮政箱 6#",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "套",
+      "default_unit": "套",
+      "spec": "AI 自动新增（票据识别）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "套": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "xggh",
+      "name": "香菇干货",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "鸡油菌",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "公斤",
+      "default_unit": "公斤",
+      "spec": "AI 自动新增（票据识别）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "公斤": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "jbtlb",
+      "name": "鸡煲汤料包",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "克",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "jgc",
+      "name": "鸡骨草",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "lrggh",
+      "name": "鹿茸菇干货",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "hq",
+      "name": "黄芪",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "hmegh",
+      "name": "黑木耳干货",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "hhs",
+      "name": "黑花生",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "hhsm（qk）",
+      "name": "黑花生米（去壳）",
+      "category": "商品",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "拇指小玉米",
+      "category": "干货",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "新鲜香蕈菌",
+      "category": "干货",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "克",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "羊肚菌礼盒",
+      "category": "干货",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "克",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "快递费",
+      "category": "快递",
+      "product_type": "stock",
+      "base_unit": "单",
+      "default_unit": "单",
+      "spec": "快递物流费用（可自行调整）",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "单": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "七彩土豆",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "人参果中果",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "人参果大果",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "人参果特大果",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "佛手柑中果",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "佛手柑大果",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "佛手柑果王",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "个",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "个": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "包浆豆腐",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "克",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "包浆豆腐300g*",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "个",
+      "default_unit": "盒",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "盒": 1
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "四季豆",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "大娃娃菜",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "小油菜",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "小米辣",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "小花糯玉米",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "新鲜玉米笋",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "新鲜芦笋",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "新鲜黑牛肝菌",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "克",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "水果玉米",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "克",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "水果西芹",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "油麦菜",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "牛奶玉米笋",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "牛奶芋头",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "玉米段",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "玉米粒",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "球生菜",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "石斛鲜条",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "克",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "紫拇指玉米",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "紫皮独头蒜中果",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "紫皮独头蒜大果",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "菠菜",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "西兰花",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "青梗松花菜",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    },
+    {
+      "code": "",
+      "name": "黑紫土豆",
+      "category": "蔬菜",
+      "product_type": "stock",
+      "base_unit": "克",
+      "default_unit": "公斤",
+      "spec": "",
+      "sale_price": 0.0,
+      "unit_cost": 0.0,
+      "conversions": {
+        "克": 1,
+        "斤": 500,
+        "公斤": 1000,
+        "千克": 1000
+      },
+      "pack_items": [],
+      "pack_fee": 0.0,
+      "stock_product": "",
+      "multiplier": 1.0,
+      "is_active": true
+    }
+  ]
+}

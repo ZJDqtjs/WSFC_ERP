@@ -1,0 +1,365 @@
+{
+  "kind": "code_mappings",
+  "label": "聚水潭编码关联",
+  "file": "code_mappings.json",
+  "exported_at": "2026-09-05 14:46:18",
+  "mappings": [
+    {
+      "source": "jushuitan",
+      "external_code": "京鲜生七彩花生2斤",
+      "external_name": "京鲜生七彩花生2斤",
+      "product": "",
+      "auto_score": 1.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "紫皮独头蒜大果3斤",
+      "external_name": "",
+      "product": "紫皮独头蒜大果",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "新鲜芦笋2斤",
+      "external_name": "",
+      "product": "新鲜芦笋",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "黑紫土豆3斤",
+      "external_name": "",
+      "product": "黑紫土豆",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "新鲜玉米笋3斤",
+      "external_name": "",
+      "product": "新鲜玉米笋",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "新鲜芦笋1斤",
+      "external_name": "",
+      "product": "新鲜芦笋",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "水果西芹4斤",
+      "external_name": "",
+      "product": "水果西芹",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "紫皮独头蒜中果1斤",
+      "external_name": "",
+      "product": "紫皮独头蒜中果",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "紫皮独头蒜中果2斤",
+      "external_name": "",
+      "product": "紫皮独头蒜中果",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "甜龙笋5斤250g+",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "甜龙笋8斤500g+",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "新鲜玉米笋5斤",
+      "external_name": "",
+      "product": "新鲜玉米笋",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "紫皮独头蒜大果1斤",
+      "external_name": "",
+      "product": "紫皮独头蒜大果",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "甜龙笋3斤250g+",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "紫皮独头蒜大果2斤",
+      "external_name": "",
+      "product": "紫皮独头蒜大果",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "紫皮独头蒜中果3斤",
+      "external_name": "",
+      "product": "紫皮独头蒜中果",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "甜龙笋2斤250g+",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "新鲜玉米笋9斤",
+      "external_name": "",
+      "product": "新鲜玉米笋",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "新鲜芦笋1.5斤",
+      "external_name": "",
+      "product": "新鲜芦笋",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "牛奶芋头4.5斤30g＋",
+      "external_name": "",
+      "product": "牛奶芋头",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "佛手柑大果2个",
+      "external_name": "",
+      "product": "佛手柑大果",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "黑紫土豆5斤",
+      "external_name": "",
+      "product": "黑紫土豆",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "牛奶芋头4.5斤50g＋",
+      "external_name": "",
+      "product": "牛奶芋头",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "新鲜芦笋3斤",
+      "external_name": "",
+      "product": "新鲜芦笋",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "佛手柑特大果2个",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "新鲜香蕈菌250g",
+      "external_name": "",
+      "product": "新鲜香蕈菌",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "新鲜芦笋250g",
+      "external_name": "",
+      "product": "新鲜芦笋",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "佛手柑特大果1个",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "小米辣2斤",
+      "external_name": "",
+      "product": "小米辣",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "牛奶芋头3斤30g＋",
+      "external_name": "",
+      "product": "牛奶芋头",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "牛奶芋头3斤50g＋",
+      "external_name": "",
+      "product": "牛奶芋头",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "甜龙笋5斤500g+",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "小米辣1斤",
+      "external_name": "",
+      "product": "小米辣",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "紫皮独头蒜大果4.5斤",
+      "external_name": "",
+      "product": "紫皮独头蒜大果",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "佛手柑大果1个",
+      "external_name": "",
+      "product": "佛手柑大果",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "佛手柑果王2个",
+      "external_name": "",
+      "product": "佛手柑果王",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "独头蒜中果4.5斤",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "新鲜西兰苔4.5斤",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "新鲜西兰苔2.5斤",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "新鲜天麻2斤8-10个",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "雪莲果大果4.5斤",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "雪莲果大果8斤",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "红皮土豆5斤100g+",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "雪莲果中果8斤",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "红皮土豆5斤200g+",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "新鲜天麻1斤4-5个",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "红皮土豆3斤100g+",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "红皮土豆3斤200g+",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "雪莲果中果3斤",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "雪莲果中果4.5斤",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    },
+    {
+      "source": "jushuitan",
+      "external_code": "葫芦中果1个",
+      "external_name": "",
+      "product": "",
+      "auto_score": 0.0
+    }
+  ]
+}
