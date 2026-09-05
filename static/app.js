@@ -8,6 +8,7 @@ let MP_CODES = [];  // 聚水潭解析出的编码列表
 const prodSel = new Set();
 const inSel = new Set();
 const outSel = new Set();
+let OUT_GROUP = null;  // 当前打开的出库批次（array of Outbound 记录）
 
 /* ---------- 批量选择工具 ---------- */
 function selSet(kind) {
@@ -40,7 +41,21 @@ function toggleAll(cb, kind) {
     c.checked = cb.checked;
     if (cb.checked) set.add(+c.value);
   });
+  // 批次行（整批一个选框）：data-ids 记录成员单号
+  document.querySelectorAll(`#${tableId} input[type="checkbox"][data-ids]`).forEach((c) => {
+    c.checked = cb.checked;
+    if (cb.checked) (c.dataset.ids || "").split(",").forEach((id) => id && set.add(+id));
+  });
   updateBatchBar(kind);
+}
+function toggleOutGroupCB(cb) {
+  const set = selSet("out");
+  const on = cb.checked;
+  (cb.dataset.ids || "").split(",").forEach((id) => {
+    if (!id) return;
+    if (on) set.add(+id); else set.delete(+id);
+  });
+  updateBatchBar("out");
 }
 function clearBatch(kind) {
   selSet(kind).clear();
@@ -1679,15 +1694,43 @@ async function submitOutbound() {
 }
 async function loadOutbounds() {
   const from = $("outDateFrom").value, to = $("outDateTo").value;
-  let rows = await api(`/api/outbounds?date_from=${from || ""}&date_to=${to || ""}`);
+  const flat = await api(`/api/outbounds?date_from=${from || ""}&date_to=${to || ""}`);
   const kw = ($("outSearch")?.value || "").trim().toLowerCase();
-  if (kw) rows = rows.filter((o) => [o.code, o.customer].join(" ").toLowerCase().includes(kw));
+  // 按批次聚合：同一 import_group 的若干单合并为一条展示行
+  let rows = [];
+  const groups = new Map();
+  for (const o of flat) {
+    if (o.import_group) {
+      if (!groups.has(o.import_group)) groups.set(o.import_group, []);
+      groups.get(o.import_group).push(o);
+    } else {
+      rows.push({ _group: false, rec: o });
+    }
+  }
+  for (const [key, recs] of groups) {
+    const g = buildOutGroup(recs);
+    if (!kw || [g.code, g.customer, g.date].join(" ").toLowerCase().includes(kw)) rows.push({ _group: true, g });
+  }
+  // 兼容旧筛选：进一步按单号/客户过滤（批次行存储成员以支持检索）
+  if (kw) rows = rows.filter((r) => r._group
+    ? (r.g.records || []).some((o) => [o.code, o.customer].join(" ").toLowerCase().includes(kw))
+    : [r.rec.code, r.rec.customer].join(" ").toLowerCase().includes(kw));
   const t = $("outTable");
-  rows = applyTableSort(t, rows);
-  $("outListHint").textContent = `共 ${rows.length} 单`;
+  // 提供可排序的统一字段
+  const sortable = rows.map((r) => r._group
+    ? { _group: true, g: r.g, code: r.g.code, customer: r.g.customer, total_amount: r.g.total_amount,
+        total_cogs: r.g.total_cogs, total_fee: r.g.total_fee, net_profit: r.g.net_profit, date: r.g.date }
+    : { _group: false, rec: r.rec, code: r.rec.code, customer: r.rec.customer, total_amount: r.rec.total_amount,
+        total_cogs: r.rec.total_cogs, total_fee: r.rec.total_fee, net_profit: r.rec.net_profit, date: r.rec.date });
+  sortable.sort((a, b) => {
+    if (t._sort) { const d = compareVal(a[t._sort.key], b[t._sort.key]) * t._sort.dir; if (d) return d; }
+    return 0;
+  });
+  const totalOrders = flat.length;
+  $("outListHint").textContent = `共 ${totalOrders} 单，合并 ${rows.length} 行`;
   t.innerHTML = `<thead><tr>
     <th class="cb-col"><input type="checkbox" onclick="toggleAll(this,'out')" /></th>
-    <th data-key="code">单号${sortArrow("outTable", "code")}</th>
+    <th data-key="code">单号/批次${sortArrow("outTable", "code")}</th>
     <th data-key="customer">客户${sortArrow("outTable", "customer")}</th>
     <th>明细</th>
     <th data-key="total_amount" class="num">收入${sortArrow("outTable", "total_amount")}</th>
@@ -1697,8 +1740,15 @@ async function loadOutbounds() {
     <th data-key="date">日期${sortArrow("outTable", "date")}</th>
     <th>备注</th>
     <th></th></tr></thead><tbody>` +
-    rows.map((o) => `<tr>
-      <td class="cb-col"><input type="checkbox" value="${o.id}" ${outSel.has(o.id) ? "checked" : ""} onchange="toggleSel('out',${o.id},this.checked)" /></td>
+    sortable.map((r) => r._group ? renderOutGroupRow(r.g) : renderOutRow(r.rec)).join("") + `</tbody>`;
+  t._rows = sortable;
+  t._render = loadOutbounds;
+  updateBatchBar("out");
+}
+function renderOutRow(o) {
+  const checked = outSel.has(o.id) ? "checked" : "";
+  return `<tr>
+      <td class="cb-col"><input type="checkbox" value="${o.id}" ${checked} onchange="toggleSel('out',${o.id},this.checked)" /></td>
       <td class="mono">${o.code}</td>
       <td>${esc(o.customer) || "—"}</td>
       <td><button class="detail-toggle" onclick="toggleOutDetail(${o.id})">▸ 查看明细</button></td>
@@ -1718,10 +1768,154 @@ async function loadOutbounds() {
         <td class="num">${fmtMoney(l.amount)}</td>
         <td class="num">成本 ${fmtMoney(l.cogs)}</td>
         <td class="num">${l.pack_fee ? "费 " + fmtMoney(l.pack_fee) : ""}</td>
-      </tr>`).join("") + `</table></div></td></tr>`).join("") + `</tbody>`;
-  t._rows = rows;
-  t._render = loadOutbounds;
-  updateBatchBar("out");
+      </tr>`).join("") + `</table></div></td></tr>`;
+}
+function buildOutGroup(recs) {
+  const ids = recs.map((r) => r.id);
+  const customers = [...new Set(recs.map((r) => r.customer).filter(Boolean))];
+  const dates = recs.map((r) => r.date).sort();
+  const products = new Set();
+  recs.forEach((r) => r.lines.forEach((l) => { if (l.line_type === "sale") products.add(l.product_id); }));
+  return {
+    import_group: recs[0].import_group,
+    ids,
+    records: recs,
+    orders: recs.length,
+    customers,
+    code: `批量 · ${recs.length}单`,
+    customer: customers.join(" / ") || "—",
+    date: dates[0] === dates[dates.length - 1] ? dates[0] : `${dates[0]} ~ ${dates[dates.length - 1]}`,
+    total_amount: recs.reduce((s, r) => s + (r.total_amount || 0), 0),
+    total_cogs: recs.reduce((s, r) => s + (r.total_cogs || 0), 0),
+    total_fee: recs.reduce((s, r) => s + (r.total_fee || 0), 0),
+    net_profit: recs.reduce((s, r) => s + (r.net_profit || 0), 0),
+    products: products.size,
+  };
+}
+function renderOutGroupRow(g) {
+  const allChecked = g.ids.length && g.ids.every((id) => outSel.has(id));
+  return `<tr>
+      <td class="cb-col"><input type="checkbox" data-ids="${g.ids.join(",")}" ${allChecked ? "checked" : ""} onchange="toggleOutGroupCB(this)" /></td>
+      <td class="mono" title="${esc(g.import_group)}">${esc(g.code)}</td>
+      <td>${esc(g.customer)}</td>
+      <td>
+        <button class="detail-toggle" onclick="openOutGroup('${esc(g.import_group)}')">▸ 查看明细</button>
+        <span class="muted" style="font-size:12px;margin-left:6px;">${g.products}种商品</span>
+      </td>
+      <td class="num mono">${fmtMoney(g.total_amount)}</td>
+      <td class="num mono">${fmtMoney(g.total_cogs)}</td>
+      <td class="num mono">${fmtMoney(g.total_fee)}</td>
+      <td class="num mono" style="color:${g.net_profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(g.net_profit)}</td>
+      <td>${g.date}</td>
+      <td class="muted" style="max-width:140px;">—</td>
+      <td><button class="btn sm danger" onclick="deleteOutGroupKeys(['${esc(g.import_group)}'])">删</button></td></tr>`;
+}
+/* 打开批次二级页 */
+function openOutGroup(groupKey) {
+  api(`/api/outbounds?g=${encodeURIComponent(groupKey)}`).then((rows) => {
+    OUT_GROUP = rows.filter((r) => r.import_group === groupKey);
+    if (!OUT_GROUP.length) { toast("未找到该批次"); return; }
+    goPage("outgroup");
+    renderOutGroup();
+  }).catch((e) => toast("加载批次失败：" + e.message));
+}
+/* 批次二级页渲染 */
+function outAggBy(rows, pool) {
+  // pool='sale' 汇总销售商品，pool='pack' 汇总耗材/包装
+  const map = new Map();
+  const aggKey = (l) => `${l.product_id}@@${l.unit}`;
+  for (const o of rows) {
+    for (const l of o.lines) {
+      if (pool === "sale" && l.line_type !== "sale") continue;
+      if (pool === "pack" && l.line_type !== "pack") continue;
+      const k = aggKey(l);
+      if (!map.has(k)) map.set(k, { product_id: l.product_id, name: l.product_name, unit: l.unit, orders: new Set(), qty: 0, qty_base: 0, amount: 0, cogs: 0 });
+      const a = map.get(k);
+      a.orders.add(o.id);
+      a.qty += l.quantity || 0;
+      a.qty_base += l.quantity_base || 0;
+      a.amount += l.amount || 0;
+      a.cogs += l.cogs || 0;
+    }
+  }
+  return [...map.values()].map((a) => ({ ...a, order_count: a.orders.size }));
+}
+function renderOutGroup() {
+  if (!OUT_GROUP) return;
+  const rows = OUT_GROUP;
+  const kw = ($("ogSearch")?.value || "").trim().toLowerCase();
+  const t = $("ogTable");
+  const aggSale = outAggBy(rows, "sale").filter((a) => !kw || a.name.toLowerCase().includes(kw));
+  const aggPack = outAggBy(rows, "pack").filter((a) => !kw || a.name.toLowerCase().includes(kw));
+  const total = {
+    amt: rows.reduce((s, o) => s + (o.total_amount || 0), 0),
+    cogs: rows.reduce((s, o) => s + (o.total_cogs || 0), 0),
+    fee: rows.reduce((s, o) => s + (o.total_fee || 0), 0),
+  };
+  const net = total.amt - total.cogs - total.fee;
+  $("ogTitle").textContent = `出库批次明细（${rows.length} 单）`;
+  $("ogHint").textContent = "按商品聚合展示每种商品的总单数 / 总数量与金额，可搜索、排序；耗材另开页签。";
+  $("ogDelCount").textContent = rows.length;
+  $("ogSummary").innerHTML =
+    `<div class="stat"><div class="label">批次单数</div><div class="value">${rows.length}</div></div>
+     <div class="stat"><div class="label">销售商品种数</div><div class="value">${outAggBy(rows, "sale").length}</div></div>
+     <div class="stat"><div class="label">耗材种数</div><div class="value">${outAggBy(rows, "pack").length}</div></div>
+     <div class="stat"><div class="label">销售收入</div><div class="value">${fmtMoney(total.amt)}</div></div>
+     <div class="stat"><div class="label">结转成本</div><div class="value">${fmtMoney(total.cogs)}</div></div>
+     <div class="stat success"><div class="label">净利</div><div class="value" style="color:${net >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(net)}</div></div>`;
+  const seg = segActive("ogSeg");
+  const isSale = seg === "og-sale";
+  let data = (isSale ? aggSale : aggPack).map((a) => ({ ...a, gp: (a.amount - a.cogs) || 0 }));
+  if (t._sort) data = data.slice().sort((a, b) => compareVal(a[t._sort.key], b[t._sort.key]) * t._sort.dir);
+  t.innerHTML = `<thead><tr>
+    <th data-key="name">商品${sortArrow("ogTable", "name")}</th>
+    ${isSale ? `<th data-key="order_count" class="num">单数${sortArrow("ogTable", "order_count")}</th>` : ""}
+    <th>单位</th>
+    <th data-key="qty" class="num">${isSale ? "总数量" : "数量"}${sortArrow("ogTable", "qty")}</th>
+    <th data-key="amount" class="num">${isSale ? "金额" : "成本"}${sortArrow("ogTable", "amount")}</th>
+    <th data-key="cogs" class="num">成本${sortArrow("ogTable", "cogs")}</th>
+    ${isSale ? `<th data-key="gp" class="num">毛利${sortArrow("ogTable", "gp")}</th>` : ""}
+  </tr></thead><tbody>` +
+    (data.length ? data.map((a) => `<tr>
+      <td>${esc(a.name)}</td>
+      ${isSale ? `<td class="num">${a.order_count} 单</td>` : ""}
+      <td>${esc(a.unit)}</td>
+      <td class="num mono">${fmtNum(a.qty)}</td>
+      <td class="num mono">${fmtMoney(a.amount)}</td>
+      <td class="num mono">${fmtMoney(a.cogs)}</td>
+      ${isSale ? `<td class="num mono" style="color:${(a.amount - a.cogs) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(a.amount - a.cogs)}</td>` : ""}
+    </tr>`).join("")
+      : `<tr><td colspan="7" class="muted">${isSale ? "无销售商品" : "无耗材/包装记录"}</td></tr>`) + `</tbody>`;
+  // 点击表头排序
+  t._rows = data;
+  t._render = function () { renderOutGroup(); };
+}
+function segActive(segId) {
+  const b = $(segId) && $(segId).querySelector(".seg-item.active");
+  return b ? b.dataset.panel : "";
+}
+function switchOgSeg(btn) {
+  const seg = btn.closest(".seg");
+  if (!seg) return;
+  seg.querySelectorAll(".seg-item").forEach((x) => x.classList.remove("active"));
+  btn.classList.add("active");
+  renderOutGroup();
+}
+async function deleteOutGroup() {
+  if (!OUT_GROUP || !OUT_GROUP.length) return;
+  deleteOutGroupKeys([OUT_GROUP[0].import_group]);
+}
+async function deleteOutGroupKeys(groupKeys) {
+  // 通过 batch 接口删除整批
+  try {
+    const all = await api(`/api/outbounds?g=${groupKeys.map(encodeURIComponent).join(",")}`);
+    const want = all.filter((r) => groupKeys.includes(r.import_group)).map((r) => r.id);
+    if (!want.length) { toast("未找到该批次"); return; }
+    if (!confirm(`确认删除该批次 ${want.length} 张出库单？将回退库存、成本与财务记录。`)) return;
+    const r = await api("/api/outbounds/batch-delete", "POST", { ids: want });
+    toast(`已删除 ${r.deleted} 张出库单`);
+    loadOutbounds(); loadStock();
+  } catch (e) { toast("删除失败：" + e.message); }
 }
 function toggleOutDetail(id) {
   const tr = $("od-" + id);

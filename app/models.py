@@ -95,6 +95,7 @@ class Outbound(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(32), index=True)
+    import_group: Mapped[str] = mapped_column(String(32), index=True, default="")  # 批量导入批次号，空=单条
     customer: Mapped[str] = mapped_column(String(64), default="")
     operator: Mapped[str] = mapped_column(String(32), default="")
     date: Mapped[str] = mapped_column(String(10), index=True)

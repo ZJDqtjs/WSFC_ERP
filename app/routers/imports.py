@@ -2,6 +2,7 @@
 import difflib
 import io
 import re
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -488,7 +489,8 @@ class ConfirmOutIn(BaseModel):
 
 
 def _confirm_orders(db: Session, user: User, orders: list[DraftOrder]) -> dict:
-    """按用户确认后的草稿创建出库单（自动结转成本与关联商品）。"""
+    """按用户确认后的草稿创建出库单（自动结转成本与关联商品）。同一批导入共用一个批次号，方便在出库列表合并展示。"""
+    group = f"imp{uuid.uuid4().hex[:10]}"
     created, warnings, failed = 0, [], []
     for o in orders:
         if not o.lines:
@@ -506,6 +508,7 @@ def _confirm_orders(db: Session, user: User, orders: list[DraftOrder]) -> dict:
                     "pack_lines": [], "pack_fee_total": o.pack_fee or 0,
                 },
                 operator=user.name,
+                import_group=group,
             )
             db.flush()
             created += 1
@@ -708,6 +711,7 @@ def import_outbounds(file: UploadFile, db: Session = Depends(get_db), user: User
         order["fee"] += to_float(cell(row, mapping.get("pack_fee")))
 
     created, warnings = 0, []
+    group = f"imp{uuid.uuid4().hex[:10]}"
     for doc_no, order in orders.items():
         if not order["lines"]:
             continue
@@ -720,6 +724,7 @@ def import_outbounds(file: UploadFile, db: Session = Depends(get_db), user: User
                     "lines": order["lines"], "pack_lines": [], "pack_fee_total": order["fee"],
                 },
                 operator=user.name,
+                import_group=group,
             )
             db.flush()
             created += 1

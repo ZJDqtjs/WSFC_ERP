@@ -316,14 +316,17 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
     }
 
 
-def create_outbound(db: Session, payload: dict, operator: str = "") -> tuple[Outbound, list]:
-    """创建出库/销售单（含明细、库存流水、财务记录、成本重算）。返回 (单, 预警)。"""
+def create_outbound(db: Session, payload: dict, operator: str = "", import_group: str = "") -> tuple[Outbound, list]:
+    """创建出库/销售单（含明细、库存流水、财务记录、成本重算）。返回 (单, 预警)。
+    import_group：批量导入批次号，空表示手动单条。
+    """
     lines = payload["lines"]
     order = build_order(db, lines, payload.get("pack_lines"), payload.get("pack_fee_total"))
     op = (payload.get("operator") or "").strip() or operator
     date = payload["date"]
     rec = Outbound(
         code=gen_outbound_code(db, date),
+        import_group=import_group,
         customer=(payload.get("customer") or "").strip(),
         operator=op,
         date=date,
