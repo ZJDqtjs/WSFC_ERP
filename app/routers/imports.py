@@ -26,7 +26,8 @@ from ..services import (
 
 router = APIRouter(prefix="/api", tags=["import"])
 
-DOCS_DIR = Path(__file__).resolve().parent.parent.parent / "docs"
+# 导入模版文件目录（后端 docs 目录）
+DOCS_DIR = Path(__file__).resolve().parent.parent.parent / "backend" / "docs"
 
 WEIGHT_UNITS = {"克": 1.0, "g": 1.0, "斤": 500.0, "公斤": 1000.0, "千克": 1000.0, "kg": 1000.0}
 
