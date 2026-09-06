@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from ..auth import get_current_user
 from ..database import get_db
 from ..models import CodeMapping, PackRule, Product, User
+from .ai import _chat, _extract_json, _llm_config
 from ..services import (
     create_inbound,
     create_outbound,
@@ -1376,6 +1377,117 @@ def auto_mappings(db: Session = Depends(get_db), user: User = Depends(get_curren
             matched += 1
     db.commit()
     return {"ok": True, "matched": matched, "total": len(rows)}
+
+
+class AiMappingsIn(BaseModel):
+    source: str = "jushuitan"
+    codes: list[str] = []
+
+
+# “AI 自动关联”：请大模型为一批未关联的聚水潭出库商品名归并出「库存大类」并分类，
+# 系统据此自动新建库存商品 + 编码关联，随后前端重新解析出库单即可结算。
+AI_SUGGEST_SYSTEM_PROMPT = """你正在帮助「企业台账系统」的用户处理出库单解析。当前有一批聚水潭出库商品名在系统中找不到，请自动把它们归并为若干个「库存大类商品」并给出分类，随后系统会为每个大类新增一条库存商品，并把每个原始商品名关联到对应大类，从而让出库单正常结算。
+
+请按以下要求处理：
+1. 把形态相同、只是规格/净重/包装/克重等级不同的外部商品名归为同一个「库存大类」。例如：
+   「京喜红皮土豆80g+1斤(带箱」「京喜红皮土豆80g+净重1.8斤」「红皮土豆3斤100g+」「红皮土豆5斤200g+」→ 库存大类「红皮土豆」；
+   「新鲜天麻大果1斤4-5个」「新鲜天麻特大果3斤10-13个」「新鲜有机天麻大果2斤8-10个」→ 库存大类「天麻」；
+   「新鲜西兰苔2.5斤」「新鲜西兰苔4.5斤」→ 库存大类「西兰苔」。
+2. 库存大类名称要尽可能短、只保留核心名，且必须是该组绝大多数外部商品名的【子串】（例如「红皮土豆」要被「京喜红皮土豆80g+1斤(带箱」包含），这样系统才能把商品名自动挂到正确的大类。不要把『斤/克/个/箱/带箱/净重/80g+/100g+』等规格字眼放进大类名；名称不要重复。
+3. category 只能输出以下原始词之一：蔬菜、干货、商品。蔬菜鲜果类（土豆、天麻、西兰苔、雪莲果、芦笋等）选「蔬菜」；干制品选「干货」；无法确定选「商品」。
+4. 只对用户给的商品名做归类，禁止新增用户没提到的商品名。
+5. 只输出一个 JSON 对象，禁止输出 JSON 以外的文字、解释、markdown 代码块标记，紧凑单行。
+JSON 结构：
+{"products":[{"name":"红皮土豆","category":"蔬菜"}],"message":"用一句话说明将新增哪些库存大类并覆盖哪些商品名"}"""
+
+
+def _ai_mapping_user_msg(names: list[str]) -> str:
+    lines = []
+    for n in names:
+        u, q = parse_jst_spec(n)
+        spec = f"{fmt_qty(q)} {u}" if u else ""
+        lines.append(f"- {n}" + (f"　（解析为每件 {spec}，这只是规格不是大类名）" if spec else ""))
+    return (
+        "请为下面这些【未关联】的出库商品名归并库存大类并分类。\n"
+        "注意：带『带箱/净重/80g+/100g+』等字样的都只是规格差别，应归到同一个库存大类。\n\n"
+        + "\n".join(lines)
+    )
+
+
+_CAT_NORM = {"蔬菜": "蔬菜", "蔬菜类": "蔬菜", "干货": "干货", "干货类": "干货", "商品": "商品"}
+
+
+def _create_ai_stock(db: Session, name: str, category: str) -> tuple[Product, bool]:
+    """按名称取或新建库存大类商品（沿用标准重量换算体系）。返回 (商品, 是否新建)。"""
+    p = db.scalar(select(Product).where(Product.name == name))
+    if p:
+        return p, False
+    p = Product(
+        name=name, code="", category=_CAT_NORM.get(category, "商品"),
+        product_type="stock", base_unit="克", default_unit="公斤",
+        conversions={"克": 1, "斤": 500, "公斤": 1000, "千克": 1000},
+        spec="AI 自动新增（出库未关联）", sale_price=0.0, unit_cost=0.0,
+        pack_items=[], pack_fee=0.0, is_active=True,
+    )
+    db.add(p)
+    db.flush()
+    return p, True
+
+
+def _apply_ai_mappings(db: Session, names: list[str], products: list[dict]) -> dict:
+    """依据 AI 归并结果创建库存大类并写入编码关联；把每个外部名挂到“名称是其子串”的最长大类。"""
+    stock_by_name: dict[str, Product] = {}
+    created_products: list[dict] = []
+    for pr in products:
+        pname = str(pr.get("name") or "").strip()
+        if not pname:
+            continue
+        p, is_new = _create_ai_stock(db, pname, str(pr.get("category") or "").strip())
+        stock_by_name[pname] = p
+        if is_new:
+            created_products.append({"name": p.name, "product_id": p.id})
+    # 每个外部名关联到“名称是其子串”且最长的库存大类
+    mapped, leftover = 0, []
+    for name in names:
+        best = max((n for n in stock_by_name if n and n in name), key=len, default=None)
+        if best is None:
+            leftover.append(name)
+            continue
+        m = db.scalar(select(CodeMapping).where(
+            CodeMapping.source == "jushuitan", CodeMapping.external_code == name))
+        if m:
+            m.product_id = stock_by_name[best].id
+            m.updated_at = datetime.now()
+        else:
+            db.add(CodeMapping(source="jushuitan", external_code=name,
+                               external_name=name, product_id=stock_by_name[best].id))
+        mapped += 1
+    db.commit()
+    msg = f"新增 {len(created_products)} 个库存大类，已关联 {mapped}/{len(names)} 个商品名。"
+    if leftover:
+        msg += f"仍有 {len(leftover)} 个无法自动关联：{'、'.join(leftover)}，请手动到「编码关联」补充。"
+    return {
+        "ok": True, "created_products": created_products, "mapped": mapped,
+        "total": len(names), "leftover": leftover, "message": msg,
+    }
+
+
+@router.post("/mappings/ai-suggest")
+def ai_suggest_mappings(data: AiMappingsIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """AI 自动新增库存大类 + 编码关联，供出库解析未关联商品时一键补全。"""
+    names = list(dict.fromkeys(n.strip() for n in (data.codes or []) if n and n.strip()))
+    if not names:
+        raise HTTPException(400, "没有需要关联的商品名")
+    cfg = _llm_config()
+    if not cfg.get("api_key"):
+        raise HTTPException(400, "未配置 LLM（product_rules.json 的 llm 段），无法使用 AI 自动关联")
+    try:
+        parsed = _extract_json(_chat(cfg, AI_SUGGEST_SYSTEM_PROMPT, _ai_mapping_user_msg(names)))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"AI 归并库存大类失败：{type(e).__name__}: {e}")
+    return _apply_ai_mappings(db, names, parsed.get("products") or [])
 
 
 @router.delete("/mappings")

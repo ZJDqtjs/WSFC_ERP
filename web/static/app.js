@@ -2749,8 +2749,9 @@ function batchFromImport(kind) {
 }
 async function runBatchModal(kind) {
   const cfg = BATCH_MODAL[kind];
-  const file = $("bmFile").files[0];
+  const file = ($("bmFile") && $("bmFile").files[0]) || window.__BM_FILE__;
   if (!file) { toast("请先选择 Excel 文件"); return; }
+  if (kind === "jushuitan") window.__BM_FILE__ = file; // 供 AI 关联后一键重新解析
   const box = $("bmResult");
   box.innerHTML = `<div class="alert ok">⏳ 正在解析…</div>`;
   try {
@@ -2759,13 +2760,42 @@ async function runBatchModal(kind) {
     else renderDraftReview(kind, r);
   } catch (e) { box.innerHTML = `<div class="alert err">解析失败：${esc(e.message)}</div>`; }
 }
+/* AI 自动新增库存大类 + 编码关联：识别未关联商品名 → 建库存大类并关联 → 重新解析出库单 */
+async function aiAutoMap(kind) {
+  const codes = (window.__LAST_UNMAPPED__ || []).filter(Boolean);
+  if (!codes.length) { toast("没有可关联的商品名"); return; }
+  const box = $("bmResult");
+  try {
+    if (box) box.innerHTML = `<div class="alert ok">🤖 AI 正在归并库存大类并建立编码关联…（通常数秒）</div>`;
+    const r = await api("/api/mappings/ai-suggest", "POST", { source: "jushuitan", codes });
+    const add = (r.created_products || []).map((p) => p.name).join("、");
+    toast(r.message || "AI 关联完成");
+    if (box) box.innerHTML = `<div class="alert ok">✅ ${esc(r.message)}${add ? "（新建：" + esc(add) + "）" : ""}</div>`;
+    if ((r.leftover || []).length) {
+      box.innerHTML += `<div class="alert warn">仍无法关联：${r.leftover.map(esc).join("、")}，可到「编码关联」手动补充后重试。</div>`;
+    }
+    // 关联完成，重新解析（含已关联商品），用户可直接确认出库
+    setTimeout(() => { if (window.__BM_FILE__) runBatchModal(kind); }, 300);
+  } catch (e) {
+    toast("AI 关联失败：" + e.message);
+    if (box) box.innerHTML = `<div class="alert err">AI 关联失败：${esc(e.message)}</div>`;
+  }
+}
 function renderDraftReview(kind, r) {
   const orders = r.orders || [];
   // 一单多货规则带出的包材/人工行：按 doc_no 记录，确认出库时一并回传
   window.__DRAFT_PACK__ = {};
   orders.forEach((o) => { if (o.pack_lines && o.pack_lines.length) window.__DRAFT_PACK__[o.doc_no] = o.pack_lines; });
   let warn = "";
-  if (r.unmapped_codes && r.unmapped_codes.length) warn += `<div class="alert warn">⚠ 未关联商品：${r.unmapped_codes.map(esc).join("、")}（请到「编码关联」关联后重新解析）</div>`;
+  if (r.unmapped_codes && r.unmapped_codes.length) {
+    window.__LAST_UNMAPPED__ = kind === "jushuitan" ? (r.unmapped_codes || []) : [];
+    warn += `<div class="alert warn">⚠ 未关联商品：${r.unmapped_codes.map(esc).join("、")}` +
+      (kind === "jushuitan"
+        ? `<div style="margin-top:8px;"><button class="btn secondary" onclick="aiAutoMap('${kind}')">🤖 AI 自动新增并关联，重新解析</button>
+           <span class="muted" style="font-size:12px;">用 AI 识别这些商品名，自动建库存大类并关联编码</span></div>`
+        : `<div class="muted" style="font-size:12px;margin-top:6px;">请到「编码关联」关联后重新解析。</div>`) +
+      `</div>`;
+  }
   if (r.skip && Object.values(r.skip).some((v) => v > 0)) warn += `<div class="alert warn">⚠ 跳过：${Object.entries(r.skip).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}单`).join("、")}</div>`;
   if (r.failed && r.failed.length) warn += `<div class="alert err">解析失败 ${r.failed.length} 条：${r.failed.slice(0, 5).map((f) => esc(f.reason)).join("；")}</div>`;
   if (!orders.length) {
