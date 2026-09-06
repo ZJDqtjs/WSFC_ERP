@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import CodeMapping, Product, User
+from ..models import CodeMapping, PackRule, Product, User
 from ..services import (
     create_inbound,
     create_outbound,
@@ -472,6 +472,7 @@ class DraftLine(BaseModel):
     price: float
     amount: float = 0.0
     deduct: str = ""  # 扣减说明（订单商品→库存商品）
+    spec: str = ""  # 规格来源，如 每件2斤 / 每件1单
 
 
 class DraftOrder(BaseModel):
@@ -481,6 +482,9 @@ class DraftOrder(BaseModel):
     operator: str = ""
     remark: str = ""
     pack_fee: float = 0.0
+    pack_rule_id: int | None = None
+    pack_rule_name: str = ""
+    pack_lines: list = []  # 一单多货规则带出的包材/纸箱行 [{product_id, unit, quantity, name, sale_product_id, cogs}]
     lines: list[DraftLine] = []
 
 
@@ -501,11 +505,14 @@ def _confirm_orders(db: Session, user: User, orders: list[DraftOrder]) -> dict:
                 {
                     "customer": o.customer, "operator": o.operator or user.name,
                     "date": o.date, "remark": o.remark,
+                    "pack_rule_id": o.pack_rule_id,
+                    "pack_rule_name": o.pack_rule_name,
                     "lines": [
-                        {"product_id": l.product_id, "unit": l.unit, "quantity": l.quantity, "price": l.price}
+                        {"product_id": l.product_id, "unit": l.unit, "quantity": l.quantity, "price": l.price, "spec": l.spec}
                         for l in o.lines
                     ],
-                    "pack_lines": [], "pack_fee_total": o.pack_fee or 0,
+                    "pack_lines": o.pack_lines or [],
+                    "pack_fee_total": o.pack_fee or 0,
                 },
                 operator=user.name,
                 import_group=group,
@@ -581,9 +588,52 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
 
     drafts, failed, unmapped_codes = [], [], set()
     unmapped_detail: dict[str, dict] = {}
+    unmatched_multi: dict[str, dict] = {}
+    rule_map = _load_pack_rule_map(db)
     for o in orders:
+        order_items = parse_jushuitan_name(o["name"])
+        rule = rule_map.get(_jst_combo_key(order_items))
+        # 一单多货（一个出库单含 ≥2 种商品）且未命中规则 → 交由前端让用户补选并生成规则
+        if not rule and len({n for n, _ in order_items}) > 1:
+            entry = unmatched_multi.setdefault(o["doc_no"], {"doc_no": o["doc_no"], "items": []})
+            for n, q in order_items:
+                base = next((it for it in entry["items"] if it["external_code"] == n), None)
+                if base:
+                    base["quantity"] += q
+                else:
+                    entry["items"].append({"external_code": n, "quantity": q, "suggest": _suggest_candidates(db, n)})
+            continue
+        if rule:
+            # 一单多货：命中打包规则 → 自动用规则内维护的商品/纸箱/人工结算
+            sale_lines, pack_lines, labor, pack_issues = _pack_rule_settle(db, rule, order_items)
+            for iss in pack_issues:
+                failed.append({"doc": o["doc_no"], "reason": iss})
+            if not sale_lines:
+                failed.append({"doc": o["doc_no"], "reason": "一单多货规则未关联到可用商品"})
+                continue
+            _settle_revenue(sale_lines, o["amount"])
+            draft_lines = [
+                DraftLine(
+                    product_id=ln["product"].id, product_name=ln["product"].name, unit=ln["unit"],
+                    quantity=ln["qty"], price=ln["price"], amount=ln["amount"],
+                    deduct=f"一单多货：“{ln['ext_name']}”每件{fmt_qty(ln['per_item'])}{ln['unit']}",
+                    spec=ln.get("spec", ""),
+                )
+                for ln in sale_lines
+            ]
+            drafts.append(
+                DraftOrder(
+                    doc_no=o["doc_no"], date=o["date"],
+                    customer=o["customer"] or o["shop"],
+                    operator=o["seller"] or user.name,
+                    remark=f"聚水潭导入 单{o['doc_no']} {o['express']}{o['track']}（一单多货·规则：{rule.name}）",
+                    pack_fee=round(labor, 2), pack_rule_id=rule.id, pack_rule_name=rule.name,
+                    pack_lines=pack_lines, lines=draft_lines,
+                )
+            )
+            continue
         lines = []
-        for ext_name, qty in parse_jushuitan_name(o["name"]):
+        for ext_name, qty in order_items:
             m = mapping_by_code.get(ext_name)
             pid = m.product_id if m else None
             p = db.get(Product, pid) if pid else None
@@ -606,7 +656,7 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                 failed.append({"doc": o["doc_no"], "reason": f"「{ext_name}」换算单位「{unit}」未配置"})
                 continue
             # 消耗量 = 件数 × 每件数量（如 1件×2斤=2斤）
-            lines.append({"p": p, "ext_name": ext_name, "unit": unit, "qty": round(qty * per_item, 4)})
+            lines.append({"p": p, "ext_name": ext_name, "unit": unit, "per_item": per_item, "qty": round(qty * per_item, 4)})
         if not lines:
             failed.append({"doc": o["doc_no"], "reason": "无已关联商品（未关联编码）"})
             continue
@@ -632,7 +682,8 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                 DraftLine(
                     product_id=ln["p"].id, product_name=ln["p"].name, unit=ln["unit"],
                     quantity=ln["qty"], price=round(amt / ln["qty"], 4) if ln["qty"] else 0,
-                    amount=amt, deduct=f"{ln['ext_name']} 每件{fmt_qty(per_item)}{unit}" if per_item else "",
+                    amount=amt, deduct=f"{ln['ext_name']} 每件{fmt_qty(ln['per_item'])}{ln['unit']}" if ln["per_item"] else "",
+                    spec=f"每件{fmt_qty(ln['per_item'])}{ln['unit']}" if ln["per_item"] else "",
                 )
             )
         drafts.append(
@@ -650,7 +701,7 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
         for code in sorted(unmapped_codes)
     ]
     unmapped_list.sort(key=lambda x: -x["count"])
-    return drafts, failed, skip, unmapped_codes, unmapped_list
+    return drafts, failed, skip, unmapped_codes, unmapped_list, list(unmatched_multi.values())
 
 
 @router.post("/import/outbounds/preview")
@@ -661,13 +712,67 @@ def preview_import_outbounds(file: UploadFile, db: Session = Depends(get_db), us
 
 @router.post("/jushuitan/import/preview")
 def preview_import_jushuitan(file: UploadFile, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    drafts, failed, skip, unmapped, unmapped_list = parse_jushuitan_draft(file, db, user)
+    drafts, failed, skip, unmapped, unmapped_list, unmatched_multi = parse_jushuitan_draft(file, db, user)
     return {
         "orders": [o.model_dump() for o in drafts],
         "skip": skip, "failed": failed, "failed_count": len(failed),
         "unmapped_codes": sorted(unmapped),
         "unmapped": unmapped_list,
+        "unmatched_multi": unmatched_multi,
     }
+
+
+class JstRuleItem(BaseModel):
+    external_code: str
+    quantity: float = 1.0
+    product_id: int | None = None
+
+
+class JstRuleIn(BaseModel):
+    doc_no: str = ""
+    items: list[JstRuleItem] = []
+
+
+@router.post("/pack-rules/from-jushuitan")
+def create_rule_from_jushuitan(data: JstRuleIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """把导入时用户手动补选的一单多货组合写入「一单多货规则」，供后续自动命中。
+
+    items.name 保留为聚水潭外部商品名（用于后续组合匹配），product_id 指向所选系统商品。
+    已有同名规则则更新商品关联，保留已配置的纸箱/人工。
+    """
+    if not data.items:
+        raise HTTPException(400, "没有组合商品")
+    rule_items = []
+    for it in data.items:
+        name = (it.external_code or "").strip()
+        if not name:
+            raise HTTPException(400, "外部商品名不能为空")
+        if not it.product_id:
+            continue
+        p = db.get(Product, it.product_id)
+        if not p:
+            raise HTTPException(400, f"商品不存在：{name}")
+        rule_items.append({"name": name, "quantity": float(it.quantity or 1), "product_id": p.id})
+    if not rule_items:
+        raise HTTPException(400, "请为组合中的商品选择关联商品")
+    combo_name = ",".join(
+        f"{it['name']}*{fmt_qty(it['quantity'])}" if it["quantity"] != 1 else it["name"]
+        for it in rule_items
+    )
+    existing = db.scalar(select(PackRule).where(PackRule.name == combo_name))
+    if existing:
+        existing.items = rule_items
+        existing.is_active = True
+        db.commit()
+        return {"ok": True, "id": existing.id, "created": False}
+    r = PackRule(
+        name=combo_name, items=rule_items, box_type="", box_items=[],
+        labor_price=None, box_ratio=1.0, remark="导入自动生成", is_active=True,
+    )
+    db.add(r)
+    db.commit()
+    db.refresh(r)
+    return {"ok": True, "id": r.id, "created": True}
 
 
 @router.post("/import/outbounds/confirm")
@@ -820,6 +925,113 @@ def pick_jst_unit(product: Product, ext_name: str) -> tuple[str | None, float | 
     return None, None
 
 
+# ---------------- 一单多货（打包规则）结算 ----------------
+def _jst_combo_key(items) -> tuple:
+    """一单多货组合去序规范化键：((名称, 数量), ...)，按名称排序，避免条目顺序影响匹配。"""
+    return tuple(sorted((str(n).strip(), round(float(q), 6)) for n, q in items))
+
+
+def _load_pack_rule_map(db: Session) -> dict:
+    """载入启用的「一单多货打包规则」，键为规范化组合键。"""
+    m = {}
+    for r in db.execute(select(PackRule).where(PackRule.is_active.is_(True))).scalars():
+        items = [(it.get("name"), it.get("quantity", 1)) for it in (r.items or [])]
+        if items and all(str(it.get("name") or "").strip() for it in r.items):
+            m[_jst_combo_key(items)] = r
+    return m
+
+
+def _resolve_labor_product(db: Session) -> Product | None:
+    """查找人工打包费商品（人工明细行用于溯源）。"""
+    return db.scalar(select(Product).where(Product.name == "人工打包费", Product.category == "人工"))
+
+
+def _pack_rule_settle(db: Session, rule: PackRule, order_items: list[tuple[str, float]]):
+    """按一单多货规则生成结算内容。
+
+    order_items: 聚水潭解析出的 [(商品名, 数量)]。
+    返回 (sale_lines, pack_lines, labor_fee, issues)
+    - sale_lines: [{product, unit, per_item, qty, ext_name, spec}, ...]
+    - pack_lines: 纸箱 + 人工明细行 [{product_id, unit, quantity, name, sale_product_id, cogs}, ...]
+      · 单一销售商品：纸箱/人工归属该商品（sale_product_id 指向它）
+      · 多货组合：归属整单规则（sale_product_id 为空，前端按规则组合展示）
+    - labor_fee: 仅在无法生成人工明细行时回退为费用；否则为 0
+    - issues: 未能关联/换算缺失的商品提示
+    """
+    qty_by_name: dict[str, float] = {}
+    for n, q in order_items:
+        qty_by_name[str(n).strip()] = qty_by_name.get(str(n).strip(), 0) + q
+    sale_lines, issues, sale_pids = [], [], []
+    for it in (rule.items or []):
+        name = str(it.get("name") or "").strip()
+        pid = it.get("product_id")
+        p = db.get(Product, pid) if pid else None
+        if not p:
+            issues.append(f"「{name}」未关联订单商品，请在一单多货规则中维护")
+            continue
+        unit, per_item = pick_jst_unit(p, name)
+        if unit is None or per_item is None:
+            issues.append(f"「{name}」未配置每件重量换算（如 1个=1000克 或 每件2斤）")
+            continue
+        if unit not in (p.conversions or {}):
+            issues.append(f"「{name}」换算单位「{unit}」未配置")
+            continue
+        q_orders = qty_by_name.get(name, float(it.get("quantity", 1) or 1))
+        spec = f"每件{fmt_qty(per_item)}{unit}"
+        if q_orders > 1:
+            spec += f"，合并{fmt_qty(q_orders)}件"
+        sale_lines.append({
+            "product": p, "unit": unit, "per_item": per_item,
+            "qty": round(q_orders * per_item, 4), "ext_name": name,
+            "spec": spec,
+        })
+        sale_pids.append(p.id)
+
+    distinct_pids = {pid for pid in sale_pids if pid is not None}
+    sp_id = next(iter(distinct_pids)) if len(distinct_pids) == 1 else None
+
+    pack_lines = [
+        {"product_id": b.get("product_id"), "unit": "个",
+         "quantity": float(b.get("quantity", 1) or 1), "name": b.get("name", ""),
+         "sale_product_id": sp_id, "cogs": None}
+        for b in (rule.box_items or []) if b.get("product_id")
+    ]
+
+    labor_line = None
+    labor_price = float(rule.labor_price or 0)
+    if labor_price:
+        lp = _resolve_labor_product(db)
+        if lp:
+            labor_line = {"product_id": lp.id, "unit": "单",
+                          "quantity": 1.0, "name": lp.name,
+                          "sale_product_id": sp_id, "cogs": labor_price}
+        else:
+            issues.append("未找到「人工打包费」商品，人工将按费用记入")
+    if labor_line:
+        pack_lines.append(labor_line)
+
+    labor_fee = 0.0 if labor_line else labor_price
+    return sale_lines, pack_lines, labor_fee, issues
+
+
+def _settle_revenue(sale_lines: list[dict], revenue: float) -> None:
+    """按商品默认售价比例把实收金额分摊到各销售行（sale_lines 内写 qty_base / price / amount）。"""
+    total = 0.0
+    for ln in sale_lines:
+        qb = unit_to_base(ln["product"], ln["unit"], ln["qty"])
+        ln["qty_base"] = qb
+        ln["_raw"] = ln["product"].sale_price * qb
+        total += ln["_raw"]
+    if total <= 0:
+        total = sum(ln["qty_base"] for ln in sale_lines)
+        for ln in sale_lines:
+            ln["_raw"] = ln["qty_base"]
+    for ln in sale_lines:
+        amt = round(revenue * ln["_raw"] / total, 2) if total else 0.0
+        ln["amount"] = amt
+        ln["price"] = round(amt / ln["qty"], 4) if ln["qty"] else 0
+
+
 def jushuitan_rows(rows, statuses: tuple | None = ("已出库",)) -> list[dict]:
     """解析聚水潭行。statuses 为 None 时接受全部状态（鲜货需求预演算），仅排除 作废/已删除/空。"""
     mapping, start = detect_header(rows, JUSHUITAN_COLS)
@@ -911,14 +1123,14 @@ def _match_stock(db: Session, ext_name: str) -> Product | None:
 
 
 def _suggest_candidates(db: Session, ext_name: str, top: int = 8) -> list[dict]:
-    """为未关联的外部商品名返回候选系统商品（库存大类优先，排除 人工/包材/快递），带匹配分数。
+    """为未关联的外部商品名返回候选系统商品（库存大类+订单小类，排除 人工/包材/快递），带匹配分数。
 
-    「凑零为整 / 全名归一」策略与 _match_stock 保持一致：先按剥离规格后的基础名精确匹配，
-    再按整名与基础名做模糊匹配，为用户在导入页手动选择提供推荐（分数>=0.35 的才进入候选）。
+    策略与 _match_stock 保持一致：先按剥离规格后的基础名精确匹配，再按整名与基础名做模糊匹配；分数>=0.35 才进入候选。
+    同时包含订单小类（order），因为一单多货规则按订单小类表达组合名。
     """
     base = _strip_spec(ext_name)
-    stocks = [
-        p for p in db.execute(select(Product).where(Product.product_type == "stock")).scalars()
+    cands = [
+        p for p in db.execute(select(Product)).scalars()
         if p.category not in _NO_AUTO_STOCK_CATS
     ]
     scored: list[tuple[float, int]] = []
@@ -932,11 +1144,11 @@ def _suggest_candidates(db: Session, ext_name: str, top: int = 8) -> list[dict]:
 
     n, b = _norm(ext_name), _norm(base)
     # 1) 基础名精确匹配优先（安全，绝不误配）
-    for s in stocks:
+    for s in cands:
         if s.name == base or s.code == base:
             _push(s.id, 1.0)
     # 2) 整名/基础名模糊匹配
-    for s in stocks:
+    for s in cands:
         sc = 0.0
         for cand in (s.name, s.code):
             c = _norm(cand)

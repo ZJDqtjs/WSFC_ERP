@@ -2164,30 +2164,58 @@ function openOutGroup(groupKey) {
   }).catch((e) => toast("加载批次失败：" + e.message));
 }
 /* 批次二级页渲染 */
+function specMerge(s) {
+  if (!s) return "";
+  return s.spec || "";
+}
+function packOwner(o, l, saleLines, ruleName) {
+  // 单一销售商品：纸箱/人工归属该销售商品；多货组合：按规则组合聚合
+  if (l.sale_product_id != null) {
+    const sp = saleLines.find((x) => x.product_id === l.sale_product_id);
+    const sname = l.sale_product_name || (sp && sp.product_name) || l.product_name;
+    const sub = [ruleName ? `规则:${ruleName}` : "", specMerge(sp)].filter(Boolean).join(" · ");
+    // 命中一单多货规则时，key 需带上规则，避免同一商品不同规则的箱号被聚到一行
+    const ruleKey = ruleName ? `@@${o.pack_rule_id || ruleName}` : "";
+    return { key: `sp${l.sale_product_id}${ruleKey}`, name: sname, sub };
+  }
+  if (ruleName) {
+    const name = saleLines.map((s) => s.product_name).filter(Boolean).join(" + ") || ruleName;
+    const detail = saleLines.map((s) => `${s.product_name}:${specMerge(s)}`).filter(Boolean).join("；");
+    const sub = [ruleName ? `规则:${ruleName}` : "", detail].filter(Boolean).join(" · ");
+    return { key: `rule${o.pack_rule_id || o.id}`, name, sub };
+  }
+  return { key: `p${l.product_id}`, name: l.product_name, sub: "" };
+}
 function outAggBy(rows, pool) {
   // pool='sale' 汇总销售商品；pool='pack' 汇总耗材/包装(不含人工)；pool='labor' 仅人工；
-  // pool='laborpack' 打包人工+耗材按销售商品组合（如 京鲜生茯苓500g打包+纸箱8号）
-  const isLaborPack = pool === "laborpack";
+  // pool='laborpack' 人工+耗材，按「销售商品 / 规则组合」溯源展示。
+  const isPackPool = pool === "pack";
   const map = new Map();
   const aggKey = (l) => `${l.product_id}@@${l.unit}`;
   for (const o of rows) {
+    const saleLines = (o.lines || []).filter((l) => l.line_type === "sale");
+    const ruleName = o.pack_rule_name || o.multi_rule || "";
     for (const l of o.lines) {
       const isLabor = !!l.is_labor; // 人工：category=人工 或 名称以「打包」结尾
       if (pool === "sale" && l.line_type !== "sale") continue;
       if (pool === "pack" && (l.line_type !== "pack" || isLabor)) continue; // 耗材：排除人工
       if (pool === "labor" && !(l.line_type === "pack" && isLabor)) continue; // 仅人工
-      if (pool === "laborpack" && l.line_type !== "pack") continue; // 打包人工+耗材
-      // 打包人工+耗材按所属销售商品组合；未关联（手动）则按包材自身
-      const k = isLaborPack
-        ? (l.sale_product_id != null ? `sp${l.sale_product_id}` : `p${l.product_id}`)
-        : aggKey(l);
+      if (pool === "laborpack" && l.line_type !== "pack") continue; // 人工+耗材
+
+      let k, name, sub, unit;
+      if (pool === "sale" || isPackPool) {
+        k = aggKey(l);
+        name = l.product_name;
+        sub = "";
+        unit = l.unit;
+      } else {
+        const own = packOwner(o, l, saleLines, ruleName);
+        k = own.key; name = own.name; sub = own.sub; unit = l.unit;
+      }
       if (!map.has(k)) {
         map.set(k, {
-          product_id: k,
-          name: isLaborPack ? "" : l.product_name,
-          parts: isLaborPack ? [] : null,
-          unit: l.unit,
-          orders: new Set(), qty: 0, qty_base: 0, amount: 0, cogs: 0,
+          product_id: k, name, sub, unit,
+          orders: new Set(), qty: 0, qty_base: 0, amount: 0, cogs: 0, boxes: new Set(), hasBox: false,
         });
       }
       const a = map.get(k);
@@ -2196,14 +2224,22 @@ function outAggBy(rows, pool) {
       a.qty_base += l.quantity_base || 0;
       a.amount += l.amount || 0;
       a.cogs += l.cogs || 0;
-      if (isLaborPack && !a.parts.includes(l.product_name)) a.parts.push(l.product_name);
+      if (!a.sub && sub) a.sub = sub;
+      // 「打包人工+耗材」等池：收集该销售商品/规则组合命中的纸箱/耗材型号
+      if (pool === "laborpack" && l.line_type === "pack" && !isLabor) {
+        a.hasBox = true;
+        a.boxes.add(l.product_name);
+      }
     }
   }
-  return [...map.values()].map((a) => ({
-    ...a,
-    name: isLaborPack ? (a.parts.join("+") || "(未关联)") : a.name,
-    order_count: a.orders.size,
-  }));
+  return [...map.values()].map((a) => {
+    const boxes = [...a.boxes];
+    if (a.hasBox && boxes.length) {
+      const bx = boxes.join(" + ");
+      a.subSub = a.sub ? `${a.sub} · 纸箱:${bx}` : `纸箱:${bx}`;
+    }
+    return { ...a, boxes, order_count: a.orders.size };
+  });
 }
 function renderOutGroup() {
   if (!OUT_GROUP) return;
@@ -2251,7 +2287,7 @@ function renderOutGroup() {
     ${isSale ? `<th data-key="gp" class="num">毛利${sortArrow("ogTable", "gp")}</th>` : ""}
   </tr></thead><tbody>` +
     (data.length ? data.map((a) => `<tr>
-      <td>${esc(a.name)}</td>
+      <td>${esc(a.name)}${(a.subSub || a.sub) ? `<div class="muted" style="font-size:12px;font-weight:normal;">${esc(a.subSub || a.sub)}</div>` : ""}</td>
       <td class="num">${a.order_count} 单</td>
       ${isLaborPack ? "" : `<td>${esc(a.unit)}</td>`}
       ${isLaborPack ? "" : `<td class="num mono">${fmtNum(a.qty)}</td>`}
@@ -2725,6 +2761,9 @@ async function runBatchModal(kind) {
 }
 function renderDraftReview(kind, r) {
   const orders = r.orders || [];
+  // 一单多货规则带出的包材/人工行：按 doc_no 记录，确认出库时一并回传
+  window.__DRAFT_PACK__ = {};
+  orders.forEach((o) => { if (o.pack_lines && o.pack_lines.length) window.__DRAFT_PACK__[o.doc_no] = o.pack_lines; });
   let warn = "";
   if (r.unmapped_codes && r.unmapped_codes.length) warn += `<div class="alert warn">⚠ 未关联商品：${r.unmapped_codes.map(esc).join("、")}（请到「编码关联」关联后重新解析）</div>`;
   if (r.skip && Object.values(r.skip).some((v) => v > 0)) warn += `<div class="alert warn">⚠ 跳过：${Object.entries(r.skip).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}单`).join("、")}</div>`;
@@ -2737,7 +2776,8 @@ function renderDraftReview(kind, r) {
   }
   const body = orders.map((o, oi) => `
     <div class="draft-order" data-doc="${esc(o.doc_no)}" data-date="${esc(o.date)}" data-customer="${esc(o.customer || "")}"
-         data-operator="${esc(o.operator || "")}" data-remark="${esc(o.remark || "")}" data-packfee="${o.pack_fee || 0}">
+         data-operator="${esc(o.operator || "")}" data-remark="${esc(o.remark || "")}" data-packfee="${o.pack_fee || 0}"
+         data-packruleid="${o.pack_rule_id || ""}" data-packrulename="${esc(o.pack_rule_name || "")}">
       <div class="draft-head">
         <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" class="draft-check" checked onchange="updateDraftCount('${kind}')" /> 出库</label>
         <b>${esc(o.doc_no || "（无单号）")}</b>
@@ -2788,10 +2828,16 @@ async function confirmDraft(kind) {
       if (pid && unit && qty > 0) lines.push({ product_id: pid, unit, quantity: qty, price });
     });
     if (!lines.length) return;
+    const packMap = window.__DRAFT_PACK__ || {};
+    const pid = od.dataset.packruleid ? +od.dataset.packruleid : null;
+    const pname = (od.dataset.packrulename || "").trim();
     orders.push({
       doc_no: od.dataset.doc, date: od.dataset.date, customer: od.dataset.customer,
       operator: od.dataset.operator, remark: od.dataset.remark,
       pack_fee: parseFloat(od.dataset.packfee) || 0, lines,
+      pack_rule_id: pid,
+      pack_rule_name: pname,
+      pack_lines: packMap[od.dataset.doc] || [],
     });
   });
   if (!orders.length) { toast("没有勾选任何单据"); return; }

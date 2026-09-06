@@ -66,6 +66,10 @@ def migrate():
         ocols = [r[1] for r in conn.execute(text("PRAGMA table_info(outbounds)")).fetchall()]
         if "import_group" not in ocols:
             conn.execute(text("ALTER TABLE outbounds ADD COLUMN import_group VARCHAR(32) DEFAULT ''"))
+        if "pack_rule_id" not in ocols:
+            conn.execute(text("ALTER TABLE outbounds ADD COLUMN pack_rule_id INTEGER"))
+        if "pack_rule_name" not in ocols:
+            conn.execute(text("ALTER TABLE outbounds ADD COLUMN pack_rule_name VARCHAR(255) DEFAULT ''"))
         conn.commit()
 
     # 出库单行：pack 行所属销售商品（打包人工+耗材组合统计用）
@@ -73,8 +77,11 @@ def migrate():
         lcols = [r[1] for r in conn.execute(text("PRAGMA table_info(outbound_lines)")).fetchall()]
         if "sale_product_id" not in lcols:
             conn.execute(text("ALTER TABLE outbound_lines ADD COLUMN sale_product_id INTEGER"))
-            conn.commit()
+        if "spec" not in lcols:
+            conn.execute(text("ALTER TABLE outbound_lines ADD COLUMN spec VARCHAR(64) DEFAULT ''"))
+        conn.commit()
     _backfill_sale_product()
+    _backfill_pack_rule()
 
     # 一单多货规则表：箱型号关联清单（新增列）
     with engine.connect() as conn:
@@ -133,6 +140,33 @@ def _box_model_name(pname: str) -> str:
     if n.endswith("号箱"):
         return n[:-1]
     return n
+
+
+def _backfill_pack_rule():
+    """回填出库单的 pack_rule_name / pack_rule_id（幂等）：从 remark 解析「一单多货·规则：xxx）」。"""
+    from .database import SessionLocal
+    from .models import Outbound, PackRule
+
+    db = SessionLocal()
+    try:
+        from sqlalchemy import select
+
+        rules = {r.name: r.id for r in db.execute(select(PackRule)).scalars()}
+        for o in db.execute(select(Outbound).where(Outbound.pack_rule_name == "")).scalars():
+            remark = o.remark or ""
+            if "一单多货·规则：" not in remark:
+                continue
+            seg = remark.split("一单多货·规则：", 1)[1].split("）", 1)[0].strip()
+            if not seg:
+                continue
+            o.pack_rule_name = seg
+            o.pack_rule_id = rules.get(seg)
+        db.commit()
+    except Exception as e:  # 回填失败不影响主流程
+        print("[迁移] 回填 pack_rule 失败:", e)
+        db.rollback()
+    finally:
+        db.close()
 
 
 def _backfill_sale_product():

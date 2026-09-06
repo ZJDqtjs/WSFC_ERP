@@ -44,14 +44,25 @@ class BatchIds(BaseModel):
 
 
 def _to_dict(o: Outbound) -> dict:
+    remark = o.remark or ""
+    is_multi = "一单多货" in remark
+    multi_rule = o.pack_rule_name or ""
+    if not multi_rule and "一单多货·规则：" in remark:
+        multi_rule = remark.split("一单多货·规则：", 1)[1].split("）", 1)[0]
+    # pack 行所属销售商品名：同单内 sale_product_id → sale 行 product_id
+    sale_names = {l.product_id: (l.product.name if l.product else "") for l in o.lines if l.line_type == "sale"}
     return {
         "id": o.id,
         "code": o.code,
         "import_group": o.import_group,
+        "pack_rule_id": o.pack_rule_id,
+        "pack_rule_name": o.pack_rule_name,
         "customer": o.customer,
         "operator": o.operator,
         "date": o.date,
         "remark": o.remark,
+        "is_multi": is_multi,
+        "multi_rule": multi_rule,
         "total_amount": o.total_amount,
         "total_cogs": o.total_cogs,
         "total_fee": o.total_fee,
@@ -63,6 +74,8 @@ def _to_dict(o: Outbound) -> dict:
                 "product_name": l.product.name if l.product else "",
                 "line_type": l.line_type,
                 "sale_product_id": l.sale_product_id,
+                "sale_product_name": sale_names.get(l.sale_product_id, ""),
+                "spec": l.spec or "",
                 "unit": l.unit,
                 "quantity": l.quantity,
                 "quantity_base": l.quantity_base,

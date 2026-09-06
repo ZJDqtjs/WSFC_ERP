@@ -215,10 +215,12 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
             pid, unit, quantity = ln.product_id, ln.unit, ln.quantity
             price = float(ln.price or 0)
             fee = ln.pack_fee
+            spec = getattr(ln, "spec", "") or ""
         else:  # dict（批量导入）
             pid, unit, quantity = ln["product_id"], ln["unit"], ln["quantity"]
             price = float(ln.get("price", 0) or 0)
             fee = ln.get("pack_fee")
+            spec = ln.get("spec", "") or ""
         p = db.get(Product, pid)
         if not p:
             raise ValueError("商品不存在")
@@ -238,7 +240,7 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
                 "stock_product_id": target.id, "stock_product_name": target.name,
                 "deduction_base": deduction_base,
                 "unit_price": price, "amount": amount, "cogs": cogs, "pack_fee": fee,
-                "line_type": "sale",
+                "line_type": "sale", "spec": spec,
             }
         )
         total_amount += amount
@@ -280,14 +282,19 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
         if not m:
             raise ValueError(f"关联商品ID {spec['product_id']} 不存在")
         qty_base = unit_to_base(m, spec["unit"], spec["quantity"])
-        # 关联材料成本：优先用库存平均成本，未入库时用参考成本（如纸箱单价）
-        cost = m.avg_cost if m.avg_cost else m.unit_cost
-        cogs = round(qty_base * cost, 2)
+        # 关联材料成本：优先用显式指定成本（人工行），否则库存平均成本，未入库时用参考成本
+        if spec.get("cogs") is not None:
+            cogs = round(float(spec["cogs"]), 2)
+            unit_price = round(cogs / spec["quantity"], 4) if spec["quantity"] else 0.0
+        else:
+            cost = m.avg_cost if m.avg_cost else m.unit_cost
+            cogs = round(qty_base * cost, 2)
+            unit_price = cost
         pack_rows.append(
             {
                 "product_id": m.id, "product_name": m.name, "base_unit": m.base_unit,
                 "unit": spec["unit"], "quantity": spec["quantity"], "quantity_base": qty_base,
-                "unit_price": cost, "amount": cogs, "cogs": cogs, "pack_fee": 0,
+                "unit_price": unit_price, "amount": cogs, "cogs": cogs, "pack_fee": 0,
                 "line_type": "pack",
                 "sale_product_id": spec.get("sale_product_id"),
             }
@@ -336,6 +343,8 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
     rec = Outbound(
         code=gen_outbound_code(db, date),
         import_group=import_group,
+        pack_rule_id=payload.get("pack_rule_id"),
+        pack_rule_name=(payload.get("pack_rule_name") or "").strip(),
         customer=(payload.get("customer") or "").strip(),
         operator=op,
         date=date,
@@ -366,6 +375,7 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
                 product_id=r["product_id"],
                 line_type=r["line_type"],
                 sale_product_id=r.get("sale_product_id"),  # pack 行所属销售商品（组合统计用）
+                spec=r.get("spec", ""),  # 销售行规格来源
                 unit=r["unit"],
                 quantity=r["quantity"],
                 quantity_base=r["quantity_base"],

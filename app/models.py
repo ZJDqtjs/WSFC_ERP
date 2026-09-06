@@ -96,6 +96,8 @@ class Outbound(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(32), index=True)
     import_group: Mapped[str] = mapped_column(String(32), index=True, default="")  # 批量导入批次号，空=单条
+    pack_rule_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 命中的一单多货规则ID
+    pack_rule_name: Mapped[str] = mapped_column(String(255), default="")  # 规则名快照（规则改动不影响历史）
     customer: Mapped[str] = mapped_column(String(64), default="")
     operator: Mapped[str] = mapped_column(String(32), default="")
     date: Mapped[str] = mapped_column(String(10), index=True)
@@ -121,6 +123,7 @@ class OutboundLine(Base):
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
     line_type: Mapped[str] = mapped_column(String(8), default="sale")  # sale / pack
     sale_product_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # pack 行所属销售商品 ID
+    spec: Mapped[str] = mapped_column(String(64), default="")  # 销售行规格来源，如 每件2斤 / 每件1单
     unit: Mapped[str] = mapped_column(String(32))
     quantity: Mapped[float] = mapped_column(Float)
     quantity_base: Mapped[float] = mapped_column(Float)

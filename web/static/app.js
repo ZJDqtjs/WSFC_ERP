@@ -1618,9 +1618,12 @@ async function loadOutbounds() {
     <th data-key="date">日期${sortArrow("outTable", "date")}</th>
     <th>备注</th>
     <th></th></tr></thead><tbody>` +
-    rows.map((o) => `<tr>
+    rows.map((o) => {
+    const multiBadge = o.is_multi ? '<span class="badge adjust" title="一单多货规则结算">多单结算</span>' : "";
+    const multiHead = o.is_multi ? `<div class="hint" style="padding:6px 12px;color:var(--accent);">🔗 多单结算${o.multi_rule ? ` · 规则「${esc(o.multi_rule)}」` : ""}${o.total_fee ? ` · 打包人工费 ${fmtMoney(o.total_fee)}` : ""}</div>` : "";
+    return `<tr>
       <td class="cb-col"><input type="checkbox" value="${o.id}" ${outSel.has(o.id) ? "checked" : ""} onchange="toggleSel('out',${o.id},this.checked)" /></td>
-      <td class="mono">${o.code}</td>
+      <td class="mono">${o.code} ${multiBadge}</td>
       <td>${esc(o.customer) || "—"}</td>
       <td><button class="detail-toggle" onclick="toggleOutDetail(${o.id})">▸ 查看明细</button></td>
       <td class="num mono">${fmtMoney(o.total_amount)}</td>
@@ -1630,16 +1633,16 @@ async function loadOutbounds() {
       <td>${o.date}</td>
       <td class="muted" style="max-width:140px;">${renderRemarkHtml(o.remark)}</td>
       <td><button class="btn sm danger" onclick="deleteOutbound(${o.id})">删</button></td></tr>
-      <tr id="od-${o.id}" style="display:none;"><td colspan="11"><div class="subtable"><table>` +
+      <tr id="od-${o.id}" style="display:none;"><td colspan="11"><div class="subtable">${multiHead}<table>` +
       o.lines.map((l) => `<tr>
         <td>${esc(l.product_name)}</td>
-        <td>${l.line_type === "sale" ? '<span class="badge out">销售</span>' : '<span class="badge pack">包装消耗</span>'}</td>
+        <td>${l.line_type === "sale" ? '<span class="badge out">销售</span>' : (o.is_multi ? '<span class="badge adjust">多单结算·包装</span>' : '<span class="badge pack">包装消耗</span>')}</td>
         <td>${fmtNum(l.quantity)} ${l.unit}</td>
         <td>= ${fmtNum(l.quantity_base)} ${l.base_unit || ""}</td>
         <td class="num">${fmtMoney(l.amount)}</td>
         <td class="num">成本 ${fmtMoney(l.cogs)}</td>
         <td class="num">${l.pack_fee ? "费 " + fmtMoney(l.pack_fee) : ""}</td>
-      </tr>`).join("") + `</table></div></td></tr>`).join("") + `</tbody>`;
+      </tr>`).join("") + `</table></div></td></tr>`}).join("") + `</tbody>`;
   t._rows = rows;
   t._render = loadOutbounds;
   updateBatchBar("out");
@@ -1998,8 +2001,10 @@ async function runBatchModal(kind) {
 function renderDraftReview(kind, r) {
   const orders = r.orders || [];
   let warn = "";
-  // 聚水潭导入页：发现未关联商品时，先引导用户在当前页面手动匹配（保存后自动重解析）；跳过时 r.forceReview=1 直接进入单据确认
+  // 聚水潭导入页：① 一单多货未命中规则 → 先引导生成规则；② 未关联商品 → 引导编码匹配；跳过时 forceReview 直接确认
+  if (kind === "jushuitan" && r.unmatched_multi && r.unmatched_multi.length && !r.forceReview) return renderJstRuleScreen(kind, r, "");
   if (kind === "jushuitan" && r.unmapped && r.unmapped.length && !r.forceReview) return renderJstMatchScreen(kind, r, "");
+  if (r.unmatched_multi && r.unmatched_multi.length && r.forceReview) warn += `<div class="alert warn">⚠ 已跳过 <b>${r.unmatched_multi.length}</b> 个一单多货订单（未生成规则，未结算）</div>`;
   if (r.unmapped_codes && r.unmapped_codes.length) warn += r.forceReview
       ? `<div class="alert warn">⚠ 已跳过 <b>${r.unmapped_codes.length}</b> 种未关联商品（${r.unmapped_codes.map(esc).join("、")}），未计入出库，请留意。</div>`
       : `<div class="alert warn">⚠ 未关联商品：${r.unmapped_codes.map(esc).join("、")}（请到「编码关联」关联后重新解析）</div>`;
@@ -2011,14 +2016,20 @@ function renderDraftReview(kind, r) {
       <div class="modal-foot"><button class="btn secondary" onclick="openBatchModal('${kind}')">返回重新选择</button></div>`;
     return;
   }
-  const body = orders.map((o, oi) => `
+  const body = orders.map((o, oi) => {
+    // 一单多货规则带出的包材/人工，随单据回传给确认（避免重新生成时丢失）
+    const pl = (o.pack_lines || []);
+    const packHint = pl.length ? ` · 📦${pl.map((b) => `${esc(b.name || "")}×${fmtNum(b.quantity)}`).join("+")}` : "";
+    if (kind === "jushuitan") { window.__JST_ORDERS__ = window.__JST_ORDERS__ || {}; window.__JST_ORDERS__[o.doc_no] = { pack_lines: pl, pack_fee: o.pack_fee || 0 }; }
+    return `
     <div class="draft-order" data-doc="${esc(o.doc_no)}" data-date="${esc(o.date)}" data-customer="${esc(o.customer || "")}"
          data-operator="${esc(o.operator || "")}" data-remark="${esc(o.remark || "")}" data-packfee="${o.pack_fee || 0}">
       <div class="draft-head">
         <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" class="draft-check" checked onchange="updateDraftCount('${kind}')" /> 出库</label>
         <b>${esc(o.doc_no || "（无单号）")}</b>
-        <span class="muted">${esc(o.customer || "—")} · ${esc(o.date)}${o.pack_fee ? " · 打包费 " + fmtMoney(o.pack_fee) : ""}</span>
+        <span class="muted">${esc(o.customer || "—")} · ${esc(o.date)}</span>
       </div>
+      ${pl.length || o.pack_fee ? `<div class="hint" style="padding:6px 12px;color:var(--accent);">一单多货结算：${packHint || ""}${o.pack_fee ? (packHint ? " · " : "") + "人工 " + fmtMoney(o.pack_fee) : ""}</div>` : ""}
       <table class="subtable">
         <thead><tr><th>商品</th><th>单位</th><th>数量</th><th>单价</th><th>金额</th></tr></thead>
         <tbody>${(o.lines || []).map((l) => `
@@ -2031,7 +2042,7 @@ function renderDraftReview(kind, r) {
           </tr>`).join("")}
         </tbody>
       </table>
-    </div>`).join("");
+    </div>`; }).join("");
   $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} — 确认出库 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="alert ok">解析出 <b>${orders.length}</b> 单。可勾选、修改数量/单价后点击「确认出库」。</div>
     ${warn}
@@ -2119,6 +2130,70 @@ async function saveJstMappingsAndContinue(kind) {
   } catch (e) { toast("保存/解析失败：" + e.message); }
 }
 
+/* ---------- 一单多货未命中规则：手动补选并自动生成规则 ---------- */
+function jstSugOpts(sug, selected) {
+  const list = [];
+  (sug || []).forEach((s) => list.push({ id: s.id, name: `${s.name}（推荐 ${Math.round(s.score * 100)}%）` }));
+  PRODUCTS.forEach((p) => { if (!list.some((x) => +x.id === +p.id)) list.push({ id: p.id, name: p.name }); });
+  const best = (sug || [])[0];
+  const sel = selected || (best && best.score >= 0.7 ? best.id : "");
+  return `<option value="">— 选择系统商品 —</option>` +
+    list.map((o) => `<option value="${o.id}" ${String(o.id) === String(sel) ? "selected" : ""}>${esc(o.name)}</option>`).join("");
+}
+function renderJstRuleScreen(kind, r, note) {
+  const multi = r.unmatched_multi || [];
+  if (!PRODUCTS.length) { api("/api/products").then((p) => { PRODUCTS = p; renderJstRuleScreen(kind, r, note); }).catch(() => {}); return; }
+  const title = BATCH_MODAL[kind] ? BATCH_MODAL[kind].title : "导入聚水潭出库单";
+  const info = note || `<div class="alert warn">本次有 <b>${multi.length}</b> 个一单多货订单在「一单多货规则」中没有匹配组合。请为每个商品选择关联的系统商品，保存后自动生成规则并结算，下次导入即自动命中。</div>`;
+  $("modalBox").innerHTML = `<h3>${title} — 🔗 生成一单多货规则</h3>${info}` +
+    multi.map((o) => `
+      <div class="draft-order" data-doc="${esc(o.doc_no)}">
+        <div class="draft-head"><b>${esc(o.doc_no)}</b><span class="muted">一单多货 · 未命中规则</span></div>
+        <table class="subtable">
+          <thead><tr><th>聚水潭商品</th><th class="num">数量</th><th>关联到系统商品</th></tr></thead>
+          <tbody>${(o.items || []).map((it) => `
+            <tr data-code="${esc(it.external_code)}">
+              <td><b>${esc(it.external_code)}</b></td>
+              <td class="num">${fmtNum(it.quantity)}</td>
+              <td><select class="jst-rule-select searchable">${jstSugOpts(it.suggest, "")}</select></td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`).join("") +
+    `<div class="modal-foot">
+      <button class="btn secondary" onclick="skipJstRules('${kind}')">跳过（暂不结算这些多单）</button>
+      <button class="btn green" onclick="saveJstRulesAndContinue('${kind}')">✅ 保存为规则并继续</button>
+    </div>`;
+  bindSearchable($("modalBox"));
+}
+async function saveJstRulesAndContinue(kind) {
+  const orders = [];
+  document.querySelectorAll("#modalBox .draft-order").forEach((od) => {
+    const items = [];
+    od.querySelectorAll(".jst-rule-select").forEach((sel) => {
+      const tr = sel.closest("tr");
+      if (sel.value) items.push({ external_code: tr.dataset.code, product_id: +sel.value });
+    });
+    if (items.length) orders.push({ doc_no: od.dataset.doc, items });
+  });
+  const file = window.__BM_FILE__;
+  if (!file) { toast("文件丢失，请重新选择"); openBatchModal(kind); return; }
+  if (!orders.length && !confirm("未选择任何关联，确定跳过这些一单多货订单吗？")) return;
+  $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3><div class="alert ok">⏳ 正在生成规则并重新解析…</div>`;
+  try {
+    for (const o of orders) await api("/api/pack-rules/from-jushuitan", "POST", o);
+    toast(`已生成 ${orders.length} 条一单多货规则`);
+    const r = await apiUpload(BATCH_MODAL[kind].preview, file);
+    renderDraftReview(kind, r);
+  } catch (e) { toast("保存失败：" + e.message); }
+}
+function skipJstRules(kind) {
+  const file = window.__BM_FILE__;
+  if (!file) { toast("文件丢失，请重新选择"); openBatchModal(kind); return; }
+  $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3><div class="alert ok">⏳ 重新解析…</div>`;
+  apiUpload(BATCH_MODAL[kind].preview, file).then((rr) => { rr.forceReview = 1; renderDraftReview(kind, rr); }).catch((e) => toast("解析失败：" + e.message));
+}
+
 function draftLineCalc(inp) {
   const tr = inp.closest("tr");
   const qty = parseFloat(tr.querySelector(".draft-qty").value) || 0;
@@ -2142,10 +2217,12 @@ async function confirmDraft(kind) {
       if (pid && unit && qty > 0) lines.push({ product_id: pid, unit, quantity: qty, price });
     });
     if (!lines.length) return;
+    const meta = (kind === "jushuitan" && window.__JST_ORDERS__ && window.__JST_ORDERS__[od.dataset.doc]) || {};
     orders.push({
       doc_no: od.dataset.doc, date: od.dataset.date, customer: od.dataset.customer,
       operator: od.dataset.operator, remark: od.dataset.remark,
-      pack_fee: parseFloat(od.dataset.packfee) || 0, lines,
+      pack_fee: meta.pack_fee != null ? meta.pack_fee : (parseFloat(od.dataset.packfee) || 0),
+      pack_lines: meta.pack_lines || [], lines,
     });
   });
   if (!orders.length) { toast("没有勾选任何单据"); return; }
