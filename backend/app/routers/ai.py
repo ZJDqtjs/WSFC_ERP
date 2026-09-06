@@ -18,12 +18,15 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Product, Unit, User
+from ..models import Inbound, OutboundLine, Product, Unit, User
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-CONFIG_FILE = ROOT / "product_rules.json"
+CONFIG_FILE = ROOT.parent / "product_rules.json"
+
+# AI 票据图片保存目录（backend/data/uploads）：记录备注可引用 /uploads/xxx.jpg 预览
+UPLOAD_DIR = ROOT / "data" / "uploads"
 
 # 单位别名 -> 系统换算表里的标准名
 UNIT_ALIASES = {
@@ -40,11 +43,18 @@ SYSTEM_PROMPT = """你是「企业台账系统」的自然语言录入解析器�
 1. 判断业务类型 type：入库 -> "inbound"；出库 -> "outbound"。按用户第一个明确的动作词判断。
 2. 商品名称 product：输出用户提到的商品名称（原词即可，简洁，不要加多余说明）。
 3. 数量、单位、单价：直接保留用户表述的数字与单位（如 quantity=100, unit="斤", unit_price=25），禁止自行换算单位、禁止改数字。
-4. 日期 date：用户没说具体日期就用"今天"（今天的日期见用户消息），格式 YYYY-MM-DD。
-5. supplier（入库时的供应商）/ customer（出库时的客户）/ remark（备注）：有则提取，没有给空字符串。
-6. 一句话可能包含多行/多个商品，lines 里逐行列出；单价统一理解为"每 unit 单位的金额"。
+4. category 商品分类：逐条判断该商品属于哪一类，按以下四选一输出原词：
+   - "库存商品"：采购入库/库存货品（如 木耳、佛手柑大果、七彩土豆）
+   - "订单商品"：销售的小规格商品（如 佛手柑大果2个、七彩土豆3斤）
+   - "包材"：包装材料（如 纸箱、泡沫箱、胶带、保鲜袋）
+   - "人工"：打包人工/劳务（如 某某打包、人工打包费）
+   无法判断时不输出该字段（省略）。
+5. 日期 date：用户没说具体日期就用"今天"（今天的日期见用户消息），格式 YYYY-MM-DD。
+6. supplier（入库时的供应商）/ customer（出库时的客户）/ remark（备注）：有则提取，没有给空字符串。
+7. 一句话可能包含多行/多个商品，lines 里逐行列出；单价统一理解为"每 unit 单位的金额"。
 
 只输出一个 JSON 对象，禁止输出 JSON 以外的任何文字、解释、markdown 代码块标记。
+JSON 要紧凑输出：单行、无缩进无换行、字段间不留多余空格；supplier/customer/remark 为空时省略该字段。
 JSON 结构：
 {
   "type": "inbound" | "outbound",
@@ -53,7 +63,7 @@ JSON 结构：
   "customer": "",
   "remark": "",
   "lines": [
-    { "product": "商品名称", "quantity": 100, "unit": "斤", "unit_price": 25 }
+    { "category": "库存商品", "product": "商品名称", "quantity": 100, "unit": "斤", "unit_price": 25 }
   ]
 }"""
 
@@ -62,12 +72,14 @@ IMAGE_SYSTEM_PROMPT = """你是「企业台账系统」的采购票据识别助�
 处理要求：
 1. 业务类型一律为入库（inbound）：这些票据代表公司采购了货物进入仓库。
 2. 逐条提取每条采购商品的：商品名称（product，按票据原文，简洁）、数量（quantity）、单位（unit，如 张/个/斤/公斤/袋/箱）、单价（unit_price，每单位的金额，保留小数）。
-3. supplier：票据上的销方（卖方）公司名称；customer 留空。
-4. 日期 date：票据上若有日期就用它（格式 YYYY-MM-DD），没有就用"今天"（今天的日期见用户消息）。
-5. remark：可留空。
-6. 票据可能有多张/多条，lines 逐条列出；金额合计不用输出。
+3. category 商品分类：逐条判断属于"库存商品"（货品/蔬菜/干货）、"包材"（纸箱/泡沫箱/胶带/包装袋等包装材料）、还是"人工"（打包劳务）；销售小规格的"订单商品"一般不出现，出现也按"库存商品"处理。无法判断时不输出该字段（省略）。
+4. supplier：票据上的销方（卖方）公司名称；customer 留空。
+5. 日期 date：票据上若有日期就用它（格式 YYYY-MM-DD），没有就用"今天"（今天的日期见用户消息）。
+6. remark：可留空。
+7. 票据可能有多张/多条，lines 逐条列出；金额合计不用输出。
 
 只输出一个 JSON 对象，禁止输出 JSON 以外的任何文字、解释、markdown 代码块标记。
+JSON 要紧凑输出：单行、无缩进无换行、字段间不留多余空格；supplier/customer/remark 为空时省略该字段。
 JSON 结构：
 {
   "type": "inbound",
@@ -76,7 +88,7 @@ JSON 结构：
   "customer": "",
   "remark": "",
   "lines": [
-    { "product": "商品名称", "quantity": 100, "unit": "个", "unit_price": 0.5 }
+    { "category": "库存商品", "product": "商品名称", "quantity": 100, "unit": "个", "unit_price": 0.5 }
   ]
 }"""
 
@@ -115,6 +127,7 @@ def _chat(cfg: dict, system: str, user: str) -> str:
             {"role": "user", "content": user},
         ],
         temperature=0.1,
+        max_tokens=800,  # 限制输出长度，避免模型生成超长内容拖慢整体耗时
     )
     if not resp.choices or not resp.choices[0].message or not resp.choices[0].message.content:
         raise RuntimeError(f"大模型返回异常：{resp.model_dump() if hasattr(resp, 'model_dump') else resp}")
@@ -130,6 +143,7 @@ def _chat_stream(cfg: dict, system: str, user: str):
             {"role": "user", "content": user},
         ],
         temperature=0.1,
+        max_tokens=800,  # 限制输出长度，避免模型生成超长内容拖慢整体耗时
         stream=True,
     )
     for chunk in stream:
@@ -152,6 +166,7 @@ def _chat_stream_mm(cfg: dict, system: str, user: str, image_data_uri: str):
             },
         ],
         temperature=0.1,
+        max_tokens=800,  # 限制输出长度，避免模型生成超长内容拖慢整体耗时
         stream=True,
     )
     for chunk in stream:
@@ -172,17 +187,88 @@ def _ensure_unit(db: Session, unit: str) -> Unit:
     return u
 
 
-def _auto_create_stock(db: Session, name: str, unit: str) -> Product:
-    """自动新增一个库存商品（采购新物品），并自动补齐单位。返回新商品。"""
+# AI 商品分类：库存商品 stock / 订单商品 order / 包材 pack / 人工 labor
+AI_CATEGORIES = ("stock", "order", "pack", "labor")
+AI_CATEGORY_LABELS = {
+    "stock": "库存商品",
+    "order": "订单商品",
+    "pack": "包材",
+    "labor": "人工",
+}
+_AI_ALIAS_TO_CAT = {}
+for _cat, _aliases in {
+    "stock": ("库存商品", "库存", "商品", "stock", "货品"),
+    "order": ("订单商品", "订单", "order", "销售商品"),
+    "pack": ("包材", "包装材料", "包装耗材", "耗材", "包装", "pack"),
+    "labor": ("人工", "劳务", "打包", "labor", "工费"),
+}.items():
+    for _a in _aliases:
+        _AI_ALIAS_TO_CAT.setdefault(_a, _cat)
+
+# 包材识别关键字（用于本地兜底/新建商品归类）
+PACK_KEYWORDS = (
+    "纸箱", "拖箱", "果箱", "泡沫箱", "保温箱", "周转箱", "编织袋", "保鲜袋",
+    "包装袋", "胶带", "气泡膜", "珍珠棉", "冰袋", "内膜袋", "牛皮纸", "封箱",
+    "气柱", "吸塑", "拉链袋", "自封袋", "网兜", "彩盒", "礼盒盒",
+)
+
+
+def _normalize_category(raw: str) -> str:
+    """把 LLM 输出的分类原文归一到内部标识 stock/order/pack/labor；无法识别返回空串。"""
+    s = (str(raw or "").strip().lower())
+    if not s:
+        return ""
+    best, blen = "", -1
+    for alias, cat in _AI_ALIAS_TO_CAT.items():
+        if alias in s and len(alias) > blen:
+            blen, best = len(alias), cat
+    return best
+
+
+def _product_category(p: Product | None) -> str:
+    """按商品档案反推其 AI 分类标识：订单商品/人工/包材/库存商品。"""
+    if not p:
+        return ""
+    cat = (p.category or "").strip()
+    name = (p.name or "")
+    if p.product_type == "order":
+        return "order"
+    if cat == "人工" or name.endswith("打包"):
+        return "labor"
+    if cat in ("包材", "耗材", "包装"):
+        return "pack"
+    return "stock"
+
+
+def _guess_category(name: str) -> str:
+    """本地兜底：按名称猜测分类（名称带打包/人工 -> 人工；含包材关键字 -> 包材）。"""
+    name = (name or "")
+    if name.endswith("打包") or name.endswith("人工") or "人工" in name:
+        return "labor"
+    if any(k in name for k in PACK_KEYWORDS):
+        return "pack"
+    return ""
+
+
+def _auto_create_product(db: Session, name: str, unit: str, cat: str) -> Product:
+    """按分类自动新增商品档案（采购新物品/新包材/新人工），并自动补齐单位。返回新商品。"""
     name = (name or "").strip()
     if not name:
         raise HTTPException(400, "商品名称为空，无法自动新增")
     _ensure_unit(db, unit or "个")
     u = (unit or "个").strip()
+    if cat == "labor":
+        category, ptype = "人工", "stock"
+    elif cat == "pack":
+        category, ptype = "包材", "stock"
+    elif cat == "order":
+        category, ptype = "商品", "order"
+    else:
+        category, ptype = "商品", "stock"
     p = Product(
         name=name,
-        category="商品",
-        product_type="stock",
+        category=category,
+        product_type=ptype,
         base_unit=u,
         default_unit=u,
         conversions={u: 1},
@@ -259,6 +345,7 @@ def _quick_parse_text(text: str) -> dict | None:
                 price = float(pm.group("price") or 0)
                 break
         if idx == 0 and price == 0:
+            # 例如：今天入库了100斤木耳，25一斤 -> 取尾部的数字价格
             pm = re.search(r"(?:￥|¥)?(?P<price>\d+(?:\.\d+)?)\s*(?:一|两)?(?P<u>斤|公斤|千克|个|件|袋|包|盒|箱|份|单)", s, re.S)
             if pm:
                 price = float(pm.group("price") or 0)
@@ -324,6 +411,55 @@ def _resolve_outbound_product(db: Session, name: str) -> Product | None:
     return _match_product(db, name, "stock")
 
 
+def _match_by_category(db: Session, name: str, cat: str) -> Product | None:
+    """在指定 AI 分类内按名称匹配商品（精确→子串，取更长）。"""
+    name = (name or "").strip()
+    if not name or cat not in AI_CATEGORIES:
+        return None
+    q = db.query(Product).filter(Product.is_active.is_(True))
+    if cat == "order":
+        q = q.filter(Product.product_type == "order")
+    elif cat == "pack":
+        q = q.filter(Product.category.in_(("包材", "耗材", "包装")))
+    elif cat == "labor":
+        q = q.filter(Product.category == "人工")
+    else:  # stock：库存商品（排除 人工/包材/耗材/包装）
+        q = q.filter(
+            Product.product_type == "stock",
+            ~Product.category.in_(("人工", "包材", "耗材", "包装")),
+        )
+    p = q.filter(Product.name == name).first()
+    if p:
+        return p
+    best, blen = None, -1
+    for c in q.all():
+        if name in c.name or c.name in name:
+            m = min(len(c.name), len(name))
+            if m > blen:
+                blen, best = m, c
+    return best
+
+
+def _resolve_line(db: Session, name: str, op_type: str, cat: str) -> Product | None:
+    """按分类优先匹配商品；未命中再回退业务类型默认解析（入库库存，出库订单优先）。
+
+    指定分类时：仅在对应分类内匹配；无命中时只做全局精确名称匹配，
+    不做跨分类子串回退（避免把「xx打包」人工错配到「xx」库存商品）。
+    未指定分类时：沿用业务类型默认解析。
+    """
+    if cat in AI_CATEGORIES:
+        p = _match_by_category(db, name, cat)
+        if p:
+            return p
+        p = db.query(Product).filter(Product.is_active.is_(True), Product.name == name).first()
+        if p:
+            return p
+        return None
+    if op_type == "inbound":
+        return _resolve_inbound_product(db, name)
+    return _resolve_outbound_product(db, name)
+
+
 def _norm_unit(unit: str, conv: dict) -> str | None:
     """把单位别名归一到商品换算表中的标准名。"""
     if not unit:
@@ -337,8 +473,42 @@ def _norm_unit(unit: str, conv: dict) -> str | None:
     return unit  # 找不到标准名时原样返回，由前端兜底
 
 
-def _normalize_line(p: Product | None, line: dict, auto_created: bool = False) -> dict:
-    """把 数量/单价 换算到商品的默认展示单位（如 公斤），并保留原始值供前端参考。"""
+def _last_price_default(db: Session, p: Product | None, op_type: str) -> float:
+    """取该商品最近一次录入的价格（折算到默认展示单位）。
+
+    入库取最近一条入库单价（回退商品参考采购单价）；出库取最近一条出库单价（回退默认售价）。
+    供 AI 识别未提取到单价时默认填入。
+    """
+    if not p:
+        return 0.0
+    conv = p.conversions or {}
+    du = p.default_unit or p.base_unit
+
+    def to_du(price: float, unit: str) -> float:
+        price = float(price or 0)
+        if not price:
+            return 0.0
+        if unit and unit in conv and du in conv and conv.get(unit):
+            return round(price * conv[du] / conv[unit], 4)
+        return round(price, 4)
+
+    if op_type == "inbound":
+        row = db.query(Inbound).filter(Inbound.product_id == p.id).order_by(Inbound.id.desc()).first()
+        if row and row.unit_price:
+            return to_du(row.unit_price, row.unit)
+        return to_du(p.unit_cost, p.base_unit)
+    row = db.query(OutboundLine).filter(OutboundLine.product_id == p.id).order_by(OutboundLine.id.desc()).first()
+    if row and row.unit_price:
+        return to_du(row.unit_price, row.unit)
+    return to_du(p.sale_price, p.base_unit)
+
+
+def _normalize_line(db: Session, p: Product | None, line: dict, op_type: str, auto_created: bool = False, category: str = "") -> dict:
+    """把 数量/单价 换算到商品的默认展示单位（如 公斤），并保留原始值供前端参考。
+
+    若用户未录入单价，则按该商品上次录入的价格默认填入（不再换算为 0）。
+    category: AI 分类标识 stock/order/pack/labor（用于前端分级下拉）。
+    """
     name = (line.get("product") or "").strip()
     qty = float(line.get("quantity") or 0)
     unit = str(line.get("unit") or "").strip()
@@ -347,11 +517,13 @@ def _normalize_line(p: Product | None, line: dict, auto_created: bool = False) -
     out = {
         "product_id": 0,
         "product_name": name,
+        "category": category,
         "quantity": qty,
         "unit": unit,
         "unit_price": price,
         "matched": False,
         "auto_created": bool(auto_created),
+        "price_defaulted": False,
         "hint": "",
     }
     if not p:
@@ -364,27 +536,37 @@ def _normalize_line(p: Product | None, line: dict, auto_created: bool = False) -
     out["product_id"] = p.id
     out["product_name"] = p.name
     out["matched"] = True
-    out["hint"] = f"已匹配「{p.name}」（{p.product_type}）" + ("，🆕 自动新增" if auto_created else "")
+    out["category"] = _product_category(p) or category
+    out["hint"] = f"已匹配「{p.name}」（{AI_CATEGORY_LABELS.get(out['category'], p.product_type)}）" + ("，🆕 自动新增" if auto_created else "")
 
     # 换算到默认展示单位：数量与单价都折算到 1 个默认单位
     if u and u in conv and du in conv and conv.get(u):
         qty_default = qty * conv[u] / conv[du]
-        price_default = price * conv[du] / conv[u] if price else 0
         out["quantity"] = round(qty_default, 4)
         out["unit"] = du
-        out["unit_price"] = round(price_default, 4)
+        if price:
+            out["unit_price"] = round(price * conv[du] / conv[u], 4)
     else:
         # 换算表没有该单位：尝试 斤<->公斤 兜底
         if u == "斤" and "公斤" in conv:
             out["quantity"] = round(qty * 0.5, 4)
             out["unit"] = "公斤"
-            out["unit_price"] = round(price * 2, 4) if price else 0
+            if price:
+                out["unit_price"] = round(price * 2, 4)
         elif u in ("公斤", "千克") and "公斤" in conv:
             out["quantity"] = round(qty, 4)
             out["unit"] = "公斤"
         else:
             out["unit"] = du if du else unit
-            out["hint"] += f"；未能换算单位，请核对"
+            out["hint"] += "；未能换算单位，请核对"
+
+    # 用户未录入单价（仍为 0）：按该商品上次录入的价格默认填入（已是默认单位，不再换算）
+    if not out["unit_price"]:
+        last = _last_price_default(db, p, op_type)
+        if last:
+            out["unit_price"] = round(last, 4)
+            out["price_defaulted"] = True
+            out["hint"] += "；价格未识别，已按上次录入单价默认填入，请核对"
     return out
 
 
@@ -402,16 +584,20 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
     if not lines_in:
         raise HTTPException(400, "未能从描述中提取商品明细，请补充商品名称、数量与价格")
 
-    resolver = _resolve_inbound_product if op_type == "inbound" else _resolve_outbound_product
     lines = []
     for ln in lines_in:
-        p = resolver(db, ln.get("product", ""))
+        name = ln.get("product", "")
+        cat = _normalize_category(ln.get("category", ""))
+        if not cat:
+            cat = _guess_category(name)
+        p = _resolve_line(db, name, op_type, cat)
         auto = False
         if p is None and op_type == "inbound":
-            # 入库的新物品：自动新增库存商品（含新单位），并标记 auto_created
-            p = _auto_create_stock(db, ln.get("product", ""), ln.get("unit", ""))
+            # 入库的新物品：按分类自动新增商品档案（含新单位），并标记 auto_created
+            p = _auto_create_product(db, name, ln.get("unit", ""), cat or "stock")
             auto = True
-        lines.append(_normalize_line(p, ln, auto_created=auto))
+        category = _product_category(p) if p else (cat or "")
+        lines.append(_normalize_line(db, p, ln, op_type, auto_created=auto, category=category))
     if any(ln.get("auto_created") for ln in lines):
         db.commit()  # 持久化自动新增的商品与单位，否则会话结束即回滚
 
@@ -475,7 +661,9 @@ def parse_stream(data: ParseIn, db: Session = Depends(get_db), user: User = Depe
             if quick:
                 try:
                     quick_result = _build_result(db, quick, text)
-                    yield event({"result": quick_result, "source": "quick", "confidence": "medium"})
+                    # 本地快速识别已成功：直接返回，不再调用慢速大模型（识别即出结果）
+                    yield event({"result": quick_result, "source": "quick", "confidence": "high"})
+                    return
                 except HTTPException:
                     pass
             buf = ""
@@ -504,9 +692,6 @@ def _image_data_uri(data: bytes, filename: str) -> str:
     }.get(ext, "image/jpeg")
     b64 = base64.b64encode(data).decode("ascii")
     return f"data:{mime};base64,{b64}"
-
-
-UPLOAD_DIR = ROOT / "data" / "uploads"
 
 
 def _save_invoice(data: bytes, filename: str) -> str:

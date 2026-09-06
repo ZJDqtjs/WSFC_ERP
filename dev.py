@@ -1,8 +1,8 @@
-"""本地一键开发：同时启动 后端 API + 前端预览（前后端分离）。
+"""本地一键开发：同时启动 后端 API（backend/）+ 桌面 Web 前端（web/）。
 
-用法:
-    python dev.py                 # 后端 :8000  +  前端 :80（绑定 80 失败自动改 8001）
-    API_PORT=8000 WEB_PORT=80 python dev.py   # 自定义端口
+用法（在 WSFC_ERP 根目录执行）:
+    python dev.py                              # 后端 :8000 + 前端 :80（绑定 80 失败自动改 8001）
+    API_PORT=8000 WEB_PORT=80 python dev.py    # 自定义端口
 """
 import os
 import subprocess
@@ -37,8 +37,8 @@ def main():
     print(f"  前端页面: http://localhost:{WEB_PORT}")
     print("=" * 46)
 
-    backend = _run(f"uv run python run.py", ROOT, "API")
-    frontend = _run(f"uv run python web\\serve.py", ROOT, "WEB")
+    backend = _run(f"uv run python run.py", ROOT / "backend", "API")
+    frontend = _run(f"uv run python serve.py", ROOT / "web", "WEB")
 
     import threading
     t1 = threading.Thread(target=_pump, args=(backend, "API"), daemon=True)

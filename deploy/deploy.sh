@@ -21,7 +21,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 echo "==> [3/7] 创建 Python 虚拟环境并安装依赖"
-cd "$APP_DIR"
+cd "$APP_DIR/backend"
 if command -v uv >/dev/null 2>&1; then
   if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c 'import sys; raise SystemExit(sys.version_info < (3, 12))'; then
     rm -rf .venv
@@ -38,13 +38,13 @@ else
 fi
 
 echo "==> [4/7] 修正目录权限"
-sudo mkdir -p "$APP_DIR/data/uploads" "$APP_DIR/data/backups"
+sudo mkdir -p "$APP_DIR/backend/data/uploads" "$APP_DIR/backend/data/backups"
 sudo chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 
 echo "==> [5/7] 同步前端静态到 /var/www/erp（nginx 可读，家目录默认 www-data 不可穿越）"
 sudo mkdir -p /var/www/erp
 sudo rm -rf /var/www/erp/*
-sudo cp -r "$APP_DIR/static/." /var/www/erp/
+sudo cp -r "$APP_DIR/web/static/." /var/www/erp/
 sudo cp "$APP_DIR/config.json" /var/www/erp/config.json
 if [ ! -f "$APP_DIR/mobile/dist/index.html" ]; then
   echo "错误：找不到移动端生产构建 mobile/dist，请先在本地执行 npm --prefix mobile run build 并上传 mobile/dist" >&2
@@ -55,11 +55,11 @@ sudo cp -r "$APP_DIR/mobile/dist/." /var/www/erp/mobile/
 sudo chown -R www-data:www-data /var/www/erp
 
 echo "==> [6/7] 安装 nginx 站点配置（监听 80）"
-API_ROUTE=$(python3 -c 'import json; print(json.load(open("config.json"))["routes"]["api"].rstrip("/"))')
-UPLOAD_ROUTE=$(python3 -c 'import json; print(json.load(open("config.json"))["routes"]["uploads"].rstrip("/"))')
-MOBILE_ROUTE=$(python3 -c 'import json; print(json.load(open("config.json"))["routes"]["mobile"].rstrip("/"))')
-API_HOST=$(python3 -c 'import json; print(json.load(open("config.json"))["server"]["api_host"])')
-API_PORT=$(python3 -c 'import json; print(json.load(open("config.json"))["server"]["api_port"])')
+API_ROUTE=$(python3 -c 'import json; print(json.load(open("'$APP_DIR'/config.json"))["routes"]["api"].rstrip("/"))')
+UPLOAD_ROUTE=$(python3 -c 'import json; print(json.load(open("'$APP_DIR'/config.json"))["routes"]["uploads"].rstrip("/"))')
+MOBILE_ROUTE=$(python3 -c 'import json; print(json.load(open("'$APP_DIR'/config.json"))["routes"]["mobile"].rstrip("/"))')
+API_HOST=$(python3 -c 'import json; print(json.load(open("'$APP_DIR'/config.json"))["server"]["api_host"])')
+API_PORT=$(python3 -c 'import json; print(json.load(open("'$APP_DIR'/config.json"))["server"]["api_port"])')
 sed -e "s|__API_ROUTE__|$API_ROUTE|g" -e "s|__UPLOAD_ROUTE__|$UPLOAD_ROUTE|g" -e "s|__MOBILE_ROUTE__|$MOBILE_ROUTE|g" \
   "$APP_DIR/deploy/nginx.conf" | sudo tee "/etc/nginx/sites-available/$SERVICE" >/dev/null
 sudo ln -sf "/etc/nginx/sites-available/$SERVICE" "/etc/nginx/sites-enabled/$SERVICE"

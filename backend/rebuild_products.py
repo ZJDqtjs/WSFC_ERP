@@ -17,10 +17,8 @@ from app.database import SessionLocal
 from app.models import CodeMapping, Product
 
 BASE = "http://127.0.0.1:8000"
-ROOT = Path(__file__).resolve().parent
-# 原始数据源 Excel 位于项目根目录的 data-src/
-DATA_SRC = ROOT.parent / "data-src"
-LEMON = str(DATA_SRC / "柠檬云商品导入模板.xlsx")
+LEMON = "柠檬云商品导入模板.xlsx"
+ROOT = Path(__file__).resolve().parent.parent
 CFG = json.loads((ROOT / "product_rules.json").read_text(encoding="utf-8"))
 OPENER = None
 
@@ -120,7 +118,7 @@ def collect_july():
     prod_cfg = defaultdict(lambda: {"cats": set(), "confs": defaultdict(int)})
     box_prices = defaultdict(list)
     for cat_label, path in SRC_FILES.items():
-        wb = load_workbook(DATA_SRC / path, data_only=True)
+        wb = load_workbook(ROOT / "data-src" / path, data_only=True)
         for ws in wb.worksheets:
             for row in ws.iter_rows(min_row=3, values_only=True):
                 vals = list(row) + [None] * 10
