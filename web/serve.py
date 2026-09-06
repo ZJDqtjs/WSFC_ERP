@@ -18,8 +18,8 @@ import urllib.parse
 import json
 from pathlib import Path
 
-WEB_ROOT = Path(__file__).resolve().parent.parent / "static"
-ROOT = WEB_ROOT.parent
+WEB_ROOT = Path(__file__).resolve().parent / "static"
+ROOT = Path(__file__).resolve().parent.parent
 with (ROOT / "config.json").open(encoding="utf-8") as f:
     CONFIG = json.load(f)
 SERVER_CONFIG = CONFIG.get("server", {})

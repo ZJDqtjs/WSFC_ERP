@@ -1,10 +1,11 @@
 """后端 API 启动脚本（前后端分离）：只启动 FastAPI，不托管前端。
 
 前端由 web/serve.py（本地开发，默认 80 端口）或 nginx（Linux 生产）托管。
-用法（在项目根目录执行）:
-    uv run python run.py            # 后端 API -> http://127.0.0.1:8000
-    API_PORT=9000 uv run python run.py   # 自定义端口
-    SERVE_STATIC=1 uv run python run.py  # 单进程一体化预览（后端顺带托管 static/）
+用法（在 backend 目录内执行）:
+    cd backend
+    uv run python run.py                     # 后端 API -> http://127.0.0.1:8000
+    API_PORT=9000 uv run python run.py       # 自定义端口
+    SERVE_STATIC=1 uv run python run.py      # 单进程一体化预览（后端顺带托管 web/static）
 """
 import os
 import socket
@@ -13,7 +14,9 @@ from pathlib import Path
 
 import uvicorn
 
-ROOT = Path(__file__).resolve().parent
+# backend/ 为运行目录，根配置位于 WSFC_ERP 根目录
+BACKEND = Path(__file__).resolve().parent
+ROOT = BACKEND.parent
 with (ROOT / "config.json").open(encoding="utf-8") as f:
     CONFIG = json.load(f)
 API_CONFIG = CONFIG.get("server", {})

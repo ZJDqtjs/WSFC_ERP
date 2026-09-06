@@ -59,6 +59,7 @@
         <button class="nav-item" data-page="products" data-cat="包材"><span class="nav-ico"><svg class="ic"><use href="#i-package"/></svg></span>包材</button>
         <button class="nav-item" data-page="products" data-cat="人工"><span class="nav-ico"><svg class="ic"><use href="#i-user"/></svg></span>人工</button>
         <button class="nav-item" data-page="products" data-cat="快递"><span class="nav-ico"><svg class="ic"><use href="#i-truck"/></svg></span>快递</button>
+        <button class="nav-item" data-page="packrules"><span class="nav-ico"><svg class="ic"><use href="#i-link"/></svg></span>一单多货</button>
         <div class="nav-group">经营分析</div>
         <button class="nav-item" data-page="report"><span class="nav-ico"><svg class="ic"><use href="#i-chart"/></svg></span>财务报表</button>
         <div class="nav-group">数据工具</div>
@@ -66,6 +67,8 @@
         <button class="nav-item" data-page="jushuitan"><span class="nav-ico"><svg class="ic"><use href="#i-link"/></svg></span>聚水潭关联</button>
         <button class="nav-item" data-page="import"><span class="nav-ico"><svg class="ic"><use href="#i-database"/></svg></span>批量导入</button>
         <button class="nav-item" data-page="backup"><span class="nav-ico"><svg class="ic"><use href="#i-save"/></svg></span>备份与恢复</button>
+        <div class="nav-group">设置</div>
+        <button class="nav-item" data-page="pdata"><span class="nav-ico"><svg class="ic"><use href="#i-sliders"/></svg></span>商品资料备份</button>
       </nav>
       <div class="side-user">
         <div class="user-avatar" id="userAvatar">管</div>
@@ -100,7 +103,7 @@
             <button class="btn green" id="aiBtn" onclick="aiParse()"><svg class="ic"><use href="#i-ai"/></svg> 识别并录入</button>
             <button class="btn secondary" onclick="aiPickImage()"><svg class="ic"><use href="#i-paperclip"/></svg> 相册识别</button>
             <button class="btn secondary" onclick="aiCaptureImage()"><svg class="ic"><use href="#i-camera"/></svg> 拍照识别</button>
-            <input type="file" id="aiImgFile" accept="image/*" style="display:none;" onchange="aiParseImage('file')" />
+            <input type="file" id="aiImgFile" accept="image/*" multiple style="display:none;" onchange="aiParseImage('file')" />
             <input type="file" id="aiCamFile" accept="image/*" capture="environment" style="display:none;" onchange="aiParseImage('cam')" />
           </div>
           <div id="aiThinking" class="ai-thinking" style="display:none;">
@@ -139,6 +142,7 @@
         <div class="seg" id="stockSeg">
           <button class="seg-item active" data-panel="stock-overview" onclick="switchSeg('stockSeg', this)">库存总览</button>
           <button class="seg-item" data-panel="stock-movements" onclick="switchSeg('stockSeg', this)">库存流水</button>
+          <button class="seg-item" data-panel="stock-workload" onclick="switchSeg('stockSeg', this)">工作量统计</button>
         </div>
 
         <div id="stock-overview">
@@ -167,7 +171,24 @@
               <input id="mvSearch" placeholder="🔍 筛选流水..." oninput="loadMovements()" />
               <button class="btn" onclick="loadMovements()">查询</button>
             </div>
+            <div id="mvChart"></div>
             <div class="table-wrap"><table id="mvTable"></table></div>
+          </div>
+        </div>
+
+        <div id="stock-workload" style="display:none;">
+          <div class="card">
+            <div class="toolbar">
+              <input id="wlDateFrom" type="date" /><span>-</span><input id="wlDateTo" type="date" />
+              <button class="btn" onclick="loadWorkload()">查询</button>
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="loadWorkload()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+            </div>
+            <div id="wlChart"></div>
+            <div class="stat-grid">
+              <div class="stat accent"><div class="label">总工作量</div><div class="value" id="wlTotal">-</div><div class="sub" id="wlTotalSub"></div></div>
+            </div>
+            <div class="table-wrap"><table id="wlTable"></table></div>
           </div>
         </div>
       </section>
@@ -286,6 +307,30 @@
         </div>
       </section>
 
+      <!-- 出库/销售批次明细（二级页） -->
+      <section id="page-outgroup" class="page">
+        <div class="card">
+          <div class="card-head">
+            <h3 id="ogTitle">出库批次明细</h3><span class="hint" id="ogHint"></span>
+            <button class="btn secondary" style="margin-left:auto;" onclick="goPage('outbound');loadOutbounds()">← 返回出库列表</button>
+          </div>
+          <div class="stat-grid" id="ogSummary" style="margin-bottom:12px;"></div>
+          <div class="toolbar">
+            <div class="seg" id="ogSeg">
+              <button class="seg-item active" data-panel="og-sale" onclick="switchOgSeg(this)">销售商品</button>
+              <button class="seg-item" data-panel="og-pack" onclick="switchOgSeg(this)">耗材 / 包装</button>
+              <button class="seg-item" data-panel="og-labor" onclick="switchOgSeg(this)">人工</button>
+              <button class="seg-item" data-panel="og-laborpack" onclick="switchOgSeg(this)">打包人工 + 耗材</button>
+            </div>
+            <input id="ogSearch" placeholder="🔍 搜索商品..." oninput="renderOutGroup()" />
+            <button class="btn secondary" onclick="renderOutGroup()">筛选</button>
+            <div class="grow"></div>
+            <button class="btn danger" onclick="deleteOutGroup()">🗑 删除本批（<span id="ogDelCount">0</span> 单）</button>
+          </div>
+          <div class="table-wrap"><table id="ogTable"></table></div>
+        </div>
+      </section>
+
       <!-- 商品管理 -->
       <section id="page-products" class="page">
         <div class="card">
@@ -298,6 +343,8 @@
             <input id="prodSearch" placeholder="🔍 搜索商品..." oninput="renderProducts()" />
             <div class="grow"></div>
             <button class="btn secondary" onclick="openUnitsModal()"><svg class="ic"><use href="#i-ruler"/></svg> 计量单位管理</button>
+            <button class="btn secondary" onclick="pdataDownload('products_stock')"><svg class="ic"><use href="#i-download"/></svg> 导出库存JSON</button>
+            <button class="btn secondary" onclick="pdataDownload('products_order')"><svg class="ic"><use href="#i-download"/></svg> 导出订单JSON</button>
             <button class="btn" onclick="openProductModal()"><svg class="ic"><use href="#i-plus"/></svg> 新增商品</button>
           </div>
           <div class="batch-bar" id="prodBatch" style="display:none;">
@@ -307,6 +354,27 @@
             <button class="btn secondary" onclick="clearBatch('prod')">取消选择</button>
           </div>
           <div class="table-wrap"><table id="prodTable"></table></div>
+        </div>
+      </section>
+
+      <!-- 一单多货（多货合并打包规则） -->
+      <section id="page-packrules" class="page">
+        <div class="card">
+          <div class="card-head"><h3>一单多货（多货打包规则）</h3><span class="hint">区别于「关联结算/人工」的一单一货；此处维护一张订单含多种商品时的合并打包规则（纸箱 + 人工）</span></div>
+          <div class="toolbar">
+            <input id="prSearch" placeholder="🔍 搜索组合 / 商品 / 纸箱..." oninput="renderPackRules()" />
+            <select id="prBox" class="searchable" onchange="renderPackRules()"><option value="">全部纸箱型号</option></select>
+            <div class="grow"></div>
+            <button class="btn secondary" onclick="pdataDownload('pack_rules')"><svg class="ic"><use href="#i-download"/></svg> 导出JSON</button>
+            <button class="btn secondary" onclick="loadPackRules()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+            <button class="btn" onclick="openPackRuleModal()"><svg class="ic"><use href="#i-plus"/></svg> 新增一单多货规则</button>
+          </div>
+          <div class="batch-bar" id="prBatch" style="display:none;">
+            <span class="muted">已选 <b id="prSelCount">0</b> 条</span>
+            <button class="btn danger" onclick="batchDeletePackRules()">批量删除</button>
+            <button class="btn secondary" onclick="clearBatch('pr')">取消选择</button>
+          </div>
+          <div class="table-wrap"><table id="prTable"></table></div>
         </div>
       </section>
 
@@ -392,34 +460,20 @@
       <!-- 聚水潭关联 -->
       <section id="page-jushuitan" class="page">
         <div class="card">
-          <div class="card-head"><h3>① 上传聚水潭销售出库单并关联商品编码</h3><span class="hint">解析商品名称并自动推荐匹配，保存后即可自动结算</span></div>
+          <div class="card-head"><h3>① 上传聚水潭销售出库单并自动新增关联</h3><span class="hint">自动新增不存在的订单商品并关键词关联库存商品；需维护关联请前往出库页「关联结算」</span></div>
           <div class="toolbar">
             <input type="file" id="mpFile" accept=".xlsx" />
-            <button class="btn" onclick="parseJushuitan()">解析并匹配</button>
+            <button class="btn" onclick="parseJushuitan()">解析并自动新增</button>
             <button class="btn secondary" onclick="autoMapping()"><svg class="ic"><use href="#i-ai"/></svg> 自动匹配未关联</button>
             <button class="btn secondary" onclick="clearMapping()">清空关联</button>
+            <div class="grow"></div>
+            <button class="btn secondary" onclick="pdataDownload('code_mappings')"><svg class="ic"><use href="#i-download"/></svg> 导出JSON</button>
           </div>
           <div id="mpParseInfo"></div>
-          <div class="table-wrap" style="margin-top:10px;"><table id="mpTable"></table></div>
-          <div class="form-actions">
-            <button class="btn green" onclick="saveMappings()">✓ 保存全部关联</button>
-            <span class="muted">下拉框已自动选中推荐项，核对后保存即可</span>
-          </div>
         </div>
 
         <div class="card">
-          <div class="card-head"><h3>② 已保存的关联关系</h3><span class="hint">查看 / 修改 / 删除，或手动新增</span></div>
-          <div class="toolbar">
-            <input id="mpNewCode" placeholder="外部商品编码（如：京鲜生七彩花生2斤）" style="flex:1;min-width:240px;" />
-            <select id="mpNewProduct" class="searchable"><option value="">选择关联到系统商品…</option></select>
-            <button class="btn secondary" onclick="addMappingRow()">＋ 手动新增</button>
-            <button class="btn" onclick="saveSavedMappings()">✓ 保存修改</button>
-          </div>
-          <div class="table-wrap" style="margin-top:10px;"><table id="mpSavedTable"></table></div>
-        </div>
-
-        <div class="card">
-          <div class="card-head"><h3>③ 导入聚水潭出库单（自动结算）</h3><span class="hint">按已保存的关联生成出库单并核算成本</span></div>
+          <div class="card-head"><h3>② 导入聚水潭出库单（自动结算）</h3><span class="hint">按已保存的关联生成出库单并核算成本</span></div>
           <div class="toolbar">
             <input type="file" id="mpImportFile" accept=".xlsx" />
             <button class="btn green" onclick="batchFromImport('jushuitan')">导入出库单（预览确认）</button>
@@ -453,6 +507,39 @@
           <div class="table-wrap"><table id="bkTable"></table></div>
         </div>
       </section>
+
+      <!-- 设置 · 商品资料备份（解耦成 5 个 JSON 手动维护/迁移） -->
+      <section id="page-pdata" class="page">
+        <div class="card">
+          <div class="card-head">
+            <h3>商品资料备份（解耦维护）</h3>
+            <span class="hint" id="pdataDir"></span>
+            <div class="grow"></div>
+            <button class="btn green" onclick="pdataExportAll()"><svg class="ic"><use href="#i-save"/></svg> 一键导出到 json 目录</button>
+            <button class="btn" onclick="pdataImportAll()"><svg class="ic"><use href="#i-refresh"/></svg> 从 json 目录一键导入</button>
+          </div>
+          <p class="hint" style="margin-top:8px;">商品资料按「数据表」拆分为 5 个 JSON 独立保存于 <code>backend/json</code>（后端项目中，商品资料备份目录），商品间相互引用用「名称」表达，可跨库/跨设备迁移。各业务页也提供单独的「导出 JSON」按钮。</p>
+          <div class="alert ok" style="margin-top:8px;" id="pdataNote">
+            独立脚本命令：<code>cd backend && uv run python sync_product_data.py export|import|status</code>（在 backend 目录执行，存在 json 时一键导入）。
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>5 类商品资料</h3><span class="hint">json 目录与数据库对照；点击「下载」保存单个 json，"导入"从 json 目录读入该类</span></div>
+          <div class="table-wrap"><table id="pdataTable"></table></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>从本地上传 json 导入</h3><span class="hint">可在任意电脑编辑 json 后上传，按名称导入（upsert），便于手动维护与迁移</span></div>
+          <div class="toolbar">
+            <input type="file" id="pdataUploadFile" accept=".json,.txt" />
+            <button class="btn" onclick="pdataUploadImport()"><svg class="ic"><use href="#i-refresh"/></svg> 上传并导入</button>
+            <span class="grow"></span>
+            <button class="btn secondary" onclick="loadPdataPage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新状态</button>
+          </div>
+          <div id="pdataResult" style="margin-top:10px;"></div>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -463,15 +550,20 @@
       <p class="login-sub">库存 · 财务 · 一体化</p>
       <div class="field" style="margin-bottom:12px;">
         <label>用户名</label>
-        <input id="loginUser" autocomplete="username" placeholder="请输入用户名" />
+        <input id="loginUser" autocomplete="username" placeholder="请输入用户名" onkeydown="if(event.key==='Enter')doLogin()" />
       </div>
-      <div class="field" style="margin-bottom:16px;">
-        <label>密码</label>
-        <input id="loginPass" type="password" autocomplete="current-password" placeholder="请输入密码" onkeydown="if(event.key==='Enter')doLogin()" />
+      <div id="loginKeyRow" class="field" style="margin-bottom:16px;">
+        <label>私钥文件</label>
+        <div class="keyfile-row">
+          <input id="loginKeyFile" type="file" accept=".pem,.key,.txt,text/plain" style="display:none;" onchange="onKeyFileChange('loginKeyFile','loginKeyName')" />
+          <input id="loginKeyName" readonly placeholder="点击选择 Ed25519 私钥文件" onclick="$('loginKeyFile').click()" onkeydown="if(event.key==='Enter')doLogin()" style="cursor:pointer;background:var(--primary-50);" />
+          <button class="btn secondary" type="button" onclick="$('loginKeyFile').click()">选择文件</button>
+        </div>
+        <div class="field-hint" id="loginKeyHint" style="color:var(--muted);font-size:12px;margin-top:4px;">选择由私钥管理工具生成的私钥文件（.pem / id_ed25519）</div>
       </div>
       <div id="loginErr" class="alert err" style="display:none;"></div>
       <button class="btn" style="width:100%;" onclick="doLogin()">登 录</button>
-      <p class="login-foot">默认账号 ***REMOVED-DEFAULT-PASSWORD***</p>
+      <p class="login-foot">请使用管理员分发的私钥文件登录</p>
     </div>
   </div>
 

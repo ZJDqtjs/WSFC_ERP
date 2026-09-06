@@ -8,16 +8,18 @@ let MP_CODES = [];  // 聚水潭解析出的编码列表
 const prodSel = new Set();
 const inSel = new Set();
 const outSel = new Set();
+const prSel = new Set();  // 一单多货批量选择
+let OUT_GROUP = null;  // 当前打开的出库批次（array of Outbound 记录）
 
 /* ---------- 批量选择工具 ---------- */
 function selSet(kind) {
-  return kind === "prod" ? prodSel : kind === "in" ? inSel : outSel;
+  return kind === "prod" ? prodSel : kind === "in" ? inSel : kind === "out" ? outSel : prSel;
 }
 function selBarId(kind) {
-  return kind === "prod" ? "prodBatch" : kind === "in" ? "inBatch" : "outBatch";
+  return kind === "prod" ? "prodBatch" : kind === "in" ? "inBatch" : kind === "out" ? "outBatch" : "prBatch";
 }
 function selCountId(kind) {
-  return kind === "prod" ? "prodSelCount" : kind === "in" ? "inSelCount" : "outSelCount";
+  return kind === "prod" ? "prodSelCount" : kind === "in" ? "inSelCount" : kind === "out" ? "outSelCount" : "prSelCount";
 }
 function updateBatchBar(kind) {
   const bar = $(selBarId(kind));
@@ -35,18 +37,33 @@ function toggleSel(kind, id, checked) {
 function toggleAll(cb, kind) {
   const set = selSet(kind);
   set.clear();
-  const tableId = kind === "prod" ? "prodTable" : kind === "in" ? "inTable" : "outTable";
+  const tableId = kind === "prod" ? "prodTable" : kind === "in" ? "inTable" : kind === "out" ? "outTable" : "prTable";
   document.querySelectorAll(`#${tableId} input[type="checkbox"][value]`).forEach((c) => {
     c.checked = cb.checked;
     if (cb.checked) set.add(+c.value);
   });
+  // 批次行（整批一个选框）：data-ids 记录成员单号
+  document.querySelectorAll(`#${tableId} input[type="checkbox"][data-ids]`).forEach((c) => {
+    c.checked = cb.checked;
+    if (cb.checked) (c.dataset.ids || "").split(",").forEach((id) => id && set.add(+id));
+  });
   updateBatchBar(kind);
+}
+function toggleOutGroupCB(cb) {
+  const set = selSet("out");
+  const on = cb.checked;
+  (cb.dataset.ids || "").split(",").forEach((id) => {
+    if (!id) return;
+    if (on) set.add(+id); else set.delete(+id);
+  });
+  updateBatchBar("out");
 }
 function clearBatch(kind) {
   selSet(kind).clear();
   if (kind === "prod") renderProducts();
   else if (kind === "in") loadInbounds();
-  else loadOutbounds();
+  else if (kind === "out") loadOutbounds();
+  else renderPackRules();
 }
 
 /* ---------- 可搜索下拉（点击选择，输入可快速筛选） ---------- */
@@ -141,11 +158,18 @@ document.addEventListener("click", (e) => {
 
 /* ---------- 工具 ---------- */
 const $ = (id) => document.getElementById(id);
+const ROUTES = { api: "/api", uploads: "/uploads" };
+
+function routePath(path) {
+  if (path.startsWith("/api")) return ROUTES.api + path.slice(4);
+  if (path.startsWith("/uploads")) return ROUTES.uploads + path.slice(8);
+  return path;
+}
 
 async function api(path, method = "GET", body) {
   const opt = { method, headers: { "Content-Type": "application/json" } };
   if (body !== undefined) opt.body = JSON.stringify(body);
-  const res = await fetch(path, opt);
+  const res = await fetch(routePath(path), opt);
   if (res.status === 401) { showLogin(); throw new Error("请先登录"); }
   if (!res.ok) {
     let msg = "请求失败";
@@ -158,7 +182,7 @@ async function api(path, method = "GET", body) {
 async function apiUpload(path, file) {
   const fd = new FormData();
   fd.append("file", file);
-  const res = await fetch(path, { method: "POST", body: fd });
+  const res = await fetch(routePath(path), { method: "POST", body: fd });
   if (res.status === 401) { showLogin(); throw new Error("请先登录"); }
   if (!res.ok) {
     let msg = "请求失败";
@@ -224,6 +248,11 @@ function today() {
 function monthStart() {
   return today().slice(0, 8) + "01";
 }
+function daysAgo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 /* ---------- 导航 ---------- */
 const PAGE_TITLES = {
@@ -249,7 +278,7 @@ function goPage(name) {
   const loaders = {
     home: loadDashboard, stock: loadStock, inbound: initInbound, outbound: initOutbound,
     products: renderProducts, report: loadReport, import: loadImportPage, jushuitan: loadMappingPage,
-    backup: loadBackupPage, fresh: loadFresh,
+    backup: loadBackupPage, fresh: loadFresh, packrules: loadPackRules, pdata: loadPdataPage,
   };
   (loaders[name] || (() => {}))();
 }
@@ -273,9 +302,10 @@ function switchSeg(segId, btn) {
     el.style.display = el.id === panel ? "" : "none";
   });
   if (panel === "stock-movements") loadMovements();
+  if (panel === "stock-workload") loadWorkload();
 }
 
-/* ---------- 认证 ---------- */
+/* ---------- 认证（私钥登录） ---------- */
 function showLogin() {
   $("loginMask").classList.remove("hidden");
   $("loginUser").focus();
@@ -292,16 +322,37 @@ function setUser(u) {
     if (el && !el.value) el.value = disp;
   });
 }
+function onKeyFileChange(inputId, nameId) {
+  const f = $(inputId).files[0];
+  $(nameId).value = f ? f.name : "";
+}
+function readFileText(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(new Error("读取文件失败"));
+    fr.readAsText(file);
+  });
+}
 async function doLogin() {
   const username = $("loginUser").value.trim();
-  const password = $("loginPass").value;
-  if (!username || !password) { showLoginErr("请输入用户名和密码"); return; }
+  const f = $("loginKeyFile").files[0];
+  if (!username) { showLoginErr("请输入用户名"); return; }
+  if (!f) { showLoginErr("请选择私钥文件"); return; }
+  let private_key;
+  try { private_key = await readFileText(f); }
+  catch (e) { showLoginErr("读取私钥文件失败：" + e.message); return; }
   try {
-    const r = await fetch("/api/auth/login", {
+    const r = await fetch(routePath("/api/auth/login"), {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, private_key }),
     });
-    if (!r.ok) { showLoginErr("用户名或密码错误"); return; }
+    if (!r.ok) {
+      let msg = r.status === 400 ? "私钥文件无法解析，请确认为 Ed25519 私钥" : "用户名或私钥不匹配";
+      try { const j = await r.json(); if (j.detail) msg = j.detail; } catch (e) {}
+      showLoginErr(msg);
+      return;
+    }
     const j = await r.json();
     setUser(j.user);
     hideLogin();
@@ -315,7 +366,7 @@ function showLoginErr(msg) {
   el.style.display = "block";
 }
 $("logoutBtn").addEventListener("click", async () => {
-  try { await fetch("/api/auth/logout", { method: "POST" }); } catch (e) {}
+  try { await fetch(routePath("/api/auth/logout"), { method: "POST" }); } catch (e) {}
   CURRENT_USER = null;
   showLogin();
 });
@@ -326,7 +377,7 @@ function openModal(html) {
   $("modalMask").classList.add("show");
   bindSearchable($("modalBox"));
 }
-function closeModal() { $("modalMask").classList.remove("show"); }
+function closeModal() { $("modalMask").classList.remove("show"); const r = _aiDoneResolve; _aiDoneResolve = null; if (r) r(); }
 $("modalMask").addEventListener("click", (e) => { if (e.target.id === "modalMask") closeModal(); });
 
 /* =============== 库存 =============== */
@@ -391,11 +442,14 @@ function renderStock(overview) {
 }
 
 function openAdjust(pid = 0) {
+  const opts = PRODUCTS.filter((p) => p.is_active && p.product_type === "stock" && !["人工", "快递"].includes(p.category))
+    .map((p) => `<option value="${p.id}" ${p.id === pid ? "selected" : ""}>${esc(p.name)}</option>`).join("");
   openModal(`
-    <h3>盘点调整 <button class="close" onclick="closeModal()">✕</button></h3>
+    <h3>盘点调整（相对增减） <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="form-grid">
-      <div class="field"><label>商品 *</label><select id="adjProduct">${productOptions(pid)}</select></div>
-      <div class="field"><label>调整数量（基础单位，正盘盈/负盘亏）*</label><input id="adjQty" type="number" step="any" placeholder="如 -5" /></div>
+      <div class="field" style="grid-column:1/-1;"><label>商品 *</label><select id="adjProduct" onchange="adjPreview()">${opts}</select></div>
+      <div class="field" style="grid-column:1/-1;"><span class="muted">当前库存：<b id="adjNow">—</b></span>　→　<span class="muted">调整后：<b id="adjAfter" style="color:var(--primary)">—</b></span></div>
+      <div class="field" style="grid-column:1/-1;"><label>调整数量 *（相对当前库存，必带 +/-）</label><input id="adjQty" oninput="adjPreview()" placeholder="如 +100 增加 / -100 减少；留空则不调整" style="width:100%;" /></div>
       <div class="field"><label>成本单价（仅盘盈用）</label><input id="adjPrice" type="number" step="any" value="0" /></div>
       <div class="field"><label>日期</label><input id="adjDate" type="date" value="${today()}" /></div>
       <div class="field"><label>操作员</label><input id="adjOperator" placeholder="谁操作的" /></div>
@@ -405,27 +459,56 @@ function openAdjust(pid = 0) {
       <button class="btn secondary" onclick="closeModal()">取消</button>
       <button class="btn" onclick="submitAdjust()">确认调整</button>
     </div>`);
+  adjPreview();
+}
+function adjPreview() {
+  const p = PRODUCTS.find((x) => x.id === +$("adjProduct").value);
+  const nowEl = $("adjNow"), afterEl = $("adjAfter");
+  if (!p) { nowEl.textContent = "—"; afterEl.textContent = "—"; return; }
+  const unit = p.default_unit || p.base_unit;
+  const f = (p.conversions || {})[unit] || 1;
+  const now = p.stock / f;
+  nowEl.textContent = `${fmtNum(now)} ${unit}`;
+  const raw = ($("adjQty").value || "").trim();
+  if (!raw) { afterEl.textContent = `${fmtNum(now)} ${unit}（不调整）`; return; }
+  if (!/^[+-]\d+(\.\d+)?$/.test(raw)) { afterEl.textContent = "⚠ 需以 + 或 - 开头，如 +100 / -100"; return; }
+  afterEl.textContent = `${fmtNum(now + parseFloat(raw))} ${unit}`;
 }
 async function submitAdjust() {
+  const raw = ($("adjQty").value || "").trim();
+  if (raw && !/^[+-]\d+(\.\d+)?$/.test(raw)) {
+    toast("调整数量必须以 + 或 - 开头（如 +100 增加 / -100 减少），不允许直接填裸数字；留空则不调整");
+    return;
+  }
+  const p = PRODUCTS.find((x) => x.id === +$("adjProduct").value);
+  if (!p) { toast("请选择商品"); return; }
   try {
     await api("/api/adjust", "POST", {
-      product_id: +$("adjProduct").value,
-      quantity: +$("adjQty").value,
+      product_id: p.id,
+      quantity: raw,
+      unit: p.default_unit || p.base_unit,
       unit_price: +$("adjPrice").value || 0,
       date: $("adjDate").value,
       operator: $("adjOperator").value,
       remark: $("adjRemark").value,
     });
-    closeModal(); toast("盘点调整成功"); loadStock();
+    closeModal();
+    toast(raw ? "盘点调整成功" : "数量留空，未调整库存");
+    loadStock();
   } catch (e) { toast("操作失败：" + e.message); }
 }
 
 function viewProductMv(pid) {
   goPage("stock");
-  $("mvProduct").value = String(pid);
+  const sel = $("mvProduct");
+  sel.value = String(pid);
+  // 触发 change 同步「可搜索下拉」的显示文本（否则仍显示旧商品/全部商品）
+  sel.dispatchEvent(new Event("change", { bubbles: true }));
+  // 默认查看该商品最近一个月的流水
+  $("mvDateFrom").value = daysAgo(29);
+  $("mvDateTo").value = today();
   const segBtn = document.querySelector('#stockSeg .seg-item[data-panel="stock-movements"]');
   if (segBtn) switchSeg("stockSeg", segBtn);
-  loadMovements();
 }
 
 /* =============== 工作台 =============== */
@@ -575,7 +658,7 @@ async function aiParse() {
   if (!text) { toast("请输入入库/出库描述"); return; }
   aiStartTask();
   try {
-    const res = await fetch("/api/ai/parse/stream", {
+    const res = await fetch(routePath("/api/ai/parse/stream"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
@@ -586,45 +669,101 @@ async function aiParse() {
 }
 function aiPickImage() { $("aiImgFile").click(); }
 function aiCaptureImage() { $("aiCamFile").click(); }
-async function aiParseImage(src) {
+function aiParseImage(src) {
   const inp = src === "cam" ? $("aiCamFile") : $("aiImgFile");
-  const f = inp.files[0];
-  if (!f) return;
-  aiStartTask('<svg class="ic"><use href="#i-camera"/></svg> 发票识别中…');
+  const files = Array.from(inp.files || []);
+  if (!files.length) return;
+  aiParseImageFiles(files, src === "cam" ? "拍照" : "相册");
+  inp.value = "";
+}
+let _aiDoneResolve = null;   // 批量识别时，等待当前确认框关闭后再识别下一张
+async function aiParseImageFiles(files, label) {
+  const total = files.length;
+  if (total > 1) toast(`已选择 ${total} 张图片，逐张识别中…`);
+  for (let i = 0; i < total; i++) {
+    if (_batchAbort) { _batchAbort = false; break; }
+    if (i > 0) await new Promise((r) => setTimeout(r, 400));
+    const ok = await aiRecognizeOne(files[i], i, total, label);
+    if (!ok) return;  // 识别失败或用户取消，停止剩余批次
+  }
+}
+let _batchAbort = false;
+async function aiRecognizeOne(f, idx, total, label) {
+  const progress = total > 1 ? `（第 ${idx + 1}/${total} 张）` : "";
+  aiStartTask(`<svg class="ic"><use href="#i-camera"/></svg> ${label}识别中 ${progress}`);
   try {
     const fd = new FormData();
     fd.append("file", f);
-    const res = await fetch("/api/ai/parse-image/stream", {
+    const res = await fetch(routePath("/api/ai/parse-image/stream"), {
       method: "POST",
       body: fd,
       signal: AI_CTRL.signal,
     });
-    await aiFinishOk(await aiCollectStream(res));
-  } catch (e) { aiFinishErr(e); }
-  finally { inp.value = ""; }
+    const result = await aiCollectStream(res);
+    await aiFinishOk(result);
+    if (total > 1) await new Promise((resolve) => { _aiDoneResolve = resolve; }); // 等用户确认/取消后再识别下一张
+    return true;
+  } catch (e) {
+    if (e.name === "AbortError") { _batchAbort = true; aiFinishErr(e); }  // 用户取消：终止整批
+    else aiFinishErr(e);
+    return false;
+  }
 }
-function aiProductOptions(selectedId, orderFirst) {
-  const sorted = PRODUCTS.filter((p) => p.is_active).slice().sort((a, b) =>
-    orderFirst ? (b.product_type === "order") - (a.product_type === "order")
-               : (a.product_type === "order") - (b.product_type === "order")
-  );
-  return sorted.map((p) =>
-    `<option value="${p.id}" ${p.id === selectedId ? "selected" : ""}>${p.product_type === "order" ? "〔订单〕" : "〔库存〕"}${esc(p.name)}</option>`
+// 支持 Ctrl+V 粘贴图片批量识别
+document.addEventListener("paste", (e) => {
+  const files = Array.from((e.clipboardData || {}).items || [])
+    .filter((it) => it.type.startsWith("image/"))
+    .map((it) => it.getAsFile())
+    .filter(Boolean);
+  if (files.length) { e.preventDefault(); aiParseImageFiles(files, "粘贴"); }
+});
+const AI_CAT_ORDER = [["stock", "库存商品"], ["order", "订单商品"], ["pack", "包材"], ["labor", "人工"]];
+function aiCatOptions(selectedCat) {
+  return AI_CAT_ORDER.map(([c, label]) =>
+    `<option value="${c}" ${c === selectedCat ? "selected" : ""}>${label}</option>`
   ).join("");
+}
+// 按 AI 分类过滤商品（stock=库存商品，order=订单商品，pack=包材，labor=人工）
+function aiProductsByCat(cat) {
+  return (PRODUCTS || []).filter((p) => p.is_active).filter((p) => {
+    const c = (p.category || "").trim();
+    if (cat === "order") return p.product_type === "order";
+    if (cat === "pack") return c === "包材" || c === "耗材" || c === "包装";
+    if (cat === "labor") return c === "人工" || /打包$/.test(p.name);
+    return p.product_type === "stock" && c !== "人工" && c !== "包材" && c !== "耗材" && c !== "包装";
+  });
+}
+function aiProductOptions(selectedId, cat) {
+  const catLabel = { stock: "库存", order: "订单", pack: "包材", labor: "人工" }[cat || "stock"] || "库存";
+  const list = aiProductsByCat(cat || "stock").slice().sort((a, b) => a.name.localeCompare(b.name, "zh"));
+  return list.map((p) =>
+    `<option value="${p.id}" ${p.id === selectedId ? "selected" : ""}>〔${catLabel}〕${esc(p.name)}</option>`
+  ).join("");
+}
+function aiCatChanged(i) {
+  const tr = document.querySelector(`#aiLines tr[data-idx="${i}"]`);
+  if (!tr) return;
+  const cat = tr.querySelector(".ai-cat").value;
+  const sel = tr.querySelector(".ai-pid");
+  const cur = +sel.value;
+  sel.innerHTML = aiProductOptions(aiProductsByCat(cat).some((p) => p.id === cur) ? cur : 0, cat);
 }
 let AI_CONFIRM = null;   // 当前确认框对应的识别结果（供提交时标注）
 function openAiConfirm(r) {
   AI_CONFIRM = r;
   const isIn = r.type === "inbound";
-  const linesHtml = (r.lines || []).map((ln, i) => `
-    <tr data-idx="${i}">
-      <td style="min-width:220px;"><select class="searchable ai-pid">${aiProductOptions(ln.product_id, !isIn)}</select>
+  const linesHtml = (r.lines || []).map((ln, i) => {
+    const cat = (["stock", "order", "pack", "labor"].includes(ln.category) ? ln.category : (isIn ? "stock" : "order"));
+    return `<tr data-idx="${i}">
+      <td><select class="ai-cat" onchange="aiCatChanged(${i})" style="width:92px;">${aiCatOptions(cat)}</select></td>
+      <td style="min-width:220px;"><select class="searchable ai-pid">${aiProductOptions(ln.product_id, cat)}</select>
         ${ln.auto_created ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 自动新增</span>' : ""}</td>
       <td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.quantity)}" style="width:90px;" /></td>
       <td><input class="ai-unit" value="${esc(ln.unit || "")}" style="width:70px;" /></td>
-      <td><input type="number" step="any" class="ai-price" value="${ln.unit_price}" style="width:100px;" /></td>
+      <td><input type="number" step="any" class="ai-price" value="${ln.unit_price}" style="width:100px;" />${ln.price_defaulted ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按上次价</span>' : ""}</td>
       <td class="muted" style="font-size:12px;">${esc(ln.hint || "")}</td>
-    </tr>`).join("");
+    </tr>`;
+  }).join("");
   const invImg = r.image_url
     ? `<div class="ai-invoice"><span class="muted">📎 票据凭证</span><img src="${esc(r.image_url)}" alt="票据" onclick="window.open('${esc(r.image_url)}','_blank')" /></div>`
     : "";
@@ -642,8 +781,8 @@ function openAiConfirm(r) {
       <div class="field"><label>备注</label><input id="aiRemark" value="${esc(r.remark)}" /></div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>商品</th><th>数量</th><th>单位</th><th>${isIn ? "单价" : "售价"}</th><th>说明</th></tr></thead>
-      <tbody id="aiLines">${linesHtml || '<tr><td colspan="5" class="empty">未识别到明细</td></tr>'}</tbody>
+      <thead><tr><th>分类</th><th>商品</th><th>数量</th><th>单位</th><th>${isIn ? "单价" : "售价"}</th><th>说明</th></tr></thead>
+      <tbody id="aiLines">${linesHtml || '<tr><td colspan="6" class="empty">未识别到明细</td></tr>'}</tbody>
     </table></div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
@@ -651,12 +790,13 @@ function openAiConfirm(r) {
     </div>`);
 }
 function aiTypeChanged() {
-  // 切换类型时重排商品下拉（出库订单优先，入库库存优先）
+  // 切换类型时，未显式归类的行按业务类型重设默认分类（入库库存优先，出库订单优先）
   const isIn = $("aiType").value === "inbound";
   document.querySelectorAll("#aiLines tr[data-idx]").forEach((tr) => {
-    const sel = tr.querySelector(".ai-pid");
-    const cur = +sel.value;
-    sel.innerHTML = aiProductOptions(cur, !isIn);
+    const catSel = tr.querySelector(".ai-cat");
+    const cat = catSel.value;
+    if (!["stock", "order", "pack", "labor"].includes(cat)) catSel.value = isIn ? "stock" : "order";
+    aiCatChanged(+tr.dataset.idx);
   });
 }
 async function aiSubmit() {
@@ -697,7 +837,7 @@ async function aiSubmit() {
 /* 备注渲染：把 /uploads/xxx.jpg 票据引用转成缩略图（可点击放大） */
 function renderRemarkHtml(rmk) {
   if (!rmk) return "—";
-  return esc(rmk).replace(/\/uploads\/[\w.\-]+/g, (u) =>
+  return esc(rmk).replace(new RegExp(ROUTES.uploads.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\/[\\w.\\-]+", "g"), (u) =>
     `<a href="${u}" target="_blank"><img src="${u}" alt="票据" style="height:34px;vertical-align:middle;border-radius:4px;margin-right:4px;border:1px solid var(--border-light);" /></a>`);
 }
 
@@ -796,7 +936,7 @@ function renderFreshConfig() {
   const selHtml = FC_SEL.map((id, i) => {
     const p = FC_ALL.find((x) => x.id === id);
     if (!p) return "";
-    return `<div class="fc-sel-item" draggable="true" data-id="${id}" data-index="${i}" ondragstart="fcDragStart(event, ${id})" ondragover="event.preventDefault()" ondrop="fcDrop(event, ${i})">
+    return `<div class="fc-sel-item">
       <span class="grow">${i + 1}. ${esc(p.name)}</span>
       <button class="btn sm" onclick="fcMove(${i},-1)" title="上移">↑</button>
       <button class="btn sm" onclick="fcMove(${i},1)" title="下移">↓</button>
@@ -804,27 +944,6 @@ function renderFreshConfig() {
     </div>`;
   }).join("");
   $("fcSel").innerHTML = selHtml || '<div class="empty" style="padding:14px;">未选择（将展示全部）</div>';
-}
-let FC_DRAG_ID = null;
-function fcDragStart(event, id) {
-  FC_DRAG_ID = id;
-  event.dataTransfer.effectAllowed = 'move';
-  event.dataTransfer.setData('text/plain', String(id));
-}
-function fcDrop(event, targetIndex) {
-  event.preventDefault();
-  const draggedId = Number(event.dataTransfer.getData('text/plain') || FC_DRAG_ID || 0);
-  if (!draggedId) return;
-  const from = FC_SEL.indexOf(draggedId);
-  if (from < 0) return;
-  const to = targetIndex;
-  if (from === to) return;
-  const next = [...FC_SEL];
-  const [item] = next.splice(from, 1);
-  next.splice(to, 0, item);
-  FC_SEL = next;
-  FC_DRAG_ID = null;
-  renderFreshConfig();
 }
 function fcToggle(id) {
   const i = FC_SEL.indexOf(id);
@@ -912,6 +1031,110 @@ async function deleteBackup(name) {
     toast("已删除备份");
     renderBkTable(r.backups || []);
   } catch (e) { toast("删除失败：" + e.message); }
+}
+
+/* =============== 设置 · 商品资料备份（解耦 JSON） =============== */
+const PDATA_KINDS = {
+  units: "units.json", products_stock: "products_stock.json",
+  products_order: "products_order.json", pack_rules: "pack_rules.json",
+  code_mappings: "code_mappings.json",
+};
+async function loadPdataPage() {
+  try {
+    const s = await api("/api/product-data/status");
+    $("pdataDir").textContent = "json 目录：" + s.dir;
+    renderPdataTable(s.rows || []);
+  } catch (e) { toast("加载商品资料状态失败：" + e.message); }
+}
+function renderPdataTable(rows) {
+  $("pdataTable").innerHTML = `<thead><tr>
+    <th>类型</th><th>json 文件</th><th class="num">库内数</th><th class="num">json 数</th><th>备份状态</th><th>操作</th>
+  </tr></thead><tbody>` +
+    (rows.length ? rows.map((r) => {
+      const state = !r.exists
+        ? `<span class="badge">未备份</span>`
+        : `<span class="badge" style="background:var(--ok,#16a34a);color:#fff;">已备份 ${esc(r.mtime || "")}</span>`;
+      return `<tr>
+        <td>${esc(r.label)}</td>
+        <td class="mono">${esc(r.file)}</td>
+        <td class="num mono">${r.count_in_db}</td>
+        <td class="num mono">${r.exists ? r.count_in_file : "-"}</td>
+        <td>${state}</td>
+        <td class="line-actions">
+          <button class="btn sm secondary" onclick="pdataDownload('${r.kind}')">下载</button>
+          <button class="btn sm" ${r.exists ? "" : "disabled"} onclick="pdataImportOne('${r.kind}')">导入</button>
+        </td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="6" class="empty">暂无数据</td></tr>`) + `</tbody>`;
+}
+async function pdataExportAll() {
+  try {
+    const r = await api("/api/product-data/export", "POST");
+    toast("已导出 " + (r.files || []).length + " 个 json 到服务器目录");
+    loadPdataPage();
+  } catch (e) { toast("导出失败：" + e.message); }
+}
+async function pdataImportAll() {
+  if (!confirm("从 json 目录一键导入全部 5 类？将按名称新增/更新（upsert），不会删除已有数据。")) return;
+  try {
+    const r = await api("/api/product-data/import", "POST");
+    renderPdataImportResult(r.results || []);
+    loadPdataPage();
+  } catch (e) { toast("导入失败：" + e.message); }
+}
+async function pdataImportOne(kind) {
+  if (!confirm("从 json 目录导入「" + kind + "」？将按名称新增/更新，不会删除已有数据。")) return;
+  try {
+    const r = await api("/api/product-data/import/" + kind, "POST");
+    renderPdataImportResult([r]);
+    loadPdataPage();
+  } catch (e) { toast("导入失败：" + e.message); }
+}
+function renderPdataImportResult(results) {
+  const rows = (results || []).map((s) => `<tr>
+    <td>${esc(s.label)}</td>
+    <td class="num">${s.created || 0} 新增</td>
+    <td class="num">${s.updated || 0} 更新</td>
+    <td>${s.loaded === false ? '<span class="badge">未加载</span>' : ""}
+      ${(s.warnings || []).map((w) => `<div class="hint">${esc(w)}</div>`).join("")}</td>
+  </tr>`).join("");
+  $("pdataResult").innerHTML = `<div class="alert ok">导入完成</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>类型</th><th class="num">新增</th><th class="num">更新</th><th>备注</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  bindSearchable($("pdataResult"));
+}
+async function pdataDownload(kind) {
+  try {
+    const data = await api("/api/product-data/" + kind);
+    if (data && data.error) { toast(data.error); return; }
+    downloadJson(data, PDATA_KINDS[kind]);
+  } catch (e) { toast("导出失败：" + e.message); }
+}
+function downloadJson(obj, filename) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 200);
+}
+async function pdataUploadImport() {
+  const f = $("pdataUploadFile").files[0];
+  if (!f) { toast("请先选择 json 文件"); return; }
+  let payload;
+  try { payload = JSON.parse(await readFileText(f)); }
+  catch (e) { toast("JSON 解析失败：" + e.message); return; }
+  const kind = payload && payload.kind;
+  if (!kind || !PDATA_KINDS[kind]) { toast("无法识别文件类型：json 需含 kind 字段（可在本页下载对应 json 参考结构）"); return; }
+  if (!confirm(`本地上传导入「${kind}」？将按名称新增/更新，不会删除已有数据。`)) return;
+  try {
+    const r = await api("/api/product-data/import-one", "POST", { payload });
+    renderPdataImportResult([r]);
+    loadPdataPage();
+    toast("导入完成");
+  } catch (e) { toast("导入失败：" + e.message); }
 }
 
 /* =============== 商品 =============== */
@@ -1006,9 +1229,12 @@ async function renderProducts() {
       const linkInfo = p.product_type === "order"
         ? (p.stock_product_id ? `扣减：${esc(p.stock_product_name || "?")} ×${fmtNum(p.multiplier)}` : '<span style="color:var(--red)">未关联库存商品</span>')
         : (p.spec || "");
+      const isLabor = p.category === "人工";
       const stockShown = p.product_type === "order" && p.stock_product_name
         ? `<span class="muted">经库存商品</span>`
-        : fmtStock(p);
+        : isLabor
+          ? `<span class="badge income">工作量 ${fmtNum(p.workload)} 单</span>`
+          : fmtStock(p);
       return `<tr>
         <td class="cb-col"><input type="checkbox" value="${p.id}" ${prodSel.has(p.id) ? "checked" : ""} onchange="toggleSel('prod',${p.id},this.checked)" /></td>
         <td class="muted mono">${esc(p.code) || "—"}</td>
@@ -1033,7 +1259,8 @@ async function renderProducts() {
 async function openUnitsModal() {
   const units = await api("/api/units");
   openModal(`
-    <h3>计量单位管理 <button class="close" onclick="closeModal()">✕</button></h3>
+    <h3>计量单位管理 <button class="close" onclick="closeModal()">✕</button>
+      <button class="btn sm secondary" style="float:right;" onclick="pdataDownload('units')"><svg class="ic"><use href="#i-download"/></svg> 导出JSON</button></h3>
     <p class="hint" style="margin-bottom:12px;">重量类单位需填写「每单位克数」，如 斤=500克；计数类按商品自行设置换算。标准单位不可删除。</p>
     <div class="table-wrap"><table>
       <thead><tr><th>单位</th><th>类型</th><th>每单位克数</th><th></th></tr></thead>
@@ -1256,6 +1483,217 @@ async function deleteProduct(pid) {
   if (!confirm("确认删除该商品？其历史单据会一并删除，请谨慎。")) return;
   try { await api("/api/products/" + pid, "DELETE"); closeModal(); toast("已删除"); PRODUCTS = await api("/api/products"); renderProducts(); }
   catch (e) { toast("删除失败：" + e.message); }
+}
+
+/* =============== 一单多货（多货合并打包规则） =============== */
+let PACK_RULES = [];
+async function loadPackRules() {
+  if (!PRODUCTS.length) PRODUCTS = await api("/api/products");
+  PACK_RULES = await api("/api/pack-rules");
+  const boxes = [...new Set(PACK_RULES.map((r) => r.box_type).filter(Boolean))].sort();
+  const bs = $("prBox");
+  if (bs && boxes.join() !== (bs._boxes || []).join()) {
+    bs._boxes = boxes;
+    bs.innerHTML = '<option value="">全部纸箱型号</option>' + boxes.map((b) => `<option value="${esc(b)}">${esc(b)}</option>`).join("");
+  }
+  renderPackRules();
+}
+function prOrderProducts() { return PRODUCTS.filter((p) => p.product_type === "order"); }
+function prItemOptions(selPid, orderProds) {
+  return `<option value="">— 不关联（保留下方名称）—</option>` +
+    orderProds.map((p) => `<option value="${p.id}" ${selPid === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+}
+function prItemRowHtml(it) {
+  it = it || {};
+  const orderProds = prOrderProducts();
+  let pid = it.product_id || null;
+  // 商品已不存在的关联，降级为原文并取消关联
+  let name = it.name || "";
+  if (pid && !PRODUCTS.find((x) => x.id === pid)) { pid = null; }
+  if (pid) name = (PRODUCTS.find((x) => x.id === pid)?.name) || name;
+  return `<div class="pr-item-row">
+    <select class="pr-item-product searchable" onchange="prItemLinked(this)">${prItemOptions(pid, orderProds)}</select>
+    <input class="pr-item-name" value="${esc(name)}" placeholder="商品名称（未关联时原文）" />
+    <input class="pr-item-qty" type="number" step="any" value="${it.quantity != null ? it.quantity : 1}" />
+    <button class="btn danger sm" onclick="this.closest('.pr-item-row').remove()">删</button>
+  </div>`;
+}
+function prItemLinked(sel) {
+  const row = sel.closest(".pr-item-row");
+  const m = PRODUCTS.find((x) => x.id === +sel.value);
+  if (m) row.querySelector(".pr-item-name").value = m.name;
+}
+function addPrItemRow() {
+  $("prItems").insertAdjacentHTML("beforeend", prItemRowHtml());
+}
+/* 箱型号→包材纸箱 关联 */
+function prBoxProducts() {
+  return PRODUCTS.filter((p) => p.is_active && p.category === "包材" && (p.name.includes("箱") || p.name.includes("纸")));
+}
+function prModelOf(pname) {
+  const n = String(pname || "");
+  if (n.endsWith("纸箱")) return n.slice(0, -2);
+  if (n.endsWith("号箱")) return n.slice(0, -1);
+  return n;
+}
+function prBoxOptions(selPid) {
+  return `<option value="">自定义（下方输入型号）</option>` +
+    prBoxProducts().map((p) => `<option value="${p.id}" ${selPid === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+}
+function prBoxRowHtml(bx) {
+  bx = bx || {};
+  let pid = bx.product_id || null;
+  let name = bx.name || "";
+  if (pid && !PRODUCTS.find((x) => x.id === pid)) { pid = null; }
+  if (pid) name = prModelOf(PRODUCTS.find((x) => x.id === pid)?.name) || name;
+  return `<div class="pr-box-row">
+    <select class="pr-box-product searchable" onchange="prBoxLinked(this)">${prBoxOptions(pid)}</select>
+    <input class="pr-box-name" value="${esc(name)}" placeholder="箱型号，如 3号 / 邮政6号" />
+    <input class="pr-box-qty" type="number" step="any" min="1" value="${bx.quantity != null ? bx.quantity : 1}" />
+    <button class="btn danger sm" onclick="this.closest('.pr-box-row').remove()">删</button>
+  </div>`;
+}
+function prBoxLinked(sel) {
+  const row = sel.closest(".pr-box-row");
+  if (sel.value) {
+    const m = PRODUCTS.find((x) => x.id === +sel.value);
+    if (m) row.querySelector(".pr-box-name").value = prModelOf(m.name);
+  }
+}
+function addPrBoxRow() {
+  $("prBoxItems").insertAdjacentHTML("beforeend", prBoxRowHtml());
+}
+function collectPrBoxItems() {
+  const out = [];
+  document.querySelectorAll("#prBoxItems .pr-box-row").forEach((row) => {
+    const sel = row.querySelector(".pr-box-product");
+    const n = (row.querySelector(".pr-box-name").value || "").trim();
+    const q = parseFloat(row.querySelector(".pr-box-qty").value);
+    if (!n) return;
+    out.push({ product_id: sel && sel.value ? +sel.value : null, name: n, quantity: q > 0 ? q : 1 });
+  });
+  return out;
+}
+function collectPrItems() {
+  const out = [];
+  document.querySelectorAll("#prItems .pr-item-row").forEach((row) => {
+    const sel = row.querySelector(".pr-item-product");
+    const n = (row.querySelector(".pr-item-name").value || "").trim();
+    const q = parseFloat(row.querySelector(".pr-item-qty").value);
+    if (!n) return;
+    out.push({ product_id: sel && sel.value ? +sel.value : null, name: n, quantity: q > 0 ? q : 1 });
+  });
+  return out;
+}
+function openPackRuleModal(rid = 0) {
+  const r = rid ? PACK_RULES.find((x) => x.id === rid) : null;
+  const items = (r ? r.items || [] : []).map((it) => ({ product_id: it.product_id, name: it.name, quantity: it.quantity }));
+  if (!items.length) items.push({ product_id: null, name: "", quantity: 1 });
+  const boxes = (r ? r.box_items || [] : []).map((bx) => ({ product_id: bx.product_id, name: bx.name, quantity: bx.quantity }));
+  if (!boxes.length && r && r.box_type) {
+    (r.box_type || "").split("+").forEach((part) => {
+      const m = part.trim().match(/^(.*?)(?:\*(\d+))?$/);
+      if (m && m[1]) boxes.push({ product_id: null, name: m[1], quantity: m[2] ? +m[2] : 1 });
+    });
+  }
+  if (!boxes.length) boxes.push({ product_id: null, name: "", quantity: 1 });
+  openModal(`
+    <h3>${rid ? "编辑" : "新增"}一单多货规则 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="block-title">组合商品（多货打包：一张订单含以下多种商品）</div>
+    <div id="prItems">${items.map((it) => prItemRowHtml(it)).join("")}</div>
+    <button class="btn secondary sm" style="margin-top:8px;" onclick="addPrItemRow()">＋ 添加组合商品</button>
+    <div class="block-title" style="margin-top:16px;">纸箱型号（关联包材纸箱） <span class="hint">选择包材商品并填数量，自动生成箱型号</span></div>
+    <div id="prBoxItems">${boxes.map((bx) => prBoxRowHtml(bx)).join("")}</div>
+    <button class="btn secondary sm" style="margin-top:8px;" onclick="addPrBoxRow()">＋ 添加箱型</button>
+    <div class="form-grid" style="margin-top:14px;">
+      <div class="field"><label>工人单价（元/单）</label><input id="prLabor" type="number" step="any" value="${r?.labor_price ?? ""}" placeholder="可空" /></div>
+      <div class="field"><label>箱单比</label><input id="prRatio" type="number" step="any" min="1" value="${r?.box_ratio || 1}" /></div>
+      <div class="field"><label>备注</label><input id="prRemark" value="${esc(r?.remark || "")}" placeholder="可选" /></div>
+    </div>
+    <label style="display:flex;gap:6px;align-items:center;margin-top:10px;"><input type="checkbox" id="prActive" ${r ? (r.is_active ? "checked" : "") : "checked"}/> 启用该规则</label>
+    <div class="modal-foot">
+      ${r ? `<button class="btn danger" onclick="deletePackRule(${r.id})" style="margin-right:auto;">删除</button>` : ""}
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="savePackRule(${rid || 0})">保存</button>
+    </div>`);
+}
+async function savePackRule(rid) {
+  const items = collectPrItems();
+  if (!items.length) { toast("至少填写一条组合商品"); return; }
+  const body = {
+    items,
+    box_items: collectPrBoxItems(),
+    labor_price: $("prLabor").value === "" ? null : +$("prLabor").value,
+    box_ratio: +$("prRatio").value || 1,
+    remark: $("prRemark").value,
+    is_active: $("prActive").checked,
+  };
+  try {
+    if (rid) await api("/api/pack-rules/" + rid, "PUT", body);
+    else await api("/api/pack-rules", "POST", body);
+    closeModal(); toast("规则已保存");
+    PACK_RULES = await api("/api/pack-rules");
+    renderPackRules();
+  } catch (e) { toast("保存失败：" + e.message); }
+}
+async function deletePackRule(rid) {
+  if (!confirm("确认删除该一单多货规则？")) return;
+  try { await api("/api/pack-rules/" + rid, "DELETE"); closeModal(); toast("已删除"); PACK_RULES = await api("/api/pack-rules"); renderPackRules(); }
+  catch (e) { toast("删除失败：" + e.message); }
+}
+function renderPackRules() {
+  const kw = ($("prSearch")?.value || "").trim().toLowerCase();
+  const box = $("prBox")?.value || "";
+  const rows = PACK_RULES.filter((r) =>
+    (!kw || r.name.toLowerCase().includes(kw) ||
+      (r.items || []).some((it) => (it.name || "").toLowerCase().includes(kw)) ||
+      (r.box_type || "").toLowerCase().includes(kw) ||
+      (r.box_items || []).some((it) => (it.name || "").toLowerCase().includes(kw))) &&
+    (!box || (r.box_type || "") === box)
+  );
+  const t = $("prTable");
+  t.innerHTML = `<thead><tr>
+    <th class="cb-col"><input type="checkbox" onclick="toggleAll(this,'pr')" /></th>
+    <th>组合（一单多货）</th><th>纸箱型号（关联包材）</th><th class="num">工人单价</th><th class="num">箱单比</th><th>备注</th><th>状态</th><th>操作</th>
+  </tr></thead><tbody>` +
+    rows.map((r) => {
+      const items = (r.items || []).map((it) => {
+        const m = it.product_id ? PRODUCTS.find((x) => x.id === it.product_id) : null;
+        const nm = m ? m.name : (it.name || "?");
+        return `${esc(nm)}${it.quantity != 1 ? `×${fmtNum(it.quantity)}` : ""}`;
+      }).join("，");
+      const boxChips = (r.box_items || []).map((bi) => {
+        const bm = bi.product_id ? PRODUCTS.find((x) => x.id === bi.product_id) : null;
+        const label = bm ? bm.name : (bi.name || "—");
+        const chip = bm ? "income" : "adjust";
+        return `<span class="badge ${chip}">${esc(label)}${bi.quantity != 1 ? ` ×${fmtNum(bi.quantity)}` : ""}</span>`;
+      }).join(" ") || "—";
+      return `<tr>
+        <td class="cb-col"><input type="checkbox" value="${r.id}" ${prSel.has(r.id) ? "checked" : ""} onchange="toggleSel('pr',${r.id},this.checked)" /></td>
+        <td><b>${esc(r.name)}</b><div class="muted" style="font-size:12px;">${esc(items)}</div></td>
+        <td>${boxChips}</td>
+        <td class="num">${r.labor_price != null ? fmtNum(r.labor_price) : "—"}</td>
+        <td class="num">${r.box_ratio || 1}</td>
+        <td class="muted">${esc(r.remark) || "—"}</td>
+        <td>${r.is_active ? '<span class="badge in">启用</span>' : '<span class="badge off">停用</span>'}</td>
+        <td class="line-actions"><button class="btn sm secondary" onclick="openPackRuleModal(${r.id})">编辑</button></td>
+      </tr>`;
+    }).join("") + `</tbody>`;
+  if (!rows.length) t.innerHTML = `<tr><td colspan="8" class="empty">暂无一单多货规则</td></tr>`;
+  updateBatchBar("pr");
+}
+async function batchDeletePackRules() {
+  const ids = [...prSel];
+  if (!ids.length) { toast("请先勾选要删除的规则"); return; }
+  if (!confirm(`确认删除选中的 ${ids.length} 条一单多货规则？`)) return;
+  try {
+    let deleted = 0;
+    for (const id of ids) { await api("/api/pack-rules/" + id, "DELETE"); deleted++; }
+    prSel.clear();
+    toast(`已删除 ${deleted} 条规则`);
+    PACK_RULES = await api("/api/pack-rules");
+    renderPackRules();
+  } catch (e) { toast("删除失败：" + e.message); }
 }
 
 /* =============== 入库 =============== */
@@ -1600,15 +2038,43 @@ async function submitOutbound() {
 }
 async function loadOutbounds() {
   const from = $("outDateFrom").value, to = $("outDateTo").value;
-  let rows = await api(`/api/outbounds?date_from=${from || ""}&date_to=${to || ""}`);
+  const flat = await api(`/api/outbounds?date_from=${from || ""}&date_to=${to || ""}`);
   const kw = ($("outSearch")?.value || "").trim().toLowerCase();
-  if (kw) rows = rows.filter((o) => [o.code, o.customer].join(" ").toLowerCase().includes(kw));
+  // 按批次聚合：同一 import_group 的若干单合并为一条展示行
+  let rows = [];
+  const groups = new Map();
+  for (const o of flat) {
+    if (o.import_group) {
+      if (!groups.has(o.import_group)) groups.set(o.import_group, []);
+      groups.get(o.import_group).push(o);
+    } else {
+      rows.push({ _group: false, rec: o });
+    }
+  }
+  for (const [key, recs] of groups) {
+    const g = buildOutGroup(recs);
+    if (!kw || [g.code, g.customer, g.date].join(" ").toLowerCase().includes(kw)) rows.push({ _group: true, g });
+  }
+  // 兼容旧筛选：进一步按单号/客户过滤（批次行存储成员以支持检索）
+  if (kw) rows = rows.filter((r) => r._group
+    ? (r.g.records || []).some((o) => [o.code, o.customer].join(" ").toLowerCase().includes(kw))
+    : [r.rec.code, r.rec.customer].join(" ").toLowerCase().includes(kw));
   const t = $("outTable");
-  rows = applyTableSort(t, rows);
-  $("outListHint").textContent = `共 ${rows.length} 单`;
+  // 提供可排序的统一字段
+  const sortable = rows.map((r) => r._group
+    ? { _group: true, g: r.g, code: r.g.code, customer: r.g.customer, total_amount: r.g.total_amount,
+        total_cogs: r.g.total_cogs, total_fee: r.g.total_fee, net_profit: r.g.net_profit, date: r.g.date }
+    : { _group: false, rec: r.rec, code: r.rec.code, customer: r.rec.customer, total_amount: r.rec.total_amount,
+        total_cogs: r.rec.total_cogs, total_fee: r.rec.total_fee, net_profit: r.rec.net_profit, date: r.rec.date });
+  sortable.sort((a, b) => {
+    if (t._sort) { const d = compareVal(a[t._sort.key], b[t._sort.key]) * t._sort.dir; if (d) return d; }
+    return 0;
+  });
+  const totalOrders = flat.length;
+  $("outListHint").textContent = `共 ${totalOrders} 单，合并 ${rows.length} 行`;
   t.innerHTML = `<thead><tr>
     <th class="cb-col"><input type="checkbox" onclick="toggleAll(this,'out')" /></th>
-    <th data-key="code">单号${sortArrow("outTable", "code")}</th>
+    <th data-key="code">单号/批次${sortArrow("outTable", "code")}</th>
     <th data-key="customer">客户${sortArrow("outTable", "customer")}</th>
     <th>明细</th>
     <th data-key="total_amount" class="num">收入${sortArrow("outTable", "total_amount")}</th>
@@ -1618,12 +2084,16 @@ async function loadOutbounds() {
     <th data-key="date">日期${sortArrow("outTable", "date")}</th>
     <th>备注</th>
     <th></th></tr></thead><tbody>` +
-    rows.map((o) => {
-    const multiBadge = o.is_multi ? '<span class="badge adjust" title="一单多货规则结算">多单结算</span>' : "";
-    const multiHead = o.is_multi ? `<div class="hint" style="padding:6px 12px;color:var(--accent);">🔗 多单结算${o.multi_rule ? ` · 规则「${esc(o.multi_rule)}」` : ""}${o.total_fee ? ` · 打包人工费 ${fmtMoney(o.total_fee)}` : ""}</div>` : "";
-    return `<tr>
-      <td class="cb-col"><input type="checkbox" value="${o.id}" ${outSel.has(o.id) ? "checked" : ""} onchange="toggleSel('out',${o.id},this.checked)" /></td>
-      <td class="mono">${o.code} ${multiBadge}</td>
+    sortable.map((r) => r._group ? renderOutGroupRow(r.g) : renderOutRow(r.rec)).join("") + `</tbody>`;
+  t._rows = sortable;
+  t._render = loadOutbounds;
+  updateBatchBar("out");
+}
+function renderOutRow(o) {
+  const checked = outSel.has(o.id) ? "checked" : "";
+  return `<tr>
+      <td class="cb-col"><input type="checkbox" value="${o.id}" ${checked} onchange="toggleSel('out',${o.id},this.checked)" /></td>
+      <td class="mono">${o.code}</td>
       <td>${esc(o.customer) || "—"}</td>
       <td><button class="detail-toggle" onclick="toggleOutDetail(${o.id})">▸ 查看明细</button></td>
       <td class="num mono">${fmtMoney(o.total_amount)}</td>
@@ -1633,19 +2103,229 @@ async function loadOutbounds() {
       <td>${o.date}</td>
       <td class="muted" style="max-width:140px;">${renderRemarkHtml(o.remark)}</td>
       <td><button class="btn sm danger" onclick="deleteOutbound(${o.id})">删</button></td></tr>
-      <tr id="od-${o.id}" style="display:none;"><td colspan="11"><div class="subtable">${multiHead}<table>` +
+      <tr id="od-${o.id}" style="display:none;"><td colspan="11"><div class="subtable"><table>` +
       o.lines.map((l) => `<tr>
         <td>${esc(l.product_name)}</td>
-        <td>${l.line_type === "sale" ? '<span class="badge out">销售</span>' : (o.is_multi ? '<span class="badge adjust">多单结算·包装</span>' : '<span class="badge pack">包装消耗</span>')}</td>
+        <td>${l.line_type === "sale" ? '<span class="badge out">销售</span>' : '<span class="badge pack">包装消耗</span>'}</td>
         <td>${fmtNum(l.quantity)} ${l.unit}</td>
         <td>= ${fmtNum(l.quantity_base)} ${l.base_unit || ""}</td>
         <td class="num">${fmtMoney(l.amount)}</td>
         <td class="num">成本 ${fmtMoney(l.cogs)}</td>
         <td class="num">${l.pack_fee ? "费 " + fmtMoney(l.pack_fee) : ""}</td>
-      </tr>`).join("") + `</table></div></td></tr>`}).join("") + `</tbody>`;
-  t._rows = rows;
-  t._render = loadOutbounds;
-  updateBatchBar("out");
+      </tr>`).join("") + `</table></div></td></tr>`;
+}
+function buildOutGroup(recs) {
+  const ids = recs.map((r) => r.id);
+  const customers = [...new Set(recs.map((r) => r.customer).filter(Boolean))];
+  const dates = recs.map((r) => r.date).sort();
+  const products = new Set();
+  recs.forEach((r) => r.lines.forEach((l) => { if (l.line_type === "sale") products.add(l.product_id); }));
+  return {
+    import_group: recs[0].import_group,
+    ids,
+    records: recs,
+    orders: recs.length,
+    customers,
+    code: `批量 · ${recs.length}单`,
+    customer: customers.join(" / ") || "—",
+    date: dates[0] === dates[dates.length - 1] ? dates[0] : `${dates[0]} ~ ${dates[dates.length - 1]}`,
+    total_amount: recs.reduce((s, r) => s + (r.total_amount || 0), 0),
+    total_cogs: recs.reduce((s, r) => s + (r.total_cogs || 0), 0),
+    total_fee: recs.reduce((s, r) => s + (r.total_fee || 0), 0),
+    net_profit: recs.reduce((s, r) => s + (r.net_profit || 0), 0),
+    products: products.size,
+  };
+}
+function renderOutGroupRow(g) {
+  const allChecked = g.ids.length && g.ids.every((id) => outSel.has(id));
+  return `<tr>
+      <td class="cb-col"><input type="checkbox" data-ids="${g.ids.join(",")}" ${allChecked ? "checked" : ""} onchange="toggleOutGroupCB(this)" /></td>
+      <td class="mono" title="${esc(g.import_group)}">${esc(g.code)}</td>
+      <td>${esc(g.customer)}</td>
+      <td>
+        <button class="detail-toggle" onclick="openOutGroup('${esc(g.import_group)}')">▸ 查看明细</button>
+        <span class="muted" style="font-size:12px;margin-left:6px;">${g.products}种商品</span>
+      </td>
+      <td class="num mono">${fmtMoney(g.total_amount)}</td>
+      <td class="num mono">${fmtMoney(g.total_cogs)}</td>
+      <td class="num mono">${fmtMoney(g.total_fee)}</td>
+      <td class="num mono" style="color:${g.net_profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(g.net_profit)}</td>
+      <td>${g.date}</td>
+      <td class="muted" style="max-width:140px;">—</td>
+      <td><button class="btn sm danger" onclick="deleteOutGroupKeys(['${esc(g.import_group)}'])">删</button></td></tr>`;
+}
+/* 打开批次二级页 */
+function openOutGroup(groupKey) {
+  api(`/api/outbounds?g=${encodeURIComponent(groupKey)}`).then((rows) => {
+    OUT_GROUP = rows.filter((r) => r.import_group === groupKey);
+    if (!OUT_GROUP.length) { toast("未找到该批次"); return; }
+    goPage("outgroup");
+    renderOutGroup();
+  }).catch((e) => toast("加载批次失败：" + e.message));
+}
+/* 批次二级页渲染 */
+function specMerge(s) {
+  if (!s) return "";
+  return s.spec || "";
+}
+function packOwner(o, l, saleLines, ruleName) {
+  // 单一销售商品：纸箱/人工归属该销售商品；多货组合：按规则组合聚合
+  if (l.sale_product_id != null) {
+    const sp = saleLines.find((x) => x.product_id === l.sale_product_id);
+    const sname = l.sale_product_name || (sp && sp.product_name) || l.product_name;
+    const sub = [ruleName ? `规则:${ruleName}` : "", specMerge(sp)].filter(Boolean).join(" · ");
+    // 命中一单多货规则时，key 需带上规则，避免同一商品不同规则的箱号被聚到一行
+    const ruleKey = ruleName ? `@@${o.pack_rule_id || ruleName}` : "";
+    return { key: `sp${l.sale_product_id}${ruleKey}`, name: sname, sub };
+  }
+  if (ruleName) {
+    const name = saleLines.map((s) => s.product_name).filter(Boolean).join(" + ") || ruleName;
+    const detail = saleLines.map((s) => `${s.product_name}:${specMerge(s)}`).filter(Boolean).join("；");
+    const sub = [ruleName ? `规则:${ruleName}` : "", detail].filter(Boolean).join(" · ");
+    return { key: `rule${o.pack_rule_id || o.id}`, name, sub };
+  }
+  return { key: `p${l.product_id}`, name: l.product_name, sub: "" };
+}
+function outAggBy(rows, pool) {
+  // pool='sale' 汇总销售商品；pool='pack' 汇总耗材/包装(不含人工)；pool='labor' 仅人工；
+  // pool='laborpack' 人工+耗材，按「销售商品 / 规则组合」溯源展示。
+  const isPackPool = pool === "pack";
+  const map = new Map();
+  const aggKey = (l) => `${l.product_id}@@${l.unit}`;
+  for (const o of rows) {
+    const saleLines = (o.lines || []).filter((l) => l.line_type === "sale");
+    const ruleName = o.pack_rule_name || o.multi_rule || "";
+    for (const l of o.lines) {
+      const isLabor = !!l.is_labor; // 人工：category=人工 或 名称以「打包」结尾
+      if (pool === "sale" && l.line_type !== "sale") continue;
+      if (pool === "pack" && (l.line_type !== "pack" || isLabor)) continue; // 耗材：排除人工
+      if (pool === "labor" && !(l.line_type === "pack" && isLabor)) continue; // 仅人工
+      if (pool === "laborpack" && l.line_type !== "pack") continue; // 人工+耗材
+
+      let k, name, sub, unit;
+      if (pool === "sale" || isPackPool) {
+        k = aggKey(l);
+        name = l.product_name;
+        sub = "";
+        unit = l.unit;
+      } else {
+        const own = packOwner(o, l, saleLines, ruleName);
+        k = own.key; name = own.name; sub = own.sub; unit = l.unit;
+      }
+      if (!map.has(k)) {
+        map.set(k, {
+          product_id: k, name, sub, unit,
+          orders: new Set(), qty: 0, qty_base: 0, amount: 0, cogs: 0, boxes: new Set(), hasBox: false,
+        });
+      }
+      const a = map.get(k);
+      a.orders.add(o.id);
+      a.qty += l.quantity || 0;
+      a.qty_base += l.quantity_base || 0;
+      a.amount += l.amount || 0;
+      a.cogs += l.cogs || 0;
+      if (!a.sub && sub) a.sub = sub;
+      // 「打包人工+耗材」等池：收集该销售商品/规则组合命中的纸箱/耗材型号
+      if (pool === "laborpack" && l.line_type === "pack" && !isLabor) {
+        a.hasBox = true;
+        a.boxes.add(l.product_name);
+      }
+    }
+  }
+  return [...map.values()].map((a) => {
+    const boxes = [...a.boxes];
+    if (a.hasBox && boxes.length) {
+      const bx = boxes.join(" + ");
+      a.subSub = a.sub ? `${a.sub} · 纸箱:${bx}` : `纸箱:${bx}`;
+    }
+    return { ...a, boxes, order_count: a.orders.size };
+  });
+}
+function renderOutGroup() {
+  if (!OUT_GROUP) return;
+  const rows = OUT_GROUP;
+  const kw = ($("ogSearch")?.value || "").trim().toLowerCase();
+  const t = $("ogTable");
+  const aggSale = outAggBy(rows, "sale").filter((a) => !kw || a.name.toLowerCase().includes(kw));
+  const aggPack = outAggBy(rows, "pack").filter((a) => !kw || a.name.toLowerCase().includes(kw));
+  const aggLabor = outAggBy(rows, "labor").filter((a) => !kw || a.name.toLowerCase().includes(kw));
+  const aggLaborPack = outAggBy(rows, "laborpack").filter((a) => !kw || a.name.toLowerCase().includes(kw));
+  const total = {
+    amt: rows.reduce((s, o) => s + (o.total_amount || 0), 0),
+    cogs: rows.reduce((s, o) => s + (o.total_cogs || 0), 0),
+    fee: rows.reduce((s, o) => s + (o.total_fee || 0), 0),
+  };
+  const net = total.amt - total.cogs - total.fee;
+  $("ogTitle").textContent = `出库批次明细（${rows.length} 单）`;
+  $("ogHint").textContent = "按商品聚合展示每种商品的单数/数量/金额或成本，可搜索、排序；耗材、人工、打包人工+耗材分开页签展示。";
+  $("ogDelCount").textContent = rows.length;
+  $("ogSummary").innerHTML =
+    `<div class="stat"><div class="label">批次单数</div><div class="value">${rows.length}</div></div>
+     <div class="stat"><div class="label">销售商品种数</div><div class="value">${outAggBy(rows, "sale").length}</div></div>
+     <div class="stat"><div class="label">耗材种数</div><div class="value">${outAggBy(rows, "pack").length}</div></div>
+     <div class="stat"><div class="label">人工种数</div><div class="value">${outAggBy(rows, "labor").length}</div></div>
+     <div class="stat"><div class="label">销售收入</div><div class="value">${fmtMoney(total.amt)}</div></div>
+     <div class="stat"><div class="label">结转成本</div><div class="value">${fmtMoney(total.cogs)}</div></div>
+     <div class="stat success"><div class="label">净利</div><div class="value" style="color:${net >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(net)}</div></div>`;
+  const seg = segActive("ogSeg");
+  let isSale = false, isLaborPack = false, emptyText = "无记录";
+  let data;
+  if (seg === "og-sale") { isSale = true; data = aggSale; emptyText = "无销售商品"; }
+  else if (seg === "og-labor") { data = aggLabor; emptyText = "无人工记录"; }
+  else if (seg === "og-laborpack") { isLaborPack = true; data = aggLaborPack; emptyText = "无打包人工/耗材记录"; }
+  else { data = aggPack; emptyText = "无耗材/包装记录"; }
+  data = data.map((a) => ({ ...a, gp: (a.amount - a.cogs) || 0 }));
+  if (t._sort) data = data.slice().sort((a, b) => compareVal(a[t._sort.key], b[t._sort.key]) * t._sort.dir);
+  const colSpan = isSale ? 7 : (isLaborPack ? 3 : 5);
+  t.innerHTML = `<thead><tr>
+    <th data-key="name">商品${sortArrow("ogTable", "name")}</th>
+    <th data-key="order_count" class="num">单数${sortArrow("ogTable", "order_count")}</th>
+    ${isLaborPack ? "" : `<th>单位</th>`}
+    ${isLaborPack ? "" : `<th data-key="qty" class="num">${isSale ? "总数量" : "数量"}${sortArrow("ogTable", "qty")}</th>`}
+    ${isSale ? `<th data-key="amount" class="num">金额${sortArrow("ogTable", "amount")}</th>` : ""}
+    <th data-key="cogs" class="num">成本${sortArrow("ogTable", "cogs")}</th>
+    ${isSale ? `<th data-key="gp" class="num">毛利${sortArrow("ogTable", "gp")}</th>` : ""}
+  </tr></thead><tbody>` +
+    (data.length ? data.map((a) => `<tr>
+      <td>${esc(a.name)}${(a.subSub || a.sub) ? `<div class="muted" style="font-size:12px;font-weight:normal;">${esc(a.subSub || a.sub)}</div>` : ""}</td>
+      <td class="num">${a.order_count} 单</td>
+      ${isLaborPack ? "" : `<td>${esc(a.unit)}</td>`}
+      ${isLaborPack ? "" : `<td class="num mono">${fmtNum(a.qty)}</td>`}
+      ${isSale ? `<td class="num mono">${fmtMoney(a.amount)}</td>` : ""}
+      <td class="num mono">${fmtMoney(a.cogs)}</td>
+      ${isSale ? `<td class="num mono" style="color:${(a.amount - a.cogs) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(a.amount - a.cogs)}</td>` : ""}
+    </tr>`).join("")
+      : `<tr><td colspan="${colSpan}" class="muted">${emptyText}</td></tr>`) + `</tbody>`;
+  // 点击表头排序
+  t._rows = data;
+  t._render = function () { renderOutGroup(); };
+}
+function segActive(segId) {
+  const b = $(segId) && $(segId).querySelector(".seg-item.active");
+  return b ? b.dataset.panel : "";
+}
+function switchOgSeg(btn) {
+  const seg = btn.closest(".seg");
+  if (!seg) return;
+  seg.querySelectorAll(".seg-item").forEach((x) => x.classList.remove("active"));
+  btn.classList.add("active");
+  renderOutGroup();
+}
+async function deleteOutGroup() {
+  if (!OUT_GROUP || !OUT_GROUP.length) return;
+  deleteOutGroupKeys([OUT_GROUP[0].import_group]);
+}
+async function deleteOutGroupKeys(groupKeys) {
+  // 通过 batch 接口删除整批
+  try {
+    const all = await api(`/api/outbounds?g=${groupKeys.map(encodeURIComponent).join(",")}`);
+    const want = all.filter((r) => groupKeys.includes(r.import_group)).map((r) => r.id);
+    if (!want.length) { toast("未找到该批次"); return; }
+    if (!confirm(`确认删除该批次 ${want.length} 张出库单？将回退库存、成本与财务记录。`)) return;
+    const r = await api("/api/outbounds/batch-delete", "POST", { ids: want });
+    toast(`已删除 ${r.deleted} 张出库单`);
+    loadOutbounds(); loadStock();
+  } catch (e) { toast("删除失败：" + e.message); }
 }
 function toggleOutDetail(id) {
   const tr = $("od-" + id);
@@ -1841,11 +2521,12 @@ async function loadMovements() {
   const pid = $("mvProduct").value || "0";
   const from = $("mvDateFrom").value, to = $("mvDateTo").value;
   let rows = await api(`/api/movements?product_id=${pid}&date_from=${from || ""}&date_to=${to || ""}`);
+  renderMvChart(rows, +pid);
   const kw = ($("mvSearch")?.value || "").trim().toLowerCase();
   if (kw) rows = rows.filter((m) => [m.date, m.product_name, m.remark, m.operator].join(" ").toLowerCase().includes(kw));
   const t = $("mvTable");
   rows = applyTableSort(t, rows);
-  const typeBadge = { in: '<span class="badge in">入库</span>', out: '<span class="badge out">出库</span>', pack_out: '<span class="badge pack">包装消耗</span>', adjust: '<span class="badge adjust">盘点</span>' };
+  const typeBadge = { in: '<span class="badge in">入库</span>', out: '<span class="badge out">出库</span>', pack_out: '<span class="badge pack">包装消耗</span>', work: '<span class="badge income">工作量</span>', adjust: '<span class="badge adjust">盘点</span>' };
   t.innerHTML = `<thead><tr>
     <th data-key="date">时间${sortArrow("mvTable", "date")}</th>
     <th data-key="product_name">商品${sortArrow("mvTable", "product_name")}</th>
@@ -1854,17 +2535,87 @@ async function loadMovements() {
     <th data-key="amount" class="num">金额${sortArrow("mvTable", "amount")}</th>
     <th data-key="operator">操作员${sortArrow("mvTable", "operator")}</th>
     <th>备注</th></tr></thead><tbody>` +
-    rows.map((m) => `<tr>
+    rows.map((m) => {
+      const v = m.quantity_display != null ? m.quantity_display : m.quantity_base;
+      const unit = m.unit || "";
+      return `<tr>
       <td class="mono">${m.date}</td>
       <td>${esc(m.product_name)}</td>
       <td>${typeBadge[m.move_type] || m.move_type}</td>
-      <td class="num mono" style="color:${m.quantity_display >= 0 ? "var(--green)" : "var(--red)"}">${m.quantity_display >= 0 ? "+" : ""}${fmtNum(m.quantity_display)} ${esc(m.unit || "")}</td>
+      <td class="num mono" style="color:${v >= 0 ? "var(--green)" : "var(--red)"}">${v >= 0 ? "+" : ""}${fmtNum(v)} ${esc(unit)}</td>
       <td class="num mono">${fmtMoney(m.amount)}</td>
       <td>${esc(m.operator) || "—"}</td>
-      <td class="muted">${esc(m.remark)}</td></tr>`).join("") + `</tbody>`;
+      <td class="muted">${esc(m.remark)}</td></tr>`;
+    }).join("") + `</tbody>`;
   if (!rows.length) t.innerHTML = `<tr><td colspan="7" class="empty">暂无流水</td></tr>`;
   t._rows = rows;
   t._render = loadMovements;
+}
+
+/* 近一个月库存变动柱状图：按日聚合净变动（单商品用默认单位，全部商品用基础单位） */
+function renderMvChart(rows, pid) {
+  const box = $("mvChart");
+  if (!box) return;
+  const from = $("mvDateFrom").value, to = $("mvDateTo").value;
+  const useDisp = !!pid; // 选中具体商品时按默认单位展示
+  const byDate = {};
+  rows.forEach((m) => {
+    const v = useDisp ? (m.quantity_display != null ? m.quantity_display : m.quantity_base) : m.quantity_base;
+    byDate[m.date] = (byDate[m.date] || 0) + v;
+  });
+  const end = to ? new Date(to + "T00:00:00") : new Date();
+  const start = from ? new Date(from + "T00:00:00") : new Date(end.getTime() - 29 * 86400000);
+  const days = [];
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    days.push({ ds, v: byDate[ds] || 0 });
+  }
+  if (days.length > 62) days.splice(0, days.length - 62); // 防止日期范围过大
+  const p = useDisp ? PRODUCTS.find((x) => x.id === pid) : null;
+  const unit = p ? (p.default_unit || p.base_unit) : "基础单位";
+  const max = Math.max(1, ...days.map((d) => Math.abs(d.v)));
+  box.innerHTML = `<div class="mv-chart-title">近${days.length}天库存变动趋势（${unit}，绿=净入库/红=净出库）</div><div class="mv-chart">` +
+    days.map((d) => {
+      const h = Math.max(2, Math.round(Math.abs(d.v) / max * 100));
+      const cls = d.v > 0 ? "up" : d.v < 0 ? "down" : "zero";
+      const label = d.v ? (d.v > 0 ? "+" : "") + fmtNum(d.v) : "";
+      return `<div class="mv-col" title="${d.ds}：${d.v ? (d.v > 0 ? "+" : "") + fmtNum(d.v) : "0"} ${unit}">
+        <span class="mv-val">${label}</span>
+        <div class="mv-track"><div class="mv-bar ${cls}" style="height:${h}%"></div></div>
+        <div class="mv-x">${d.ds.slice(5)}</div></div>`;
+    }).join("") + `</div>`;
+}
+
+/* =============== 工作量统计（人工打包） =============== */
+async function loadWorkload() {
+  const from = $("wlDateFrom").value, to = $("wlDateTo").value;
+  const d = await api(`/api/workload?date_from=${from || ""}&date_to=${to || ""}`);
+  renderWorkload(d);
+}
+function renderWorkload(d) {
+  $("wlTotal").textContent = fmtNum(d.total_workload) + " 单";
+  $("wlTotalSub").textContent = `成本 ${fmtMoney(d.total_cost)} · ${d.by_product.length} 个打包工种`;
+  const max = Math.max(1, ...d.by_product.map((x) => x.workload));
+  $("wlChart").innerHTML = `<div class="mv-chart-title">各人工打包工作量（${d.by_product.length ? "单" : "—"}）</div><div class="wl-bars">` +
+    d.by_product.map((x) => {
+      const w = Math.round(x.workload / max * 100);
+      return `<div class="wl-row" title="${esc(x.name)}：${fmtNum(x.workload)} 单 · 成本 ${fmtMoney(x.cost)}">
+        <span class="wl-name">${esc(x.name)}</span>
+        <span class="wl-track"><span class="wl-bar" style="width:${Math.max(2, w)}%"></span></span>
+        <span class="wl-val">${fmtNum(x.workload)}</span></div>`;
+    }).join("") +
+    (d.by_product.length ? "" : `<div class="wl-empty">该时间段暂无人工作量</div>`) + `</div>`;
+  const t = $("wlTable");
+  t.innerHTML = `<thead><tr>
+    <th>人工工种</th><th class="num">工作量(单)</th><th class="num">单位单价</th><th class="num">成本</th></tr></thead><tbody>` +
+    d.by_product.map((x) => `<tr>
+      <td><b>${esc(x.name)}</b></td>
+      <td class="num mono">${fmtNum(x.workload)} ${esc(x.unit)}</td>
+      <td class="num mono">${fmtMoney(x.rate)}/${esc(x.unit)}</td>
+      <td class="num mono">${fmtMoney(x.cost)}</td></tr>`).join("") +
+    (d.by_product.length ? "" : `<tr><td colspan="4" class="empty">该时间段无人工工作量</td></tr>`) + `</tbody>`;
+  t._rows = d.by_product;
+  t._render = () => renderWorkload(d);
 }
 
 /* ---------- HTML 转义 ---------- */
@@ -1874,6 +2625,10 @@ function esc(s) {
 
 /* ---------- 初始化 ---------- */
 (async function init() {
+  try {
+    const cfg = await fetch("/config.json", { cache: "no-store" }).then((r) => r.json());
+    Object.assign(ROUTES, cfg.routes || {});
+  } catch (e) {}
   showLogin();
   try {
     const me = await api("/api/auth/me");
@@ -1882,15 +2637,7 @@ function esc(s) {
   } catch (e) {
     return; // 未登录，停留在登录页
   }
-  $("mvProduct").innerHTML = `<option value="0">全部商品</option>`;
-  PRODUCTS = await api("/api/products");
-  UNITS = await api("/api/units");
-  $("mvProduct").innerHTML = `<option value="0">全部商品</option>` +
-    PRODUCTS.filter((p) => !["人工", "快递"].includes(p.category)).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
-  $("inProduct").innerHTML = `<option value="">选择商品…</option>` +
-    PRODUCTS.filter((p) => p.is_active && p.product_type === "stock").map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
-  $("inProduct").onchange = inProductChanged;
-  $("inUnit").onchange = calcInbound;
+  // 预设默认日期范围：入库记录本月，出库记录当天
   $("inDate").value = today();
   $("outDate").value = today();
   $("inDateFrom").value = monthStart();
@@ -1899,13 +2646,28 @@ function esc(s) {
   $("outDateTo").value = today();
   $("mvDateFrom").value = today(); // 库存流水默认显示当天
   $("mvDateTo").value = today();
-  bindSearchable(document);
+  $("wlDateFrom").value = monthStart(); // 工作量统计默认本月
+  $("wlDateTo").value = today();
+
+  // 加载基础数据（失败不阻塞初始化，保证默认范围与首页可用）
+  try {
+    PRODUCTS = await api("/api/products");
+    UNITS = await api("/api/units");
+  } catch (e) { PRODUCTS = PRODUCTS || []; UNITS = UNITS || []; }
+  try {
+    $("mvProduct").innerHTML = `<option value="0">全部商品</option>` +
+      PRODUCTS.filter((p) => !["人工", "快递"].includes(p.category)).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+    $("inProduct").innerHTML = `<option value="">选择商品…</option>` +
+      PRODUCTS.filter((p) => p.is_active && p.product_type === "stock").map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+    $("inUnit").onchange = calcInbound;
+  } catch (e) {}
+  try { bindSearchable(document); } catch (e) {}
   loadDashboard();
 })();
 
 /* =============== 批量导入 =============== */
 function downloadTpl(kind) {
-  window.location.href = `/api/templates/${kind}`;
+  window.location.href = routePath(`/api/templates/${kind}`);
 }
 async function doImport(kind) {
   const idMap = { products: "impProdFile", inbounds: "impInFile", outbounds: "impOutFile" };
@@ -1957,7 +2719,7 @@ const BATCH_MODAL = {
     tpl: "",
     preview: "/api/jushuitan/import/preview",
     confirm: "/api/jushuitan/import/confirm",
-    hint: "上传聚水潭导出的「销售出库单_*.xlsx」，自动识别商品并按件数×每件规格结算。一单多货自动拆行；遇未关联的系统外商品，会在本页提示手动匹配并自动记录到关联结算（持续进化），确认后才出库。",
+    hint: "上传聚水潭导出的「销售出库单_*.xlsx」，自动识别商品并按件数×每件规格结算。先解析预览，确认后才出库。需先在「编码关联」中把商品名关联到系统商品。",
   },
 };
 function openBatchModal(kind) {
@@ -1989,7 +2751,6 @@ async function runBatchModal(kind) {
   const cfg = BATCH_MODAL[kind];
   const file = $("bmFile").files[0];
   if (!file) { toast("请先选择 Excel 文件"); return; }
-  window.__BM_FILE__ = file; // 供「保存关联后重新解析」复用同一文件
   const box = $("bmResult");
   box.innerHTML = `<div class="alert ok">⏳ 正在解析…</div>`;
   try {
@@ -2000,14 +2761,11 @@ async function runBatchModal(kind) {
 }
 function renderDraftReview(kind, r) {
   const orders = r.orders || [];
+  // 一单多货规则带出的包材/人工行：按 doc_no 记录，确认出库时一并回传
+  window.__DRAFT_PACK__ = {};
+  orders.forEach((o) => { if (o.pack_lines && o.pack_lines.length) window.__DRAFT_PACK__[o.doc_no] = o.pack_lines; });
   let warn = "";
-  // 聚水潭导入页：① 一单多货未命中规则 → 先引导生成规则；② 未关联商品 → 引导编码匹配；跳过时 forceReview 直接确认
-  if (kind === "jushuitan" && r.unmatched_multi && r.unmatched_multi.length && !r.forceReview) return renderJstRuleScreen(kind, r, "");
-  if (kind === "jushuitan" && r.unmapped && r.unmapped.length && !r.forceReview) return renderJstMatchScreen(kind, r, "");
-  if (r.unmatched_multi && r.unmatched_multi.length && r.forceReview) warn += `<div class="alert warn">⚠ 已跳过 <b>${r.unmatched_multi.length}</b> 个一单多货订单（未生成规则，未结算）</div>`;
-  if (r.unmapped_codes && r.unmapped_codes.length) warn += r.forceReview
-      ? `<div class="alert warn">⚠ 已跳过 <b>${r.unmapped_codes.length}</b> 种未关联商品（${r.unmapped_codes.map(esc).join("、")}），未计入出库，请留意。</div>`
-      : `<div class="alert warn">⚠ 未关联商品：${r.unmapped_codes.map(esc).join("、")}（请到「编码关联」关联后重新解析）</div>`;
+  if (r.unmapped_codes && r.unmapped_codes.length) warn += `<div class="alert warn">⚠ 未关联商品：${r.unmapped_codes.map(esc).join("、")}（请到「编码关联」关联后重新解析）</div>`;
   if (r.skip && Object.values(r.skip).some((v) => v > 0)) warn += `<div class="alert warn">⚠ 跳过：${Object.entries(r.skip).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}单`).join("、")}</div>`;
   if (r.failed && r.failed.length) warn += `<div class="alert err">解析失败 ${r.failed.length} 条：${r.failed.slice(0, 5).map((f) => esc(f.reason)).join("；")}</div>`;
   if (!orders.length) {
@@ -2016,20 +2774,15 @@ function renderDraftReview(kind, r) {
       <div class="modal-foot"><button class="btn secondary" onclick="openBatchModal('${kind}')">返回重新选择</button></div>`;
     return;
   }
-  const body = orders.map((o, oi) => {
-    // 一单多货规则带出的包材/人工，随单据回传给确认（避免重新生成时丢失）
-    const pl = (o.pack_lines || []);
-    const packHint = pl.length ? ` · 📦${pl.map((b) => `${esc(b.name || "")}×${fmtNum(b.quantity)}`).join("+")}` : "";
-    if (kind === "jushuitan") { window.__JST_ORDERS__ = window.__JST_ORDERS__ || {}; window.__JST_ORDERS__[o.doc_no] = { pack_lines: pl, pack_fee: o.pack_fee || 0 }; }
-    return `
+  const body = orders.map((o, oi) => `
     <div class="draft-order" data-doc="${esc(o.doc_no)}" data-date="${esc(o.date)}" data-customer="${esc(o.customer || "")}"
-         data-operator="${esc(o.operator || "")}" data-remark="${esc(o.remark || "")}" data-packfee="${o.pack_fee || 0}">
+         data-operator="${esc(o.operator || "")}" data-remark="${esc(o.remark || "")}" data-packfee="${o.pack_fee || 0}"
+         data-packruleid="${o.pack_rule_id || ""}" data-packrulename="${esc(o.pack_rule_name || "")}">
       <div class="draft-head">
         <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" class="draft-check" checked onchange="updateDraftCount('${kind}')" /> 出库</label>
         <b>${esc(o.doc_no || "（无单号）")}</b>
-        <span class="muted">${esc(o.customer || "—")} · ${esc(o.date)}</span>
+        <span class="muted">${esc(o.customer || "—")} · ${esc(o.date)}${o.pack_fee ? " · 打包费 " + fmtMoney(o.pack_fee) : ""}</span>
       </div>
-      ${pl.length || o.pack_fee ? `<div class="hint" style="padding:6px 12px;color:var(--accent);">一单多货结算：${packHint || ""}${o.pack_fee ? (packHint ? " · " : "") + "人工 " + fmtMoney(o.pack_fee) : ""}</div>` : ""}
       <table class="subtable">
         <thead><tr><th>商品</th><th>单位</th><th>数量</th><th>单价</th><th>金额</th></tr></thead>
         <tbody>${(o.lines || []).map((l) => `
@@ -2042,7 +2795,7 @@ function renderDraftReview(kind, r) {
           </tr>`).join("")}
         </tbody>
       </table>
-    </div>`; }).join("");
+    </div>`).join("");
   $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} — 确认出库 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="alert ok">解析出 <b>${orders.length}</b> 单。可勾选、修改数量/单价后点击「确认出库」。</div>
     ${warn}
@@ -2052,148 +2805,6 @@ function renderDraftReview(kind, r) {
       <button class="btn green" onclick="confirmDraft('${kind}')">✓ 确认出库（<span id="draftCount">${orders.length}</span> 单）</button>
     </div>`;
 }
-
-/* ---------- 聚水潭导入：未关联商品手动匹配（自动记录关联，持续进化） ---------- */
-function jstMatchOpts(u) {
-  const list = [];
-  (u.suggest || []).forEach((s) => list.push({ id: s.id, name: `${s.name}（推荐 ${Math.round(s.score * 100)}%）` }));
-  PRODUCTS.forEach((p) => { if (!list.some((x) => +x.id === +p.id)) list.push({ id: p.id, name: p.name }); });
-  const best = (u.suggest || [])[0];
-  const selected = best && best.score >= 0.7 ? best.id : "";
-  return `<option value="">— 选择系统商品 —</option>` +
-    list.map((o) => `<option value="${o.id}" ${String(o.id) === String(selected) ? "selected" : ""}>${esc(o.name)}</option>`).join("");
-}
-function renderJstMatchScreen(kind, r, note) {
-  const codes = r.unmapped || [];
-  const saved = r.saved || 0;
-  if (!PRODUCTS.length) { api("/api/products").then((p) => { PRODUCTS = p; redrawJstMatchScreen(kind, r, note, saved); }).catch(() => {}); return; }
-  drawJstMatchScreen(kind, r, note, saved);
-}
-function redrawJstMatchScreen(kind, r, note, saved) { r = r || {}; drawJstMatchScreen(kind, { ...r, saved }, note || "", saved); }
-function drawJstMatchScreen(kind, r, note, saved) {
-  const codes = r.unmapped || [];
-  const title = BATCH_MODAL[kind] ? BATCH_MODAL[kind].title : "导入聚水潭出库单";
-  const info = note || (saved ? `<div class="alert ok">已自动保存 <b>${saved}</b> 条关联，系统已重新解析。本次还有 <b>${codes.length}</b> 种商品未关联，请继续匹配或直接确认出库。</div>`
-                                    : `<div class="alert warn">本次导入发现 <b>${codes.length}</b> 种商品在系统中尚未关联。请为每种商品选择关联系统商品，保存后会自动记录到「关联结算」并重新解析，下次导入即自动匹配。</div>`);
-  $("modalBox").innerHTML = `<h3>${title} — 🔗 匹配未关联商品</h3>
-    ${info}
-    <table class="subtable" style="width:100%;">
-      <thead><tr><th style="width:40%;">聚水潭商品</th><th class="num">出现次数</th><th>每件规格</th><th>关联到系统商品</th></tr></thead>
-      <tbody>${codes.map((u) => `
-        <tr>
-          <td><b>${esc(u.external_code)}</b></td>
-          <td class="num">${u.count}</td>
-          <td class="muted">${esc(u.spec) || "—"}</td>
-          <td><select class="jst-map-select searchable" data-code="${esc(u.external_code)}">${jstMatchOpts(u)}</select></td>
-        </tr>`).join("")}
-      </tbody>
-    </table>
-    <p class="hint" style="margin:10px 0;">匹配后点击「保存关联并继续」：自动写入关联结算 → 重新解析 → 返回确认出库。</p>
-    <div class="modal-foot">
-      <button class="btn secondary" onclick="skipJstMatch('${kind}')">跳过，先行出库已关联商品</button>
-      <button class="btn green" onclick="saveJstMappingsAndContinue('${kind}')">✓ 保存关联并继续</button>
-    </div>`;
-  bindSearchable($("modalBox"));
-}
-function skipJstMatch(kind) {
-  // 无法复用已在内存中被丢弃的草稿，直接重新解析后强制进入单据确认
-  const file = window.__BM_FILE__;
-  if (!file) { toast("文件丢失，请重新选择"); openBatchModal(kind); return; }
-  $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3><div class="alert ok">⏳ 重新解析…</div>`;
-  apiUpload(BATCH_MODAL[kind].preview, file).then((rr) => {
-    rr.forceReview = 1;
-    renderDraftReview(kind, rr);
-  }).catch((e) => toast("解析失败：" + e.message));
-}
-async function saveJstMappingsAndContinue(kind) {
-  const items = [];
-  document.querySelectorAll("#modalBox .jst-map-select").forEach((sel) => {
-    if (sel.value) items.push({ external_code: sel.dataset.code, product_id: +sel.value });
-  });
-  const file = window.__BM_FILE__;
-  if (!file) { toast("文件丢失，请重新选择"); openBatchModal(kind); return; }
-  if (!items.length && !confirm("未选择任何关联，确定仅查看已关联单据吗？")) return;
-  $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3><div class="alert ok">⏳ 正在保存关联并重新解析…</div>`;
-  try {
-    if (items.length) {
-      await api("/api/mappings/bulk", "POST", { source: "jushuitan", items });
-      toast(`已自动保存 ${items.length} 条关联`);
-    }
-    const r = await apiUpload(BATCH_MODAL[kind].preview, file);
-    if (r.unmapped && r.unmapped.length) {
-      r.saved = items.length;
-      renderJstMatchScreen(kind, r, "");
-    } else {
-      renderDraftReview(kind, r);
-      toast("关联已生效，可确认出库");
-    }
-  } catch (e) { toast("保存/解析失败：" + e.message); }
-}
-
-/* ---------- 一单多货未命中规则：手动补选并自动生成规则 ---------- */
-function jstSugOpts(sug, selected) {
-  const list = [];
-  (sug || []).forEach((s) => list.push({ id: s.id, name: `${s.name}（推荐 ${Math.round(s.score * 100)}%）` }));
-  PRODUCTS.forEach((p) => { if (!list.some((x) => +x.id === +p.id)) list.push({ id: p.id, name: p.name }); });
-  const best = (sug || [])[0];
-  const sel = selected || (best && best.score >= 0.7 ? best.id : "");
-  return `<option value="">— 选择系统商品 —</option>` +
-    list.map((o) => `<option value="${o.id}" ${String(o.id) === String(sel) ? "selected" : ""}>${esc(o.name)}</option>`).join("");
-}
-function renderJstRuleScreen(kind, r, note) {
-  const multi = r.unmatched_multi || [];
-  if (!PRODUCTS.length) { api("/api/products").then((p) => { PRODUCTS = p; renderJstRuleScreen(kind, r, note); }).catch(() => {}); return; }
-  const title = BATCH_MODAL[kind] ? BATCH_MODAL[kind].title : "导入聚水潭出库单";
-  const info = note || `<div class="alert warn">本次有 <b>${multi.length}</b> 个一单多货订单在「一单多货规则」中没有匹配组合。请为每个商品选择关联的系统商品，保存后自动生成规则并结算，下次导入即自动命中。</div>`;
-  $("modalBox").innerHTML = `<h3>${title} — 🔗 生成一单多货规则</h3>${info}` +
-    multi.map((o) => `
-      <div class="draft-order" data-doc="${esc(o.doc_no)}">
-        <div class="draft-head"><b>${esc(o.doc_no)}</b><span class="muted">一单多货 · 未命中规则</span></div>
-        <table class="subtable">
-          <thead><tr><th>聚水潭商品</th><th class="num">数量</th><th>关联到系统商品</th></tr></thead>
-          <tbody>${(o.items || []).map((it) => `
-            <tr data-code="${esc(it.external_code)}">
-              <td><b>${esc(it.external_code)}</b></td>
-              <td class="num">${fmtNum(it.quantity)}</td>
-              <td><select class="jst-rule-select searchable">${jstSugOpts(it.suggest, "")}</select></td>
-            </tr>`).join("")}
-          </tbody>
-        </table>
-      </div>`).join("") +
-    `<div class="modal-foot">
-      <button class="btn secondary" onclick="skipJstRules('${kind}')">跳过（暂不结算这些多单）</button>
-      <button class="btn green" onclick="saveJstRulesAndContinue('${kind}')">✅ 保存为规则并继续</button>
-    </div>`;
-  bindSearchable($("modalBox"));
-}
-async function saveJstRulesAndContinue(kind) {
-  const orders = [];
-  document.querySelectorAll("#modalBox .draft-order").forEach((od) => {
-    const items = [];
-    od.querySelectorAll(".jst-rule-select").forEach((sel) => {
-      const tr = sel.closest("tr");
-      if (sel.value) items.push({ external_code: tr.dataset.code, product_id: +sel.value });
-    });
-    if (items.length) orders.push({ doc_no: od.dataset.doc, items });
-  });
-  const file = window.__BM_FILE__;
-  if (!file) { toast("文件丢失，请重新选择"); openBatchModal(kind); return; }
-  if (!orders.length && !confirm("未选择任何关联，确定跳过这些一单多货订单吗？")) return;
-  $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3><div class="alert ok">⏳ 正在生成规则并重新解析…</div>`;
-  try {
-    for (const o of orders) await api("/api/pack-rules/from-jushuitan", "POST", o);
-    toast(`已生成 ${orders.length} 条一单多货规则`);
-    const r = await apiUpload(BATCH_MODAL[kind].preview, file);
-    renderDraftReview(kind, r);
-  } catch (e) { toast("保存失败：" + e.message); }
-}
-function skipJstRules(kind) {
-  const file = window.__BM_FILE__;
-  if (!file) { toast("文件丢失，请重新选择"); openBatchModal(kind); return; }
-  $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3><div class="alert ok">⏳ 重新解析…</div>`;
-  apiUpload(BATCH_MODAL[kind].preview, file).then((rr) => { rr.forceReview = 1; renderDraftReview(kind, rr); }).catch((e) => toast("解析失败：" + e.message));
-}
-
 function draftLineCalc(inp) {
   const tr = inp.closest("tr");
   const qty = parseFloat(tr.querySelector(".draft-qty").value) || 0;
@@ -2217,12 +2828,16 @@ async function confirmDraft(kind) {
       if (pid && unit && qty > 0) lines.push({ product_id: pid, unit, quantity: qty, price });
     });
     if (!lines.length) return;
-    const meta = (kind === "jushuitan" && window.__JST_ORDERS__ && window.__JST_ORDERS__[od.dataset.doc]) || {};
+    const packMap = window.__DRAFT_PACK__ || {};
+    const pid = od.dataset.packruleid ? +od.dataset.packruleid : null;
+    const pname = (od.dataset.packrulename || "").trim();
     orders.push({
       doc_no: od.dataset.doc, date: od.dataset.date, customer: od.dataset.customer,
       operator: od.dataset.operator, remark: od.dataset.remark,
-      pack_fee: meta.pack_fee != null ? meta.pack_fee : (parseFloat(od.dataset.packfee) || 0),
-      pack_lines: meta.pack_lines || [], lines,
+      pack_fee: parseFloat(od.dataset.packfee) || 0, lines,
+      pack_rule_id: pid,
+      pack_rule_name: pname,
+      pack_lines: packMap[od.dataset.doc] || [],
     });
   });
   if (!orders.length) { toast("没有勾选任何单据"); return; }
@@ -2318,121 +2933,33 @@ async function confirmInbound(kind) {
 
 /* =============== 聚水潭编码关联 =============== */
 async function loadMappingPage() {
-  populateMpNewProduct();
+  // 页面已改为「解析即自动新增/关联」，这里仅展示当前关联数量供参考
   const r = await api("/api/mappings");
-  renderSavedMappings(r);
-  $("mpParseInfo").innerHTML = "";
-  $("mpTable").innerHTML = "";
-  if (r.length) {
-    $("mpParseInfo").innerHTML = `<div class="alert ok">已保存 <b>${r.length}</b> 条关联记录，可在「② 已保存的关联关系」中查看修改。</div>`;
-  }
-}
-function populateMpNewProduct() {
-  $("mpNewProduct").innerHTML = `<option value="">选择关联到系统商品…</option>` +
-    PRODUCTS.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
-}
-function renderSavedMappings(rows) {
-  const t = $("mpSavedTable");
-  if (!rows.length) {
-    t.innerHTML = `<tr><td class="empty" colspan="4">暂无已保存的关联关系。可在上方①解析后保存，或在此手动新增。</td></tr>`;
-    return;
-  }
-  const optHtml = (pid) =>
-    `<option value="">— 不关联 —</option>` +
-    PRODUCTS.map((p) => `<option value="${p.id}" ${String(p.id) === String(pid) ? "selected" : ""}>${esc(p.name)}</option>`).join("");
-  t.innerHTML = `<thead><tr>
-    <th>外部商品编码（聚水潭）</th><th>关联到系统商品</th><th>来源</th><th>操作</th></tr></thead><tbody>` +
-    rows.map((m) => `<tr data-id="${m.id}">
-      <td><b>${esc(m.external_code)}</b></td>
-      <td><select class="saved-select searchable" data-code="${esc(m.external_code)}">${optHtml(m.product_id)}</select></td>
-      <td class="muted">${m.auto_score ? `自动匹配 ${Math.round(m.auto_score * 100)}%` : "手动"}</td>
-      <td><button class="btn sm danger" onclick="deleteMappingRow(${m.id}, '${esc(m.external_code)}')">删除</button></td></tr>`).join("") + `</tbody>`;
-  bindSearchable(t);
-}
-async function saveSavedMappings() {
-  const items = [];
-  document.querySelectorAll("#mpSavedTable .saved-select").forEach((sel) => {
-    if (sel.value) items.push({ external_code: sel.dataset.code, product_id: +sel.value });
-  });
-  if (!items.length) { toast("没有有效的关联（未选择商品）"); return; }
-  try {
-    const r = await api("/api/mappings/bulk", "POST", { source: "jushuitan", items });
-    toast(`已保存修改 ${r.saved} 条`);
-    loadMappingPage();
-  } catch (e) { toast("保存失败：" + e.message); }
-}
-async function deleteMappingRow(id, code) {
-  if (!confirm(`确认删除关联「${code}」？`)) return;
-  try { await api("/api/mappings/" + id, "DELETE"); toast("已删除"); loadMappingPage(); }
-  catch (e) { toast("删除失败：" + e.message); }
-}
-async function addMappingRow() {
-  const code = $("mpNewCode").value.trim();
-  const pid = $("mpNewProduct").value;
-  if (!code) { toast("请输入外部商品编码"); return; }
-  if (!pid) { toast("请选择要关联的系统商品"); return; }
-  try {
-    await api("/api/mappings", "POST", { source: "jushuitan", external_code: code, product_id: +pid });
-    toast("已新增关联");
-    $("mpNewCode").value = "";
-    loadMappingPage();
-  } catch (e) { toast("新增失败：" + e.message); }
+  $("mpParseInfo").innerHTML = r.length
+    ? `<div class="alert ok">当前已保存 <b>${r.length}</b> 条商品编码关联（均指向库存商品），导入出库单时将按此关联结算。</div>`
+    : `<div class="alert">暂无商品编码关联，上传聚水潭出库单后会自动新增订单商品并关联库存商品。</div>`;
 }
 async function parseJushuitan() {
   const file = $("mpFile").files[0];
   if (!file) { toast("请先选择聚水潭出库单文件"); return; }
   try {
     const r = await apiUpload("/api/jushuitan/parse", file);
-    MP_CODES = r.codes;
+    MP_CODES = r.codes || [];
     const skip = Object.entries(r.skip).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}单`).join("、");
-    $("mpParseInfo").innerHTML = `<div class="alert ok">共 <b>${r.total_orders}</b> 单已出库，解析出 <b>${r.codes.length}</b> 种商品${skip ? `，跳过（${skip}）` : ""}。系统已自动推荐匹配，请核对后「保存全部关联」。</div>`;
-    renderMpTable(r.codes);
+    const codes = MP_CODES;
+    const created = codes.filter((c) => c.status === "自动新增");
+    const existed = codes.filter((c) => c.status === "已存在");
+    const linked = codes.filter((c) => !!c.stock_product_name);
+    const unlinked = codes.filter((c) => !c.stock_product_name);
+    let html = `<div class="alert ok">共 <b>${r.total_orders}</b> 单已出库，解析出 <b>${codes.length}</b> 种订单商品` +
+      (skip ? `，跳过（${skip}）` : "") + `。</div>`;
+    html += `<div class="mp-summary">
+      <div class="mp-sum-item ok"><b>${linked.length}</b> 种已关联库存商品${linked.length ? `（${linked.map((c) => `${esc(c.product_name)} → ${esc(c.stock_product_name)}`).join("、")}）` : ""}</div>
+      <div class="mp-sum-item">本次自动新增 <b>${created.length}</b> 种订单商品${existed.length ? `，已存在未新增 ${existed.length} 种` : ""}</div>` +
+      (unlinked.length ? `<div class="mp-sum-item warn">未匹配库存 <b>${unlinked.length}</b> 种：${unlinked.map((c) => esc(c.product_name)).join("、")}（可在出库页「关联结算」中维护）</div>` : "") + `
+    </div>`;
+    $("mpParseInfo").innerHTML = html;
   } catch (e) { $("mpParseInfo").innerHTML = `<div class="alert err">解析失败：${esc(e.message)}</div>`; }
-}
-function renderMpTable(codes) {
-  const optHtml = (pid) =>
-    `<option value="">— 不关联 —</option>` +
-    PRODUCTS.map((p) => `<option value="${p.id}" ${String(p.id) === String(pid) ? "selected" : ""}>${esc(p.name)}</option>`).join("");
-  $("mpTable").innerHTML = `<thead><tr>
-    <th>聚水潭商品</th><th class="num">出现次数</th><th>每件规格</th><th>推荐匹配</th><th>关联到系统商品</th><th>状态</th></tr></thead><tbody>` +
-    codes.map((c) => {
-      const matched = !!c.product_id;
-      const selId = c.product_id || c.suggest_id || "";
-      const score = c.score;
-      const tag = matched
-        ? `<span class="badge in">已关联</span>`
-        : (selId ? `<span class="badge adjust">建议匹配</span>` : `<span class="badge off">待关联</span>`);
-      return `<tr>
-        <td><b>${esc(c.external_code)}</b></td>
-        <td class="num">${c.count}</td>
-        <td class="muted">${esc(c.spec) || "—"}</td>
-        <td class="muted">${c.suggest_name ? `${esc(c.suggest_name)} <span class="muted">(${Math.round(score * 100)}%)</span>` : "—"}</td>
-        <td><select class="mp-select searchable" data-code="${esc(c.external_code)}" onchange="mpSelectChanged(this)">${optHtml(selId)}</select></td>
-        <td>${tag}</td></tr>`;
-    }).join("") + `</tbody>`;
-  // 未保存过的：匹配度>=50% 的自动选中，弱匹配留待人工确认
-  document.querySelectorAll("#mpTable .mp-select").forEach((sel) => {
-    const c = MP_CODES.find((x) => x.external_code === sel.dataset.code);
-    if (c && !c.product_id && c.suggest_id && (c.score || 0) >= 0.5) sel.value = String(c.suggest_id);
-  });
-  bindSearchable($("mpTable"));
-}
-function mpSelectChanged(sel) {
-  const c = MP_CODES.find((x) => x.external_code === sel.dataset.code);
-  if (c) c.product_id = sel.value ? +sel.value : null;
-}
-async function saveMappings() {
-  // 以表格下拉框的实际选择为准（自动选中的推荐项也在其中）
-  const items = [];
-  document.querySelectorAll("#mpTable .mp-select").forEach((sel) => {
-    if (sel.value) items.push({ external_code: sel.dataset.code, product_id: +sel.value });
-  });
-  if (!items.length) { toast("没有可保存的关联，请先在列表中选择要关联的商品"); return; }
-  try {
-    const r = await api("/api/mappings/bulk", "POST", { source: "jushuitan", items });
-    toast(`已保存 ${r.saved} 条关联`);
-    loadMappingPage();
-  } catch (e) { toast("保存失败：" + e.message); }
 }
 async function autoMapping() {
   try {
