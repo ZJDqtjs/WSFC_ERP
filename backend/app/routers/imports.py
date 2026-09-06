@@ -887,15 +887,23 @@ def parse_jushuitan_name(name: str) -> list[tuple[str, float]]:
 
 
 # 聚水潭商品名中的单件规格：如 "京鲜生七彩花生2斤" → 每件 2斤
-SPEC_RE = re.compile(r"([\d.]+)\s*(斤|公斤|千克|克|g|kg)")
+# 整件净重优先（斤/公斤/千克）——商品名里可能同时含“单颗克重”与“整件斤重”，
+# 如「京喜红皮土豆80g+1斤(带箱」应为 1斤，而非单颗 80g。
+SPEC_MAJOR_RE = re.compile(r"([\d.]+)\s*(公斤|千克|斤)")
+# 单颗克重兜底（如 250g），仅当整名没有斤/公斤时才使用
+SPEC_MINOR_RE = re.compile(r"([\d.]+)\s*(克|g|kg)")
 UNIT_ALIAS = {"g": "克", "kg": "千克"}
 # 计数单位优先顺序（含订单商品的「单」：1件订单商品 = 1 单）
 COUNT_PREF = ["个", "单", "袋", "包", "盒", "箱", "件", "份"]
 
 
 def parse_jst_spec(name: str) -> tuple[str | None, float | None]:
-    """从外部商品名解析每件规格，如 '京鲜生七彩花生2斤' → ('斤', 2.0)。"""
-    m = SPEC_RE.search(str(name or ""))
+    """从外部商品名解析每件规格，如 '京鲜生七彩花生2斤' → ('斤', 2.0)。
+
+    优先匹配整件净重（斤/公斤/千克）；整名无斤级重量时才回退到克/g（如 250g）。
+    """
+    s = str(name or "")
+    m = SPEC_MAJOR_RE.search(s) or SPEC_MINOR_RE.search(s)
     if m:
         u = UNIT_ALIAS.get(m.group(2), m.group(2))
         return u, float(m.group(1))
