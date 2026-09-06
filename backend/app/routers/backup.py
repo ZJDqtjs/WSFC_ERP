@@ -1,9 +1,11 @@
 """备份与恢复：SQLite 在线备份 / 恢复、自动备份配置。
 
-备份文件保存在 data/backups（erp_backup_YYYYMMDD_HHMMSS.db）。
-自动备份配置保存在 data/backup_config.json，默认开启、每 2 小时一次、保留最近 30 份。
+备份文件保存在 data/backups。系统自动生成的备份命名为 erp_backup_YYYYMMDD_HHMMSS.db；
+手动放入的备份可任意命名（任意 *.db），不会被自动清理、也可在列表中显示并用于恢复。
+自动备份配置保存在 data/backup_config.json，默认开启、每 2 小时一次、保留最近 30 份（仅清理自动生成的）。
 """
 import json
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +23,14 @@ BACKUP_DIR = DATA_DIR / "backups"
 BACKUP_DIR.mkdir(exist_ok=True)
 CONFIG_FILE = DATA_DIR / "backup_config.json"
 DEFAULT_CONFIG = {"enabled": True, "interval_hours": 2, "keep": 30}
+
+# 系统自动生成备份的命名格式（严格匹配）：erp_backup_YYYYMMDD_HHMMSS.db
+# 只有命中此格式的文件才会参与自动清理；手动放入/手动命名的文件一律保留。
+AUTO_BACKUP_RE = re.compile(r"^erp_backup_\d{8}_\d{6}\.db$")
+
+
+def is_auto_backup(name: str) -> bool:
+    return bool(AUTO_BACKUP_RE.match(name or ""))
 
 
 def load_config() -> dict:
@@ -55,10 +65,11 @@ def create_backup_file() -> str:
 
 
 def _prune() -> None:
+    """仅清理系统自动生成的备份（命中 AUTO_BACKUP_RE），手动放入的文件不清理。"""
     cfg = load_config()
     keep = max(1, int(cfg.get("keep", 30)))
     files = sorted(
-        BACKUP_DIR.glob("erp_backup_*.db"),
+        (f for f in BACKUP_DIR.glob("*.db") if is_auto_backup(f.name)),
         key=lambda f: f.stat().st_mtime,
         reverse=True,
     )
@@ -80,7 +91,7 @@ def _human_size(n: int) -> str:
 def _list_backups() -> list[dict]:
     rows = []
     for f in sorted(
-        BACKUP_DIR.glob("erp_backup_*.db"),
+        BACKUP_DIR.glob("*.db"),
         key=lambda f: f.stat().st_mtime,
         reverse=True,
     ):
