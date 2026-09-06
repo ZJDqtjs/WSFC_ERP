@@ -2846,6 +2846,7 @@ function updateDraftCount(kind) {
   $("draftCount").textContent = n;
 }
 async function confirmDraft(kind) {
+  if (window.__CONFIRMING__) return; // 防止重复提交
   const orders = [];
   document.querySelectorAll("#modalBox .draft-order").forEach((od) => {
     if (!od.querySelector(".draft-check").checked) return;
@@ -2871,6 +2872,13 @@ async function confirmDraft(kind) {
     });
   });
   if (!orders.length) { toast("没有勾选任何单据"); return; }
+  // 提交中等待提示：替换确认区为运行提示，防止用户反复点击
+  window.__CONFIRMING__ = true;
+  $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="alert ok" style="text-align:center;">
+      <div style="font-size:16px;font-weight:bold;margin-bottom:6px;">⏳ 正在提交出库，操作运行中…</div>
+      <div class="muted" style="font-size:13px;">共 ${orders.length} 单，一般数秒内完成；请勿关闭窗口或重复点击。完成后将自动展示结果。</div>
+    </div>`;
   try {
     const r = await api(BATCH_MODAL[kind].confirm, "POST", { orders });
     let html = `<div class="alert ok">✓ 已创建 <b>${r.created}</b> 个出库单`;
@@ -2889,6 +2897,7 @@ async function confirmDraft(kind) {
     }
     loadOutbounds(); loadStock();
   } catch (e) { toast("确认出库失败：" + e.message); }
+  finally { window.__CONFIRMING__ = false; }
 }
 
 /* ---------- 批量入库预览/确认 ---------- */
