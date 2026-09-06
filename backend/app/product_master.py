@@ -100,8 +100,17 @@ def export_payload(db, kind: str) -> dict:
         data = [
             {
                 "name": r.name,
-                # 组合条目只保留 名称+数量（含 order 商品名），导入时按名称解析成 id，跨库不依赖 id
-                "items": [{"name": it.get("name", ""), "quantity": it.get("quantity", 1)} for it in (r.items or [])],
+                # 组合条目只保留 名称+数量（含 order 商品名）+ 扣减关联（库存大类名+倍数），
+                # 导入时按名称解析成 id，跨库不依赖 id
+                "items": [
+                    {
+                        "name": it.get("name", ""),
+                        "quantity": it.get("quantity", 1),
+                        "stock_product": (db.get(Product, it["stock_product_id"]).name if it.get("stock_product_id") and db.get(Product, it["stock_product_id"]) else ""),
+                        "multiplier": it.get("multiplier", 1),
+                    }
+                    for it in (r.items or [])
+                ],
                 "box_type": r.box_type,
                 "labor_price": r.labor_price, "box_ratio": r.box_ratio,
                 "remark": r.remark, "is_active": r.is_active,
@@ -250,10 +259,19 @@ def _import_pack_rules(db, items) -> dict:
             if rn:
                 mp = _get_product_by_name(db, rn)
                 product_id = mp.id if mp else None
+            sp_id = None
+            sp_name = str(ri.get("stock_product", "")).strip()
+            if sp_name:
+                msp = _get_product_by_name(db, sp_name)
+                sp_id = msp.id if msp else None
+                if not msp:
+                    warnings.append(f"规则「{name}」的扣减关联库存商品「{sp_name}」不存在，扣减关联已置空")
             rule_items.append({
                 "product_id": product_id,
                 "name": rn,
                 "quantity": float(ri.get("quantity", 1) or 1),
+                "stock_product_id": sp_id,
+                "multiplier": float(ri.get("multiplier", 1) or 1),
             })
         r.items = rule_items
         r.box_type = str(it.get("box_type", "")).strip()

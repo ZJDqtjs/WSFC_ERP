@@ -10,8 +10,11 @@
 幂等：商品按名称 upsert，编码关联按 (source, external_code) upsert。
 """
 import sys
+from pathlib import Path
 
-sys.path.insert(0, r"D:\code\WSFC_ERP\backend")
+BACKEND_DIR = Path(__file__).resolve().parent  # 项目 backend 目录，随项目移动自动适配
+
+sys.path.insert(0, str(BACKEND_DIR))
 from sqlalchemy import select
 
 from app.database import SessionLocal
@@ -113,13 +116,12 @@ def main():
     for kind in ("products_stock", "products_order", "code_mappings"):
         payload = export_payload(db, kind)
         import json
-        from pathlib import Path
         fname, _, listkey = (
             ("products_stock.json", "库存商品", "items"),
             ("products_order.json", "订单商品", "items"),
             ("code_mappings.json", "聚水潭编码关联", "mappings"),
         )[["products_stock", "products_order", "code_mappings"].index(kind)]
-        fp = Path(r"D:\code\WSFC_ERP\backend\json") / fname
+        fp = BACKEND_DIR / "json" / fname
         fp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"  {fname}: {len(payload[listkey])} 条")
     print("完成")

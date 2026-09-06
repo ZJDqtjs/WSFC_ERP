@@ -1503,6 +1503,13 @@ function prItemOptions(selPid, orderProds) {
   return `<option value="">— 不关联（保留下方名称）—</option>` +
     orderProds.map((p) => `<option value="${p.id}" ${selPid === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("");
 }
+function prStockProducts() {
+  return PRODUCTS.filter((p) => p.is_active && p.product_type === "stock" && !["人工", "包材", "快递"].includes(p.category));
+}
+function prStockOptions(selPid) {
+  return `<option value="">— 按订单商品默认 —</option>` +
+    prStockProducts().map((p) => `<option value="${p.id}" ${selPid === p.id ? "selected" : ""}>${esc(p.name)}（${esc(p.category) || "—"}·单位${esc(p.default_unit || p.base_unit)}）</option>`).join("");
+}
 function prItemRowHtml(it) {
   it = it || {};
   const orderProds = prOrderProducts();
@@ -1515,6 +1522,8 @@ function prItemRowHtml(it) {
     <select class="pr-item-product searchable" onchange="prItemLinked(this)">${prItemOptions(pid, orderProds)}</select>
     <input class="pr-item-name" value="${esc(name)}" placeholder="商品名称（未关联时原文）" />
     <input class="pr-item-qty" type="number" step="any" value="${it.quantity != null ? it.quantity : 1}" />
+    <select class="pr-item-stock searchable" title="出库扣减目标（库存大类）">${prStockOptions(it.stock_product_id)}</select>
+    <input class="pr-item-mult" type="number" step="any" min="0.0001" value="${it.multiplier != null ? it.multiplier : 1}" title="每件扣减倍数（×库存默认单位）" />
     <button class="btn danger sm" onclick="this.closest('.pr-item-row').remove()">删</button>
   </div>`;
 }
@@ -1581,13 +1590,21 @@ function collectPrItems() {
     const n = (row.querySelector(".pr-item-name").value || "").trim();
     const q = parseFloat(row.querySelector(".pr-item-qty").value);
     if (!n) return;
-    out.push({ product_id: sel && sel.value ? +sel.value : null, name: n, quantity: q > 0 ? q : 1 });
+    const stockSel = row.querySelector(".pr-item-stock");
+    const mult = parseFloat(row.querySelector(".pr-item-mult").value);
+    out.push({
+      product_id: sel && sel.value ? +sel.value : null,
+      name: n,
+      quantity: q > 0 ? q : 1,
+      stock_product_id: stockSel && stockSel.value ? +stockSel.value : null,
+      multiplier: mult > 0 ? mult : 1,
+    });
   });
   return out;
 }
 function openPackRuleModal(rid = 0) {
   const r = rid ? PACK_RULES.find((x) => x.id === rid) : null;
-  const items = (r ? r.items || [] : []).map((it) => ({ product_id: it.product_id, name: it.name, quantity: it.quantity }));
+  const items = (r ? r.items || [] : []).map((it) => ({ product_id: it.product_id, name: it.name, quantity: it.quantity, stock_product_id: it.stock_product_id, multiplier: it.multiplier }));
   if (!items.length) items.push({ product_id: null, name: "", quantity: 1 });
   const boxes = (r ? r.box_items || [] : []).map((bx) => ({ product_id: bx.product_id, name: bx.name, quantity: bx.quantity }));
   if (!boxes.length && r && r.box_type) {
@@ -1660,7 +1677,12 @@ function renderPackRules() {
       const items = (r.items || []).map((it) => {
         const m = it.product_id ? PRODUCTS.find((x) => x.id === it.product_id) : null;
         const nm = m ? m.name : (it.name || "?");
-        return `${esc(nm)}${it.quantity != 1 ? `×${fmtNum(it.quantity)}` : ""}`;
+        let label = `${esc(nm)}${it.quantity != 1 ? `×${fmtNum(it.quantity)}` : ""}`;
+        if (it.stock_product_id) {
+          const sm = PRODUCTS.find((x) => x.id === it.stock_product_id);
+          label += `　<span class="badge income" title="出库扣减目标">扣${esc(sm ? sm.name : "?")}×${fmtNum(it.multiplier)}</span>`;
+        }
+        return label;
       }).join("，");
       const boxChips = (r.box_items || []).map((bi) => {
         const bm = bi.product_id ? PRODUCTS.find((x) => x.id === bi.product_id) : null;

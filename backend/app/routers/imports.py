@@ -474,6 +474,8 @@ class DraftLine(BaseModel):
     amount: float = 0.0
     deduct: str = ""  # 扣减说明（订单商品→库存商品）
     spec: str = ""  # 规格来源，如 每件2斤 / 每件1单
+    stock_product_id: int | None = None  # 一单多货：扣减目标库存商品（大类），None=按订单商品自身关联
+    multiplier: float = 1.0  # 一单多货：每件扣减倍数（× 库存默认单位）
 
 
 class DraftOrder(BaseModel):
@@ -509,7 +511,8 @@ def _confirm_orders(db: Session, user: User, orders: list[DraftOrder]) -> dict:
                     "pack_rule_id": o.pack_rule_id,
                     "pack_rule_name": o.pack_rule_name,
                     "lines": [
-                        {"product_id": l.product_id, "unit": l.unit, "quantity": l.quantity, "price": l.price, "spec": l.spec}
+                        {"product_id": l.product_id, "unit": l.unit, "quantity": l.quantity, "price": l.price, "spec": l.spec,
+                         "stock_product_id": l.stock_product_id, "multiplier": l.multiplier}
                         for l in o.lines
                     ],
                     "pack_lines": o.pack_lines or [],
@@ -594,7 +597,9 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
     for o in orders:
         order_items = parse_jushuitan_name(o["name"])
         rule = rule_map.get(_jst_combo_key(order_items))
-        # 一单多货（一个出库单含 ≥2 种商品）且未命中规则 → 交由前端让用户补选并生成规则
+        # 一单多货（一个出库单含 ≥2 种商品）未命中规则时，不再跳过（否则不扣库存），
+        # 而是回退到下方“逐商品关联结算”路径：按每个商品的编码关联扣库存大类 + 关联结算清单扣包材/人工。
+        # 例如「香菇干货500g*1,鹿茸菇干货500g*1」无 *1 打包规则时，仍会正常扣减两种干货的库存。
         if not rule and len({n for n, _ in order_items}) > 1:
             entry = unmatched_multi.setdefault(o["doc_no"], {"doc_no": o["doc_no"], "items": []})
             for n, q in order_items:
@@ -603,7 +608,7 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                     base["quantity"] += q
                 else:
                     entry["items"].append({"external_code": n, "quantity": q, "suggest": _suggest_candidates(db, n)})
-            continue
+            # 未命中规则：记录为该订单暂未配置一单多货规则（仅作为提示），但仍需照常结算库存，不再 continue
         if rule:
             # 一单多货：命中打包规则 → 自动用规则内维护的商品/纸箱/人工结算
             sale_lines, pack_lines, labor, pack_issues = _pack_rule_settle(db, rule, order_items)
@@ -619,6 +624,8 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                     quantity=ln["qty"], price=ln["price"], amount=ln["amount"],
                     deduct=f"一单多货：“{ln['ext_name']}”每件{fmt_qty(ln['per_item'])}{ln['unit']}",
                     spec=ln.get("spec", ""),
+                    stock_product_id=ln.get("stock_product_id"),
+                    multiplier=ln.get("multiplier", 1.0),
                 )
                 for ln in sale_lines
             ]
@@ -993,6 +1000,9 @@ def _pack_rule_settle(db: Session, rule: PackRule, order_items: list[tuple[str, 
             "product": p, "unit": unit, "per_item": per_item,
             "qty": round(q_orders * per_item, 4), "ext_name": name,
             "spec": spec,
+            # 规则内维护的扣减目标（库存大类）与倍数；未配置时留空，交由订单商品自身关联扣减
+            "stock_product_id": it.get("stock_product_id"),
+            "multiplier": float(it.get("multiplier", 1) or 1),
         })
         sale_pids.append(p.id)
 

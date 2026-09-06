@@ -17,6 +17,8 @@ class RuleItemIn(BaseModel):
     product_id: int | None = None  # 关联的订单商品，可为空
     name: str  # 商品名（关联时使用订单商品名；未关联时为原文）
     quantity: float = 1.0
+    stock_product_id: int | None = None  # 关联库存商品（大类）：出库时据此扣减库存
+    multiplier: float = 1.0  # 1单订单商品 = multiplier × 库存商品默认单位（如 1单=1.5公斤）
 
 
 class BoxItemIn(BaseModel):
@@ -141,6 +143,14 @@ def _validate_items(db: Session, items: list[RuleItemIn]):
             # 关联时以订单商品名称为准
             if it.name:
                 it.name = p.name
+        if it.stock_product_id is not None:
+            sp = db.get(Product, it.stock_product_id)
+            if not sp:
+                raise HTTPException(400, f"关联的库存商品（大类）不存在")
+            if sp.product_type != "stock":
+                raise HTTPException(400, f"「{sp.name}」不是库存大类，出库扣减目标必须是库存商品（大类）")
+        if (it.multiplier or 0) <= 0:
+            raise HTTPException(400, f"商品「{it.name}」的扣减倍数必须大于 0")
 
 
 def _prepare(db: Session, data: PackRuleIn):

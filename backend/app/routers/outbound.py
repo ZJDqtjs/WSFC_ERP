@@ -131,6 +131,7 @@ def delete_outbound(oid: int, db: Session = Depends(get_db), user: User = Depend
     for l in rec.lines:
         affected.add(l.product_id)
     for m in db.execute(select(StockMovement).where(StockMovement.ref_type == "outbound", StockMovement.ref_id == oid)).scalars():
+        affected.add(m.product_id)  # 库存流水实际扣在哪个商品（含库存大类/包材/人工）就重算哪个
         db.delete(m)
     for f in db.execute(select(FinanceRecord).where(FinanceRecord.ref_type == "outbound", FinanceRecord.ref_id == oid)).scalars():
         db.delete(f)
@@ -151,6 +152,7 @@ def batch_delete_outbounds(data: BatchIds, db: Session = Depends(get_db), user: 
             continue
         affected = {l.product_id for l in rec.lines}
         for m in db.execute(select(StockMovement).where(StockMovement.ref_type == "outbound", StockMovement.ref_id == oid)).scalars():
+            affected.add(m.product_id)  # 库存流水实际扣在哪个商品（含库存大类/包材/人工）就重算哪个
             db.delete(m)
         for f in db.execute(select(FinanceRecord).where(FinanceRecord.ref_type == "outbound", FinanceRecord.ref_id == oid)).scalars():
             db.delete(f)

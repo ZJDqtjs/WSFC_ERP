@@ -52,6 +52,23 @@ def stock_deduction(db: Session, order_product: Product, qty_base_in_order: floa
     return order_product, qty_base_in_order
 
 
+def _deduct_with_override(db: Session, order_product: Product, qty_base_in_order: float,
+                          stock_product_id: int | None, multiplier: float = 1.0) -> tuple[Product, float]:
+    """计算一次出库的扣减目标库存商品与扣减数量。
+
+    一单多货规则若显式指定了关联库存商品（大类）与倍数，则优先按其扣减；
+    否则回退为按订单商品自身关联扣减（stock_deduction）。
+    扣减数 = 订单基础数量 × 倍数 × 库存商品默认单位系数。
+    """
+    if stock_product_id:
+        sp = db.get(Product, stock_product_id)
+        if sp and sp.product_type == "stock":
+            du = sp.default_unit or sp.base_unit
+            factor = (sp.conversions or {}).get(du, 1.0)
+            return sp, qty_base_in_order * float(multiplier or 1.0) * float(factor)
+    return stock_deduction(db, order_product, qty_base_in_order)
+
+
 def base_to_unit(product: Product, unit: str, quantity_base: float) -> float:
     conv = product.conversions or {}
     factor = conv.get(unit)
@@ -216,11 +233,15 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
             price = float(ln.price or 0)
             fee = ln.pack_fee
             spec = getattr(ln, "spec", "") or ""
+            ov_sp = getattr(ln, "stock_product_id", None)
+            ov_mult = getattr(ln, "multiplier", 1.0)
         else:  # dict（批量导入）
             pid, unit, quantity = ln["product_id"], ln["unit"], ln["quantity"]
             price = float(ln.get("price", 0) or 0)
             fee = ln.get("pack_fee")
             spec = ln.get("spec", "") or ""
+            ov_sp = ln.get("stock_product_id")
+            ov_mult = ln.get("multiplier", 1.0)
         p = db.get(Product, pid)
         if not p:
             raise ValueError("商品不存在")
@@ -228,8 +249,8 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
             raise ValueError(f"「{p.name}」数量必须大于 0")
         qty_base = unit_to_base(p, unit, quantity)
         amount = round(quantity * price, 2)
-        # 扣减目标：订单商品关联的库存商品（大类），未关联则扣减自身
-        target, deduction_base = stock_deduction(db, p, qty_base)
+        # 扣减目标：一单多货规则如指定库存大类则按其扣减；否则按订单商品关联的库存商品（大类），未关联则扣减自身
+        target, deduction_base = _deduct_with_override(db, p, qty_base, ov_sp, ov_mult)
         cogs = round(deduction_base * (target.avg_cost or target.unit_cost), 2)
         if fee is None:
             fee = p.pack_fee
