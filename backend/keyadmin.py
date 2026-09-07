@@ -46,4 +46,9 @@ if __name__ == "__main__":
     print("  首次进入需输入管理员密码（product_rules.json 中 accounts 的管理员密码）")
     print("  关闭服务:  按 Ctrl+C")
     print("=" * 46)
-    uvicorn.run("keyadmin.main:app", host=KEYADMIN_HOST, port=KEYADMIN_PORT)
+
+    # uvicorn 自带对 Ctrl+C(SIGINT)/kill(SIGTERM) 的优雅退出处理；
+    # run() 返回后统一 os._exit(0) 彻底结束进程，避免任何非守护线程残留而占用端口。
+    server = uvicorn.Server(uvicorn.Config("keyadmin.main:app", host=KEYADMIN_HOST, port=KEYADMIN_PORT))
+    server.run()
+    os._exit(0)  # run 结束后确保彻底退出，并即时释放端口
