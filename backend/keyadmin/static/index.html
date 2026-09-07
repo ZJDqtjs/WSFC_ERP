@@ -57,6 +57,19 @@
         </div>
         <div class="table-wrap"><table id="kuTable"></table></div>
       </div>
+
+      <div class="card card-danger">
+        <div class="card-head">
+          <h3>⚡ 备份与应急抢救（后门）</h3>
+          <span class="hint">当 ERP 主账号无法登录 / 数据异常时，可在此创建备份、恢复备份或重置初始管理员登录私钥来抢救。<b>恢复备份会覆盖当前数据，请谨慎操作。</b></span>
+          <button class="btn sm ghost" style="margin-left:auto;" onclick="loadBackups()">刷新</button>
+        </div>
+        <div class="form-actions" style="margin-bottom:10px;">
+          <button class="btn primary" onclick="creBackup()">🗄 立即备份当前数据库</button>
+          <button class="btn danger" onclick="resetAdminLogin()">🆘 重置初始管理员登录私钥</button>
+        </div>
+        <div class="table-wrap"><table id="bkTable"></table></div>
+      </div>
     </main>
   </div>
 

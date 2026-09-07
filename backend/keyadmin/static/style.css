@@ -33,7 +33,8 @@
 body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); }
 
 /* ---------- 通用 ---------- */
-.card { background: var(--card); border-radius: var(--radius-lg); padding: 20px; margin-bottom: 16px; box-shadow: var(--shadow); border: 1px solid var(--border); }
+.card { background: var(--card); border-radius: var(--radius-lg); padding: 20px; margin-bottom: 16px; box-shadow: var(--shadow); }
+.card-danger { border: 1px dashed rgba(220, 80, 60, .55); background: rgba(220, 80, 60, .04); }
 .card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
 .card-head h3 { font-size: 16px; font-weight: 600; }
 .hint { color: var(--muted); font-size: 12.5px; }

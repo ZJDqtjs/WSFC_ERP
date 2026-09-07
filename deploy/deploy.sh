@@ -23,7 +23,12 @@ fi
 echo "==> [3/7] 创建 Python 虚拟环境并安装依赖"
 cd "$APP_DIR/backend"
 if command -v uv >/dev/null 2>&1; then
-  if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c 'import sys; raise SystemExit(sys.version_info < (3, 12))'; then
+  # 关键：以 root 跑本脚本时，uv 默认把 Python 装到 /root/.local/share/uv，
+  # 导致运行用户（APP_USER）无权执行解释器 => systemd 203/EXEC。
+  # 强制装到应用目录内，使其对运行用户可访问。
+  export UV_PYTHON_INSTALL_DIR="$APP_DIR/.uv-python"
+  VENV_PY="$PWD/.venv/bin/python"
+  if [ ! -x "$VENV_PY" ] || ! printf '%s' "$(readlink -f "$VENV_PY" 2>/dev/null)" | grep -q "$APP_DIR"; then
     rm -rf .venv
     uv venv --python 3.12 .venv
   fi

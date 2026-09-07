@@ -127,7 +127,7 @@ def _chat(cfg: dict, system: str, user: str) -> str:
             {"role": "user", "content": user},
         ],
         temperature=0.1,
-        max_tokens=800,  # 限制输出长度，避免模型生成超长内容拖慢整体耗时
+        max_tokens=1600,  # 放宽，避免长内容被截断
     )
     if not resp.choices or not resp.choices[0].message or not resp.choices[0].message.content:
         raise RuntimeError(f"大模型返回异常：{resp.model_dump() if hasattr(resp, 'model_dump') else resp}")
@@ -143,7 +143,7 @@ def _chat_stream(cfg: dict, system: str, user: str):
             {"role": "user", "content": user},
         ],
         temperature=0.1,
-        max_tokens=800,  # 限制输出长度，避免模型生成超长内容拖慢整体耗时
+        max_tokens=1600,  # 长表述也可能较长，放宽到 1600
         stream=True,
     )
     for chunk in stream:
@@ -166,7 +166,7 @@ def _chat_stream_mm(cfg: dict, system: str, user: str, image_data_uri: str):
             },
         ],
         temperature=0.1,
-        max_tokens=800,  # 限制输出长度，避免模型生成超长内容拖慢整体耗时
+        max_tokens=3200,  # 票据商品多、JSON 长，放宽以免截断
         stream=True,
     )
     for chunk in stream:
@@ -281,13 +281,53 @@ def _auto_create_product(db: Session, name: str, unit: str, cat: str) -> Product
     return p
 
 
+def _repair_truncated_json(content: str) -> dict:
+    """模型输出被 max_tokens 截断时，按括号配平补上缺失的闭合括号，尽量恢复为合法 JSON。
+
+    适用场景：长票据/长描述导致 JSON 不完整（对象/数组未闭合）。
+    """
+    base = content.strip()
+    if base.endswith(","):
+        base = base[:-1].rstrip()
+    stack = []
+    in_str = esc = False
+    for ch in base:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in "}]" and stack:
+            stack.pop()
+    tail = "".join(reversed(stack))
+    if tail:
+        try:
+            return json.loads(base + tail)
+        except ValueError:
+            pass
+    raise ValueError("模型输出无法解析为 JSON（可能被截断）")
+
+
 def _extract_json(content: str) -> dict:
-    """从模型输出中稳健提取 JSON（兼容带 markdown 代码块或前后杂文）。"""
+    """从模型输出中稳健提取 JSON（兼容 markdown 代码块 / 前后杂文 / 截断）。"""
     content = content.strip()
     m = re.search(r"\{.*\}", content, re.S)
     if m:
         content = m.group(0)
-    return json.loads(content)
+    try:
+        return json.loads(content)
+    except ValueError:
+        pass
+    return _repair_truncated_json(content)
 
 
 def _normalize_quick_product_name(name: str) -> str:
@@ -503,6 +543,38 @@ def _last_price_default(db: Session, p: Product | None, op_type: str) -> float:
     return to_du(p.sale_price, p.base_unit)
 
 
+def _line_candidates(db: Session, name: str, op_type: str, cat: str) -> list[Product]:
+    """收集该识别名称下的候选商品（精确同名优先，其次近似名），供前端让用户选择。
+
+    - 近似：名称互相包含（如「9号箱」↔「9号纸箱」）
+    - 触发提示的条件：无完全同名、但存在近似名（由调用方判定 ambiguous）
+    """
+    name = (name or "").strip()
+    if not name:
+        return []
+    rows = []
+    if cat in AI_CATEGORIES:
+        q = db.query(Product).filter(Product.is_active.is_(True))
+        if cat == "order":
+            q = q.filter(Product.product_type == "order")
+        elif cat == "pack":
+            q = q.filter(Product.category.in_(("包材", "耗材", "包装")))
+        elif cat == "labor":
+            q = q.filter(Product.category == "人工")
+        else:  # stock：库存商品（排除 人工/包材/耗材/包装）
+            q = q.filter(
+                Product.product_type == "stock",
+                ~Product.category.in_(("人工", "包材", "耗材", "包装")),
+            )
+        rows = q.all()
+    else:
+        rows = db.query(Product).filter(Product.is_active.is_(True)).all()
+    exact = [p for p in rows if p.name == name]
+    sub = [p for p in rows if p.name != name and (name in p.name or p.name in name)]
+    sub.sort(key=lambda p: -min(len(p.name), len(name)))
+    return exact + sub
+
+
 def _normalize_line(db: Session, p: Product | None, line: dict, op_type: str, auto_created: bool = False, category: str = "") -> dict:
     """把 数量/单价 换算到商品的默认展示单位（如 公斤），并保留原始值供前端参考。
 
@@ -524,6 +596,10 @@ def _normalize_line(db: Session, p: Product | None, line: dict, op_type: str, au
         "matched": False,
         "auto_created": bool(auto_created),
         "price_defaulted": False,
+        "ambiguous": False,
+        "candidates": [],
+        "unit_conflict": False,
+        "unit_conflict_msg": "",
         "hint": "",
     }
     if not p:
@@ -560,6 +636,24 @@ def _normalize_line(db: Session, p: Product | None, line: dict, op_type: str, au
             out["unit"] = du if du else unit
             out["hint"] += "；未能换算单位，请核对"
 
+    # 单位冲突检测：识别原始单位 与 商品库存/展示单位 不一致时，提示用户确认换算
+    raw_unit = _norm_unit(unit, conv) or (unit or "")  # 归一化后的识别单位
+    stored_unit = du or p.base_unit
+    if (
+        out["unit"]                       # 已换算出的目标单位
+        and raw_unit
+        and stored_unit
+        and raw_unit != stored_unit
+        and raw_unit != out["unit"]
+        and not (auto_created)            # 自动新增不冲突
+    ):
+        out["unit_conflict"] = True
+        out["unit_conflict_msg"] = (
+            f"识别单位为「{raw_unit}」，商品「{p.name}」当前按「{stored_unit}」记录，"
+            f"已换算为「{out['unit']}」，请核对数量与单位"
+        )
+        out["hint"] += f"；⚠ {out['unit_conflict_msg']}"
+
     # 用户未录入单价（仍为 0）：按该商品上次录入的价格默认填入（已是默认单位，不再换算）
     if not out["unit_price"]:
         last = _last_price_default(db, p, op_type)
@@ -592,12 +686,35 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
             cat = _guess_category(name)
         p = _resolve_line(db, name, op_type, cat)
         auto = False
+        # 收集相似候选（原名匹配到的 p 也可能是近似匹配里的一个），若存在近似商品且未精确同名则提示用户选择
+        cands = _line_candidates(db, name, op_type, cat)
+        exact_hit = any(c.name == name for c in cands)
+        similar = [c for c in cands if c.id != (p.id if p else None)]
+        if p is None and exact_hit:
+            # 有精确同名但被分类过滤漏掉（罕见），直接采用精确同名
+            for c in cands:
+                if c.name == name:
+                    p = c
+                    break
+            similar = [c for c in cands if c.id != p.id]
         if p is None and op_type == "inbound":
             # 入库的新物品：按分类自动新增商品档案（含新单位），并标记 auto_created
             p = _auto_create_product(db, name, ln.get("unit", ""), cat or "stock")
             auto = True
+            similar = []  # 已自动新增，不再提示相似
+        # 仅在「无精确同名 + 存在近似商品」时判定为歧义，提示用户选择
+        ambiguous = bool(similar) and not exact_hit and not auto and p is not None
         category = _product_category(p) if p else (cat or "")
-        lines.append(_normalize_line(db, p, ln, op_type, auto_created=auto, category=category))
+        ln_out = _normalize_line(db, p, ln, op_type, auto_created=auto, category=category)
+        ln_out["ambiguous"] = ambiguous
+        ln_out["candidates"] = (
+            [{"product_id": c.id, "name": c.name, "category": _product_category(c)} for c in cands]
+            if ambiguous else []
+        )
+        if ambiguous:
+            names = "、".join(c["name"] for c in ln_out["candidates"])
+            ln_out["hint"] = f"⚠ 识别到多个相似商品（{names}），请确认选哪一个"
+        lines.append(ln_out)
     if any(ln.get("auto_created") for ln in lines):
         db.commit()  # 持久化自动新增的商品与单位，否则会话结束即回滚
 

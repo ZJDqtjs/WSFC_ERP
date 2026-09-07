@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
@@ -19,8 +20,9 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth import verify_password
-from app.database import DATA_DIR, get_db
+from app.auth import ensure_seed_users, verify_password
+from app.routers.backup import _list_backups, _safe_path, create_backup_file
+from app.database import DATA_DIR, DB_PATH, get_db
 from app.keys import generate_keypair
 from app.models import User
 
@@ -213,6 +215,79 @@ def delete_user(
     db.delete(user)
     db.commit()
     return {"ok": True}
+
+
+# ============================================================
+#  备份与应急抢救（后门）：ERP 主进程登录失效 / 数据异常时，
+#  可在本私钥管理后台直接备份 / 恢复数据库，或重置初始管理员登录私钥。
+# ============================================================
+class RestoreBackupIn(BaseModel):
+    name: str
+
+
+@app.get("/api/backups")
+def rescue_list_backups(_: bool = Depends(_require)):
+    return {"backups": _list_backups()}
+
+
+@app.post("/api/backup")
+def rescue_create_backup(_: bool = Depends(_require)):
+    name = create_backup_file()
+    return {"ok": True, "name": name, "backups": _list_backups()}
+
+
+@app.post("/api/backup/restore")
+def rescue_restore_backup(data: RestoreBackupIn, _: bool = Depends(_require)):
+    """用备份文件覆盖当前数据库（含 WAL 一致性）。恢复后旧登录令牌失效，需重新登录。"""
+    src_path = _safe_path(data.name)
+    if not src_path.exists():
+        raise HTTPException(404, "备份文件不存在")
+    src = sqlite3.connect(str(src_path))
+    dst = sqlite3.connect(str(DB_PATH))
+    try:
+        src.backup(dst)
+    except Exception as e:
+        raise HTTPException(500, f"恢复失败：{e}")
+    finally:
+        dst.close()
+        src.close()
+    return {"ok": True, "restored": data.name, "backups": _list_backups()}
+
+
+@app.delete("/api/backup/{name}")
+def rescue_delete_backup(name: str, _: bool = Depends(_require)):
+    src_path = _safe_path(name)
+    if not src_path.exists():
+        raise HTTPException(404, "备份文件不存在")
+    src_path.unlink()
+    return {"ok": True, "backups": _list_backups()}
+
+
+@app.post("/api/rescue/reset-admin")
+def rescue_reset_admin(db: Session = Depends(get_db), _: bool = Depends(_require)):
+    """应急重置：确保初始管理员（product_rules.json accounts）恢复默认密码，并为其重新生成 ERP 登录私钥。"""
+    ensure_seed_users(db)  # 恢复初始管理员的进入密码（keyadmin 门禁）
+    from app.auth import SEED_USERS
+
+    items = []
+    for s in SEED_USERS:
+        u = db.scalar(select(User).where(User.username == s["username"]))
+        if not u:
+            continue
+        private_pem, public_ssh, fp = generate_keypair()
+        u.public_key = public_ssh
+        u.fingerprint = fp
+        u.key_created_at = datetime.now()
+        u.is_active = True
+        items.append(
+            {"username": u.username, "name": u.name, "private_key": private_pem, "fingerprint": fp}
+        )
+    db.commit()
+    return {
+        "ok": True,
+        "note": "已重置初始管理员密码并重新生成 ERP 登录私钥（旧私钥已失效），请立即下载保存",
+        "items": items,
+    }
 
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="keyadmin_static")

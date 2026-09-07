@@ -127,6 +127,60 @@ async function delUser(id, username) {
   } catch (e) { toast("删除失败：" + e.message); }
 }
 
+/* ---------- 备份与应急抢救（后门） ---------- */
+async function loadBackups() {
+  try {
+    const r = await api("/api/backups");
+    const rows = r.backups || [];
+    const t = $("bkTable");
+    t.innerHTML = `<thead><tr><th>文件名</th><th>大小</th><th>备份时间</th><th>操作</th></tr></thead><tbody>` +
+      (rows.length ? rows.map((b) => `<tr>
+        <td class="mono">${esc(b.name)}</td>
+        <td>${esc(b.size_human)}</td>
+        <td class="muted">${esc(b.mtime)}</td>
+        <td class="line-actions">
+          <button class="btn sm danger" onclick="restoreBackup('${esc(b.name)}')">恢复</button>
+          <button class="btn sm ghost" onclick="delBackup('${esc(b.name)}')">删除</button>
+        </td>
+      </tr>`).join("") : `<tr><td colspan="4" class="empty">暂无备份文件（data/backups）</td></tr>`) + `</tbody>`;
+  } catch (e) { toast("加载备份失败：" + e.message); }
+}
+async function creBackup() {
+  try {
+    const r = await api("/api/backup", "POST");
+    toast("已创建备份：" + r.name);
+    loadBackups();
+  } catch (e) { toast("备份失败：" + e.message); }
+}
+async function restoreBackup(name) {
+  if (!confirm(`确认用备份「${name}」覆盖当前数据库？\n恢复后当前未保存的数据将丢失，且所有人需重新登录。`)) return;
+  try {
+    const r = await api("/api/backup/restore", "POST", { name });
+    toast("已恢复备份：" + (r.restored || name));
+    loadBackups();
+    loadUsers();
+  } catch (e) { toast("恢复失败：" + e.message); }
+}
+async function delBackup(name) {
+  if (!confirm(`确认删除备份「${name}」？`)) return;
+  try {
+    await api(`/api/backup/${encodeURIComponent(name)}`, "DELETE");
+    toast("已删除备份");
+    loadBackups();
+  } catch (e) { toast("删除失败：" + e.message); }
+}
+async function resetAdminLogin() {
+  if (!confirm("确认重置初始管理员的登录私钥？\n旧私钥将立即失效；将重新生成一个用于 ERP 登录的私钥，请立即下载保存。")) return;
+  try {
+    const r = await api("/api/rescue/reset-admin", "POST");
+    toast(r.note || "已重置");
+    loadUsers();
+    const it = (r.items || [])[0];
+    if (it) showKeyModal(it.username, it.private_key, it.fingerprint);
+    else toast("未找到初始管理员账号");
+  } catch (e) { toast("重置失败：" + e.message); }
+}
+
 /* ---------- 私钥弹窗 ---------- */
 function openModal(html) {
   $("modalBox").innerHTML = html;
@@ -170,6 +224,7 @@ function copyKey() {
       $("gate").style.display = "none";
       $("admin").style.display = "";
       await loadUsers();
+      loadBackups();
     }
     // 未通过门禁则保持密码框
   } catch (e) {}

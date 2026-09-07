@@ -754,12 +754,21 @@ function openAiConfirm(r) {
   const isIn = r.type === "inbound";
   const linesHtml = (r.lines || []).map((ln, i) => {
     const cat = (["stock", "order", "pack", "labor"].includes(ln.category) ? ln.category : (isIn ? "stock" : "order"));
+    const prodSel = ln.ambiguous && ln.candidates && ln.candidates.length
+      ? `<select class="ai-pid" style="border-color:var(--amber);">
+          ${ln.candidates.map((c) => `<option value="${c.product_id}" ${c.product_id === ln.product_id ? "selected" : ""}>〔${({ stock: "库存", order: "订单", pack: "包材", labor: "人工" }[c.category] || "库存")}〕${esc(c.name)}</option>`).join("")}
+        </select>`
+      : `<select class="searchable ai-pid">${aiProductOptions(ln.product_id, cat)}</select>`;
+    const ambiBadge = ln.ambiguous
+      ? '<span class="badge" style="background:#fff3cd;color:#8a6d00;margin-left:6px;">⚠ 相似商品待确认</span>' : "";
+    const unitBadge = ln.unit_conflict
+      ? '<span class="badge" style="background:#fde2e0;color:#b3261e;margin-left:6px;" title="' + esc(ln.unit_conflict_msg || "") + '">⚠ 单位不一致</span>' : "";
     return `<tr data-idx="${i}">
       <td><select class="ai-cat" onchange="aiCatChanged(${i})" style="width:92px;">${aiCatOptions(cat)}</select></td>
-      <td style="min-width:220px;"><select class="searchable ai-pid">${aiProductOptions(ln.product_id, cat)}</select>
+      <td style="min-width:220px;">${prodSel}${ambiBadge}
         ${ln.auto_created ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 自动新增</span>' : ""}</td>
       <td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.quantity)}" style="width:90px;" /></td>
-      <td><input class="ai-unit" value="${esc(ln.unit || "")}" style="width:70px;" /></td>
+      <td><input class="ai-unit" value="${esc(ln.unit || "")}" style="width:70px;" />${unitBadge}</td>
       <td><input type="number" step="any" class="ai-price" value="${ln.unit_price}" style="width:100px;" />${ln.price_defaulted ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按上次价</span>' : ""}</td>
       <td class="muted" style="font-size:12px;">${esc(ln.hint || "")}</td>
     </tr>`;
