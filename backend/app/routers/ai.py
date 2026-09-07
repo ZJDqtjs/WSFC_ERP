@@ -543,11 +543,18 @@ def _last_price_default(db: Session, p: Product | None, op_type: str) -> float:
     return to_du(p.sale_price, p.base_unit)
 
 
+def _pack_key(s: str) -> str:
+    """包材宽松名：去空白、去“纸/拖”等箱型限定词，用于「9号箱」↔「9号纸箱」的等价判断。"""
+    s = re.sub(r"\s+", "", s or "")
+    return s.replace("纸", "").replace("拖", "")
+
+
 def _line_candidates(db: Session, name: str, op_type: str, cat: str) -> list[Product]:
     """收集该识别名称下的候选商品（精确同名优先，其次近似名），供前端让用户选择。
 
     - 近似：名称互相包含（如「9号箱」↔「9号纸箱」）
     - 触发提示的条件：无完全同名、但存在近似名（由调用方判定 ambiguous）
+    - 包材额外做宽松匹配：去掉空白与“纸/拖”后按等价/包含判断，避免「9 号箱」匹配不到「9号纸箱」
     """
     name = (name or "").strip()
     if not name:
@@ -569,8 +576,25 @@ def _line_candidates(db: Session, name: str, op_type: str, cat: str) -> list[Pro
         rows = q.all()
     else:
         rows = db.query(Product).filter(Product.is_active.is_(True)).all()
-    exact = [p for p in rows if p.name == name]
-    sub = [p for p in rows if p.name != name and (name in p.name or p.name in name)]
+    qkey = _pack_key(name) if cat == "pack" else name
+    exact = []
+    for p in rows:
+        if p.name == name:
+            exact.append(p)
+        elif cat == "pack" and _pack_key(p.name) == qkey and p.name != name:
+            exact.append(p)
+    # 去重（按 id）
+    seen = {p.id for p in exact}
+    sub = []
+    for p in rows:
+        if p.id in seen:
+            continue
+        hit = (name in p.name or p.name in name)
+        if not hit and cat == "pack":
+            pkey = _pack_key(p.name)
+            hit = (qkey in pkey or pkey in qkey)
+        if hit:
+            sub.append(p)
     sub.sort(key=lambda p: -min(len(p.name), len(name)))
     return exact + sub
 
@@ -686,24 +710,35 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
             cat = _guess_category(name)
         p = _resolve_line(db, name, op_type, cat)
         auto = False
-        # 收集相似候选（原名匹配到的 p 也可能是近似匹配里的一个），若存在近似商品且未精确同名则提示用户选择
         cands = _line_candidates(db, name, op_type, cat)
-        exact_hit = any(c.name == name for c in cands)
+        if cat == "pack":
+            # 包材做宽松判定：以「去空白/纸/拖」后的名称为准。
+            # 存在≥2个宽松等价候选（如票据“9 号箱” vs 已有“9号纸箱”）→ 视为歧义，让用户挑选，绝不抢先自动新增。
+            qkey = _pack_key(name)
+            loose = [c for c in cands if _pack_key(c.name) == qkey]
+            sub = [c for c in cands if c not in loose and (qkey in _pack_key(c.name) or _pack_key(c.name) in qkey)]
+            cands = loose + sub
+            if len(loose) == 1:
+                exact_hit = True
+                p = loose[0]  # 唯一的宽松等价：直接采用该包材
+            else:
+                exact_hit = False
+                p = None       # 没有/有多个等价 → 交由用户选择
+        else:
+            exact_hit = any(c.name == name for c in cands)
+            if p is None and exact_hit:
+                # 有精确同名但被分类过滤漏掉（罕见），直接采用精确同名
+                for c in cands:
+                    if c.name == name:
+                        p = c
+                        break
         similar = [c for c in cands if c.id != (p.id if p else None)]
-        if p is None and exact_hit:
-            # 有精确同名但被分类过滤漏掉（罕见），直接采用精确同名
-            for c in cands:
-                if c.name == name:
-                    p = c
-                    break
-            similar = [c for c in cands if c.id != p.id]
-        if p is None and op_type == "inbound":
-            # 入库的新物品：按分类自动新增商品档案（含新单位），并标记 auto_created
+        # 存在近似候选且无完全同名 => 歧义：不自动新增，交由用户在候选里挑选
+        ambiguous = bool(similar) and not exact_hit
+        if p is None and not ambiguous and op_type == "inbound":
+            # 入库的新物品（无任何相似商品）：按分类自动新增商品档案，并标记 auto_created
             p = _auto_create_product(db, name, ln.get("unit", ""), cat or "stock")
             auto = True
-            similar = []  # 已自动新增，不再提示相似
-        # 仅在「无精确同名 + 存在近似商品」时判定为歧义，提示用户选择
-        ambiguous = bool(similar) and not exact_hit and not auto and p is not None
         category = _product_category(p) if p else (cat or "")
         ln_out = _normalize_line(db, p, ln, op_type, auto_created=auto, category=category)
         ln_out["ambiguous"] = ambiguous
