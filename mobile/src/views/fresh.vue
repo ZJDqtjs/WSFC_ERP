@@ -1,7 +1,7 @@
 <template>
   <div>
+    <sub-header title="鲜货现采" />
     <div class="card">
-      <div class="card-title">鲜货现采</div>
       <div class="toolbar">
         <span class="muted">今日鲜货预采概览</span>
         <van-button size="small" plain type="primary" @click="loadFresh">刷新</van-button>
@@ -40,6 +40,7 @@
 import { ref, onMounted } from 'vue'
 import { showToast } from 'vant'
 import api from '../api'
+import SubHeader from '../components/sub-header.vue'
 
 const items = ref([])
 const refreshing = ref(false)

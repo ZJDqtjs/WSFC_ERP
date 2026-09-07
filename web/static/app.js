@@ -301,6 +301,7 @@ function switchSeg(segId, btn) {
     if (el.classList.contains("seg")) return;
     el.style.display = el.id === panel ? "" : "none";
   });
+  if (panel === "stock-adjustments") loadAdjustments();
   if (panel === "stock-movements") loadMovements();
   if (panel === "stock-workload") loadWorkload();
 }
@@ -450,10 +451,13 @@ function openAdjust(pid = 0) {
       <div class="field" style="grid-column:1/-1;"><label>商品 *</label><select id="adjProduct" onchange="adjPreview()">${opts}</select></div>
       <div class="field" style="grid-column:1/-1;"><span class="muted">当前库存：<b id="adjNow">—</b></span>　→　<span class="muted">调整后：<b id="adjAfter" style="color:var(--primary)">—</b></span></div>
       <div class="field" style="grid-column:1/-1;"><label>调整数量 *（相对当前库存，必带 +/-）</label><input id="adjQty" oninput="adjPreview()" placeholder="如 +100 增加 / -100 减少；留空则不调整" style="width:100%;" /></div>
-      <div class="field"><label>成本单价（仅盘盈用）</label><input id="adjPrice" type="number" step="any" value="0" /></div>
+      <div class="field"><label>平均成本（相对现均价，必带 +/-）</label><input id="adjAvgCost" oninput="adjPreview()" placeholder="如 +2 / -1；留空则不调整" /></div>
+      <div class="field"><label>成本单价（相对现参考成本，必带 +/-）</label><input id="adjUnitCost" oninput="adjPreview()" placeholder="如 +2 / -1；留空则不调整" /></div>
       <div class="field"><label>日期</label><input id="adjDate" type="date" value="${today()}" /></div>
       <div class="field"><label>操作员</label><input id="adjOperator" placeholder="谁操作的" /></div>
     </div>
+    <div class="field" style="grid-column:1/-1;"><span class="muted">当前均价：<b id="adjNowAvg" style="color:var(--danger)">—</b></span>　→　<span class="muted">均价调整后：<b id="adjAfterAvg" style="color:var(--primary)">—</b></span></div>
+    <div class="field" style="grid-column:1/-1;"><span class="muted">当前成本单价：<b id="adjNowUc" style="color:var(--danger)">—</b></span>　→　<span class="muted">成本单价调整后：<b id="adjAfterUc" style="color:var(--primary)">—</b></span></div>
     <div class="field" style="margin-top:10px;"><label>原因</label><input id="adjRemark" placeholder="如：盘点差异/损耗" /></div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
@@ -463,39 +467,121 @@ function openAdjust(pid = 0) {
 }
 function adjPreview() {
   const p = PRODUCTS.find((x) => x.id === +$("adjProduct").value);
-  const nowEl = $("adjNow"), afterEl = $("adjAfter");
-  if (!p) { nowEl.textContent = "—"; afterEl.textContent = "—"; return; }
+  const el = (id) => $(id);
+  const nowEl = el("adjNow"), afterEl = el("adjAfter");
+  const nowAvg = el("adjNowAvg"), afterAvg = el("adjAfterAvg");
+  const nowUc = el("adjNowUc"), afterUc = el("adjAfterUc");
+  if (!p) { [nowEl, afterEl, nowAvg, afterAvg, nowUc, afterUc].forEach((e) => e && (e.textContent = "—")); return; }
   const unit = p.default_unit || p.base_unit;
   const f = (p.conversions || {})[unit] || 1;
   const now = p.stock / f;
   nowEl.textContent = `${fmtNum(now)} ${unit}`;
-  const raw = ($("adjQty").value || "").trim();
-  if (!raw) { afterEl.textContent = `${fmtNum(now)} ${unit}（不调整）`; return; }
-  if (!/^[+-]\d+(\.\d+)?$/.test(raw)) { afterEl.textContent = "⚠ 需以 + 或 - 开头，如 +100 / -100"; return; }
-  afterEl.textContent = `${fmtNum(now + parseFloat(raw))} ${unit}`;
+  const raw = ($("adjQty")?.value || "").trim();
+  if (!raw) afterEl.textContent = `${fmtNum(now)} ${unit}（不调整）`;
+  else if (!/^[+-]\d+(\.\d+)?$/.test(raw)) afterEl.textContent = "⚠ 需以 + 或 - 开头，如 +100 / -100";
+  else afterEl.textContent = `${fmtNum(now + parseFloat(raw))} ${unit}`;
+
+  const avg = (p.avg_cost || 0) * f;
+  nowAvg.textContent = avg > 0 ? `${fmtMoney(avg)}/${unit}` : "—（无均价）";
+  const araw = ($("adjAvgCost")?.value || "").trim();
+  if (!araw) afterAvg.textContent = "不调整";
+  else if (!/^[+-]\d+(\.\d+)?$/.test(araw)) afterAvg.textContent = "⚠ 需以 + 或 - 开头，如 +2 / -1";
+  else afterAvg.textContent = `${fmtMoney(Math.max(avg + parseFloat(araw), 0))}/${unit}`;
+
+  const uc = (p.unit_cost || 0) * f;
+  nowUc.textContent = uc > 0 ? `${fmtMoney(uc)}/${unit}` : "—（无成本单价）";
+  const uraw = ($("adjUnitCost")?.value || "").trim();
+  if (!uraw) afterUc.textContent = "不调整";
+  else if (!/^[+-]\d+(\.\d+)?$/.test(uraw)) afterUc.textContent = "⚠ 需以 + 或 - 开头，如 +2 / -1";
+  else afterUc.textContent = `${fmtMoney(Math.max(uc + parseFloat(uraw), 0))}/${unit}`;
 }
 async function submitAdjust() {
-  const raw = ($("adjQty").value || "").trim();
-  if (raw && !/^[+-]\d+(\.\d+)?$/.test(raw)) {
-    toast("调整数量必须以 + 或 - 开头（如 +100 增加 / -100 减少），不允许直接填裸数字；留空则不调整");
-    return;
-  }
+  const get = (id) => ($(id)?.value || "").trim();
+  const raw = get("adjQty"), araw = get("adjAvgCost"), uraw = get("adjUnitCost");
+  if (raw && !/^[+-]\d+(\.\d+)?$/.test(raw)) { toast("调整数量必须以 + 或 - 开头（如 +100 增加 / -100 减少），留空则不调整"); return; }
+  if (araw && !/^[+-]\d+(\.\d+)?$/.test(araw)) { toast("平均成本必须以 + 或 - 开头（如 +2 调高 / -1 调低），留空则不调整"); return; }
+  if (uraw && !/^[+-]\d+(\.\d+)?$/.test(uraw)) { toast("成本单价必须以 + 或 - 开头（如 +2 调高 / -1 调低），留空则不调整"); return; }
   const p = PRODUCTS.find((x) => x.id === +$("adjProduct").value);
   if (!p) { toast("请选择商品"); return; }
   try {
-    await api("/api/adjust", "POST", {
+    const r = await api("/api/adjust", "POST", {
       product_id: p.id,
       quantity: raw,
       unit: p.default_unit || p.base_unit,
-      unit_price: +$("adjPrice").value || 0,
+      avg_cost_adj: araw,
+      unit_cost_adj: uraw,
       date: $("adjDate").value,
       operator: $("adjOperator").value,
       remark: $("adjRemark").value,
     });
     closeModal();
-    toast(raw ? "盘点调整成功" : "数量留空，未调整库存");
+    toast(r && r.message ? r.message : (raw || araw || uraw ? "盘点调整成功" : "无调整"));
     loadStock();
+    loadAdjustments();
   } catch (e) { toast("操作失败：" + e.message); }
+}
+
+/* ---------- 盘点调整记录（查看谁盘点的，支持删除回退） ---------- */
+let ADJ_PRODS = [];
+function ensureAdjFilter() {
+  const sel = $("adjProductFilter");
+  if (!sel) return;
+  // 补充盘点记录里出现但未在 PRODUCTS 中的商品（如已停用），主列表在初始化时已填充
+  const existing = new Set([...sel.options].map((o) => o.value));
+  ADJ_PRODS.forEach((p) => {
+    if (p && p.id && !existing.has(String(p.id))) {
+      sel.insertAdjacentHTML("beforeend", `<option value="${p.id}">${esc(p.name)}</option>`);
+      existing.add(String(p.id));
+    }
+  });
+}
+async function loadAdjustments() {
+  try { ensureAdjFilter(); } catch (e) {}
+  const pid = $("adjProductFilter")?.value || "0";
+  const from = $("adjDateFrom")?.value || "", to = $("adjDateTo")?.value || "";
+  let rows = await api(`/api/adjustments?product_id=${pid}&date_from=${from || ""}&date_to=${to || ""}`);
+  rows.forEach((r) => ADJ_PRODS.push({ id: r.product_id, name: r.product_name, is_active: true, product_type: "stock", category: "" }));
+  const t = $("adjRecordTable");
+  rows = applyTableSort(t, rows);
+  if (!rows.length) {
+    t.innerHTML = `<tr><td colspan="8" class="empty">暂无盘点调整记录</td></tr>`;
+    t._render = loadAdjustments;
+    t._rows = rows;
+    return;
+  }
+  t.innerHTML = `<thead><tr>
+    <th data-key="date">日期${sortArrow("adjRecordTable", "date")}</th>
+    <th data-key="product_name">商品${sortArrow("adjRecordTable", "product_name")}</th>
+    <th data-key="quantity" class="num">库存变动${sortArrow("adjRecordTable", "quantity")}</th>
+    <th data-key="avg_cost_delta" class="num">均价调整${sortArrow("adjRecordTable", "avg_cost_delta")}</th>
+    <th data-key="unit_cost_delta" class="num">成本单价${sortArrow("adjRecordTable", "unit_cost_delta")}</th>
+    <th data-key="operator">操作员${sortArrow("adjRecordTable", "operator")}</th>
+    <th>备注</th>
+    <th>操作</th></tr></thead><tbody>` +
+    rows.map((r) => {
+      const deltaHtml = (v, unit) => v ? (v > 0 ? "+" : "") + fmtNum(v) + "元/" + esc(unit) : "—";
+      return `<tr>
+        <td class="mono">${esc(r.date)}<div class="muted" style="font-size:11px">${esc(r.created_at)}</div></td>
+        <td><b>${esc(r.product_name)}</b></td>
+        <td class="num">${r.quantity ? (r.quantity > 0 ? "+" : "") + fmtNum(r.quantity) + " " + esc(r.unit) : "—"}</td>
+        <td class="num mono" style="color:${r.avg_cost_delta ? (r.avg_cost_delta > 0 ? "var(--green)" : "var(--red)") : ""}">${deltaHtml(r.avg_cost_delta, r.unit)}</td>
+        <td class="num mono" style="color:${r.unit_cost_delta ? (r.unit_cost_delta > 0 ? "var(--green)" : "var(--red)") : ""}">${deltaHtml(r.unit_cost_delta, r.unit)}</td>
+        <td>${esc(r.operator) || "—"}</td>
+        <td class="muted">${esc(r.remark)}</td>
+        <td class="line-actions"><button class="btn sm danger" onclick="deleteAdjustment(${r.id})">删除回退</button></td>
+      </tr>`;
+    }).join("") + `</tbody>`;
+  t._rows = rows;
+  t._render = loadAdjustments;
+}
+async function deleteAdjustment(gid) {
+  if (!confirm("确认删除该盘点调整记录？将回退其对库存、平均成本与成本单价的影响。")) return;
+  try {
+    await api(`/api/adjustments/${gid}`, "DELETE");
+    toast("已删除并回退调整");
+    loadAdjustments();
+    loadStock();
+  } catch (e) { toast("删除失败：" + e.message); }
 }
 
 function viewProductMv(pid) {
@@ -2679,6 +2765,8 @@ function esc(s) {
   $("mvDateTo").value = today();
   $("wlDateFrom").value = monthStart(); // 工作量统计默认本月
   $("wlDateTo").value = today();
+  $("adjDateFrom").value = monthStart(); // 盘点记录默认本月
+  $("adjDateTo").value = today();
 
   // 加载基础数据（失败不阻塞初始化，保证默认范围与首页可用）
   try {
@@ -2688,6 +2776,9 @@ function esc(s) {
   try {
     $("mvProduct").innerHTML = `<option value="0">全部商品</option>` +
       PRODUCTS.filter((p) => !["人工", "快递"].includes(p.category)).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+    const adjF = $("adjProductFilter");
+    if (adjF) adjF.innerHTML = `<option value="0">全部商品</option>` +
+      PRODUCTS.filter((p) => p.is_active && p.product_type === "stock" && !["人工", "快递"].includes(p.category)).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
     $("inProduct").innerHTML = `<option value="">选择商品…</option>` +
       PRODUCTS.filter((p) => p.is_active && p.product_type === "stock").map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
     $("inUnit").onchange = calcInbound;

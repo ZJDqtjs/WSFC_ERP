@@ -18,10 +18,24 @@ class AdjustIn(BaseModel):
     product_id: int
     quantity: str = ""  # 相对调整量：形如 +100 / -100（留空=不调整），按展示单位计
     unit: str = ""      # 调整单位（默认取商品展示/默认单位）
-    unit_price: float = 0.0
+    avg_cost_adj: str = ""  # 平均成本相对调整：形如 +2 / -1（留空=不调整），按展示单位单价计（如 元/斤），在现有均价基础上升降
+    unit_cost_adj: str = ""  # 成本单价(参考成本)相对调整：形如 +2 / -1（留空=不调整），按展示单位单价计，在现有成本单价基础上升降
     remark: str = ""
     operator: str = ""
     date: str
+
+
+def _parse_rel(s: str, what: str) -> float:
+    """解析相对调整串，要求形如 +100 / -1.5，返回数值；空串返回 None。"""
+    s = (s or "").strip()
+    if not s:
+        return None
+    if not re.match(r"^[+-]\d+(\.\d+)?$", s):
+        raise HTTPException(400, f"{what}必须以 + 或 - 开头（如 +2 增加 / -1 减少），不允许直接填裸数字；留空则不调整")
+    v = float(s)
+    if v == 0:
+        raise HTTPException(400, f"{what}不能为 0（需要不调整请留空）")
+    return v
 
 
 @router.get("/movements")
@@ -65,53 +79,233 @@ def list_movements(
 
 @router.post("/adjust")
 def adjust_stock(data: AdjustIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """相对盘点调整：+100 增加 / -100 减少（按展示单位）；留空则不调整。"""
+    """相对盘点调整：
+    库存 +100 / -100（按展示单位）、
+    平均成本 +2 / -1（元/展示单位，在现有均价基础上升降，影响库存价值与未来出库成本结转）、
+    成本单价 +2 / -1（元/展示单位，在现有 unit_cost 基础上升降，仅影响参考成本，不影响库存价值）。
+    均使用 +/- 相对当前值调整；留空则不调整。"""
     p = db.get(Product, data.product_id)
     if not p:
         raise HTTPException(404, "商品不存在")
-    qty_str = (data.quantity or "").strip()
     conv = p.conversions or {}
     du = p.default_unit or p.base_unit
     f_disp = conv.get(du, 1) or 1
-    if not qty_str:
-        # 未填写数量：不调整，返回当前库存
+    op = data.operator.strip() or user.name
+    base_remark = (data.remark or "").strip()
+
+    qty_str = (data.quantity or "").strip()
+    avg_str = (data.avg_cost_adj or "").strip()
+    uc_str = (data.unit_cost_adj or "").strip()
+    if not qty_str and not avg_str and not uc_str:
         return {
             "ok": True, "adjusted": False,
             "stock": p.stock, "display": round(p.stock / f_disp, 4), "unit": du,
-            "message": "数量留空，未调整库存",
+            "avg_cost": p.avg_cost, "unit_cost": p.unit_cost,
+            "message": "数量与成本均留空，未进行调整",
         }
-    if not re.match(r"^[+-]\d+(\.\d+)?$", qty_str):
-        raise HTTPException(400, "调整数量必须以 + 或 - 开头（如 +100 增加 / -100 减少），不允许直接填裸数字；留空则不调整")
-    delta_disp = float(qty_str)
-    if delta_disp == 0:
-        raise HTTPException(400, "调整数量不能为 0（需要不调整请留空）")
-    # 展示单位 → 基础单位（如 +100 公斤 = +100000 克）
-    unit = data.unit or du
-    f = conv.get(unit, 1) or 1
-    delta_base = round(delta_disp * f, 6)
-    amount = round(delta_disp * data.unit_price, 2) if delta_disp > 0 else 0.0
-    op = data.operator.strip() or user.name
-    db.add(
-        StockMovement(
-            product_id=p.id,
-            move_type="adjust",
-            quantity_base=delta_base,
-            amount=amount,
-            ref_type="manual",
-            date=data.date,
-            operator=op,
-            remark=f"盘点调整：{data.remark.strip()}",
+
+    movements = []
+    delta_disp = 0.0
+    parts = []
+
+    # 1) 平均成本相对调整：在现有均价基础上增减（按展示单位单价），作用于当前全部库存
+    avg_delta_disp = 0.0
+    if avg_str:
+        avg_delta_disp = _parse_rel(avg_str, "平均成本")
+        avg_delta_base = round(avg_delta_disp / f_disp, 6)
+        value_delta = round(p.stock * avg_delta_base, 2)
+        if value_delta != 0:
+            movements.append(
+                StockMovement(
+                    product_id=p.id,
+                    move_type="cost",
+                    quantity_base=0.0,
+                    amount=value_delta,
+                    ref_type="manual",
+                    date=data.date,
+                    operator=op,
+                )
+            )
+        parts.append(f"均价{avg_delta_disp:+g}元/{du}")
+
+    # 2) 成本单价（参考成本）相对调整：直接修改 product.unit_cost 字段，并记录一条 ucost 流水用于回退
+    uc_delta_base = 0.0
+    if uc_str:
+        uc_delta_disp = _parse_rel(uc_str, "成本单价")
+        uc_delta_base = round(uc_delta_disp / f_disp, 6)
+        p.unit_cost = max(round((p.unit_cost or 0) + uc_delta_base, 6), 0.0)
+        movements.append(
+            StockMovement(
+                product_id=p.id,
+                move_type="ucost",
+                quantity_base=0.0,
+                amount=round(uc_delta_base, 6),  # 记录单位成本增量（基础单位），删除回退时反向抵扣
+                ref_type="manual",
+                date=data.date,
+                operator=op,
+            )
         )
-    )
+        parts.append(f"成本单价{uc_delta_disp:+g}元/{du}")
+
+    # 3) 库存相对调整
+    if qty_str:
+        delta_disp = _parse_rel(qty_str, "调整数量")
+        unit = data.unit or du
+        f = conv.get(unit, 1) or 1
+        delta_base = round(delta_disp * f, 6)
+        movements.append(
+            StockMovement(
+                product_id=p.id,
+                move_type="adjust",
+                quantity_base=delta_base,
+                amount=0.0,
+                ref_type="manual",
+                date=data.date,
+                operator=op,
+                remark=f"盘点调整：{', '.join(parts)}".strip() if parts else f"盘点调整：{base_remark}".strip(),
+            )
+        )
+
+    for m in movements:
+        db.add(m)
+    db.flush()
+    group_id = movements[0].id if movements else 0
+    for m in movements:
+        m.ref_id = group_id
+        if not m.remark:
+            m.remark = f"盘点调整：{', '.join(parts)}"
+
     recompute_product(db, p.id)
     db.commit()
-    p = db.get(Product, p.id)
+    db.refresh(p)
+    msg_parts = []
+    if qty_str:
+        msg_parts.append(f"库存{delta_disp:+.6g} {du}")
+    if avg_str:
+        msg_parts.append(f"均价{avg_delta_disp:+g}元/{du}")
+    if uc_str:
+        msg_parts.append(f"成本单价{uc_delta_disp:+g}元/{du}")
     return {
         "ok": True, "adjusted": True,
-        "quantity": delta_disp, "unit": unit,
+        "adjustment_id": group_id,
+        "quantity": delta_disp, "unit": du,
+        "avg_cost_delta": round(avg_delta_disp, 4) if avg_str else 0.0,
+        "unit_cost_delta": round(uc_delta_disp, 4) if uc_str else 0.0,
         "stock": p.stock, "display": round(p.stock / f_disp, 4),
-        "message": f"调整成功：{delta_disp:+.6g} {unit}（当前 {round(p.stock / f_disp, 4):g} {du}）",
+        "avg_cost": round(p.avg_cost * f_disp, 4),
+        "unit_cost": round((p.unit_cost or 0) * f_disp, 4),
+        "message": "调整成功：" + "；".join(msg_parts) + f"（当前 {round(p.stock / f_disp, 4):g} {du}，均价 {fmt_qty(p.avg_cost * f_disp)}元/{du}）",
     }
+
+
+@router.get("/adjustments")
+def list_adjustments(
+    product_id: int = 0,
+    date_from: str = "",
+    date_to: str = "",
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """盘点调整记录：按一次调整(分组)汇总，展示是谁盘点的、数量/成本变动，供回退。"""
+    q = (
+        select(StockMovement)
+        .where(StockMovement.ref_type == "manual")
+        .order_by(StockMovement.ref_id.desc(), StockMovement.id)
+    )
+    if date_from:
+        q = q.where(StockMovement.date >= date_from)
+    if date_to:
+        q = q.where(StockMovement.date <= date_to)
+    matched = db.execute(q).scalars()
+    # 按分组聚合：一次调整可能含 成本行 + 库存行；历史 manual 流水(ref_id 为空)按自身 id 单独成组
+    groups: dict[int, dict] = {}
+    order: list[int] = []
+    for m in matched:
+        if product_id and m.product_id != product_id:
+            continue
+        key = m.ref_id if m.ref_id is not None else m.id
+        if key not in groups:
+            groups[key] = {"rows": [], "product_id": m.product_id}
+            order.append(key)
+        groups[key]["rows"].append(m)
+
+    # 预载涉及商品的全部流水（id, quantity_base），用于还原每个成本重估流水发生时的库存基数
+    involved_ids = {g["product_id"] for g in groups.values()}
+    run: dict[int, float] = {pid: 0.0 for pid in involved_ids}
+    basis: dict[int, float] = {}  # 成本流水 id -> 发生时库存基数
+    for _m in db.execute(
+        select(StockMovement)
+        .where(StockMovement.product_id.in_(involved_ids))
+        .order_by(StockMovement.id)
+    ).scalars():
+        if _m.move_type == "cost":
+            basis[_m.id] = run[_m.product_id]  # 含该成本流水前的全部库存（其自身数量为 0）
+        run[_m.product_id] += _m.quantity_base or 0.0
+
+    result = []
+    for gid in order:
+        g = groups[gid]
+        g["rows"].sort(key=lambda r: r.id)
+        p = g["rows"][0].product
+        if not p:
+            continue
+        du = p.default_unit or p.base_unit
+        f = (p.conversions or {}).get(du, 1) or 1
+        qty_move = next((r for r in g["rows"] if r.move_type == "adjust"), None)
+        cost_move = next((r for r in g["rows"] if r.move_type == "cost"), None)
+        uc_move = next((r for r in g["rows"] if r.move_type == "ucost"), None)
+        qty_disp = (qty_move.quantity_base / f) if qty_move else 0.0
+        cost_delta = 0.0
+        if cost_move:
+            b = basis.get(cost_move.id, 0.0)
+            cost_delta = (cost_move.amount / b * f) if b > 0 else 0.0
+        uc_delta = (uc_move.amount * f) if uc_move else 0.0
+        first = g["rows"][0]
+        remark = (qty_move.remark if qty_move else uc_move.remark if uc_move else cost_move.remark) or ""
+        result.append(
+            {
+                "id": gid,
+                "product_id": p.id,
+                "product_name": p.name,
+                "unit": du,
+                "quantity": round(qty_disp, 4),
+                "avg_cost_delta": round(cost_delta, 4),
+                "unit_cost_delta": round(uc_delta, 4),
+                "date": first.date,
+                "operator": first.operator,
+                "remark": remark,
+                "created_at": first.created_at.strftime("%Y-%m-%d %H:%M:%S") if first.created_at else "",
+            }
+        )
+    return result
+
+
+@router.delete("/adjustments/{gid}")
+def delete_adjustment(gid: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """删除盘点调整记录并回退：清理该次调整写入的库存/均价/成本单价流水后重算商品，并反向抵消 unit_cost。
+    兼容历史 manual 流水(ref_id 为空)：按单一流水 id 匹配。"""
+    moves = list(db.execute(
+        select(StockMovement).where(
+            StockMovement.ref_type == "manual",
+            (StockMovement.ref_id == gid) | (StockMovement.ref_id.is_(None) & (StockMovement.id == gid)),
+        )
+    ).scalars())
+    if not moves:
+        raise HTTPException(404, "盘点调整记录不存在")
+    affected = set()
+    # 回退 成本单价(unit_cost)：按记录的增量反向抵扣
+    for m in moves:
+        affected.add(m.product_id)
+        if m.move_type == "ucost" and m.amount:
+            pu = db.get(Product, m.product_id)
+            if pu:
+                pu.unit_cost = max(round((pu.unit_cost or 0) - (m.amount or 0), 6), 0.0)
+    for m in moves:
+        db.delete(m)
+    for pid in affected:
+        recompute_product(db, pid)
+    db.commit()
+    return {"ok": True, "deleted": len(moves)}
 
 
 @router.get("/stock-overview")

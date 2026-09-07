@@ -1,5 +1,8 @@
 <template>
-  <router-view v-if="!isTab" />
+  <main v-if="isSub" class="m-main m-sub">
+    <router-view />
+  </main>
+  <router-view v-else-if="!isTab" />
   <template v-else>
     <header class="m-header">
       <div class="m-title">{{ title }}</div>
@@ -23,6 +26,8 @@ import { useRoute } from 'vue-router'
 
 const route = useRoute()
 const isTab = computed(() => !!route.meta.tab)
+// 二级页（非 tab、非登录）：统一套内边距容器，页面内自带 sub-header
+const isSub = computed(() => !route.meta.tab && route.path !== '/login')
 const title = computed(() => route.meta.title || '企业台账')
 </script>
 
@@ -35,6 +40,7 @@ body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   height: 46px; background: #1989fa; color: #fff; font-weight: 600; font-size: 16px;
 }
 .m-main { padding: 12px 12px 66px; }
+.m-sub { padding-bottom: 24px; }
 .card { background: #fff; border-radius: 10px; padding: 14px; margin-bottom: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.04); }
 .card-title { font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
 .num { text-align: right; }

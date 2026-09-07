@@ -141,6 +141,7 @@
       <section id="page-stock" class="page">
         <div class="seg" id="stockSeg">
           <button class="seg-item active" data-panel="stock-overview" onclick="switchSeg('stockSeg', this)">库存总览</button>
+          <button class="seg-item" data-panel="stock-adjustments" onclick="switchSeg('stockSeg', this)">盘点记录</button>
           <button class="seg-item" data-panel="stock-movements" onclick="switchSeg('stockSeg', this)">库存流水</button>
           <button class="seg-item" data-panel="stock-workload" onclick="switchSeg('stockSeg', this)">工作量统计</button>
         </div>
@@ -160,6 +161,19 @@
             <div class="stat"><div class="label">商品种类</div><div class="value" id="statTypes">-</div></div>
             <div class="stat accent"><div class="label">库存总值</div><div class="value" id="statStockValue">-</div><div class="sub" id="statStockSub"></div></div>
             <div class="stat warn"><div class="label">缺货预警</div><div class="value" id="statLow">-</div></div>
+          </div>
+        </div>
+
+        <div id="stock-adjustments" style="display:none;">
+          <div class="card">
+            <div class="toolbar">
+              <select id="adjProductFilter" class="searchable"><option value="0">全部商品</option></select>
+              <input id="adjDateFrom" type="date" /><span>-</span><input id="adjDateTo" type="date" />
+              <button class="btn" onclick="loadAdjustments()">查询</button>
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="loadAdjustments()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+            </div>
+            <div class="table-wrap"><table id="adjRecordTable"></table></div>
           </div>
         </div>
 
