@@ -91,7 +91,8 @@ def adjust_stock(data: AdjustIn, db: Session = Depends(get_db), user: User = Dep
     du = p.default_unit or p.base_unit
     f_disp = conv.get(du, 1) or 1
     op = data.operator.strip() or user.name
-    base_remark = (data.remark or "").strip()
+    reason = (data.remark or "").strip()  # 盘点原因（在盘点记录备注栏展示，供追溯）
+    adjust_summary = ""
 
     qty_str = (data.quantity or "").strip()
     avg_str = (data.avg_cost_adj or "").strip()
@@ -153,16 +154,30 @@ def adjust_stock(data: AdjustIn, db: Session = Depends(get_db), user: User = Dep
         unit = data.unit or du
         f = conv.get(unit, 1) or 1
         delta_base = round(delta_disp * f, 6)
+        # 盘盈金额：按“保持均价不变”的原则入账。若按现均价(sum = qty×avg)入账，
+        # 在负库存(库存价值被截到0)时会把均价抬高（如 -0.17kg 盘盈 +3kg → 1060.07元/kg）。
+        # 改为 amount = 目标均价×(调整后库存) - 现库存价值，使均价(含同期均价重估)保持不变。
+        amount = 0.0
+        if delta_base > 0:
+            S0 = p.stock or 0.0
+            V_eff = p.stock_value or 0.0  # 现库存价值（负库存时为0）
+            A_eff = p.avg_cost or 0.0     # 现均价（每基础单位）
+            if avg_str and S0 > 0:        # 与均价重估流水同步：先重估再盘盈
+                A_eff += avg_delta_base
+                V_eff += S0 * avg_delta_base
+            ns = S0 + delta_base
+            if ns > 0:
+                amount = round(A_eff * ns - V_eff, 2)
         movements.append(
             StockMovement(
                 product_id=p.id,
                 move_type="adjust",
                 quantity_base=delta_base,
-                amount=0.0,
+                amount=amount,
                 ref_type="manual",
                 date=data.date,
                 operator=op,
-                remark=f"盘点调整：{', '.join(parts)}".strip() if parts else f"盘点调整：{base_remark}".strip(),
+                remark=f"盘点调整：{reason}".strip() if reason else "",
             )
         )
 
@@ -173,7 +188,8 @@ def adjust_stock(data: AdjustIn, db: Session = Depends(get_db), user: User = Dep
     for m in movements:
         m.ref_id = group_id
         if not m.remark:
-            m.remark = f"盘点调整：{', '.join(parts)}"
+            m.remark = (f"盘点调整：{reason}".strip() if reason
+                        else (f"盘点调整：{', '.join(parts)}".strip() if parts else "盘点调整"))
 
     recompute_product(db, p.id)
     db.commit()
