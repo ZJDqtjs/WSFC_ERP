@@ -234,3 +234,20 @@ class CodeMapping(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     product: Mapped[Product | None] = relationship()
+
+
+class Deduction(Base):
+    """扣点规则：按商品类别设置入库扣点百分比。
+
+    批量导入→入库 解析「进货单价」时，若商品类别命中规则，
+    实际入库单价 = 原单价 × (1 - percent/100)，直接以折算价作为入库成本。
+    """
+
+    __tablename__ = "deductions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    category: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # 商品类别，与 Product.category 精确匹配
+    percent: Mapped[float] = mapped_column(Float, default=0.0)  # 扣点百分比 0~99.99，如 7 表示 7%
+    remark: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)

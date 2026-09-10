@@ -13,7 +13,7 @@ from sqlalchemy import select, text
 from .auth import ensure_seed_users
 from .database import Base, DATA_DIR, SessionLocal, engine
 from .models import Product
-from .routers import ai, auth, backup, fresh, imports, inbound, inventory, outbound, pack_rules, product_data, products, report
+from .routers import ai, auth, backup, deductions, fresh, imports, inbound, inventory, outbound, pack_rules, product_data, products, report
 from .routers.backup import create_backup_file, load_config
 from .services import recompute_product, seed_units
 
@@ -280,6 +280,7 @@ app.include_router(inbound.router)
 app.include_router(outbound.router)
 app.include_router(inventory.router)
 app.include_router(pack_rules.router)
+app.include_router(deductions.router)
 app.include_router(report.router)
 app.include_router(imports.router)
 app.include_router(backup.router)

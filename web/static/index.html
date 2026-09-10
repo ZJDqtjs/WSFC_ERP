@@ -66,6 +66,7 @@
         <button class="nav-item" data-page="fresh"><span class="nav-ico"><svg class="ic"><use href="#i-truck"/></svg></span>鲜货现采</button>
         <button class="nav-item" data-page="jushuitan"><span class="nav-ico"><svg class="ic"><use href="#i-link"/></svg></span>聚水潭关联</button>
         <button class="nav-item" data-page="import"><span class="nav-ico"><svg class="ic"><use href="#i-database"/></svg></span>批量导入</button>
+        <button class="nav-item" data-page="deduction"><span class="nav-ico"><svg class="ic"><use href="#i-coins"/></svg></span>扣点</button>
         <button class="nav-item" data-page="backup"><span class="nav-ico"><svg class="ic"><use href="#i-save"/></svg></span>备份与恢复</button>
         <div class="nav-group">设置</div>
         <button class="nav-item" data-page="pdata"><span class="nav-ico"><svg class="ic"><use href="#i-sliders"/></svg></span>商品资料备份</button>
@@ -407,6 +408,10 @@
           <div class="stat-grid" id="repStats"></div>
         </div>
         <div class="card">
+          <div class="card-head"><h3>销售成本构成</h3><span class="muted" id="repCostHint"></span></div>
+          <div id="repCostBreak"></div>
+        </div>
+        <div class="card">
           <div class="card-head"><h3>商品销售明细</h3></div>
           <div class="table-wrap"><table id="repProductTable"></table></div>
         </div>
@@ -452,6 +457,20 @@
             <button class="btn" onclick="batchFromImport('outbound')">导入出库（预览确认）</button>
           </div>
           <div id="impOutResult"></div>
+        </div>
+      </section>
+
+      <!-- 扣点 -->
+      <section id="page-deduction" class="page">
+        <div class="card">
+          <div class="card-head">
+            <h3>扣点设置</h3>
+            <span class="hint">按商品类别设置入库扣点百分比；批量导入→入库解析「进货单价」时按 原价 × (1 − 扣点%) 折算为入库成本（影响库存均价与利润）</span>
+            <div class="grow"></div>
+            <button class="btn green" onclick="deducAdd()"><svg class="ic"><use href="#i-plus"/></svg> 新增扣点</button>
+            <button class="btn secondary" onclick="loadDeductionPage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+          </div>
+          <div class="table-wrap"><table id="deducTable"></table></div>
         </div>
       </section>
 

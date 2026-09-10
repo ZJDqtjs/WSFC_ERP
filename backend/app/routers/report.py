@@ -27,6 +27,45 @@ def _date_filter(q, date_from, date_to):
     return q
 
 
+# 关联结算行（line_type='pack'）的费用归类：出库时自动结算的包材/人工/快递
+PACK_COST_CATS = {
+    "人工": "人工打包费",
+    "包材": "包材耗材",
+    "耗材": "包材耗材",
+    "包装": "包材耗材",
+    "快递": "快递运费",
+}
+
+
+def _pack_cost_category(p: Product | None, line: OutboundLine) -> str:
+    """判断一条关联结算行属于哪类费用（人工打包费 / 包材耗材 / 快递运费）。"""
+    if not p:
+        return "其他关联结算"
+    cat = (p.category or "").strip()
+    if cat in PACK_COST_CATS:
+        return PACK_COST_CATS[cat]
+    # 兜底：名称以「打包」结尾的按人工计（与 outbound._to_dict 的 is_labor 判定一致）
+    if (p.name or "").strip().endswith("打包"):
+        return "人工打包费"
+    return "其他关联结算"
+
+
+def _pack_cost_breakdown(outbounds: list[Outbound]) -> dict[str, float]:
+    """按费用类别汇总出库单的关联结算成本。
+
+    这些成本已包含在 total_cogs 中（不是账外费用），此处仅做结构化拆分，
+    让报表能看清「包材 / 人工 / 快递」各花了多少，不重复计入净利。
+    """
+    out: dict[str, float] = {}
+    for o in outbounds:
+        for l in o.lines:
+            if l.line_type != "pack":
+                continue
+            key = _pack_cost_category(l.product, l)
+            out[key] = round(out.get(key, 0.0) + (l.cogs or 0.0), 2)
+    return out
+
+
 @router.get("/dashboard")
 def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     from datetime import date
@@ -44,11 +83,15 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
         revenue = sum(o.total_amount for o in outbounds)
         cogs = sum(o.total_cogs for o in outbounds)
         fee = sum(x.amount for x in finances if x.type == "expense" and x.category != "采购支出")
+        packs = _pack_cost_breakdown(outbounds)
         return {
             "revenue": round(revenue, 2),
             "gross": round(revenue - cogs, 2),
             "net": round(revenue - cogs - fee, 2),
             "orders": len(outbounds),
+            "cogs": round(cogs, 2),
+            "pack_costs": packs,
+            "pack_cost_total": round(sum(packs.values()), 2),
         }
 
     products = list(db.execute(select(Product)).scalars())
@@ -171,11 +214,25 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
         for pid, d in sorted(by_product.items(), key=lambda kv: -kv[1]["amount"])
     ]
 
+    # 关联结算成本拆分（包材/人工/快递）——已含在 cogs 内，单独列出供分析
+    pack_costs = _pack_cost_breakdown(outbounds)
+    pack_total = round(sum(pack_costs.values()), 2)
+    # 商品本身成本 = 总成本 - 关联结算成本
+    goods_cogs = round(cogs - pack_total, 2)
+
+    # 账外费用（finance_records 中登记的手工支出），按类别归集
+    manual_fees: dict[str, float] = {}
+    for f in finances:
+        if f.type != "expense" or f.category == "采购支出":
+            continue
+        manual_fees[f.category] = round(manual_fees.get(f.category, 0.0) + f.amount, 2)
+
     return {
         "date_from": date_from,
         "date_to": date_to,
         "revenue": round(revenue, 2),
         "cogs": round(cogs, 2),
+        "goods_cogs": goods_cogs,
         "gross_profit": gross,
         "expense": round(expense, 2),
         "net_profit": net,
@@ -184,9 +241,14 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
         "order_count": len(outbounds),
         "inbound_count": len(inbounds),
         "by_product": product_rows,
+        # 出库自动结算的关联成本明细（包材/人工/快递），已包含在 cogs 中
+        "pack_costs": pack_costs,
+        "pack_cost_total": pack_total,
+        # 账外手工登记费用（不含采购支出），会额外从毛利中扣减得到净利
+        "manual_fees": manual_fees,
         "fee_breakdown": {
-            "人工打包费": round(sum(f.amount for f in finances if f.category == "人工打包费"), 2),
-            "其他支出": round(sum(f.amount for f in finances if f.type == "expense" and f.category not in ("人工打包费", "采购支出")), 2),
+            **pack_costs,
+            **{k: v for k, v in manual_fees.items() if k not in pack_costs},
         },
     }
 

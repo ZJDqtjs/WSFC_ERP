@@ -1481,3 +1481,28 @@ th[data-key] .sort-arrow {
 tr.draft-off { 
   opacity: 0.45; 
 }
+
+/* 销售成本构成：堆叠占比条 + 图例圆点 */
+.cost-stack {
+  display: flex;
+  height: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--border-light, #eee);
+  margin: 4px 0 14px;
+}
+
+.cost-stack span {
+  display: block;
+  height: 100%;
+  transition: width .3s ease;
+}
+
+.cost-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-right: 7px;
+  vertical-align: middle;
+}

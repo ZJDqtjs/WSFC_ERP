@@ -279,9 +279,18 @@ function goPage(name) {
     home: loadDashboard, stock: loadStock, inbound: initInbound, outbound: initOutbound,
     products: renderProducts, report: loadReport, import: loadImportPage, jushuitan: loadMappingPage,
     backup: loadBackupPage, fresh: loadFresh, packrules: loadPackRules, pdata: loadPdataPage,
+    deduction: loadDeductionPage,
   };
   (loaders[name] || (() => {}))();
 }
+/* 扣点页面功能尚未实现；占位同名函数以避免 goPage/按钮引用未定义标识符导致全局跳转崩溃 */
+function loadDeductionPage() {
+  const t = document.getElementById("deducTable");
+  if (t) t.innerHTML = `<tr><td colspan="2" class="empty">扣点功能尚未实现</td></tr>`;
+}
+function deducAdd() { toast("扣点功能尚未实现"); }
+function deducEdit() { toast("扣点功能尚未实现"); }
+function deducDel() { toast("扣点功能尚未实现"); }
 document.querySelectorAll(".nav-item").forEach((b) => b.addEventListener("click", () => {
   if (b.dataset.page === "products") {
     prodForceCat = b.dataset.cat || "";
@@ -2331,7 +2340,7 @@ function outAggBy(rows, pool) {
       }
       if (!map.has(k)) {
         map.set(k, {
-          product_id: k, name, sub, unit,
+          product_id: k, pid: l.product_id, name, sub, unit,
           orders: new Set(), qty: 0, qty_base: 0, amount: 0, cogs: 0, boxes: new Set(), hasBox: false,
         });
       }
@@ -2367,6 +2376,42 @@ function renderOutGroup() {
   const aggPack = outAggBy(rows, "pack").filter((a) => !kw || a.name.toLowerCase().includes(kw));
   const aggLabor = outAggBy(rows, "labor").filter((a) => !kw || a.name.toLowerCase().includes(kw));
   const aggLaborPack = outAggBy(rows, "laborpack").filter((a) => !kw || a.name.toLowerCase().includes(kw));
+  // 「销售商品」页签的成本需包含该商品关联的打包人工+耗材成本，否则毛利虚高：
+  // 直接关联的打包行带 sale_product_id；一单多货或未回填的按该单销售金额比例分摊到销售商品。
+  {
+    const byPid = new Map();
+    aggSale.forEach((a) => {
+      a.pack_cogs = a.pack_cogs || 0;
+      let arr = byPid.get(a.pid);
+      if (!arr) { arr = []; byPid.set(a.pid, arr); }
+      arr.push(a);
+    });
+    const addPack = (pid, amt) => {
+      const arr = byPid.get(pid) || [];
+      if (!arr.length) return;
+      const each = amt / arr.length;
+      arr.forEach((a) => { a.pack_cogs += each; });
+    };
+    for (const o of rows) {
+      const saleLines = (o.lines || []).filter((l) => l.line_type === "sale");
+      const totalAmt = saleLines.reduce((s, l) => s + (l.amount || 0), 0);
+      const unowned = [];
+      for (const l of o.lines || []) {
+        if (l.line_type !== "pack") continue;
+        if (l.sale_product_id == null) { unowned.push(l); continue; }
+        addPack(l.sale_product_id, l.cogs || 0);
+      }
+      if (unowned.length && saleLines.length) {
+        for (const l of unowned) {
+          for (const sl of saleLines) {
+            const share = totalAmt ? (sl.amount || 0) / totalAmt : 1 / saleLines.length;
+            addPack(sl.product_id, (l.cogs || 0) * share);
+          }
+        }
+      }
+    }
+    aggSale.forEach((a) => { a.base_cogs = a.cogs; a.cogs = a.cogs + a.pack_cogs; });
+  }
   const total = {
     amt: rows.reduce((s, o) => s + (o.total_amount || 0), 0),
     cogs: rows.reduce((s, o) => s + (o.total_cogs || 0), 0),
@@ -2404,7 +2449,7 @@ function renderOutGroup() {
     ${isSale ? `<th data-key="gp" class="num">毛利${sortArrow("ogTable", "gp")}</th>` : ""}
   </tr></thead><tbody>` +
     (data.length ? data.map((a) => `<tr>
-      <td>${esc(a.name)}${(a.subSub || a.sub) ? `<div class="muted" style="font-size:12px;font-weight:normal;">${esc(a.subSub || a.sub)}</div>` : ""}</td>
+      <td>${esc(a.name)}${(a.subSub || a.sub) ? `<div class="muted" style="font-size:12px;font-weight:normal;">${esc(a.subSub || a.sub)}</div>` : ""}${isSale && a.pack_cogs ? `<div class="muted" style="font-size:11px;color:var(--danger);">商品成本 ${fmtMoney(a.base_cogs ?? a.cogs)} ＋ 打包人工+耗材 ${fmtMoney(a.pack_cogs)}</div>` : ""}</td>
       <td class="num">${a.order_count} 单</td>
       ${isLaborPack ? "" : `<td>${esc(a.unit)}</td>`}
       ${isLaborPack ? "" : `<td class="num mono">${fmtNum(a.qty)}</td>`}
@@ -2549,14 +2594,17 @@ async function loadReport() {
     api(`/api/report/summary?date_from=${from || ""}&date_to=${to || ""}`),
     api(`/api/finance?date_from=${from || ""}&date_to=${to || ""}`),
   ]);
+  const packTotal = rep.pack_cost_total || 0;
   $("repStats").innerHTML = `
     <div class="stat blue"><div class="label">销售收入</div><div class="value">${fmtMoney(rep.revenue)}</div><div class="sub">${rep.order_count} 单</div></div>
-    <div class="stat amber"><div class="label">结转成本</div><div class="value">${fmtMoney(rep.cogs)}</div></div>
+    <div class="stat amber"><div class="label">结转成本</div><div class="value">${fmtMoney(rep.cogs)}</div><div class="sub">含关联结算 ${fmtMoney(packTotal)}</div></div>
     <div class="stat green"><div class="label">毛利</div><div class="value">${fmtMoney(rep.gross_profit)}</div><div class="sub">${rep.revenue ? ((rep.gross_profit / rep.revenue) * 100).toFixed(1) + "%" : "—"}</div></div>
-    <div class="stat red"><div class="label">期间费用</div><div class="value">${fmtMoney(rep.expense)}</div><div class="sub">打包费 ${fmtMoney(rep.fee_breakdown["人工打包费"])}</div></div>
+    <div class="stat red"><div class="label">期间费用</div><div class="value">${fmtMoney(rep.expense)}</div><div class="sub">账外手工记账</div></div>
     <div class="stat ${rep.net_profit >= 0 ? "green" : "red"}"><div class="label">净利润</div><div class="value">${fmtMoney(rep.net_profit)}</div></div>
     <div class="stat"><div class="label">本期进货</div><div class="value">${fmtMoney(rep.purchase)}</div></div>
     <div class="stat blue"><div class="label">当前库存总值</div><div class="value">${fmtMoney(rep.stock_value)}</div></div>`;
+
+  renderCostBreakdown(rep);
 
   const pt = $("repProductTable");
   let prodRows = applyTableSort(pt, rep.by_product || []);
@@ -2598,6 +2646,53 @@ async function loadReport() {
   if (!finRows.length) ft.innerHTML = `<tr><td colspan="8" class="empty">本期无财务流水</td></tr>`;
   ft._rows = finRows;
   ft._render = loadReport;
+}
+
+/* 销售成本构成：商品成本 vs 出库自动结算的包材/人工/快递 */
+function renderCostBreakdown(rep) {
+  const box = $("repCostBreak");
+  if (!box) return;
+  const cogs = rep.cogs || 0;
+  const packs = rep.pack_costs || {};
+  const packTotal = rep.pack_cost_total || 0;
+  const goods = rep.goods_cogs != null ? rep.goods_cogs : cogs - packTotal;
+  const hint = $("repCostHint");
+  if (hint) hint.textContent = cogs ? `合计 ${fmtMoney(cogs)}` : "";
+
+  if (!cogs) {
+    box.innerHTML = `<div class="empty">本期无销售成本</div>`;
+    return;
+  }
+  const pctOf = (v) => (cogs ? (v / cogs) * 100 : 0);
+  const COLORS = { "包材耗材": "#ff976a", "人工打包费": "#7232dd", "快递运费": "#07c160", "其他关联结算": "#969799" };
+  const rows = [
+    { name: "商品成本", value: goods, color: "#1989fa", tag: "" },
+    ...Object.entries(packs)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => ({ name: k, value: v, color: COLORS[k] || "#969799", tag: "自动结算" })),
+  ];
+  box.innerHTML = `
+    <div class="cost-stack">
+      ${rows.filter((r) => r.value > 0).map((r) =>
+        `<span title="${esc(r.name)} ${fmtMoney(r.value)}" style="width:${pctOf(r.value)}%;background:${r.color};"></span>`).join("")}
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>成本项</th><th class="num">金额</th><th class="num">占比</th><th>说明</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr>
+        <td><span class="cost-dot" style="background:${r.color};"></span>${esc(r.name)}
+          ${r.tag ? `<span class="badge pack" style="margin-left:6px;">${r.tag}</span>` : ""}</td>
+        <td class="num mono">${fmtMoney(r.value)}</td>
+        <td class="num mono">${pctOf(r.value).toFixed(1)}%</td>
+        <td class="muted">${r.tag ? "出库时按包装清单自动结算，已计入结转成本" : "销售商品本身的加权平均成本"}</td>
+      </tr>`).join("")}</tbody>
+      <tfoot><tr>
+        <td><b>结转成本合计</b></td>
+        <td class="num mono"><b>${fmtMoney(cogs)}</b></td>
+        <td class="num mono">100%</td>
+        <td class="muted">关联结算合计 ${fmtMoney(packTotal)}</td>
+      </tr></tfoot>
+    </table></div>
+    ${packTotal ? "" : `<div class="alert warn" style="margin-top:10px;">本期没有包材 / 人工 / 快递等关联结算成本。若商品已配置包装清单，请确认出库时是否生成了关联结算行。</div>`}`;
 }
 function openFinanceModal() {
   openModal(`
@@ -2827,7 +2922,7 @@ const BATCH_MODAL = {
     tpl: "/api/templates/inbounds",
     preview: "/api/import/inbounds/preview",
     confirm: "/api/import/inbounds/confirm",
-    hint: "按模板填写后上传，先解析预览（可勾选、改数量单价），确认后才真正入库并更新库存。",
+    hint: "按模板填写后上传，先解析预览（可勾选、改数量单价），确认后才真正入库并更新库存。若商品类别配置了扣点，单价将按 原价×(1-扣点%) 自动折算。",
   },
   outbound: {
     title: "批量出库",

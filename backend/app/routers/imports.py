@@ -1,6 +1,7 @@
 """批量导入：模板下载、商品/入库/出库导入、聚水潭出库单解析与商品编码关联。"""
 import difflib
 import io
+import json
 import re
 import uuid
 from datetime import datetime
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import CodeMapping, PackRule, Product, User
+from ..models import CodeMapping, Deduction, PackRule, Product, User
 from .ai import _chat, _extract_json, _llm_config
 from ..services import (
     create_inbound,
@@ -331,6 +332,19 @@ def import_products(file: UploadFile, db: Session = Depends(get_db), user: User 
 
 
 # ---------------- 入库导入 ----------------
+def _load_deduction_map(db: Session) -> dict[str, float]:
+    """一次性载入全部扣点规则 {商品类别: 扣点百分比}，避免逐行查询。"""
+    return {d.category: d.percent for d in db.execute(select(Deduction)).scalars()}
+
+
+def apply_deduction_price(price: float, product: Product, deduction_map: dict[str, float]) -> float:
+    """按商品类别扣点折算单价：原价 × (1 - percent/100)。无规则或 percent<=0 时不折算。"""
+    percent = deduction_map.get(product.category) if product and product.category else 0
+    if percent and percent > 0:
+        return round(float(price) * (1 - percent / 100.0), 4)
+    return price
+
+
 class DraftInbound(BaseModel):
     product_id: int
     product_name: str = ""
@@ -353,6 +367,7 @@ def parse_inbound_draft(file: UploadFile, db: Session, user: User) -> tuple[list
     mapping, start = detect_header(rows, INBOUND_ALIASES)
     if not mapping or "product" not in mapping:
         raise HTTPException(400, "未识别到入库表头（需包含「商品」列），请使用下载的入库导入模板")
+    deduction_map = _load_deduction_map(db)
     items, failed = [], []
     for i in range(start, len(rows)):
         row = rows[i]
@@ -375,6 +390,8 @@ def parse_inbound_draft(file: UploadFile, db: Session, user: User) -> tuple[list
         if qty <= 0 or price < 0:
             failed.append({"row": i + 1, "reason": f"数量/单价无效（{product_key}）"})
             continue
+        # 扣点折算：商品类别命中扣点规则时，实际入库单价 = 原价 × (1 - 扣点%)
+        price = apply_deduction_price(price, product, deduction_map)
         items.append(
             DraftInbound(
                 product_id=product.id, product_name=product.name, unit=unit,
@@ -426,6 +443,7 @@ def import_inbounds(file: UploadFile, db: Session = Depends(get_db), user: User 
     mapping, start = detect_header(rows, INBOUND_ALIASES)
     if not mapping or "product" not in mapping:
         raise HTTPException(400, "未识别到入库表头（需包含「商品」列），请使用下载的入库导入模板")
+    deduction_map = _load_deduction_map(db)
     success, failed = 0, []
     for i in range(start, len(rows)):
         row = rows[i]
@@ -445,6 +463,8 @@ def import_inbounds(file: UploadFile, db: Session = Depends(get_db), user: User 
         if qty <= 0 or price < 0:
             failed.append({"row": i + 1, "reason": f"数量/单价无效（{product_key}）"})
             continue
+        # 扣点折算：商品类别命中扣点规则时，实际入库单价 = 原价 × (1 - 扣点%)
+        price = apply_deduction_price(price, product, deduction_map)
         try:
             create_inbound(
                 db,
@@ -580,6 +600,68 @@ def parse_outbound_draft(file: UploadFile, db: Session, user: User) -> tuple[lis
     return [DraftOrder(**o) for o in orders.values()], failed
 
 
+# ---------------- 店铺扣点（json 配置，聚水潭订单按店铺名称扣除） ----------------
+DEDUCTION_CONFIG_FILE = Path(__file__).resolve().parent.parent.parent / "json" / "deduction_config.json"
+
+
+def _load_shop_deductions() -> dict[str, dict]:
+    """加载店铺扣点规则 json → {店铺名称: {"percent": 固定扣点} | {"categories": {分类: 扣点}}}。
+
+    文件缺失/格式错误返回空表（不折算）。规则形如：
+    {"rules": [{"shop": "xxx", "percent": 2.6},
+               {"shop": "yyy", "categories": {"蔬菜": 7, "水果": 9}}]}
+    """
+    try:
+        data = json.loads(DEDUCTION_CONFIG_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    rules: dict[str, dict] = {}
+    for r in (data.get("rules") or []):
+        shop = str(r.get("shop") or "").strip()
+        if not shop:
+            continue
+        if "percent" in r and r.get("percent") is not None:
+            rules[shop] = {"percent": float(r.get("percent"))}
+        elif r.get("categories"):
+            cats = {str(k).strip(): float(v) for k, v in r["categories"].items() if v is not None}
+            if cats:
+                rules[shop] = {"categories": cats}
+    return rules
+
+
+def _shop_line_percent(rule: dict, stock_cat: str) -> float:
+    """按店铺规则解析某行的扣点百分比：固定扣点对所有行生效；分类扣点按扣减库存分类，未指定为 0。"""
+    if "percent" in rule:
+        return float(rule.get("percent") or 0)
+    cats = rule.get("categories") or {}
+    return float(cats.get(stock_cat, 0) or 0)
+
+
+def _shop_deduction_note(rule: dict) -> str:
+    """店铺扣点备注片段（如 （店铺扣点 2.6%）/ （店铺分类扣点 蔬菜7%、水果9%））。"""
+    if "percent" in rule:
+        return f"（店铺扣点 {float(rule['percent']):g}%）"
+    cats = rule.get("categories") or {}
+    if cats:
+        return "（店铺分类扣点 " + "、".join(f"{k}{float(v):g}%" for k, v in cats.items()) + "）"
+    return ""
+
+
+def _line_deduct_stock_category(db: Session, p: Product | None, stock_product_id: int | None = None) -> str:
+    """返回该行实际扣减的库存商品分类（用于按分类扣点）。
+
+    优先取一单多货规则指定的库存大类；否则取订单商品（小类）关联的库存大类；再无则取商品自身分类。
+    """
+    sp = None
+    if stock_product_id:
+        sp = db.get(Product, stock_product_id)
+    if (not sp or sp.product_type != "stock") and p and p.product_type == "order" and p.stock_product_id:
+        sp = db.get(Product, p.stock_product_id)
+    if sp and sp.product_type == "stock":
+        return sp.category or ""
+    return (p.category if p else "") or ""
+
+
 def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: tuple | None = ("已出库",)) -> tuple[list[DraftOrder], list[dict], dict, set]:
     """解析聚水潭出库单 → 草稿单（不建单）。
 
@@ -594,8 +676,10 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
     unmapped_detail: dict[str, dict] = {}
     unmatched_multi: dict[str, dict] = {}
     rule_map = _load_pack_rule_map(db)
+    shop_deductions = _load_shop_deductions()
     for o in orders:
         order_items = parse_jushuitan_name(o["name"])
+        shop_rule = shop_deductions.get(o["shop"])
         rule = rule_map.get(_jst_combo_key(order_items))
         # 一单多货（一个出库单含 ≥2 种商品）未命中规则时，不再跳过（否则不扣库存），
         # 而是回退到下方“逐商品关联结算”路径：按每个商品的编码关联扣库存大类 + 关联结算清单扣包材/人工。
@@ -618,6 +702,14 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                 failed.append({"doc": o["doc_no"], "reason": "一单多货规则未关联到可用商品"})
                 continue
             _settle_revenue(sale_lines, o["amount"])
+            deducted = False
+            if shop_rule:
+                for ln in sale_lines:
+                    pct = _shop_line_percent(shop_rule, _line_deduct_stock_category(db, ln["product"], ln.get("stock_product_id")))
+                    if pct > 0:
+                        ln["amount"] = round(ln["amount"] * (1 - pct / 100.0), 2)
+                        ln["price"] = round(ln["amount"] / ln["qty"], 4) if ln["qty"] else 0
+                        deducted = True
             draft_lines = [
                 DraftLine(
                     product_id=ln["product"].id, product_name=ln["product"].name, unit=ln["unit"],
@@ -634,7 +726,7 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                     doc_no=o["doc_no"], date=o["date"],
                     customer=o["customer"] or o["shop"],
                     operator=o["seller"] or user.name,
-                    remark=f"聚水潭导入 单{o['doc_no']} {o['express']}{o['track']}（一单多货·规则：{rule.name}）",
+                    remark=f"聚水潭导入 单{o['doc_no']} {o['express']}{o['track']}（一单多货·规则：{rule.name}）{_shop_deduction_note(shop_rule) if deducted else ''}",
                     pack_fee=round(labor, 2), pack_rule_id=rule.id, pack_rule_name=rule.name,
                     pack_lines=pack_lines, lines=draft_lines,
                 )
@@ -680,12 +772,19 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
         sum_raw = sum(raws)
         sum_qb = sum(qty_bases)
         draft_lines = []
+        deducted = False
         for ln, raw, qb in zip(lines, raws, qty_bases):
             if sum_raw > 0:
                 amt = revenue * raw / sum_raw
             else:
                 amt = revenue * qb / sum_qb if sum_qb > 0 else 0
             amt = round(amt, 2)
+            # 店铺扣点：命中店铺规则时，按扣减库存分类扣减该行收入（如 卖家实收 × (1 - 扣点%)）
+            if shop_rule:
+                pct = _shop_line_percent(shop_rule, _line_deduct_stock_category(db, ln["p"]))
+                if pct > 0:
+                    amt = round(amt * (1 - pct / 100.0), 2)
+                    deducted = True
             draft_lines.append(
                 DraftLine(
                     product_id=ln["p"].id, product_name=ln["p"].name, unit=ln["unit"],
@@ -699,7 +798,7 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                 doc_no=o["doc_no"], date=o["date"],
                 customer=o["customer"] or o["shop"],
                 operator=o["seller"] or user.name,
-                remark=f"聚水潭导入 单{o['doc_no']} {o['express']}{o['track']}",
+                remark=f"聚水潭导入 单{o['doc_no']} {o['express']}{o['track']}{_shop_deduction_note(shop_rule) if deducted else ''}",
                 pack_fee=0.0, lines=draft_lines,
             )
         )
