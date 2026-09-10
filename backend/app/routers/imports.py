@@ -709,11 +709,15 @@ def _collect_batch_unit_price(db: Session, orders: list[dict], mapping_by_code: 
 
 
 def _line_price_weight(p: Product, qb: float, batch_unit_price: dict[int, float]) -> float:
-    """该行分摊权重：单价 × 数量。单价优先取本批次实收单价，回退商品默认售价；均无则为 0（按数量均分）。"""
+    """该行分摊权重：单价 × 数量。单价优先取本批次实收单价，回退商品默认售价/成本；
+    完全无价格时退化为按数量（qb）占比分摊，避免金额被算成 0。"""
     price = batch_unit_price.get(p.id)
     if not price:
-        price = p.sale_price or 0
-    return float(price or 0) * qb
+        price = p.sale_price or p.avg_cost or p.unit_cost or 0
+    w = float(price or 0) * qb
+    if w <= 0:
+        w = float(qb or 0)
+    return w
 
 
 def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: tuple | None = ("已出库",)) -> tuple[list[DraftOrder], list[dict], dict, set]:
@@ -816,21 +820,33 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
 
         # 金额按商品实收单价/默认售价比例分摊卖家实收（一单多货按各自单价拆分，避免均分）
         revenue = o["amount"]
-        qty_bases, raws = [], []
+        qty_bases = []
         for ln in lines:
             qb = unit_to_base(ln["p"], ln["unit"], ln["qty"])
             ln["qty_base"] = qb
             qty_bases.append(qb)
-            raws.append(_line_price_weight(ln["p"], qb, batch_unit_price))
-        sum_raw = sum(raws)
-        sum_qb = sum(qty_bases)
+        # 收入分摊：有售价的商品按「估计单价×数量」取值（总价超出实收时按比例压缩）；
+        # 无售价商品分得剩余实收（按数量占比），避免金额被算成 0。
+        ests = [float(batch_unit_price.get(ln["p"].id) or (ln["p"].sale_price or 0) or 0) for ln in lines]
+        priced_amt = 0.0
+        priced_idx, res_idx, res_qb = [], [], 0.0
+        for i, (est, qb) in enumerate(zip(ests, qty_bases)):
+            if est > 0:
+                priced_idx.append(i)
+                priced_amt += qb * est
+            else:
+                res_idx.append(i)
+                res_qb += qb
+        ratio = 1.0 if priced_amt <= revenue else (revenue / priced_amt if priced_amt > 0 else 1.0)
+        alloc = [0.0] * len(lines)
+        for i in priced_idx:
+            alloc[i] = qty_bases[i] * ests[i] * ratio
+        residual = revenue - sum(alloc[i] for i in priced_idx)
+        for i in res_idx:
+            alloc[i] = residual * qty_bases[i] / res_qb if res_qb > 0 else (residual / len(res_idx) if res_idx else 0)
         draft_lines = []
         deducted = False
-        for ln, raw, qb in zip(lines, raws, qty_bases):
-            if sum_raw > 0:
-                amt = revenue * raw / sum_raw
-            else:
-                amt = revenue * qb / sum_qb if sum_qb > 0 else 0
+        for ln, amt in zip(lines, alloc):
             amt = round(amt, 2)
             gross_amount = amt  # 扣点前的原始金额
             # 店铺扣点：命中店铺规则时，按扣减库存分类扣减该行收入（如 卖家实收 × (1 - 扣点%)）

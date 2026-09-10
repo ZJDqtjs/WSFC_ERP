@@ -355,10 +355,12 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
         # 扣减目标：一单多货规则如指定库存大类则按其扣减；否则按订单商品关联的库存商品（大类），未关联则扣减自身
         target, deduction_base = _deduct_with_override(db, p, qty_base, ov_sp, ov_mult)
         # 订单/库存商品净重优先由「扣减库存量」推导（如 七彩花生2斤 → 扣 1kg 库存 → 净重 1kg）；
-        # 计数类（未关联重量类库存）回退用商品的 weight_kg。
+        # 推导不出（0）时按序回退：扣减目标库存商品自身的净重 → 当前销售商品自身填的净重；都没有算 0。
         line_net_kg = deduction_net_weight_kg(target, deduction_base)
         if line_net_kg <= 0:
-            line_net_kg = line_weight_kg(p, qty_base)
+            line_net_kg = line_weight_kg(target, deduction_base)
+            if line_net_kg <= 0:
+                line_net_kg = line_weight_kg(p, qty_base)
         express_weight += line_net_kg
         cogs = round(deduction_base * (target.avg_cost or target.unit_cost), 2)
         if fee is None:

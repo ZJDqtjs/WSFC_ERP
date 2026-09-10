@@ -1605,7 +1605,7 @@ function openProductModal(pid = 0) {
       <div class="field"><label>单位</label><select id="pUnit" class="searchable"></select><div class="field-hint">重量类按克记账（1斤=500克），计数类按个记账；订单商品固定为「单」</div></div>
       <div class="field"><label>默认售价（每基础单位）</label><input id="pSalePrice" type="number" step="any" value="${p?.sale_price || 0}" /></div>
       <div class="field"><label>参考成本（每基础单位）</label><input id="pUnitCost" type="number" step="any" value="${p?.unit_cost || 0}" /><div class="field-hint">包材/人工等无入库时按此成本结算，如纸箱0.9元/个</div></div>
-      <div class="field" id="pWeightBox" style="display:${ptype === "order" ? "none" : ""};"><label>单件净重（kg/默认单位）</label><input id="pWeightKg" type="number" step="any" value="${p?.weight_kg || 0}" /><div class="field-hint">库存商品手工设定；订单商品的净重由「扣减库存量」自动推导，无需填写</div></div>
+      <div class="field" id="pWeightBox"><label>单件净重（kg）</label><input id="pWeightKg" type="number" step="any" value="${p?.weight_kg || 0}" /><div class="field-hint">用于计算快递费。重量类库存自动按「扣减库存量」推导；按袋/按件等计数库存推不出重量时，就用这里手填的净重兜底（如 四神汤200g 填 0.2）</div></div>
     </div>
     <div id="pStockBox" class="form-grid" style="margin-top:10px;display:${ptype === "order" ? "grid" : "none"};">
       <div class="field"><label>关联库存商品（大类）*</label><select id="pStockLink" class="searchable"><option value="">— 加载中… —</option></select><div class="field-hint">出库时从该大类扣减库存，可输入名称快速筛选</div></div>
@@ -1654,8 +1654,6 @@ function deriveUnitPayload(ptype, unit) {
 function pTypeChanged() {
   const t = $("pType").value;
   $("pStockBox").style.display = t === "order" ? "grid" : "none";
-  const wb = $("pWeightBox");
-  if (wb) wb.style.display = t === "order" ? "none" : "";
   initProductUnitSelect(t, $("pUnit").value);
   if (t === "order" && $("pStockLink").options.length <= 1) {
     api("/api/stocks").then((stocks) => {
