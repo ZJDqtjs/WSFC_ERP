@@ -1,4 +1,7 @@
 """核心业务逻辑：单位换算、加权平均成本、库存/成本重算、入库/出库创建。"""
+import json
+import math
+import os
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -84,6 +87,94 @@ def default_conversions(base_unit: str) -> dict:
     return dict(DEFAULT_CONVERSIONS_BASE_COUNT)
 
 
+# ---------------- 快递费（多段计费，规则页可实时维护） ----------------
+EXPRESS_CONFIG_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "json", "express_config.json")
+EXPRESS_BOX_WEIGHT_KG = 0.1      # 每个包裹在净重基础上统一加 0.1kg 箱重
+DEFAULT_EXPRESS_CONFIG = {
+    "mode": "tiered",   # tiered=首重+续重（1kg内首重价，每超1kg加收）；flat=每kg单价
+    "first_kg_fee": 3.6,   # 1kg 以内
+    "per_extra_kg": 1.0,   # 每超 1kg 加收
+    "rate_per_kg": 3.6,    # flat 模式：每 1kg 单价
+    "round_up": True,      # 是否按整 kg 向上取整（续重按 ≥1kg 段计）
+}
+
+
+def load_express_config() -> dict:
+    """读取快递费计费配置。文件缺失/异常时回退默认。"""
+    cfg = dict(DEFAULT_EXPRESS_CONFIG)
+    try:
+        with open(EXPRESS_CONFIG_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+            for k in cfg:
+                if k in data:
+                    cfg[k] = data[k]
+    except Exception:
+        pass
+    return cfg
+
+
+def save_express_config(cfg: dict) -> dict:
+    """保存快递费计费配置到文件（实时生效）。"""
+    merged = dict(DEFAULT_EXPRESS_CONFIG)
+    if cfg and isinstance(cfg, dict):
+        merged.update(cfg)
+    os.makedirs(os.path.dirname(EXPRESS_CONFIG_FILE), exist_ok=True)
+    with open(EXPRESS_CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(merged, f, ensure_ascii=False, indent=2)
+    return merged
+
+
+def compute_express_fee(weight_kg: float, cfg: dict | None = None) -> float:
+    """快递费。
+    - tiered：1kg 内收 first_kg_fee；每超 1kg 加收 per_extra_kg（round_up 时按整 kg 向上取整）。
+    - flat：weight × rate_per_kg。
+    """
+    if cfg is None:
+        cfg = load_express_config()
+    w = max(0.0, float(weight_kg))
+    if cfg.get("mode") == "flat":
+        return round(w * float(cfg.get("rate_per_kg") or 0.0), 2)
+    over = max(0.0, w - 1.0)
+    if cfg.get("round_up", True) and over > 0:
+        over = float(math.ceil(over))
+    return round(float(cfg.get("first_kg_fee") or 0.0) + over * float(cfg.get("per_extra_kg") or 0.0), 2)
+
+
+def deduction_net_weight_kg(target: Product | None, deduction_base: float) -> float:
+    """由扣减库存量推导净重(kg)：重量类库存按其基础单位克数折算（如扣 1000 克 = 1kg）。"""
+    if target and (target.base_unit or "") in ("克", "g") and deduction_base > 0:
+        return round(float(deduction_base) / 1000.0, 4)
+    return 0.0
+
+
+def line_weight_kg(product: Product, quantity_base: float) -> float:
+    """某销售行折成「默认单位」后的净重(kg)。weight_kg 为每 默认单位 的净重(kg)。
+    仅用于基础单位非克（计数类）且未关联重量的兜底。"""
+    w = float(product.weight_kg or 0)
+    if w <= 0:
+        return 0.0
+    ref_unit = product.default_unit or product.base_unit
+    factor = float((product.conversions or {}).get(ref_unit) or 1.0)
+    if factor <= 0:
+        factor = 1.0
+    return round(quantity_base / factor * w, 4)
+
+
+def get_or_create_express_product(db: Session) -> Product:
+    """取已存在的「快递」分类商品作为快递费结算载体；没有则自动创建一个。"""
+    p = db.scalar(select(Product).where(Product.category == "快递").order_by(Product.id).limit(1))
+    if p:
+        return p
+    p = Product(
+        name="快递费(自动)", category="快递", product_type="stock",
+        base_unit="单", default_unit="单", is_active=True,
+        conversions={"单": 1}, pack_items=[], pack_fee=0.0,
+    )
+    db.add(p)
+    db.flush()
+    return p
+
+
 def recompute_product(db: Session, product_id: int) -> Product:
     """以库存流水为准重算商品的库存、加权平均成本、库存价值。
 
@@ -126,8 +217,8 @@ def recompute_product(db: Session, product_id: int) -> Product:
     product.stock = round(stock, 6)
     product.stock_value = round(value, 6)
     product.avg_cost = round(avg, 6)
-    # 人工分类不记库存：工作量 = 全部流水绝对值之和（单），库存恒为 0
-    if product.category == "人工":
+    # 人工 / 快递分类不记库存：工作量 = 全部流水绝对值之和（单），库存恒为 0
+    if product.category in ("人工", "快递"):
         product.workload = round(sum(abs(m.quantity_base) for m in moves), 6)
         product.stock = 0.0
         product.stock_value = 0.0
@@ -233,6 +324,7 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
     pack_lines = pack_lines or []
     sale_rows, pack_rows, warnings = [], [], []
     total_amount = total_cogs = 0.0
+    express_weight = 0.0  # 整单毛重(kg)，用于自动计算快递费
 
     for ln in lines:
         if hasattr(ln, "product_id"):  # Pydantic 对象
@@ -258,6 +350,12 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
         amount = round(quantity * price, 2)
         # 扣减目标：一单多货规则如指定库存大类则按其扣减；否则按订单商品关联的库存商品（大类），未关联则扣减自身
         target, deduction_base = _deduct_with_override(db, p, qty_base, ov_sp, ov_mult)
+        # 订单/库存商品净重优先由「扣减库存量」推导（如 七彩花生2斤 → 扣 1kg 库存 → 净重 1kg）；
+        # 计数类（未关联重量类库存）回退用商品的 weight_kg。
+        line_net_kg = deduction_net_weight_kg(target, deduction_base)
+        if line_net_kg <= 0:
+            line_net_kg = line_weight_kg(p, qty_base)
+        express_weight += line_net_kg
         cogs = round(deduction_base * (target.avg_cost or target.unit_cost), 2)
         if fee is None:
             fee = p.pack_fee
@@ -329,6 +427,24 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
         )
         total_cogs += cogs
 
+    # 快递费自动结算：整单净重(商品净重累加) + 每单箱体 0.1kg，按「每kg快递费单价」计算，作为一项「快递」分类成本
+    if express_weight > 0:
+        total_weight = round(express_weight + EXPRESS_BOX_WEIGHT_KG, 3)
+        express_fee = compute_express_fee(total_weight)
+        if express_fee > 0:
+            ep = get_or_create_express_product(db)
+            pack_rows.append(
+                {
+                    "product_id": ep.id, "product_name": ep.name, "base_unit": ep.base_unit,
+                    "unit": "单", "quantity": 1, "quantity_base": 1,
+                    "unit_price": express_fee, "amount": express_fee, "cogs": express_fee,
+                    "pack_fee": 0, "line_type": "pack", "sale_product_id": None,
+                    "express_weight": total_weight,
+                    "spec": f"{total_weight:.3f}kg",
+                }
+            )
+            total_cogs += express_fee
+
     if fee_total is not None:
         total_fee = round(float(fee_total), 2)
     else:
@@ -392,11 +508,11 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
         if is_sale:
             move_qty, move_type = -r["deduction_base"], "out"
         else:
-            # 人工打包记为正工作量（不扣库存）；包材等仍为负向包装消耗
+            # 人工 / 快递等服务类记为正向工作量（不扣库存）；包材等仍为负向包装消耗
             pack_p = db.get(Product, r["product_id"])
-            is_labor = bool(pack_p and pack_p.category == "人工")
-            move_qty = r["quantity_base"] if is_labor else -r["quantity_base"]
-            move_type = "work" if is_labor else "pack_out"
+            is_service = bool(pack_p and pack_p.category in ("人工", "快递"))
+            move_qty = r["quantity_base"] if is_service else -r["quantity_base"]
+            move_type = "work" if is_service else "pack_out"
         db.add(
             OutboundLine(
                 outbound_id=rec.id,

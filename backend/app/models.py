@@ -45,6 +45,7 @@ class Product(Base):
     spec: Mapped[str] = mapped_column(String(255), default="")  # 规格说明，如 每个约150克
     sale_price: Mapped[float] = mapped_column(Float, default=0.0)  # 默认售价(每基础单位)
     unit_cost: Mapped[float] = mapped_column(Float, default=0.0)  # 参考成本/采购单价(每基础单位)
+    weight_kg: Mapped[float] = mapped_column(Float, default=0.0)  # 单件毛重(kg/默认单位)，用于自动计算快递费
     conversions: Mapped[dict] = mapped_column(JSON, default=dict)  # {单位: 换算到基础单位的系数}
     # 销售关联商品/包装清单：[{product_id, quantity, unit}]
     pack_items: Mapped[list] = mapped_column(JSON, default=list)

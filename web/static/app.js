@@ -279,9 +279,57 @@ function goPage(name) {
     home: loadDashboard, stock: loadStock, inbound: initInbound, outbound: initOutbound,
     products: renderProducts, report: loadReport, import: loadImportPage, jushuitan: loadMappingPage,
     backup: loadBackupPage, fresh: loadFresh, packrules: loadPackRules, pdata: loadPdataPage,
-    deduction: loadDeductionPage,
+    deduction: loadDeductionPage, express: loadExpressPage,
   };
   (loaders[name] || (() => {}))();
+}
+/* =============== 快递费规则 =============== */
+function currentExprCfg() {
+  return {
+    mode: $("expMode").value,
+    first_kg_fee: parseFloat($("expFirst").value) || 0,
+    per_extra_kg: parseFloat($("expExtra").value) || 0,
+    rate_per_kg: parseFloat($("expRate").value) || 0,
+    round_up: $("expRoundUp").checked,
+  };
+}
+function exprFee(cfg, w) {
+  if (cfg.mode === "flat") return Math.round(w * cfg.rate_per_kg * 100) / 100;
+  let over = Math.max(0, w - 1);
+  if (cfg.round_up && over > 0) over = Math.ceil(over);
+  return Math.round((cfg.first_kg_fee + over * cfg.per_extra_kg) * 100) / 100;
+}
+function previewExpress() {
+  const el = $("expPreview");
+  if (!el) return;
+  const cfg = currentExprCfg();
+  const weights = [1, 2, 3, 5, 10];
+  el.innerHTML = weights.map((w) =>
+    `<div class="expr-item"><span class="expr-w">毛重 ${w}kg</span><span class="expr-fee">¥${fmtMoney(exprFee(cfg, w))}</span></div>`
+  ).join("");
+}
+async function loadExpressPage() {
+  try {
+    const r = await api("/api/express/rule");
+    $("expMode").value = r.mode === "flat" ? "flat" : "tiered";
+    $("expFirst").value = r.first_kg_fee;
+    $("expExtra").value = r.per_extra_kg;
+    $("expRate").value = r.rate_per_kg;
+    $("expRoundUp").checked = !!r.round_up;
+    previewExpress();
+    $("expRateInfo").textContent = "已加载当前计费规则";
+  } catch (e) { toast("加载规则失败：" + e.message); }
+}
+async function saveExpressRule() {
+  const cfg = currentExprCfg();
+  const bad = cfg.mode === "tiered" ? [cfg.first_kg_fee, cfg.per_extra_kg] : [cfg.rate_per_kg];
+  if (bad.some((v) => isNaN(v) || v < 0)) { toast("请填写正确的费用（≥0）"); return; }
+  try {
+    await api("/api/express/rule", "PUT", cfg);
+    previewExpress();
+    $("expRateInfo").textContent = "已保存，实时生效";
+    toast("快递费规则已保存");
+  } catch (e) { toast("保存失败：" + e.message); }
 }
 /* =============== 扣点设置 =============== */
 async function loadDeductionPage() {
@@ -1557,6 +1605,7 @@ function openProductModal(pid = 0) {
       <div class="field"><label>单位</label><select id="pUnit" class="searchable"></select><div class="field-hint">重量类按克记账（1斤=500克），计数类按个记账；订单商品固定为「单」</div></div>
       <div class="field"><label>默认售价（每基础单位）</label><input id="pSalePrice" type="number" step="any" value="${p?.sale_price || 0}" /></div>
       <div class="field"><label>参考成本（每基础单位）</label><input id="pUnitCost" type="number" step="any" value="${p?.unit_cost || 0}" /><div class="field-hint">包材/人工等无入库时按此成本结算，如纸箱0.9元/个</div></div>
+      <div class="field" id="pWeightBox" style="display:${ptype === "order" ? "none" : ""};"><label>单件净重（kg/默认单位）</label><input id="pWeightKg" type="number" step="any" value="${p?.weight_kg || 0}" /><div class="field-hint">库存商品手工设定；订单商品的净重由「扣减库存量」自动推导，无需填写</div></div>
     </div>
     <div id="pStockBox" class="form-grid" style="margin-top:10px;display:${ptype === "order" ? "grid" : "none"};">
       <div class="field"><label>关联库存商品（大类）*</label><select id="pStockLink" class="searchable"><option value="">— 加载中… —</option></select><div class="field-hint">出库时从该大类扣减库存，可输入名称快速筛选</div></div>
@@ -1605,6 +1654,8 @@ function deriveUnitPayload(ptype, unit) {
 function pTypeChanged() {
   const t = $("pType").value;
   $("pStockBox").style.display = t === "order" ? "grid" : "none";
+  const wb = $("pWeightBox");
+  if (wb) wb.style.display = t === "order" ? "none" : "";
   initProductUnitSelect(t, $("pUnit").value);
   if (t === "order" && $("pStockLink").options.length <= 1) {
     api("/api/stocks").then((stocks) => {
@@ -1648,6 +1699,7 @@ async function saveProduct(pid) {
     spec: $("pSpec").value,
     sale_price: +$("pSalePrice").value || 0,
     unit_cost: +$("pUnitCost").value || 0,
+    weight_kg: +($("pWeightKg").value || 0),
     conversions: unitPayload.conversions,
     pack_items: collectPacks(),
     pack_fee: +$("pPackFee").value || 0,
@@ -2458,21 +2510,23 @@ function renderOutGroup() {
   const aggPack = outAggBy(rows, "pack").filter((a) => !kw || a.name.toLowerCase().includes(kw));
   const aggLabor = outAggBy(rows, "labor").filter((a) => !kw || a.name.toLowerCase().includes(kw));
   const aggLaborPack = outAggBy(rows, "laborpack").filter((a) => !kw || a.name.toLowerCase().includes(kw));
-  // 「销售商品」页签的成本需包含该商品关联的打包人工+耗材成本，否则毛利虚高：
+  // 「销售商品」页签的成本需包含该商品关联的打包人工+耗材+快递费成本，否则毛利虚高：
   // 直接关联的打包行带 sale_product_id；一单多货或未回填的按该单销售金额比例分摊到销售商品。
+  // 快递费（category=快递）单独归入 express_cogs，与打包人工+耗材分开展示。
   {
     const byPid = new Map();
     aggSale.forEach((a) => {
       a.pack_cogs = a.pack_cogs || 0;
+      a.express_cogs = a.express_cogs || 0;
       let arr = byPid.get(a.pid);
       if (!arr) { arr = []; byPid.set(a.pid, arr); }
       arr.push(a);
     });
-    const addPack = (pid, amt) => {
+    const spread = (pid, amt, field) => {
       const arr = byPid.get(pid) || [];
       if (!arr.length) return;
       const each = amt / arr.length;
-      arr.forEach((a) => { a.pack_cogs += each; });
+      arr.forEach((a) => { a[field] += each; });
     };
     for (const o of rows) {
       const saleLines = (o.lines || []).filter((l) => l.line_type === "sale");
@@ -2481,18 +2535,18 @@ function renderOutGroup() {
       for (const l of o.lines || []) {
         if (l.line_type !== "pack") continue;
         if (l.sale_product_id == null) { unowned.push(l); continue; }
-        addPack(l.sale_product_id, l.cogs || 0);
+        spread(l.sale_product_id, l.cogs || 0, l.category === "快递" ? "express_cogs" : "pack_cogs");
       }
       if (unowned.length && saleLines.length) {
         for (const l of unowned) {
           for (const sl of saleLines) {
             const share = totalAmt ? (sl.amount || 0) / totalAmt : 1 / saleLines.length;
-            addPack(sl.product_id, (l.cogs || 0) * share);
+            spread(sl.product_id, (l.cogs || 0) * share, l.category === "快递" ? "express_cogs" : "pack_cogs");
           }
         }
       }
     }
-    aggSale.forEach((a) => { a.base_cogs = a.cogs; a.cogs = a.cogs + a.pack_cogs; });
+    aggSale.forEach((a) => { a.base_cogs = a.cogs; a.cogs = a.cogs + a.pack_cogs + (a.express_cogs || 0); });
   }
   const total = {
     amt: rows.reduce((s, o) => s + (o.total_amount || 0), 0),
@@ -2518,9 +2572,13 @@ function renderOutGroup() {
   else if (seg === "og-labor") { data = aggLabor; emptyText = "无人工记录"; }
   else if (seg === "og-laborpack") { isLaborPack = true; data = aggLaborPack; emptyText = "无打包人工/耗材记录"; }
   else { data = aggPack; emptyText = "无耗材/包装记录"; }
-  data = data.map((a) => ({ ...a, gp: (a.amount - a.cogs) || 0 }));
+  data = data.map((a) => {
+    const gp = (a.amount - a.cogs) || 0;
+    const gp_rate = a.amount ? (gp / a.amount) * 100 : 0; // 毛利率 = 毛利 / 销售金额(扣点前)
+    return { ...a, gp, gp_rate };
+  });
   if (t._sort) data = data.slice().sort((a, b) => compareVal(a[t._sort.key], b[t._sort.key]) * t._sort.dir);
-  const colSpan = isSale ? 7 : (isLaborPack ? 3 : 5);
+  const colSpan = isSale ? 8 : (isLaborPack ? 3 : 5);
   t.innerHTML = `<thead><tr>
     <th data-key="name">商品${sortArrow("ogTable", "name")}</th>
     <th data-key="order_count" class="num">单数${sortArrow("ogTable", "order_count")}</th>
@@ -2529,15 +2587,17 @@ function renderOutGroup() {
     ${isSale ? `<th data-key="amount" class="num">金额${sortArrow("ogTable", "amount")}</th>` : ""}
     <th data-key="cogs" class="num">成本${sortArrow("ogTable", "cogs")}</th>
     ${isSale ? `<th data-key="gp" class="num">毛利${sortArrow("ogTable", "gp")}</th>` : ""}
+    ${isSale ? `<th data-key="gp_rate" class="num">毛利率${sortArrow("ogTable", "gp_rate")}</th>` : ""}
   </tr></thead><tbody>` +
     (data.length ? data.map((a) => `<tr>
-      <td>${esc(a.name)}${(a.subSub || a.sub) ? `<div class="muted" style="font-size:12px;font-weight:normal;">${esc(a.subSub || a.sub)}</div>` : ""}${isSale && a.pack_cogs ? `<div class="muted" style="font-size:11px;color:var(--danger);">商品成本 ${fmtMoney(a.base_cogs ?? a.cogs)} ＋ 打包人工+耗材 ${fmtMoney(a.pack_cogs)}</div>` : ""}</td>
+      <td>${esc(a.name)}${(a.subSub || a.sub) ? `<div class="muted" style="font-size:12px;font-weight:normal;">${esc(a.subSub || a.sub)}</div>` : ""}${isSale && (a.pack_cogs || a.express_cogs) ? `<div class="muted" style="font-size:11px;color:var(--danger);">商品成本 ${fmtMoney(a.base_cogs ?? a.cogs)}${a.pack_cogs ? ` ＋ 打包人工+耗材 ${fmtMoney(a.pack_cogs)}` : ""}${a.express_cogs ? ` ＋ 快递费 ${fmtMoney(a.express_cogs)}` : ""}</div>` : ""}</td>
       <td class="num">${a.order_count} 单</td>
       ${isLaborPack ? "" : `<td>${esc(a.unit)}</td>`}
       ${isLaborPack ? "" : `<td class="num mono">${fmtNum(a.qty)}</td>`}
       ${isSale ? `<td class="num mono">${fmtMoney(a.amount)}</td>` : ""}
       <td class="num mono">${fmtMoney(a.cogs)}</td>
       ${isSale ? `<td class="num mono" style="color:${(a.amount - a.cogs) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(a.amount - a.cogs)}</td>` : ""}
+      ${isSale ? `<td class="num mono">${(a.gp_rate || 0).toFixed(1)}%</td>` : ""}
     </tr>`).join("")
       : `<tr><td colspan="${colSpan}" class="muted">${emptyText}</td></tr>`) + `</tbody>`;
   // 点击表头排序

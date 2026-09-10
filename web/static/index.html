@@ -58,7 +58,7 @@
         <button class="nav-item" data-page="products" data-type="order"><span class="nav-ico"><svg class="ic"><use href="#i-receipt"/></svg></span>关联结算</button>
         <button class="nav-item" data-page="products" data-cat="包材"><span class="nav-ico"><svg class="ic"><use href="#i-package"/></svg></span>包材</button>
         <button class="nav-item" data-page="products" data-cat="人工"><span class="nav-ico"><svg class="ic"><use href="#i-user"/></svg></span>人工</button>
-        <button class="nav-item" data-page="products" data-cat="快递"><span class="nav-ico"><svg class="ic"><use href="#i-truck"/></svg></span>快递</button>
+        <button class="nav-item" data-page="express"><span class="nav-ico"><svg class="ic"><use href="#i-truck"/></svg></span>快递费</button>
         <button class="nav-item" data-page="packrules"><span class="nav-ico"><svg class="ic"><use href="#i-link"/></svg></span>一单多货</button>
         <div class="nav-group">经营分析</div>
         <button class="nav-item" data-page="report"><span class="nav-ico"><svg class="ic"><use href="#i-chart"/></svg></span>财务报表</button>
@@ -457,6 +457,40 @@
             <button class="btn" onclick="batchFromImport('outbound')">导入出库（预览确认）</button>
           </div>
           <div id="impOutResult"></div>
+        </div>
+      </section>
+
+      <!-- 快递费规则 -->
+      <section id="page-express" class="page">
+        <div class="card">
+          <div class="card-head">
+            <h3><svg class="ic"><use href="#i-truck"/></svg> 快递费规则</h3>
+            <span class="hint">出库时按「整单毛重」自动计算快递费并计入销售成本。整单毛重 = 商品净重之和 + 每单箱体 0.1kg；商品净重由「扣减库存量」推导（重量类）</span>
+          </div>
+          <div class="toolbar">
+            <div class="field" style="grid-column:1/-1;"><label>计费方式</label>
+              <select id="expMode" onchange="previewExpress()">
+                <option value="tiered">首重 + 续重（1kg 内多少钱，每超 1kg 加收）</option>
+                <option value="flat">每 kg 单价</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-grid">
+            <div class="field"><label>1kg 以内（元）</label><input id="expFirst" type="number" step="0.01" min="0" oninput="previewExpress()" /><div class="field-hint">首重，如 3.6</div></div>
+            <div class="field"><label>每超 1kg 加收（元）</label><input id="expExtra" type="number" step="0.01" min="0" oninput="previewExpress()" /><div class="field-hint">续重，如 1</div></div>
+            <div class="field"><label>每 1kg 单价（元）</label><input id="expRate" type="number" step="0.01" min="0" oninput="previewExpress()" /><div class="field-hint">仅「每 kg 单价」方式使用</div></div>
+            <div class="field"><label><input id="expRoundUp" type="checkbox" onchange="previewExpress()" /> 续重按整 kg 向上取整</label><div class="field-hint">如 1.5kg 按 2kg 计费</div></div>
+          </div>
+          <div class="toolbar">
+            <button class="btn green" onclick="saveExpressRule()"><svg class="ic"><use href="#i-save"/></svg> 保存计费规则</button>
+            <button class="btn secondary" onclick="loadExpressPage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+            <span class="muted" id="expRateInfo"></span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>计费预览（毛重 = 净重 + 0.1kg 箱重）</h3></div>
+          <div id="expPreview" class="expr-preview"></div>
         </div>
       </section>
 

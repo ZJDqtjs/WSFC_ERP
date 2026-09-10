@@ -631,6 +631,11 @@ hr {
   min-height: 16px; 
 }
 
+.expr-preview { display: flex; flex-wrap: wrap; gap: 12px; padding: 6px 0; }
+.expr-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 150px; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+.expr-item .expr-w { font-size: 13px; color: var(--text-secondary); }
+.expr-item .expr-fee { font-size: 16px; font-weight: 700; color: var(--red, #dc2626); }
+
 .form-actions { 
   display: flex; 
   gap: 12px; 

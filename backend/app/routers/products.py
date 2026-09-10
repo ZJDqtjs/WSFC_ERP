@@ -35,6 +35,7 @@ class ProductIn(BaseModel):
     spec: str = ""
     sale_price: float = 0.0
     unit_cost: float = 0.0
+    weight_kg: float = 0.0  # 单件毛重(kg/默认单位)
     conversions: dict[str, float] = {}
     pack_items: list[PackItem] = []
     pack_fee: float = 0.0
@@ -59,6 +60,7 @@ def _to_dict(p: Product, db: Session | None = None) -> dict:
         "spec": p.spec,
         "sale_price": p.sale_price,
         "unit_cost": p.unit_cost,
+        "weight_kg": p.weight_kg or 0,
         "conversions": p.conversions or {},
         "pack_items": p.pack_items or [],
         "pack_fee": p.pack_fee,
@@ -175,6 +177,7 @@ def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = 
         spec=data.spec.strip(),
         sale_price=data.sale_price,
         unit_cost=data.unit_cost,
+        weight_kg=data.weight_kg,
         conversions=conversions,
         pack_items=[item.model_dump() for item in data.pack_items],
         pack_fee=data.pack_fee,
@@ -208,6 +211,7 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
     p.spec = data.spec.strip()
     p.sale_price = data.sale_price
     p.unit_cost = data.unit_cost
+    p.weight_kg = data.weight_kg
     p.conversions = data.conversions or default_conversions(data.base_unit)
     p.pack_items = [item.model_dump() for item in data.pack_items]
     p.pack_fee = data.pack_fee
