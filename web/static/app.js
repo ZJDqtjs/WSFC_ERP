@@ -2475,7 +2475,7 @@ function outAggBy(rows, pool) {
       if (!map.has(k)) {
         map.set(k, {
           product_id: k, pid: l.product_id, name, sub, unit,
-          orders: new Set(), qty: 0, qty_base: 0, amount: 0, cogs: 0, boxes: new Set(), hasBox: false,
+          orders: new Set(), qty: 0, qty_base: 0, amount: 0, cogs: 0, gross_sales: 0, boxes: new Set(), hasBox: false,
         });
       }
       const a = map.get(k);
@@ -2484,6 +2484,7 @@ function outAggBy(rows, pool) {
       a.qty_base += l.quantity_base || 0;
       a.amount += l.amount || 0;
       a.cogs += l.cogs || 0;
+      a.gross_sales += (l.gross_sales || l.amount || 0);
       if (!a.sub && sub) a.sub = sub;
       // 「打包人工+耗材」等池：收集该销售商品/规则组合命中的纸箱/耗材型号
       if (pool === "laborpack" && l.line_type === "pack" && !isLabor) {
@@ -2574,7 +2575,8 @@ function renderOutGroup() {
   else { data = aggPack; emptyText = "无耗材/包装记录"; }
   data = data.map((a) => {
     const gp = (a.amount - a.cogs) || 0;
-    const gp_rate = a.amount ? (gp / a.amount) * 100 : 0; // 毛利率 = 毛利 / 销售金额(扣点前)
+    const denom = a.gross_sales || a.amount || 0; // 扣点前销售金额
+    const gp_rate = denom ? (gp / denom) * 100 : 0; // 毛利率 = 毛利 / 扣点前销售金额
     return { ...a, gp, gp_rate };
   });
   if (t._sort) data = data.slice().sort((a, b) => compareVal(a[t._sort.key], b[t._sort.key]) * t._sort.dir);
@@ -3175,7 +3177,7 @@ function renderDraftReview(kind, r) {
       <table class="subtable">
         <thead><tr><th>商品</th><th>单位</th><th>数量</th><th>单价</th><th>金额</th></tr></thead>
         <tbody>${(o.lines || []).map((l) => `
-          <tr class="draft-line" data-pid="${l.product_id}" data-unit="${esc(l.unit)}">
+          <tr class="draft-line" data-pid="${l.product_id}" data-unit="${esc(l.unit)}" data-gross="${l.gross_sales || ""}">
             <td>${esc(l.product_name)}${l.deduct ? `<div class="muted" style="font-size:12px;">${esc(l.deduct)}</div>` : ""}</td>
             <td>${esc(l.unit)}</td>
             <td><input class="draft-qty" type="number" step="any" value="${l.quantity}" oninput="draftLineCalc(this)" style="width:80px;" /></td>
@@ -3215,7 +3217,8 @@ async function confirmDraft(kind) {
       const unit = tr.dataset.unit;
       const qty = parseFloat(tr.querySelector(".draft-qty").value);
       const price = parseFloat(tr.querySelector(".draft-price").value) || 0;
-      if (pid && unit && qty > 0) lines.push({ product_id: pid, unit, quantity: qty, price });
+      const gross = parseFloat(tr.dataset.gross) || 0;
+      if (pid && unit && qty > 0) lines.push({ product_id: pid, unit, quantity: qty, price, gross_sales: gross });
     });
     if (!lines.length) return;
     const packMap = window.__DRAFT_PACK__ || {};

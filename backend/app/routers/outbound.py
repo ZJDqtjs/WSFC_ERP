@@ -82,6 +82,7 @@ def _to_dict(o: Outbound) -> dict:
                 "unit_price": l.unit_price,
                 "amount": l.amount,
                 "cogs": l.cogs,
+                "gross_sales": l.gross_sales or 0,
                 "pack_fee": l.pack_fee,
                 "category": l.product.category if l.product else "",
                 "is_labor": bool(l.product and (l.product.category == "人工" or (l.product.name or "").strip().endswith("打包"))),

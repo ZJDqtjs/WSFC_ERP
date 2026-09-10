@@ -82,6 +82,8 @@ def migrate():
             conn.execute(text("ALTER TABLE outbound_lines ADD COLUMN sale_product_id INTEGER"))
         if "spec" not in lcols:
             conn.execute(text("ALTER TABLE outbound_lines ADD COLUMN spec VARCHAR(64) DEFAULT ''"))
+        if "gross_sales" not in lcols:
+            conn.execute(text("ALTER TABLE outbound_lines ADD COLUMN gross_sales FLOAT DEFAULT 0"))
         conn.commit()
     _backfill_sale_product()
     _backfill_pack_rule()
@@ -93,6 +95,43 @@ def migrate():
             conn.execute(text("ALTER TABLE pack_rules ADD COLUMN box_items JSON"))
             conn.commit()
     _backfill_pack_rule_box_items()
+    _backfill_gross_sales()
+
+
+def _backfill_gross_sales():
+    """历史出库销售行回填「扣点前销售金额」：按备注里的店铺扣点把 gross_sales=0 的扣点单行还原（幂等）。
+
+    新导入的单由 imports.py 在解析时精确截取扣点前金额，无需本回填；
+    此函数只针对修复前已导入（gross_sales 为 0）的扣点行做近似还原。
+    """
+    from .database import SessionLocal
+    from .models import Outbound
+
+    db = SessionLocal()
+    try:
+        for o in db.execute(select(Outbound)).scalars():
+            remark = o.remark or ""
+            if "扣点" not in remark:
+                continue
+            fixed = re.search(r"店铺扣点\s*([\d.]+)%", remark)
+            cat_map = {}
+            if "店铺分类扣点" in remark:
+                part = remark.split("店铺分类扣点", 1)[1]
+                for name, pct in re.findall(r"([^、()（）]+?)\s*([\d.]+)%", part):
+                    cat_map[name.strip()] = float(pct)
+            changed = False
+            for l in o.lines:
+                if l.line_type != "sale" or (l.gross_sales or 0) or not (l.amount or 0):
+                    continue
+                pct = float(fixed.group(1)) if fixed else (cat_map.get(l.product.category if l.product else "", 0) or 0)
+                if pct > 0:
+                    l.gross_sales = round(l.amount / (1 - pct / 100.0), 2)
+                    changed = True
+            if changed:
+                db.flush()
+        db.commit()
+    finally:
+        db.close()
 
 
 def _backfill_pack_rule_box_items():

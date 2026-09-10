@@ -492,6 +492,7 @@ class DraftLine(BaseModel):
     quantity: float
     price: float
     amount: float = 0.0
+    gross_sales: float = 0.0  # 扣点前销售金额（原始金额，未扣店铺扣点）
     deduct: str = ""  # 扣减说明（订单商品→库存商品）
     spec: str = ""  # 规格来源，如 每件2斤 / 每件1单
     stock_product_id: int | None = None  # 一单多货：扣减目标库存商品（大类），None=按订单商品自身关联
@@ -532,7 +533,7 @@ def _confirm_orders(db: Session, user: User, orders: list[DraftOrder]) -> dict:
                     "pack_rule_name": o.pack_rule_name,
                     "lines": [
                         {"product_id": l.product_id, "unit": l.unit, "quantity": l.quantity, "price": l.price, "spec": l.spec,
-                         "stock_product_id": l.stock_product_id, "multiplier": l.multiplier}
+                         "stock_product_id": l.stock_product_id, "multiplier": l.multiplier, "gross_sales": l.gross_sales}
                         for l in o.lines
                     ],
                     "pack_lines": o.pack_lines or [],
@@ -756,6 +757,8 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                 failed.append({"doc": o["doc_no"], "reason": "一单多货规则未关联到可用商品"})
                 continue
             _settle_revenue(sale_lines, o["amount"], batch_unit_price)
+            for ln in sale_lines:
+                ln["gross_sales"] = round(ln["amount"], 2)  # 扣点前的原始金额
             deducted = False
             if shop_rule:
                 for ln in sale_lines:
@@ -768,6 +771,7 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                 DraftLine(
                     product_id=ln["product"].id, product_name=ln["product"].name, unit=ln["unit"],
                     quantity=ln["qty"], price=ln["price"], amount=ln["amount"],
+                    gross_sales=ln.get("gross_sales") or ln["amount"],
                     deduct=f"一单多货：“{ln['ext_name']}”每件{fmt_qty(ln['per_item'])}{ln['unit']}",
                     spec=ln.get("spec", ""),
                     stock_product_id=ln.get("stock_product_id"),
@@ -828,6 +832,7 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
             else:
                 amt = revenue * qb / sum_qb if sum_qb > 0 else 0
             amt = round(amt, 2)
+            gross_amount = amt  # 扣点前的原始金额
             # 店铺扣点：命中店铺规则时，按扣减库存分类扣减该行收入（如 卖家实收 × (1 - 扣点%)）
             if shop_rule:
                 pct = _shop_line_percent(shop_rule, _line_deduct_stock_category(db, ln["p"]))
@@ -838,7 +843,8 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                 DraftLine(
                     product_id=ln["p"].id, product_name=ln["p"].name, unit=ln["unit"],
                     quantity=ln["qty"], price=round(amt / ln["qty"], 4) if ln["qty"] else 0,
-                    amount=amt, deduct=f"{ln['ext_name']} 每件{fmt_qty(ln['per_item'])}{ln['unit']}" if ln["per_item"] else "",
+                    amount=amt, gross_sales=gross_amount,
+                    deduct=f"{ln['ext_name']} 每件{fmt_qty(ln['per_item'])}{ln['unit']}" if ln["per_item"] else "",
                     spec=f"每件{fmt_qty(ln['per_item'])}{ln['unit']}" if ln["per_item"] else "",
                 )
             )

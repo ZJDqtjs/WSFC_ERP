@@ -334,6 +334,7 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
             spec = getattr(ln, "spec", "") or ""
             ov_sp = getattr(ln, "stock_product_id", None)
             ov_mult = getattr(ln, "multiplier", 1.0)
+            gross = getattr(ln, "gross_sales", None)
         else:  # dict（批量导入）
             pid, unit, quantity = ln["product_id"], ln["unit"], ln["quantity"]
             price = float(ln.get("price", 0) or 0)
@@ -341,6 +342,7 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
             spec = ln.get("spec", "") or ""
             ov_sp = ln.get("stock_product_id")
             ov_mult = ln.get("multiplier", 1.0)
+            gross = ln.get("gross_sales")
         p = db.get(Product, pid)
         if not p:
             raise ValueError("商品不存在")
@@ -348,6 +350,8 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
             raise ValueError(f"「{p.name}」数量必须大于 0")
         qty_base = unit_to_base(p, unit, quantity)
         amount = round(quantity * price, 2)
+        # 扣点前销售金额（原始金额）：导入扣点单传入；否则等于实际销售金额
+        gross_sales = round(float(gross), 2) if gross and float(gross) > 0 else amount
         # 扣减目标：一单多货规则如指定库存大类则按其扣减；否则按订单商品关联的库存商品（大类），未关联则扣减自身
         target, deduction_base = _deduct_with_override(db, p, qty_base, ov_sp, ov_mult)
         # 订单/库存商品净重优先由「扣减库存量」推导（如 七彩花生2斤 → 扣 1kg 库存 → 净重 1kg）；
@@ -365,7 +369,7 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
                 "unit": unit, "quantity": quantity, "quantity_base": qty_base,
                 "stock_product_id": target.id, "stock_product_name": target.name,
                 "deduction_base": deduction_base,
-                "unit_price": price, "amount": amount, "cogs": cogs, "pack_fee": fee,
+                "unit_price": price, "amount": amount, "cogs": cogs, "pack_fee": fee, "gross_sales": gross_sales,
                 "line_type": "sale", "spec": spec,
             }
         )
@@ -526,6 +530,7 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
                 unit_price=r["unit_price"],
                 amount=r["amount"],
                 cogs=r["cogs"],
+                gross_sales=r.get("gross_sales", 0) or 0,
                 pack_fee=r["pack_fee"],
             )
         )
