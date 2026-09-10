@@ -662,6 +662,59 @@ def _line_deduct_stock_category(db: Session, p: Product | None, stock_product_id
     return (p.category if p else "") or ""
 
 
+def _resolve_jst_product(db: Session, mapping_by_code: dict[str, CodeMapping], ext_name: str) -> Product | None:
+    """聚水潭商品名 → 系统商品：优先编码关联，回退按名称/编码精确匹配。"""
+    m = mapping_by_code.get(ext_name)
+    pid = m.product_id if m else None
+    p = db.get(Product, pid) if pid else None
+    if not p:
+        # 未配置编码关联时，回退按商品名称/编码精确匹配（如「佛手柑中果2个」）
+        p = db.scalar(select(Product).where(or_(Product.name == ext_name, Product.code == ext_name)))
+    return p
+
+
+def _collect_batch_unit_price(db: Session, orders: list[dict], mapping_by_code: dict[str, CodeMapping]) -> dict[int, float]:
+    """从单种商品的订单推导每个商品的实收单价（每基础单位），供一单多货按实际单价拆分。
+
+    例：同批次单件单「香菇干货500g*1 实收37」→ 香菇单价37；组合单「虫草花1+香菇3 实收147」
+    按 37×3 : 36×1 分摊，而不是按数量均分 147/4。组合单（含多种商品）不参与推导。
+    """
+    prices: dict[int, float] = {}
+    for o in orders:
+        items = parse_jushuitan_name(o["name"])
+        if not items or not o["amount"]:
+            continue
+        pid = None
+        total_qb = 0.0
+        for ext_name, qty in items:
+            p = _resolve_jst_product(db, mapping_by_code, ext_name)
+            if not p:
+                pid = None
+                break
+            unit, per_item = pick_jst_unit(p, ext_name)
+            if unit is None or per_item is None or unit not in (p.conversions or {}):
+                pid = None
+                break
+            qb = unit_to_base(p, unit, round(qty * per_item, 4))
+            if pid is None:
+                pid = p.id
+            elif pid != p.id:
+                pid = None  # 一单多货（含多种商品）金额无法拆分到商品级，不参与推导
+                break
+            total_qb += qb
+        if pid is not None and total_qb > 0:
+            prices.setdefault(pid, o["amount"] / total_qb)
+    return prices
+
+
+def _line_price_weight(p: Product, qb: float, batch_unit_price: dict[int, float]) -> float:
+    """该行分摊权重：单价 × 数量。单价优先取本批次实收单价，回退商品默认售价；均无则为 0（按数量均分）。"""
+    price = batch_unit_price.get(p.id)
+    if not price:
+        price = p.sale_price or 0
+    return float(price or 0) * qb
+
+
 def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: tuple | None = ("已出库",)) -> tuple[list[DraftOrder], list[dict], dict, set]:
     """解析聚水潭出库单 → 草稿单（不建单）。
 
@@ -677,6 +730,7 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
     unmatched_multi: dict[str, dict] = {}
     rule_map = _load_pack_rule_map(db)
     shop_deductions = _load_shop_deductions()
+    batch_unit_price = _collect_batch_unit_price(db, orders, mapping_by_code)
     for o in orders:
         order_items = parse_jushuitan_name(o["name"])
         shop_rule = shop_deductions.get(o["shop"])
@@ -701,7 +755,7 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
             if not sale_lines:
                 failed.append({"doc": o["doc_no"], "reason": "一单多货规则未关联到可用商品"})
                 continue
-            _settle_revenue(sale_lines, o["amount"])
+            _settle_revenue(sale_lines, o["amount"], batch_unit_price)
             deducted = False
             if shop_rule:
                 for ln in sale_lines:
@@ -734,12 +788,7 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
             continue
         lines = []
         for ext_name, qty in order_items:
-            m = mapping_by_code.get(ext_name)
-            pid = m.product_id if m else None
-            p = db.get(Product, pid) if pid else None
-            if not p:
-                # 未配置编码关联时，回退按商品名称/编码精确匹配（如「佛手柑中果2个」）
-                p = db.scalar(select(Product).where(or_(Product.name == ext_name, Product.code == ext_name)))
+            p = _resolve_jst_product(db, mapping_by_code, ext_name)
             if not p:
                 unmapped_codes.add(ext_name)
                 d = unmapped_detail.setdefault(ext_name, {"external_code": ext_name, "count": 0})
@@ -761,14 +810,14 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
             failed.append({"doc": o["doc_no"], "reason": "无已关联商品（未关联编码）"})
             continue
 
-        # 金额按商品默认售价比例分摊卖家实收
+        # 金额按商品实收单价/默认售价比例分摊卖家实收（一单多货按各自单价拆分，避免均分）
         revenue = o["amount"]
         qty_bases, raws = [], []
         for ln in lines:
             qb = unit_to_base(ln["p"], ln["unit"], ln["qty"])
             ln["qty_base"] = qb
             qty_bases.append(qb)
-            raws.append(ln["p"].sale_price * qb)
+            raws.append(_line_price_weight(ln["p"], qb, batch_unit_price))
         sum_raw = sum(raws)
         sum_qb = sum(qty_bases)
         draft_lines = []
@@ -1132,13 +1181,14 @@ def _pack_rule_settle(db: Session, rule: PackRule, order_items: list[tuple[str, 
     return sale_lines, pack_lines, labor_fee, issues
 
 
-def _settle_revenue(sale_lines: list[dict], revenue: float) -> None:
-    """按商品默认售价比例把实收金额分摊到各销售行（sale_lines 内写 qty_base / price / amount）。"""
+def _settle_revenue(sale_lines: list[dict], revenue: float, price_map: dict[int, float] | None = None) -> None:
+    """按商品实收单价/默认售价比例把实收金额分摊到各销售行（sale_lines 内写 qty_base / price / amount）。"""
+    price_map = price_map or {}
     total = 0.0
     for ln in sale_lines:
         qb = unit_to_base(ln["product"], ln["unit"], ln["qty"])
         ln["qty_base"] = qb
-        ln["_raw"] = ln["product"].sale_price * qb
+        ln["_raw"] = _line_price_weight(ln["product"], qb, price_map)
         total += ln["_raw"]
     if total <= 0:
         total = sum(ln["qty_base"] for ln in sale_lines)
