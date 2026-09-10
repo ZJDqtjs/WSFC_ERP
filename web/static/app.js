@@ -283,14 +283,96 @@ function goPage(name) {
   };
   (loaders[name] || (() => {}))();
 }
-/* 扣点页面功能尚未实现；占位同名函数以避免 goPage/按钮引用未定义标识符导致全局跳转崩溃 */
-function loadDeductionPage() {
-  const t = document.getElementById("deducTable");
-  if (t) t.innerHTML = `<tr><td colspan="2" class="empty">扣点功能尚未实现</td></tr>`;
+/* =============== 扣点设置 =============== */
+async function loadDeductionPage() {
+  try {
+    if (!PRODUCTS.length) PRODUCTS = await api("/api/products");
+    const [list, shops] = await Promise.all([
+      api("/api/deductions"),
+      api("/api/deductions/shops"),
+    ]);
+    window.__DEDUC_LIST__ = list;
+    renderDeducTable(list);
+    renderShopDeducTable(shops.rules || []);
+  } catch (e) { toast("加载扣点失败：" + e.message); }
 }
-function deducAdd() { toast("扣点功能尚未实现"); }
-function deducEdit() { toast("扣点功能尚未实现"); }
-function deducDel() { toast("扣点功能尚未实现"); }
+function deducCategories() {
+  return [...new Set((PRODUCTS || []).map((p) => p.category).filter(Boolean))].sort();
+}
+function renderDeducTable(list) {
+  const t = $("deducTable");
+  if (!t) return;
+  t.innerHTML = `<thead><tr>
+    <th>商品类别</th><th class="num">扣点 %</th><th>备注</th><th>操作</th>
+  </tr></thead><tbody>` +
+    (list.length ? list.map((d) => `<tr>
+      <td>${esc(d.category)}</td>
+      <td class="num"><span class="badge" style="background:var(--primary,#2563eb);color:#fff;">${Number(d.percent).toFixed(2)}%</span></td>
+      <td class="muted">${esc(d.remark || "")}</td>
+      <td class="line-actions">
+        <button class="btn sm secondary" onclick="deducEdit(${d.id})">编辑</button>
+        <button class="btn sm danger" onclick="deducDelete(${d.id}, '${esc(d.category)}')">删除</button>
+      </td></tr>`).join("")
+      : `<tr><td colspan="4" class="empty">暂无扣点规则，点击「新增扣点」配置（如 蔬菜 7%）</td></tr>`) +
+    `</tbody>`;
+}
+function renderShopDeducTable(rules) {
+  const t = $("shopDeducTable");
+  if (!t) return;
+  t.innerHTML = `<thead><tr>
+    <th>店铺名称</th><th>扣点规则</th>
+  </tr></thead><tbody>` +
+    (rules.length ? rules.map((r) => {
+      const badge = (v) => `<span class="badge" style="background:var(--ok,#16a34a);color:#fff;">${Number(v).toFixed(2)}%</span>`;
+      const desc = r.percent != null
+        ? `固定扣 ${badge(r.percent)}`
+        : `按扣减库存分类 ${Object.entries(r.categories || {}).map(([k, v]) => `${esc(k)} ${badge(v)}`).join("、")}`;
+      return `<tr>
+        <td>${esc(r.shop)}</td>
+        <td>${desc}<div class="muted" style="font-size:12px;margin-top:4px;">聚水潭订单导入时从「卖家实收」中扣除；在 backend/json/deduction_config.json 中修改后立即生效</div></td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="2" class="empty">未配置店铺扣点规则（backend/json/deduction_config.json）</td></tr>`) +
+    `</tbody>`;
+}
+function deducFormHtml(d) {
+  d = d || {};
+  return `<h3>${d.id ? "编辑扣点" : "新增扣点"} <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="field"><label>商品类别</label>
+      <input id="deducCat" list="deducCatList" value="${esc(d.category || "")}" placeholder="如 蔬菜 / 干货" />
+      <datalist id="deducCatList">${deducCategories().map((c) => `<option value="${esc(c)}"></option>`).join("")}</datalist>
+    </div>
+    <div class="field"><label>扣点百分比（0 ~ 99.99）</label>
+      <input id="deducPercent" type="number" min="0" max="99.99" step="0.01" value="${d.percent != null ? d.percent : ""}" />
+      <div class="field-hint">入库单价 = 进货单价 × (1 − 扣点%)，如 7% → 3.5 元按 3.255 元入库</div>
+    </div>
+    <div class="field"><label>备注</label><input id="deducRemark" value="${esc(d.remark || "")}" placeholder="可选" /></div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn green" onclick="deducSave(${d.id || 0})">保存</button>
+    </div>`;
+}
+function deducAdd() { openModal(deducFormHtml()); }
+function deducEdit(id) {
+  const d = (window.__DEDUC_LIST__ || []).find((x) => x.id === id);
+  openModal(deducFormHtml(d));
+}
+async function deducSave(id) {
+  const category = ($("deducCat").value || "").trim();
+  const percent = parseFloat($("deducPercent").value);
+  if (!category) { toast("请填写商品类别"); return; }
+  if (isNaN(percent) || percent < 0 || percent >= 100) { toast("扣点百分比需在 0 ~ 100 之间"); return; }
+  try {
+    await api("/api/deductions", "POST", { category, percent, remark: $("deducRemark").value || "" });
+    toast("已保存扣点规则"); closeModal(); loadDeductionPage();
+  } catch (e) { toast("保存失败：" + e.message); }
+}
+async function deducDelete(id, category) {
+  if (!confirm(`确认删除「${category}」的扣点规则？删除后该类别入库将不再折算。`)) return;
+  try {
+    await api("/api/deductions/" + id, "DELETE");
+    toast("已删除"); loadDeductionPage();
+  } catch (e) { toast("删除失败：" + e.message); }
+}
 document.querySelectorAll(".nav-item").forEach((b) => b.addEventListener("click", () => {
   if (b.dataset.page === "products") {
     prodForceCat = b.dataset.cat || "";
