@@ -121,6 +121,15 @@ def export_payload(db, kind: str) -> dict:
                     }
                     for it in (r.items or [])
                 ],
+                # 箱型号关联的包材纸箱清单：name 为箱型号显示名（如 7号），product 为包材商品名
+                "box_items": [
+                    {
+                        "name": str(b.get("name") or ""),
+                        "product": (db.get(Product, b.get("product_id")).name if b.get("product_id") and db.get(Product, b.get("product_id")) else ""),
+                        "quantity": b.get("quantity", 1),
+                    }
+                    for b in (r.box_items or [])
+                ],
                 "box_type": r.box_type,
                 "labor_price": r.labor_price, "box_ratio": r.box_ratio,
                 "remark": r.remark, "is_active": r.is_active,
@@ -283,6 +292,21 @@ def _import_pack_rules(db, items) -> dict:
                 "multiplier": float(ri.get("multiplier", 1) or 1),
             })
         r.items = rule_items
+        # 箱型号关联的包材纸箱清单（按名称解析；旧 json 无此字段时不覆盖现有）
+        if "box_items" in it:
+            box_items = []
+            for bi in (it.get("box_items") or []):
+                pname = str(bi.get("product", "")).strip()
+                mp = _get_product_by_name(db, pname) if pname else None
+                if pname and not mp:
+                    warnings.append(f"规则「{name}」的包材商品「{pname}」不存在，已跳过")
+                    continue
+                box_items.append({
+                    "product_id": mp.id if mp else None,
+                    "name": str(bi.get("name") or (pname or "")),
+                    "quantity": float(bi.get("quantity", 1) or 1),
+                })
+            r.box_items = box_items
         r.box_type = str(it.get("box_type", "")).strip()
         lp = it.get("labor_price")
         r.labor_price = float(lp) if lp is not None else None
