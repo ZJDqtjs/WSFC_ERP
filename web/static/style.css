@@ -635,6 +635,8 @@ hr {
 .expr-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 150px; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
 .expr-item .expr-w { font-size: 13px; color: var(--text-secondary); }
 .expr-item .expr-fee { font-size: 16px; font-weight: 700; color: var(--red, #dc2626); }
+.shop-cat-row { display: flex; gap: 8px; align-items: center; }
+.shop-cat-row input { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; font-size: 13px; background: var(--card); color: var(--text); outline: none; font-family: inherit; }
 
 .form-actions { 
   display: flex; 

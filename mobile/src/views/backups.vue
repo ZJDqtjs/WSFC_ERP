@@ -1,6 +1,9 @@
 <template>
   <div>
-    <sub-header title="备份与恢复" />
+    <header class="b-header">
+      <span class="back" @click="$router.back()">←</span>
+      <span>备份与恢复</span>
+    </header>
 
     <div class="card">
       <div class="card-title">自动备份</div>
@@ -44,7 +47,6 @@
 import { ref, onMounted } from 'vue'
 import { showToast, showConfirmDialog } from 'vant'
 import api from '../api'
-import SubHeader from '../components/sub-header.vue'
 
 const enabled = ref(true), interval = ref(2), keep = ref(30)
 const savingCfg = ref(false), backingUp = ref(false)
@@ -100,6 +102,8 @@ onMounted(load)
 </script>
 
 <style scoped>
+.b-header { display: flex; align-items: center; gap: 8px; height: 46px; background: #1989fa; color: #fff; font-weight: 600; font-size: 16px; padding: 0 12px; margin: -12px -12px 12px; }
+.back { cursor: pointer; font-size: 18px; }
 .set-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; }
 .empty { color: #969799; text-align: center; padding: 16px 0; }
 .bk-item { padding: 10px 0; border-bottom: 1px solid #f5f5f5; }

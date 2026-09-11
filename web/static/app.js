@@ -279,10 +279,19 @@ function goPage(name) {
     home: loadDashboard, stock: loadStock, inbound: initInbound, outbound: initOutbound,
     products: renderProducts, report: loadReport, import: loadImportPage, jushuitan: loadMappingPage,
     backup: loadBackupPage, fresh: loadFresh, packrules: loadPackRules, pdata: loadPdataPage,
-    deduction: loadDeductionPage, express: loadExpressPage,
+    deduction: loadDeductionPage, express: loadExpressPage, settings: loadSettingsPage,
   };
   (loaders[name] || (() => {}))();
 }
+/* 设置二级页面：商品资料备份 / 备份与恢复 / 批量导入 / 聚水潭关联 */
+function switchSettingsTab(panel) {
+  document.querySelectorAll("#settingsSeg .seg-item").forEach((x) => x.classList.toggle("active", x.dataset.panel === panel));
+  document.querySelectorAll("#page-settings .settings-panel").forEach((x) => { x.style.display = x.dataset.panel === panel ? "" : "none"; });
+  if (panel === "pdata") loadPdataPage();
+  else if (panel === "backup") loadBackupPage();
+  else if (panel === "jushuitan") loadMappingPage();
+}
+async function loadSettingsPage() { switchSettingsTab("pdata"); }
 /* =============== 快递费规则 =============== */
 function currentExprCfg() {
   return {
@@ -367,8 +376,9 @@ function renderDeducTable(list) {
 function renderShopDeducTable(rules) {
   const t = $("shopDeducTable");
   if (!t) return;
+  window.__SHOP_DEDUC__ = rules || [];
   t.innerHTML = `<thead><tr>
-    <th>店铺名称</th><th>扣点规则</th>
+    <th>店铺名称</th><th>扣点规则</th><th>操作</th>
   </tr></thead><tbody>` +
     (rules.length ? rules.map((r) => {
       const badge = (v) => `<span class="badge" style="background:var(--ok,#16a34a);color:#fff;">${Number(v).toFixed(2)}%</span>`;
@@ -377,9 +387,13 @@ function renderShopDeducTable(rules) {
         : `按扣减库存分类 ${Object.entries(r.categories || {}).map(([k, v]) => `${esc(k)} ${badge(v)}`).join("、")}`;
       return `<tr>
         <td>${esc(r.shop)}</td>
-        <td>${desc}<div class="muted" style="font-size:12px;margin-top:4px;">聚水潭订单导入时从「卖家实收」中扣除；在 backend/json/deduction_config.json 中修改后立即生效</div></td>
+        <td>${desc}<div class="muted" style="font-size:12px;margin-top:4px;">聚水潭订单导入时按「店铺名称」从「卖家实收」中扣除</div></td>
+        <td class="line-actions">
+          <button class="btn sm secondary" onclick="shopDeducEdit('${esc(r.shop)}')">编辑</button>
+          <button class="btn sm danger" onclick="shopDeducDelete('${esc(r.shop)}')">删除</button>
+        </td>
       </tr>`;
-    }).join("") : `<tr><td colspan="2" class="empty">未配置店铺扣点规则（backend/json/deduction_config.json）</td></tr>`) +
+    }).join("") : `<tr><td colspan="3" class="empty">未配置店铺扣点规则</td></tr>`) +
     `</tbody>`;
 }
 function deducFormHtml(d) {
@@ -418,6 +432,88 @@ async function deducDelete(id, category) {
   if (!confirm(`确认删除「${category}」的扣点规则？删除后该类别入库将不再折算。`)) return;
   try {
     await api("/api/deductions/" + id, "DELETE");
+    toast("已删除"); loadDeductionPage();
+  } catch (e) { toast("删除失败：" + e.message); }
+}
+/* ---------- 店铺扣点：新增/编辑/删除（写入 deduction_config.json，实时生效） ---------- */
+function shopDeducShopList() {
+  return [...new Set((window.__SHOP_DEDUC__ || []).map((r) => r.shop))].sort();
+}
+function shopCatRowHtml(k, v) {
+  return `<div class="shop-cat-row">
+      <input class="sdc-cat" list="deducCatList" value="${esc(k || "")}" placeholder="分类，如 蔬菜" style="flex:1;" />
+      <input class="sdc-pct" type="number" min="0" step="0.01" value="${v != null ? v : ""}" placeholder="%" style="width:90px;" />
+      <button class="btn danger sm" onclick="this.closest('.shop-cat-row').remove()">删</button>
+    </div>`;
+}
+function shopCatAddRow() {
+  const box = $("shopDeducRows"); if (!box) return;
+  box.insertAdjacentHTML("beforeend", shopCatRowHtml("", ""));
+}
+function shopDeducTypeChanged() {
+  const fixed = $("shopDeducType").value === "fixed";
+  $("shopDeducFixed").style.display = fixed ? "" : "none";
+  $("shopDeducCatBox").style.display = fixed ? "none" : "";
+}
+function shopDeducFormHtml(r) {
+  r = r || {};
+  const fixed = r.percent != null;
+  const shops = shopDeducShopList().map((s) => `<option value="${esc(s)}"></option>`).join("");
+  return `<h3>${r.shop ? "编辑店铺扣点" : "新增店铺扣点"} <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="field"><label>店铺名称</label>
+      <input id="shopDeducShop" list="shopDeducList" value="${esc(r.shop || "")}" placeholder="如：梓云茶蔬菜源头直发京东自营专区" />
+      <datalist id="shopDeducList">${shops}</datalist>
+      <div class="field-hint">聚水潭出库单按「店铺名称」自动扣减订单收入</div>
+    </div>
+    <div class="field"><label>规则类型</label>
+      <select id="shopDeducType" onchange="shopDeducTypeChanged()">
+        <option value="fixed" ${fixed ? "selected" : ""}>固定扣点（该店所有商品统一扣 %）</option>
+        <option value="category" ${!fixed ? "selected" : ""}>按扣减库存分类扣点</option>
+      </select>
+    </div>
+    <div id="shopDeducFixed"><div class="field"><label>固定扣点 %（0 ~ 99.99）</label><input id="shopDeducPercent" type="number" min="0" step="0.01" value="${fixed ? r.percent : ""}" /></div></div>
+    <div id="shopDeducCatBox" style="display:${fixed ? "none" : ""};">
+      <label style="font-size:13px;color:var(--text-secondary);">按分类扣点</label>
+      <div id="shopDeducRows" style="display:flex;flex-direction:column;gap:8px;">${Object.entries(r.categories || {}).map(([k, v]) => shopCatRowHtml(k, v)).join("")}</div>
+      <button class="btn sm secondary" onclick="shopCatAddRow()" style="margin-top:8px;">＋ 加一行分类</button>
+    </div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn green" onclick="shopDeducSave()">保存</button>
+    </div>`;
+}
+function shopDeducAdd() { openModal(shopDeducFormHtml()); }
+function shopDeducEdit(shop) {
+  const r = (window.__SHOP_DEDUC__ || []).find((x) => (x.shop || "").trim() === (shop || "").trim());
+  openModal(shopDeducFormHtml(r || { shop }));
+}
+async function shopDeducSave() {
+  const shop = ($("shopDeducShop").value || "").trim();
+  if (!shop) { toast("请填写店铺名称"); return; }
+  const payload = { shop };
+  if ($("shopDeducType").value === "fixed") {
+    const pct = parseFloat($("shopDeducPercent").value);
+    if (isNaN(pct) || pct < 0 || pct >= 100) { toast("固定扣点需在 0 ~ 100 之间（不含 100）"); return; }
+    payload.percent = pct;
+  } else {
+    const cats = {};
+    document.querySelectorAll("#shopDeducRows .shop-cat-row").forEach((row) => {
+      const k = row.querySelector(".sdc-cat").value.trim();
+      const v = parseFloat(row.querySelector(".sdc-pct").value);
+      if (k && !isNaN(v) && v > 0) cats[k] = v;
+    });
+    if (!Object.keys(cats).length) { toast("请至少填写一个分类扣点"); return; }
+    payload.categories = cats;
+  }
+  try {
+    await api("/api/deductions/shops", "POST", payload);
+    toast("店铺扣点已保存（实时生效）"); closeModal(); loadDeductionPage();
+  } catch (e) { toast("保存失败：" + e.message); }
+}
+async function shopDeducDelete(shop) {
+  if (!confirm(`确认删除店铺「${shop}」的扣点规则？删除后该店订单不再折算。`)) return;
+  try {
+    await api("/api/deductions/shops/" + encodeURIComponent(shop), "DELETE");
     toast("已删除"); loadDeductionPage();
   } catch (e) { toast("删除失败：" + e.message); }
 }

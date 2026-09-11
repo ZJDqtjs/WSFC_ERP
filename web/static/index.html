@@ -64,12 +64,9 @@
         <button class="nav-item" data-page="report"><span class="nav-ico"><svg class="ic"><use href="#i-chart"/></svg></span>财务报表</button>
         <div class="nav-group">数据工具</div>
         <button class="nav-item" data-page="fresh"><span class="nav-ico"><svg class="ic"><use href="#i-truck"/></svg></span>鲜货现采</button>
-        <button class="nav-item" data-page="jushuitan"><span class="nav-ico"><svg class="ic"><use href="#i-link"/></svg></span>聚水潭关联</button>
-        <button class="nav-item" data-page="import"><span class="nav-ico"><svg class="ic"><use href="#i-database"/></svg></span>批量导入</button>
         <button class="nav-item" data-page="deduction"><span class="nav-ico"><svg class="ic"><use href="#i-coins"/></svg></span>扣点</button>
-        <button class="nav-item" data-page="backup"><span class="nav-ico"><svg class="ic"><use href="#i-save"/></svg></span>备份与恢复</button>
         <div class="nav-group">设置</div>
-        <button class="nav-item" data-page="pdata"><span class="nav-ico"><svg class="ic"><use href="#i-sliders"/></svg></span>商品资料备份</button>
+        <button class="nav-item" data-page="settings"><span class="nav-ico"><svg class="ic"><use href="#i-sliders"/></svg></span>设置</button>
       </nav>
       <div class="side-user">
         <div class="user-avatar" id="userAvatar">管</div>
@@ -421,42 +418,134 @@
         </div>
       </section>
 
-      <!-- 批量导入 -->
-      <section id="page-import" class="page">
+      <!-- 设置（二级页面：商品资料备份 / 备份与恢复 / 批量导入 / 聚水潭关联） -->
+      <section id="page-settings" class="page">
         <div class="card">
-          <div class="card-head"><h3>导入模板下载</h3></div>
-          <div class="toolbar">
-            <button class="btn secondary" onclick="downloadTpl('products')"><svg class="ic"><use href="#i-download"/></svg> 商品导入模板</button>
-            <button class="btn secondary" onclick="downloadTpl('inbounds')"><svg class="ic"><use href="#i-download"/></svg> 入库导入模板</button>
-            <button class="btn secondary" onclick="downloadTpl('outbounds')"><svg class="ic"><use href="#i-download"/></svg> 出库导入模板</button>
-          </div>
-          <div class="alert ok" style="margin-top:10px;">商品模板兼容「柠檬云商品导入模板.xlsx」，整表上传自动识别（编码/类别/名称/规格/单位）。</div>
-        </div>
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-head"><h3>商品批量导入</h3></div>
-            <div class="toolbar">
-              <input type="file" id="impProdFile" accept=".xlsx" />
-              <button class="btn" onclick="doImport('products')">导入商品</button>
-            </div>
-            <div id="impProdResult"></div>
-          </div>
-          <div class="card">
-            <div class="card-head"><h3>入库批量导入</h3></div>
-            <div class="toolbar">
-              <input type="file" id="impInFile" accept=".xlsx" />
-              <button class="btn" onclick="batchFromImport('inbound')">导入入库（预览确认）</button>
-            </div>
-            <div id="impInResult"></div>
+          <div class="seg" id="settingsSeg">
+            <button class="seg-item active" data-panel="pdata" onclick="switchSettingsTab('pdata')">商品资料备份</button>
+            <button class="seg-item" data-panel="backup" onclick="switchSettingsTab('backup')">备份与恢复</button>
+            <button class="seg-item" data-panel="import" onclick="switchSettingsTab('import')">批量导入</button>
+            <button class="seg-item" data-panel="jushuitan" onclick="switchSettingsTab('jushuitan')">聚水潭关联</button>
           </div>
         </div>
-        <div class="card">
-          <div class="card-head"><h3>出库批量导入 <span class="hint">同「单号」自动合并为一单，自动结转关联材料与费用</span></h3></div>
-          <div class="toolbar">
-            <input type="file" id="impOutFile" accept=".xlsx" />
-            <button class="btn" onclick="batchFromImport('outbound')">导入出库（预览确认）</button>
+
+        <div class="settings-panel" data-panel="pdata">
+          <div class="card">
+            <div class="card-head">
+              <h3>商品资料备份（解耦维护）</h3>
+              <span class="hint" id="pdataDir"></span>
+              <div class="grow"></div>
+              <button class="btn green" onclick="pdataExportAll()"><svg class="ic"><use href="#i-save"/></svg> 一键导出到 json 目录</button>
+              <button class="btn" onclick="pdataImportAll()"><svg class="ic"><use href="#i-refresh"/></svg> 从 json 目录一键导入</button>
+            </div>
+            <p class="hint" style="margin-top:8px;">商品资料按「数据表」拆分为 5 个 JSON 独立保存于 <code>backend/json</code>（后端项目中，商品资料备份目录），商品间相互引用用「名称」表达，可跨库/跨设备迁移。各业务页也提供单独的「导出 JSON」按钮。</p>
+            <div class="alert ok" style="margin-top:8px;" id="pdataNote">
+              独立脚本命令：<code>cd backend && uv run python sync_product_data.py export|import|status</code>（在 backend 目录执行，存在 json 时一键导入）。
+            </div>
           </div>
-          <div id="impOutResult"></div>
+
+          <div class="card">
+            <div class="card-head"><h3>5 类商品资料</h3><span class="hint">json 目录与数据库对照；点击「下载」保存单个 json，"导入"从 json 目录读入该类</span></div>
+            <div class="table-wrap"><table id="pdataTable"></table></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>从本地上传 json 导入</h3><span class="hint">可在任意电脑编辑 json 后上传，按名称导入（upsert），便于手动维护与迁移</span></div>
+            <div class="toolbar">
+              <input type="file" id="pdataUploadFile" accept=".json,.txt" />
+              <button class="btn" onclick="pdataUploadImport()"><svg class="ic"><use href="#i-refresh"/></svg> 上传并导入</button>
+              <span class="grow"></span>
+              <button class="btn secondary" onclick="loadPdataPage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新状态</button>
+            </div>
+            <div id="pdataResult" style="margin-top:10px;"></div>
+          </div>
+        </div>
+
+        <div class="settings-panel" data-panel="backup" style="display:none;">
+          <div class="card">
+            <div class="card-head"><h3>自动备份设置</h3><span class="hint">默认开启，每 2 小时备份一次到 data/backups，超出保留份数自动清理旧备份</span></div>
+            <div class="toolbar">
+              <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
+                <input type="checkbox" id="bkEnabled" /> 开启自动备份
+              </label>
+              <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
+                每 <input type="number" id="bkInterval" min="0.5" step="0.5" style="width:72px;" /> 小时备份
+              </label>
+              <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
+                保留 <input type="number" id="bkKeep" min="1" style="width:72px;" /> 份
+              </label>
+              <button class="btn" onclick="saveBkConfig()">保存设置</button>
+              <div class="grow"></div>
+              <button class="btn green" onclick="createBackup()"><svg class="ic"><use href="#i-save"/></svg> 立即备份</button>
+            </div>
+            <p class="hint" id="bkStatus" style="margin-top:10px;"></p>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>备份列表</h3><span class="hint">恢复会用所选备份覆盖当前数据库，请谨慎操作</span></div>
+            <div class="table-wrap"><table id="bkTable"></table></div>
+          </div>
+        </div>
+
+        <div class="settings-panel" data-panel="import" style="display:none;">
+          <div class="card">
+            <div class="card-head"><h3>导入模板下载</h3></div>
+            <div class="toolbar">
+              <button class="btn secondary" onclick="downloadTpl('products')"><svg class="ic"><use href="#i-download"/></svg> 商品导入模板</button>
+              <button class="btn secondary" onclick="downloadTpl('inbounds')"><svg class="ic"><use href="#i-download"/></svg> 入库导入模板</button>
+              <button class="btn secondary" onclick="downloadTpl('outbounds')"><svg class="ic"><use href="#i-download"/></svg> 出库导入模板</button>
+            </div>
+            <div class="alert ok" style="margin-top:10px;">商品模板兼容「柠檬云商品导入模板.xlsx」，整表上传自动识别（编码/类别/名称/规格/单位）。</div>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head"><h3>商品批量导入</h3></div>
+              <div class="toolbar">
+                <input type="file" id="impProdFile" accept=".xlsx" />
+                <button class="btn" onclick="doImport('products')">导入商品</button>
+              </div>
+              <div id="impProdResult"></div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h3>入库批量导入</h3></div>
+              <div class="toolbar">
+                <input type="file" id="impInFile" accept=".xlsx" />
+                <button class="btn" onclick="batchFromImport('inbound')">导入入库（预览确认）</button>
+              </div>
+              <div id="impInResult"></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>出库批量导入 <span class="hint">同「单号」自动合并为一单，自动结转关联材料与费用</span></h3></div>
+            <div class="toolbar">
+              <input type="file" id="impOutFile" accept=".xlsx" />
+              <button class="btn" onclick="batchFromImport('outbound')">导入出库（预览确认）</button>
+            </div>
+            <div id="impOutResult"></div>
+          </div>
+        </div>
+
+        <div class="settings-panel" data-panel="jushuitan" style="display:none;">
+          <div class="card">
+            <div class="card-head"><h3>① 上传聚水潭销售出库单并自动新增关联</h3><span class="hint">自动新增不存在的订单商品并关键词关联库存商品；需维护关联请前往出库页「关联结算」</span></div>
+            <div class="toolbar">
+              <input type="file" id="mpFile" accept=".xlsx" />
+              <button class="btn" onclick="parseJushuitan()">解析并自动新增</button>
+              <button class="btn secondary" onclick="autoMapping()"><svg class="ic"><use href="#i-ai"/></svg> 自动匹配未关联</button>
+              <button class="btn secondary" onclick="clearMapping()">清空关联</button>
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="pdataDownload('code_mappings')"><svg class="ic"><use href="#i-download"/></svg> 导出JSON</button>
+            </div>
+            <div id="mpParseInfo"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>② 导入聚水潭出库单（自动结算）</h3><span class="hint">按已保存的关联生成出库单并核算成本</span></div>
+            <div class="toolbar">
+              <input type="file" id="mpImportFile" accept=".xlsx" />
+              <button class="btn green" onclick="batchFromImport('jushuitan')">导入出库单（预览确认）</button>
+            </div>
+            <div id="mpImportResult"></div>
+          </div>
         </div>
       </section>
 
@@ -508,8 +597,10 @@
         </div>
         <div class="card">
           <div class="card-head">
-            <h3>店铺扣点规则（JSON 配置）</h3>
-            <span class="hint">聚水潭订单导入时按「店铺名称」扣减订单收入（卖家实收）；规则在 backend/json/deduction_config.json 中维护，修改后立即生效</span>
+            <h3>店铺扣点规则</h3>
+            <span class="hint">聚水潭订单导入时按「店铺名称」扣减订单收入（卖家实收），保存后立即生效</span>
+            <div class="grow"></div>
+            <button class="btn green" onclick="shopDeducAdd()"><svg class="ic"><use href="#i-plus"/></svg> 新增店铺扣点</button>
           </div>
           <div class="table-wrap"><table id="shopDeducTable"></table></div>
         </div>
@@ -531,89 +622,6 @@
         </div>
       </section>
 
-      <!-- 聚水潭关联 -->
-      <section id="page-jushuitan" class="page">
-        <div class="card">
-          <div class="card-head"><h3>① 上传聚水潭销售出库单并自动新增关联</h3><span class="hint">自动新增不存在的订单商品并关键词关联库存商品；需维护关联请前往出库页「关联结算」</span></div>
-          <div class="toolbar">
-            <input type="file" id="mpFile" accept=".xlsx" />
-            <button class="btn" onclick="parseJushuitan()">解析并自动新增</button>
-            <button class="btn secondary" onclick="autoMapping()"><svg class="ic"><use href="#i-ai"/></svg> 自动匹配未关联</button>
-            <button class="btn secondary" onclick="clearMapping()">清空关联</button>
-            <div class="grow"></div>
-            <button class="btn secondary" onclick="pdataDownload('code_mappings')"><svg class="ic"><use href="#i-download"/></svg> 导出JSON</button>
-          </div>
-          <div id="mpParseInfo"></div>
-        </div>
-
-        <div class="card">
-          <div class="card-head"><h3>② 导入聚水潭出库单（自动结算）</h3><span class="hint">按已保存的关联生成出库单并核算成本</span></div>
-          <div class="toolbar">
-            <input type="file" id="mpImportFile" accept=".xlsx" />
-            <button class="btn green" onclick="batchFromImport('jushuitan')">导入出库单（预览确认）</button>
-          </div>
-          <div id="mpImportResult"></div>
-        </div>
-      </section>
-
-      <!-- 备份与恢复 -->
-      <section id="page-backup" class="page">
-        <div class="card">
-          <div class="card-head"><h3>自动备份设置</h3><span class="hint">默认开启，每 2 小时备份一次到 data/backups，超出保留份数自动清理旧备份</span></div>
-          <div class="toolbar">
-            <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
-              <input type="checkbox" id="bkEnabled" /> 开启自动备份
-            </label>
-            <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
-              每 <input type="number" id="bkInterval" min="0.5" step="0.5" style="width:72px;" /> 小时备份
-            </label>
-            <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
-              保留 <input type="number" id="bkKeep" min="1" style="width:72px;" /> 份
-            </label>
-            <button class="btn" onclick="saveBkConfig()">保存设置</button>
-            <div class="grow"></div>
-            <button class="btn green" onclick="createBackup()"><svg class="ic"><use href="#i-save"/></svg> 立即备份</button>
-          </div>
-          <p class="hint" id="bkStatus" style="margin-top:10px;"></p>
-        </div>
-        <div class="card">
-          <div class="card-head"><h3>备份列表</h3><span class="hint">恢复会用所选备份覆盖当前数据库，请谨慎操作</span></div>
-          <div class="table-wrap"><table id="bkTable"></table></div>
-        </div>
-      </section>
-
-      <!-- 设置 · 商品资料备份（解耦成 5 个 JSON 手动维护/迁移） -->
-      <section id="page-pdata" class="page">
-        <div class="card">
-          <div class="card-head">
-            <h3>商品资料备份（解耦维护）</h3>
-            <span class="hint" id="pdataDir"></span>
-            <div class="grow"></div>
-            <button class="btn green" onclick="pdataExportAll()"><svg class="ic"><use href="#i-save"/></svg> 一键导出到 json 目录</button>
-            <button class="btn" onclick="pdataImportAll()"><svg class="ic"><use href="#i-refresh"/></svg> 从 json 目录一键导入</button>
-          </div>
-          <p class="hint" style="margin-top:8px;">商品资料按「数据表」拆分为 5 个 JSON 独立保存于 <code>backend/json</code>（后端项目中，商品资料备份目录），商品间相互引用用「名称」表达，可跨库/跨设备迁移。各业务页也提供单独的「导出 JSON」按钮。</p>
-          <div class="alert ok" style="margin-top:8px;" id="pdataNote">
-            独立脚本命令：<code>cd backend && uv run python sync_product_data.py export|import|status</code>（在 backend 目录执行，存在 json 时一键导入）。
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-head"><h3>5 类商品资料</h3><span class="hint">json 目录与数据库对照；点击「下载」保存单个 json，"导入"从 json 目录读入该类</span></div>
-          <div class="table-wrap"><table id="pdataTable"></table></div>
-        </div>
-
-        <div class="card">
-          <div class="card-head"><h3>从本地上传 json 导入</h3><span class="hint">可在任意电脑编辑 json 后上传，按名称导入（upsert），便于手动维护与迁移</span></div>
-          <div class="toolbar">
-            <input type="file" id="pdataUploadFile" accept=".json,.txt" />
-            <button class="btn" onclick="pdataUploadImport()"><svg class="ic"><use href="#i-refresh"/></svg> 上传并导入</button>
-            <span class="grow"></span>
-            <button class="btn secondary" onclick="loadPdataPage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新状态</button>
-          </div>
-          <div id="pdataResult" style="margin-top:10px;"></div>
-        </div>
-      </section>
     </main>
   </div>
 

@@ -12,10 +12,6 @@
 
     <van-cell-group inset title="快捷入口">
       <van-cell title="📷 拍单识别" is-link to="/home" />
-      <van-cell title="📋 出入库记录" is-link to="/records" />
-      <van-cell title="📦 一单多货规则" is-link to="/pack-rules" />
-      <van-cell title="📊 经营报表" is-link to="/report" />
-      <van-cell title="🥬 鲜货现采" is-link to="/fresh" />
       <van-cell title="备份与恢复" is-link to="/backups" />
     </van-cell-group>
 
@@ -23,7 +19,7 @@
       <van-button round block type="danger" @click="logout">退出登录</van-button>
     </div>
 
-    <p class="muted" style="text-align:center;">企业台账 · 移动端 PWA · v0.2</p>
+    <p class="muted" style="text-align:center;">企业台账 · 移动端 PWA · v0.1</p>
   </div>
 </template>
 

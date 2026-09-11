@@ -6,9 +6,6 @@ import Inbound from './views/inbound.vue'
 import Stock from './views/stock.vue'
 import Mine from './views/mine.vue'
 import Backups from './views/backups.vue'
-import Records from './views/records.vue'
-import PackRules from './views/pack-rules.vue'
-import Report from './views/report.vue'
 
 const routes = [
   { path: '/login', component: Login },
@@ -20,9 +17,6 @@ const routes = [
   { path: '/stock', component: Stock, meta: { tab: true, title: '库存' } },
   { path: '/mine', component: Mine, meta: { tab: true, title: '我的' } },
   { path: '/backups', component: Backups, meta: { title: '备份与恢复' } },
-  { path: '/records', component: Records, meta: { title: '出入库记录' } },
-  { path: '/pack-rules', component: PackRules, meta: { title: '一单多货规则' } },
-  { path: '/report', component: Report, meta: { title: '经营报表' } },
 ]
 
 export default routes
