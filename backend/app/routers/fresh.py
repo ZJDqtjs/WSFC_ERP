@@ -19,7 +19,14 @@ from ..services import unit_to_base
 router = APIRouter(prefix="/api/fresh", tags=["fresh"])
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-CONFIG_FILE = ROOT / "json" / "fresh_config.json"
+
+
+def _config_file() -> Path:
+    """鲜货展示清单按分仓隔离：backend/json/fresh_config_{key}.json。"""
+    from ..database import get_current_key
+
+    return ROOT / "json" / f"fresh_config_{get_current_key()}.json"
+
 
 # 鲜货分类（可扩充）
 FRESH_CATS = ["蔬菜", "干货"]
@@ -36,15 +43,16 @@ def _factor(p: Product, du: str) -> float:
 def _load_config() -> list[int]:
     """读取展示清单（有序商品 id）。文件缺失/异常返回空（此时展示全部鲜货）。"""
     try:
-        d = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        d = json.loads(_config_file().read_text(encoding="utf-8"))
         return [int(x) for x in (d.get("ids") or [])]
     except Exception:
         return []
 
 
 def _save_config(ids: list[int]) -> None:
-    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(
+    fp = _config_file()
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    fp.write_text(
         json.dumps({"ids": [int(x) for x in ids]}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )

@@ -16,7 +16,7 @@ from ..auth import (
     get_current_user,
     make_token,
 )
-from ..database import get_db
+from ..database import current_warehouse_name, get_current_key, get_db
 from ..keys import public_from_private
 from ..models import User
 
@@ -47,6 +47,7 @@ def login(data: LoginIn, response: Response, db: Session = Depends(get_db)):
     return {
         "ok": True,
         "user": {"id": user.id, "username": user.username, "name": user.name, "role": user.role},
+        "warehouse": {"key": get_current_key(), "name": current_warehouse_name()},
     }
 
 
@@ -58,4 +59,7 @@ def logout(response: Response):
 
 @router.get("/me")
 def me(user: User = Depends(get_current_user)):
-    return {"id": user.id, "username": user.username, "name": user.name, "role": user.role}
+    return {
+        "id": user.id, "username": user.username, "name": user.name, "role": user.role,
+        "warehouse": {"key": get_current_key(), "name": current_warehouse_name()},
+    }

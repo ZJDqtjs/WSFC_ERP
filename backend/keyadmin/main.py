@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import ensure_seed_users, verify_password
 from app.routers.backup import _list_backups, _safe_path, create_backup_file
-from app.database import DATA_DIR, DB_PATH, get_db
+from app.database import DATA_DIR, DB_PATH, DEFAULT_WAREHOUSE_KEY, get_db_default as get_db
 from app.keys import generate_keypair
 from app.models import User
 
@@ -227,13 +227,13 @@ class RestoreBackupIn(BaseModel):
 
 @app.get("/api/backups")
 def rescue_list_backups(_: bool = Depends(_require)):
-    return {"backups": _list_backups()}
+    return {"backups": _list_backups(DEFAULT_WAREHOUSE_KEY)}
 
 
 @app.post("/api/backup")
 def rescue_create_backup(_: bool = Depends(_require)):
-    name = create_backup_file()
-    return {"ok": True, "name": name, "backups": _list_backups()}
+    name = create_backup_file(DEFAULT_WAREHOUSE_KEY)
+    return {"ok": True, "name": name, "backups": _list_backups(DEFAULT_WAREHOUSE_KEY)}
 
 
 @app.post("/api/backup/restore")

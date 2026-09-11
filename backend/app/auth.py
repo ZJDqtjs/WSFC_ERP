@@ -80,13 +80,21 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 def make_token(user_id: int) -> str:
-    payload = {"uid": user_id, "exp": int(time.time()) + TOKEN_MAX_AGE}
+    from .database import get_current_key
+
+    payload = {
+        "uid": user_id,
+        "wh": get_current_key(),  # 签发时绑定当前分仓，切仓后旧 token 失效
+        "exp": int(time.time()) + TOKEN_MAX_AGE,
+    }
     raw = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
     sig = hmac.new(_SECRET, raw.encode(), hashlib.sha256).hexdigest()
     return f"{raw}.{sig}"
 
 
 def verify_token(token: str) -> int | None:
+    from .database import DEFAULT_WAREHOUSE_KEY, get_current_key
+
     try:
         raw, sig = token.split(".")
         expect = hmac.new(_SECRET, raw.encode(), hashlib.sha256).hexdigest()
@@ -94,6 +102,10 @@ def verify_token(token: str) -> int | None:
             return None
         payload = json.loads(base64.urlsafe_b64decode(raw.encode()))
         if payload["exp"] < time.time():
+            return None
+        # 旧 token 无 wh 字段视为默认仓（奥斯迪）；与当前仓不一致则失效（需重登）
+        wh = payload.get("wh") or DEFAULT_WAREHOUSE_KEY
+        if wh != get_current_key():
             return None
         return int(payload["uid"])
     except Exception:

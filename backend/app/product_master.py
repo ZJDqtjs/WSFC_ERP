@@ -23,6 +23,16 @@ from .services import default_conversions
 ROOT = Path(__file__).resolve().parent.parent
 JSON_DIR = ROOT / "json"
 
+
+def _json_dir() -> Path:
+    """json 目录按分仓隔离：奥斯迪仓用 backend/json/（兼容历史文件），其他仓用 backend/json/{key}/。"""
+    from .database import DEFAULT_WAREHOUSE_KEY, get_current_key
+
+    key = get_current_key()
+    d = JSON_DIR if key == DEFAULT_WAREHOUSE_KEY else JSON_DIR / key
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
 # kind -> (文件名, 显示名, 列表字段名)
 KINDS = {
     "units": ("units.json", "计量单位", "units"),
@@ -138,8 +148,7 @@ def _write_file(db, kind: str) -> dict:
     payload = export_payload(db, kind)
     fname, label, listkey = KINDS[kind]
     data = payload[listkey]
-    JSON_DIR.mkdir(parents=True, exist_ok=True)
-    fp = JSON_DIR / fname
+    fp = _json_dir() / fname
     fp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"kind": kind, "file": fname, "count": len(data)}
 
@@ -339,7 +348,7 @@ def import_payload(db, payload: dict) -> dict:
 def import_from_file(db, kind: str) -> dict:
     """从 json 目录读取某一类并导入。文件不存在则报错/跳过。"""
     fname, label, listkey = KINDS[kind]
-    fp = JSON_DIR / fname
+    fp = _json_dir() / fname
     if not fp.exists():
         raise FileNotFoundError(f"缺少 {fname}")
     payload = json.loads(fp.read_text(encoding="utf-8"))
@@ -351,7 +360,7 @@ def import_all(db) -> dict:
     result = {"ok": True, "imported_at": _now(), "results": []}
     for kind in IMPORT_ORDER:
         fname, label, listkey = KINDS[kind]
-        if not (JSON_DIR / fname).exists():
+        if not (_json_dir() / fname).exists():
             result["results"].append({"kind": kind, "file": fname, "label": label, "created": 0,
                                       "updated": 0, "skipped": 0, "warnings": ["文件不存在，已跳过"], "loaded": False})
             continue
@@ -370,7 +379,7 @@ def status(db) -> dict:
     rows = []
     for kind in IMPORT_ORDER:
         fname, label, listkey = KINDS[kind]
-        fp = JSON_DIR / fname
+        fp = _json_dir() / fname
         file_info = None
         if fp.exists():
             st = fp.stat()
@@ -391,7 +400,7 @@ def status(db) -> dict:
             "count_in_db": _count_db(db, kind, listkey),
             **file_info,
         })
-    return {"dir": str(JSON_DIR), "rows": rows}
+    return {"dir": str(_json_dir()), "rows": rows}
 
 
 def _count_db(db, kind: str, listkey: str) -> int:

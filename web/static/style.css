@@ -126,6 +126,15 @@ body {
   color: var(--text);
 }
 
+.warehouse-tag {
+  padding: 0 16px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .side-nav { 
   flex: 1; 
   overflow-y: auto; 

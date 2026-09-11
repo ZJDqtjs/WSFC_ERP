@@ -518,12 +518,58 @@ async function shopDeducDelete(shop) {
   } catch (e) { toast("删除失败：" + e.message); }
 }
 document.querySelectorAll(".nav-item").forEach((b) => b.addEventListener("click", () => {
+  if (b.dataset.action === "warehouses") { openWarehouseModal(); return; }
   if (b.dataset.page === "products") {
     prodForceCat = b.dataset.cat || "";
     prodForceType = b.dataset.type || "";
   }
-  goPage(b.dataset.page);
+  if (b.dataset.page) goPage(b.dataset.page);
 }));
+
+/* =============== 分仓切换 =============== */
+async function openWarehouseModal() {
+  openModal(`
+    <h3>切换分仓 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div id="whErr" class="alert err" style="display:none;"></div>
+    <div id="whList"></div>
+    <hr />
+    <div class="field"><label>新建分仓名称</label>
+      <input id="whName" placeholder="如：昆明仓" onkeydown="if(event.key==='Enter')createWarehouse()" /></div>
+    <div class="toolbar"><div class="grow"></div>
+      <button class="btn green" onclick="createWarehouse()">＋ 新建并切换</button></div>`);
+  loadWarehouses();
+}
+async function loadWarehouses() {
+  try {
+    const r = await api("/api/warehouses");
+    const list = r.warehouses || [];
+    $("whList").innerHTML = (list.length ? list.map((w) => `
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line,#eee);">
+        <b>${esc(w.name)}</b><span class="muted" style="font-size:12px;">${esc(w.key)}</span>
+        <div class="grow"></div>
+        ${w.is_current ? '<span class="badge" style="background:var(--primary,#2563eb);color:#fff;">当前</span>'
+          : `<button class="btn sm" onclick="switchWarehouse('${esc(w.key)}')">切换</button>`}
+      </div>`).join("") : '<div class="empty">暂无分仓</div>');
+  } catch (e) { whErr(e.message); }
+}
+async function switchWarehouse(key) {
+  if (!confirm("切换分仓后当前登录会失效，需重新登录，确定切换？")) return;
+  try {
+    await api("/api/warehouses/switch", "POST", { key });
+    try { await api("/api/auth/logout", "POST"); } catch (e) {}
+    location.reload();
+  } catch (e) { whErr(e.message); }
+}
+async function createWarehouse() {
+  const name = ($("whName").value || "").trim();
+  if (!name) { whErr("请输入分仓名称"); return; }
+  try {
+    await api("/api/warehouses", "POST", { name });
+    try { await api("/api/auth/logout", "POST"); } catch (e) {}
+    location.reload();
+  } catch (e) { whErr(e.message); }
+}
+function whErr(msg) { const el = $("whErr"); if (!el) return; el.textContent = msg; el.style.display = "block"; }
 
 /* 页面内分段切换 */
 function switchSeg(segId, btn) {
@@ -553,6 +599,8 @@ function setUser(u) {
   $("userName").textContent = disp;
   $("userRole").textContent = u.role === "admin" ? "管理员" : "业务员";
   $("userAvatar").textContent = disp.slice(0, 1);
+  const wt = $("warehouseTag");
+  if (wt) wt.textContent = u.warehouse ? `当前分仓：${u.warehouse.name}` : "";
   ["inOperator", "outOperator", "adjOperator", "fOperator"].forEach((id) => {
     const el = $(id);
     if (el && !el.value) el.value = disp;

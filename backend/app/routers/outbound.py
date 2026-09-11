@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import FinanceRecord, Outbound, Product, StockMovement, User
+from ..models import FinanceRecord, Outbound, OutboundLine, Product, StockMovement, User
 from ..services import build_order, create_outbound, recompute_product
 
 router = APIRouter(prefix="/api/outbounds", tags=["outbound"])
@@ -102,7 +102,8 @@ def preview(data: PreviewIn, db: Session = Depends(get_db), user: User = Depends
 
 @router.get("")
 def list_outbounds(date_from: str = "", date_to: str = "", g: str = "", db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    q = select(Outbound).order_by(Outbound.id.desc())
+    # _to_dict 遍历 o.lines 与 l.product，selectinload 一次性预载避免 N+1
+    q = select(Outbound).options(selectinload(Outbound.lines).selectinload(OutboundLine.product)).order_by(Outbound.id.desc())
     if date_from:
         q = q.where(Outbound.date >= date_from)
     if date_to:

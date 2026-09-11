@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_user
 from ..database import get_db
@@ -46,7 +46,8 @@ def _to_dict(r: Inbound) -> dict:
 
 @router.get("")
 def list_inbounds(date_from: str = "", date_to: str = "", db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    q = select(Inbound).order_by(Inbound.id.desc())
+    # _to_dict 访问 r.product，selectinload 预载避免每行一条懒加载查询
+    q = select(Inbound).options(selectinload(Inbound.product)).order_by(Inbound.id.desc())
     if date_from:
         q = q.where(Inbound.date >= date_from)
     if date_to:

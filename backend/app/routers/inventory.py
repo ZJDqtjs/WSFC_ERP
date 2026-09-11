@@ -4,7 +4,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_user
 from ..database import get_db
@@ -46,7 +46,8 @@ def list_movements(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    q = select(StockMovement).order_by(StockMovement.id.desc()).limit(500)
+    # 遍历使用 m.product，selectinload 预载避免每行一条懒加载查询
+    q = select(StockMovement).options(selectinload(StockMovement.product)).order_by(StockMovement.id.desc()).limit(500)
     if product_id:
         q = q.where(StockMovement.product_id == product_id)
     if date_from:

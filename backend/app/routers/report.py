@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_user
 from ..database import get_db
@@ -74,8 +74,13 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
     month = today[:8] + "01"
 
     def range_summary(f, t):
+        # 需遍历 o.lines 统计包材/人工/快递，务必 selectinload 一次预载，避免每单一条懒加载 SELECT（N+1）
         outbounds = list(
-            db.execute(select(Outbound).where(Outbound.date >= f, Outbound.date <= t)).scalars()
+            db.execute(
+                select(Outbound)
+                .options(selectinload(Outbound.lines).selectinload(OutboundLine.product))
+                .where(Outbound.date >= f, Outbound.date <= t)
+            ).scalars()
         )
         finances = list(
             db.execute(select(FinanceRecord).where(FinanceRecord.date >= f, FinanceRecord.date <= t)).scalars()
@@ -185,7 +190,8 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
             q = q.where(model.date <= date_to)
         return q
 
-    outbounds = list(db.execute(scope(Outbound)).scalars())
+    # 后续遍历 o.lines / l.product，selectinload 一次预载避免 N+1（by_product 与包材拆分两处复用）
+    outbounds = list(db.execute(scope(Outbound).options(selectinload(Outbound.lines).selectinload(OutboundLine.product))).scalars())
     inbounds = list(db.execute(scope(Inbound)).scalars())
     finances = list(db.execute(scope(FinanceRecord)).scalars())
 
@@ -255,7 +261,7 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
 
 @router.get("/finance")
 def list_finance(date_from: str = "", date_to: str = "", db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    q = _date_filter(select(FinanceRecord), date_from, date_to).order_by(FinanceRecord.id.desc())
+    q = _date_filter(select(FinanceRecord), date_from, date_to).options(selectinload(FinanceRecord.product)).order_by(FinanceRecord.id.desc())
     return [
         {
             "id": f.id,
