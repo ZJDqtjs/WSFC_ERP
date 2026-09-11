@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import or_, select, text
 
@@ -321,6 +322,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# gzip 压缩：移动端/公网体积大的 JSON 响应显著减小传输量（桌面内网提升有限，弱网收益大）
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 app.include_router(auth.router)
 app.include_router(products.router)
