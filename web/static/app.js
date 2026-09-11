@@ -305,7 +305,7 @@ function previewExpress() {
   const cfg = currentExprCfg();
   const weights = [1, 2, 3, 5, 10];
   el.innerHTML = weights.map((w) =>
-    `<div class="expr-item"><span class="expr-w">毛重 ${w}kg</span><span class="expr-fee">¥${fmtMoney(exprFee(cfg, w))}</span></div>`
+    `<div class="expr-item"><span class="expr-w">毛重 ${w}kg</span><span class="expr-fee">${fmtMoney(exprFee(cfg, w))}</span></div>`
   ).join("");
 }
 async function loadExpressPage() {
