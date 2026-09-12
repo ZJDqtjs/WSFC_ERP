@@ -205,20 +205,94 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
     net = round(gross - expense, 2)
     stock_value = round(sum(p.stock_value for p in db.execute(select(Product)).scalars()), 2)
 
-    # 商品维度：销售数量/收入/成本
-    by_product = {}
+    # 商品维度：销售数量/收入/商品成本，并把出库时自动结算的关联成本（人工打包/包材/快递）
+    # 归属到具体商品，得到该商品的「总成本 = 商品成本 + 打包人工+耗材 + 快递费」。
+    #
+    # 归属规则（按现有数据实测口径）：
+    #   sale 行的 sale_product_id 恒为 NULL，pack 行的 sale_product_id 才指向它所服务的销售商品。
+    #   1) pack 行带 sale_product_id → 直接归到该销售商品；
+    #   2) 其余 pack 行（快递费按整单重量计费，无归属）→ 按该单各 sale 行的销售金额占比分摊；
+    #      单内只有一条 sale 行时全部归它，与该单口径一致，不会丢账。
+    by_product: dict = {}
+
+    def _bucket(pid, name):
+        return by_product.setdefault(
+            pid,
+            {
+                "name": name,
+                "qty": 0.0,
+                "amount": 0.0,
+                "gross_sales": 0.0,
+                "cogs": 0.0,  # 兼容旧字段：仅商品本身的结算成本
+                "goods_cogs": 0.0,  # 商品本身的加权平均成本
+                "pack_cogs": 0.0,  # 打包人工费 + 包材耗材
+                "express_cogs": 0.0,  # 快递运费
+            },
+        )
+
     for o in outbounds:
+        sale_lines = [l for l in o.lines if l.line_type == "sale"]
+        sale_pids = {l.product_id for l in sale_lines}
+        # 本单待分摊的关联成本：{费用类别: 金额}
+        unowned: dict[str, float] = {}
         for l in o.lines:
-            if l.line_type != "sale":
+            if l.line_type != "pack":
                 continue
-            d = by_product.setdefault(l.product_id, {"name": l.product.name if l.product else "", "qty": 0.0, "amount": 0.0, "cogs": 0.0})
-            d["qty"] += l.quantity_base
-            d["amount"] += l.amount
-            d["cogs"] += l.cogs
-    product_rows = [
-        {"product_id": pid, "name": d["name"], "qty": round(d["qty"], 4), "amount": round(d["amount"], 2), "cogs": round(d["cogs"], 2)}
-        for pid, d in sorted(by_product.items(), key=lambda kv: -kv[1]["amount"])
-    ]
+            cat = _pack_cost_category(l.product, l)
+            amount = l.cogs or 0.0
+            field = "express_cogs" if cat == "快递运费" else "pack_cogs"
+            # 仅当归属对象确实是本单的销售商品时才直接归属，避免历史脏数据把费用挂到
+            # 不存在的商品上（并确保 _bucket 不会用「未归属」覆盖真实商品名）
+            if l.sale_product_id and l.sale_product_id in sale_pids:
+                _bucket(l.sale_product_id, "")[field] += amount
+            else:
+                unowned[field] = unowned.get(field, 0.0) + amount
+
+        total_sale_amount = sum(l.amount or 0.0 for l in sale_lines)
+        for l in sale_lines:
+            d = _bucket(l.product_id, l.product.name if l.product else "")
+            # 名称以销售行自身的商品为准（pack 行只累加金额，不参与命名）
+            if l.product and l.product.name:
+                d["name"] = l.product.name
+            d["qty"] += l.quantity_base or 0.0
+            d["amount"] += l.amount or 0.0
+            d["gross_sales"] += l.gross_sales if l.gross_sales is not None else (l.amount or 0.0)
+            d["goods_cogs"] += l.cogs or 0.0
+            d["cogs"] += l.cogs or 0.0
+            # 分摊无归属的关联成本（按销售金额占比；金额为 0 时平均分摊）
+            if unowned:
+                share = (l.amount or 0.0) / total_sale_amount if total_sale_amount else 1.0 / max(len(sale_lines), 1)
+                for field, amt in unowned.items():
+                    d[field] += amt * share
+
+    product_rows = []
+    for pid, d in sorted(by_product.items(), key=lambda kv: -kv[1]["amount"]):
+        goods = round(d["goods_cogs"], 2)
+        pack = round(d["pack_cogs"], 2)
+        express = round(d["express_cogs"], 2)
+        total_cogs = round(goods + pack + express, 2)
+        amount = round(d["amount"], 2)
+        gross_sales = round(d["gross_sales"], 2)
+        gp = round(amount - total_cogs, 2)
+        # 毛利率分母用扣点前销售金额（与出库批次页 gp_rate 口径一致）
+        denom = gross_sales or amount
+        product_rows.append(
+            {
+                "product_id": pid,
+                "name": d["name"],
+                "qty": round(d["qty"], 4),
+                "amount": amount,
+                "gross_sales": gross_sales,
+                # cogs 语义升级为「总成本」，含商品成本 + 打包人工/耗材 + 快递费
+                "cogs": total_cogs,
+                "goods_cogs": goods,
+                "pack_cogs": pack,
+                "express_cogs": express,
+                "total_cogs": total_cogs,
+                "gross_profit": gp,
+                "gp_rate": round(gp / denom * 100, 2) if denom else 0.0,
+            }
+        )
 
     # 关联结算成本拆分（包材/人工/快递）——已含在 cogs 内，单独列出供分析
     pack_costs = _pack_cost_breakdown(outbounds)

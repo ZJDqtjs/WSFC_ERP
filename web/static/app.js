@@ -141,7 +141,12 @@ function compareVal(a, b) {
 function applyTableSort(tbl, rows) {
   if (tbl && tbl._sort && Array.isArray(rows)) {
     const k = tbl._sort.key, d = tbl._sort.dir;
-    return rows.slice().sort((a, b) => compareVal(a[k], b[k]) * d);
+    // 派生列没有原始字段，排序前按需换算，否则会拿 undefined 比较（等于没排序）
+    const valOf = (r) => {
+      if (k === "gross") return (Number(r.amount) || 0) - (Number(r.total_cogs != null ? r.total_cogs : r.cogs) || 0);
+      return r[k];
+    };
+    return rows.slice().sort((a, b) => compareVal(valOf(a), valOf(b)) * d);
   }
   return rows;
 }
@@ -2894,17 +2899,36 @@ async function loadReport() {
 
   const pt = $("repProductTable");
   let prodRows = applyTableSort(pt, rep.by_product || []);
-  if (!prodRows.length) pt.innerHTML = `<tr><td class="empty" colspan="5">本期无销售</td></tr>`;
+  // 成本为「总成本」= 商品成本 + 打包人工/耗材 + 快递费（后端 by_product 已按销售商品归属；
+  // 无归属的快递费等按该单销售金额占比分摊）。毛利率分母用扣点前销售金额 gross_sales。
+  const gpRateOf = (p) => {
+    const denom = Number(p.gross_sales) || Number(p.amount) || 0;
+    if (!denom) return "—";
+    const total = Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
+    const rate = p.gp_rate != null ? Number(p.gp_rate) : ((Number(p.amount) - total) / denom) * 100;
+    return rate.toFixed(1) + "%";
+  };
+  if (!prodRows.length) pt.innerHTML = `<tr><td class="empty" colspan="6">本期无销售</td></tr>`;
   else pt.innerHTML = `<thead><tr>
     <th data-key="name">商品${sortArrow("repProductTable", "name")}</th>
-    <th data-key="qty" class="num">销量(基础单位)${sortArrow("repProductTable", "qty")}</th>
+    <th data-key="qty" class="num">销量${sortArrow("repProductTable", "qty")}</th>
     <th data-key="amount" class="num">收入${sortArrow("repProductTable", "amount")}</th>
-    <th data-key="cogs" class="num">成本${sortArrow("repProductTable", "cogs")}</th>
-    <th data-key="gross" class="num">毛利${sortArrow("repProductTable", "gross")}</th></tr></thead><tbody>` +
-    prodRows.map((p) => `<tr>
-      <td>${esc(p.name)}</td><td class="num mono">${fmtNum(p.qty)}</td>
-      <td class="num mono">${fmtMoney(p.amount)}</td><td class="num mono">${fmtMoney(p.cogs)}</td>
-      <td class="num mono" style="color:var(--green)">${fmtMoney(p.amount - p.cogs)}</td></tr>`).join("") + `</tbody>`;
+    <th data-key="cogs" class="num">总成本${sortArrow("repProductTable", "cogs")}</th>
+    <th data-key="gross" class="num">毛利${sortArrow("repProductTable", "gross")}</th>
+    <th class="num">毛利率</th></tr></thead><tbody>` +
+    prodRows.map((p) => {
+      const total = Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
+      const gp = (Number(p.amount) || 0) - total;
+      const color = gp >= 0 ? "var(--green)" : "var(--red)";
+      const split = (p.pack_cogs || p.express_cogs)
+        ? `<div class="muted" style="font-size:11px;">商品成本 ${fmtMoney(p.goods_cogs != null ? p.goods_cogs : p.cogs)}${p.pack_cogs ? ` ＋ 打包人工+耗材 ${fmtMoney(p.pack_cogs)}` : ""}${p.express_cogs ? ` ＋ 快递费 ${fmtMoney(p.express_cogs)}` : ""}</div>`
+        : "";
+      return `<tr>
+      <td>${esc(p.name)}${split}</td><td class="num mono">${fmtNum(p.qty)}</td>
+      <td class="num mono">${fmtMoney(p.amount)}</td><td class="num mono">${fmtMoney(total)}</td>
+      <td class="num mono" style="color:${color}">${fmtMoney(gp)}</td>
+      <td class="num mono" style="color:${color}">${gpRateOf(p)}</td></tr>`;
+    }).join("") + `</tbody>`;
   pt._rows = prodRows;
   pt._render = loadReport;
 

@@ -1,6 +1,7 @@
 """本地前端开发/预览服务器（前后端分离）。
 
 - 托管 web/static 下的桌面 Web 前端（纯静态）
+- 托管 mobile/dist 下的移动端 PWA（挂在 config.json 的 routes.mobile，默认 /mobile/）
 - 将 /api、/uploads 请求反向代理到后端 FastAPI（默认 http://127.0.0.1:8000）
 - 网页默认端口 80（原 8000 改为 80），可用 WEB_PORT 覆盖；
   非管理员绑定 80 失败时自动改用 8001 并给出提示。
@@ -25,6 +26,10 @@ with (ROOT / "config.json").open(encoding="utf-8") as f:
 SERVER_CONFIG = CONFIG.get("server", {})
 ROUTE_CONFIG = CONFIG.get("routes", {})
 
+# 移动端 PWA 构建产物（mobile/dist），挂在 /mobile/ 前缀下
+MOBILE_PREFIX = ROUTE_CONFIG.get("mobile", "/mobile").rstrip("/")
+MOBILE_ROOT = ROOT / "mobile" / "dist"
+
 WEB_HOST = os.getenv("WEB_HOST", SERVER_CONFIG.get("web_host", "0.0.0.0"))
 WEB_PORT = int(os.getenv("WEB_PORT", SERVER_CONFIG.get("web_port", 80)))
 API_TARGET = os.getenv("API_TARGET", CONFIG.get("api_target", "http://127.0.0.1:8000")).rstrip("/")
@@ -34,6 +39,7 @@ MIME = {
     ".js": "application/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".json": "application/json; charset=utf-8",
+    ".webmanifest": "application/manifest+json; charset=utf-8",
     ".svg": "image/svg+xml",
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -115,40 +121,69 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn.close()
 
     # ---- 静态文件 ----
-    def serve_static(self):
-        p = urllib.parse.urlsplit(self.path).path
-        if p.endswith("/") or p == "":
-            p = "/index.html"
-        rel = p.lstrip("/")
-        # 防目录穿越
-        target = (ROOT / "config.json").resolve() if rel == "config.json" else (WEB_ROOT / rel).resolve()
-        if target != (ROOT / "config.json").resolve() and WEB_ROOT not in target.parents and target != WEB_ROOT:
-            self.send_error(403)
-            return
+    def _send_file(self, target: Path) -> bool:
+        """发送一个静态文件；目标不存在返回 False 由调用方决定回退。"""
         if target.is_dir():
             target = target / "index.html"
-        if target.is_file():
-            ext = target.suffix.lower()
-            ctype = MIME.get(ext, "application/octet-stream")
-            data = target.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-            self.wfile.write(data)
-        else:
-            # 未命中的路径回退到 index.html（单页入口）
-            idx = WEB_ROOT / "index.html"
-            if idx.is_file():
-                data = idx.read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-            else:
-                self.send_error(404)
+        if not target.is_file():
+            return False
+        ctype = MIME.get(target.suffix.lower(), "application/octet-stream")
+        data = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        # PWA 的 sw.js / index.html 必须每次校验，否则更新发不出去
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(data)
+        return True
+
+    def _safe_target(self, root: Path, rel: str):
+        """把相对路径解析到 root 内，防目录穿越；越界返回 None。"""
+        # config.json 允许从项目根读取（前端启动时要用端口配置）
+        if rel == "config.json":
+            return (ROOT / "config.json").resolve()
+        target = (root / rel).resolve()
+        if root not in target.parents and target != root:
+            return None
+        return target
+
+    def serve_static(self):
+        p = urllib.parse.urlsplit(self.path).path
+
+        # ---- 移动端 PWA：/mobile/** → mobile/dist/** ----
+        # 注意：必须在下面的 "/" → index.html 归一化之前判断，否则 /mobile/ 会被提前改写掉。
+        if p == MOBILE_PREFIX or p.startswith(MOBILE_PREFIX + "/"):
+            rel = p[len(MOBILE_PREFIX):].lstrip("/") or "index.html"
+            target = self._safe_target(MOBILE_ROOT, rel)
+            if target is None:
+                self.send_error(403)
+                return
+            if self._send_file(target):
+                return
+            # 未命中的前端路由（/mobile/products 等）回退到 PWA 入口
+            if self._send_file(MOBILE_ROOT / "index.html"):
+                return
+            self.send_error(
+                404,
+                "移动端还未构建：请先执行 cd mobile && npm install && npm run build",
+            )
+            return
+
+        if p.endswith("/") or p == "":
+            p = "/index.html"
+
+        # ---- 桌面 Web：其余路径 → web/static ----
+        rel = p.lstrip("/")
+        target = self._safe_target(WEB_ROOT, rel)
+        if target is None:
+            self.send_error(403)
+            return
+        if self._send_file(target):
+            return
+        # 未命中的路径回退到 index.html（单页入口）
+        if not self._send_file(WEB_ROOT / "index.html"):
+            self.send_error(404)
 
     def _dispatch(self, method):
         if self.path.startswith(PROXY_PREFIXES):
@@ -181,7 +216,10 @@ def main():
     print("=" * 46)
     print("  企业台账系统 - 前端页面（前后端分离预览）")
     print("-" * 46)
-    print(f"  前端页面:  http://localhost:{port}   (默认 80，可 WEB_PORT 覆盖)")
+    print(f"  桌面 Web:  http://localhost:{port}   (默认 80，可 WEB_PORT 覆盖)")
+    mobile_ready = (MOBILE_ROOT / "index.html").is_file()
+    print(f"  移动 PWA:  http://localhost:{port}{MOBILE_PREFIX}/   "
+          f"{'' if mobile_ready else '（未构建：cd mobile && npm run build）'}")
     print(f"  后端 API:  {API_TARGET}   (可 API_TARGET 覆盖)")
     print("  先启动后端: python run.py")
     print("  关闭服务:   按 Ctrl+C")

@@ -6,6 +6,10 @@
     uv run python run.py                     # 后端 API -> http://127.0.0.1:8000
     API_PORT=9000 uv run python run.py       # 自定义端口
     SERVE_STATIC=1 uv run python run.py      # 单进程一体化预览（后端顺带托管 web/static）
+    RELOAD=0 uv run python run.py            # 关闭热重载
+
+注意：本脚本是**本地开发**入口（deploy/erp.service 生产环境直接调 uvicorn，不受影响）。
+默认开启热重载，否则改了后端代码不重启进程就一直是旧逻辑——前端会显示不出新字段。
 """
 import os
 import socket
@@ -22,6 +26,8 @@ with (ROOT / "config.json").open(encoding="utf-8") as f:
 API_CONFIG = CONFIG.get("server", {})
 API_HOST = os.getenv("API_HOST", API_CONFIG.get("api_host", "127.0.0.1"))
 API_PORT = int(os.getenv("API_PORT", API_CONFIG.get("api_port", 8000)))
+# 热重载：默认开（本地开发）；RELOAD=0 / false / no 关闭
+RELOAD = os.getenv("RELOAD", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def lan_ips():
@@ -51,6 +57,7 @@ if __name__ == "__main__":
     print("-" * 46)
     print("  前端页面:   运行  python web/serve.py   (默认 http://localhost:80)")
     print("  或一键开发: 运行  python dev.py")
+    print(f"  热重载:     {'开启（改后端代码自动生效）' if RELOAD else '关闭'}")
     print("  关闭服务:   按 Ctrl+C")
     print("=" * 46)
-    uvicorn.run("app.main:app", host=API_HOST, port=API_PORT)
+    uvicorn.run("app.main:app", host=API_HOST, port=API_PORT, reload=RELOAD)

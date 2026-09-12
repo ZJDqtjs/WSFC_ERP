@@ -97,9 +97,18 @@ bash /home/azureuser/WSFC_ERP/deploy/deploy.sh
 
 ## 账号系统
 
-- 默认账号：*****REMOVED-DEFAULT-PASSWORD*****
-- 账号在根目录 **`product_rules.json` 的 `accounts`** 中维护（数据库初始化时同步）。
-- 私钥管理后台：`cd backend && uv run python keyadmin.py`（端口 8001，复用用户表与密钥算法）。
+登录方式是 **Ed25519 私钥文件**，不是密码：前端选私钥文件 → 后端由私钥推导公钥、比对库中保存的
+`users.fingerprint`（SHA256）。因此**用户名必须与私钥一一对应**，用户名写错、或用别人的私钥，都会返回
+`401 用户名或私钥不匹配`。
+
+- 当前用户可用 `${workspace}/backend/data/*.db`（分仓库）的 `users` 表查看：
+  `username / name / role / fingerprint / is_active`。
+- ⚠️ **`admin1` 是历史遗留账号，`fingerprint` 为 NULL，无法用私钥登录**（旧密码登录已废弃）。
+  请使用私钥管理工具分发的账号（如 `小王` / `小万` / `小李` / `小林` / `殷总` / `大凯`）。
+- 根目录 `product_rules.json` 的 `accounts` 只在**建库初始化**时同步，改它不会给已有账号补发密钥。
+- 私钥管理后台：`cd backend && uv run python keyadmin.py`（端口 8001）——用它生成/重发私钥，
+  生成的私钥文件只在当时一次性下载，请妥善保管。
+- 换分仓 / 新建分仓后旧 token 立即失效，需要重新登录（登录页会提示"登录状态已失效"）。
 
 ## 核心设计摘要
 

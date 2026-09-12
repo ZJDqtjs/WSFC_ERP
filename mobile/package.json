@@ -1,9 +1,9 @@
 {
   "name": "erp-mobile",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "企业台账移动端 PWA（Vue3 + Vant4 + Vite）",
+  "description": "企业台账移动端 PWA（Vue3 + Vant4 + Vite）— 已与桌面端功能对齐",
   "scripts": {
     "dev": "vite",
     "prebuild": "node scripts/make-icons.mjs",
