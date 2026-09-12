@@ -22,7 +22,10 @@ from sqlalchemy.orm import Session
 
 from app.auth import ensure_seed_users, verify_password
 from app.routers.backup import _list_backups, _safe_path, create_backup_file
-from app.database import DATA_DIR, DB_PATH, DEFAULT_WAREHOUSE_KEY, get_db_default as get_db
+from app.database import (
+    DATA_DIR, DB_PATH, DEFAULT_WAREHOUSE_KEY, get_db_default as get_db,
+    get_sessionmaker, get_warehouses,
+)
 from app.keys import generate_keypair
 from app.models import User
 
@@ -72,6 +75,49 @@ def _require(request: Request, db: Session = Depends(get_db)):
     if not _verify_token(request.cookies.get(COOKIE)):
         raise HTTPException(401, "未验证")
     return True
+
+
+def _other_keys() -> list[str]:
+    """默认仓以外的所有分仓 key（keyadmin 钉死操作默认仓，账号需同步到其他分仓）。"""
+    return [w["key"] for w in get_warehouses() if w["key"] != DEFAULT_WAREHOUSE_KEY]
+
+
+def sync_users_to_all() -> int:
+    """把默认仓（奥斯迪）的全部用户同步到其他分仓：不存在则创建，存在则更新。
+
+    供「同步到各分仓」按钮使用；返回同步的分仓数。
+    """
+    src = get_sessionmaker(DEFAULT_WAREHOUSE_KEY)()
+    try:
+        users = src.scalars(select(User).order_by(User.id)).all()
+    finally:
+        src.close()
+    synced = 0
+    for key in _other_keys():
+        dst = get_sessionmaker(key)()
+        try:
+            existing = {u.username: u for u in dst.scalars(select(User)).all()}
+            for u in users:
+                e = existing.get(u.username)
+                if e is None:
+                    dst.add(User(
+                        username=u.username, password_hash=u.password_hash,
+                        name=u.name, role=u.role, public_key=u.public_key,
+                        fingerprint=u.fingerprint, key_created_at=u.key_created_at,
+                        is_active=u.is_active,
+                    ))
+                else:
+                    e.name, e.role = u.name, u.role
+                    e.is_active = u.is_active
+                    if u.fingerprint:          # 默认仓有密钥才覆盖，避免误清目标仓密钥
+                        e.public_key = u.public_key
+                        e.fingerprint = u.fingerprint
+                        e.key_created_at = u.key_created_at
+            dst.commit()
+            synced += 1
+        finally:
+            dst.close()
+    return synced
 
 
 class LoginIn(BaseModel):
@@ -153,6 +199,23 @@ def create_user_with_key(
     db.add(user)
     db.commit()
     db.refresh(user)
+    # 同步到其他分仓（同账号同一私钥可登录各仓）
+    for key in _other_keys():
+        s = get_sessionmaker(key)()
+        try:
+            if s.scalar(select(User).where(User.username == username)):
+                continue
+            s.add(User(
+                username=username,
+                name=data.name.strip(),
+                role=user.role,
+                public_key=public_ssh,
+                fingerprint=fp,
+                key_created_at=user.key_created_at,
+            ))
+            s.commit()
+        finally:
+            s.close()
     return {
         "user": _serialize(user),
         "private_key": private_pem,
@@ -176,6 +239,19 @@ def update_user(
     if data.role is not None:
         user.role = data.role if data.role in ("admin", "user") else user.role
     db.commit()
+    # 同步姓名/角色到其他分仓
+    for key in _other_keys():
+        s = get_sessionmaker(key)()
+        try:
+            u = s.scalar(select(User).where(User.username == user.username))
+            if u:
+                if data.name is not None:
+                    u.name = data.name.strip()
+                if data.role is not None:
+                    u.role = data.role if data.role in ("admin", "user") else u.role
+                s.commit()
+        finally:
+            s.close()
     return {"user": _serialize(user)}
 
 
@@ -195,12 +271,31 @@ def regenerate_key(
     user.key_created_at = datetime.now()
     db.commit()
     db.refresh(user)
+    # 同步新私钥到其他分仓（旧私钥在各仓同时失效）
+    for key in _other_keys():
+        s = get_sessionmaker(key)()
+        try:
+            u = s.scalar(select(User).where(User.username == user.username))
+            if u:
+                u.public_key = public_ssh
+                u.fingerprint = fp
+                u.key_created_at = user.key_created_at
+                s.commit()
+        finally:
+            s.close()
     return {
         "user": _serialize(user),
         "private_key": private_pem,
         "public_key": public_ssh,
         "fingerprint": fp,
     }
+
+
+@app.post("/api/users/sync")
+def sync_users(_: bool = Depends(_require)):
+    """把默认仓（奥斯迪）的全部账号/私钥同步到其他分仓。"""
+    n = sync_users_to_all()
+    return {"ok": True, "synced": n, "note": f"已将默认仓账号同步到 {n} 个分仓"}
 
 
 @app.delete("/api/users/{user_id}")
@@ -214,6 +309,16 @@ def delete_user(
         raise HTTPException(404, "用户不存在")
     db.delete(user)
     db.commit()
+    # 同步删除其他分仓的同名账号
+    for key in _other_keys():
+        s = get_sessionmaker(key)()
+        try:
+            u = s.scalar(select(User).where(User.username == user.username))
+            if u:
+                s.delete(u)
+                s.commit()
+        finally:
+            s.close()
     return {"ok": True}
 
 
@@ -265,27 +370,44 @@ def rescue_delete_backup(name: str, _: bool = Depends(_require)):
 
 @app.post("/api/rescue/reset-admin")
 def rescue_reset_admin(db: Session = Depends(get_db), _: bool = Depends(_require)):
-    """应急重置：确保初始管理员（product_rules.json accounts）恢复默认密码，并为其重新生成 ERP 登录私钥。"""
-    ensure_seed_users(db)  # 恢复初始管理员的进入密码（keyadmin 门禁）
+    """应急重置：确保初始管理员（product_rules.json accounts）恢复默认密码，并为其重新生成 ERP 登录私钥。
+
+    同一把私钥写入所有分仓，保证初始管理员可登录任意分仓。
+    """
     from app.auth import SEED_USERS
 
+    all_keys = [DEFAULT_WAREHOUSE_KEY] + _other_keys()
+    # 先确保各分仓种子账号存在并恢复默认密码
+    for key in all_keys:
+        s = get_sessionmaker(key)()
+        try:
+            ensure_seed_users(s)
+            s.commit()
+        finally:
+            s.close()
+
     items = []
-    for s in SEED_USERS:
-        u = db.scalar(select(User).where(User.username == s["username"]))
-        if not u:
-            continue
+    for seed in SEED_USERS:
         private_pem, public_ssh, fp = generate_keypair()
-        u.public_key = public_ssh
-        u.fingerprint = fp
-        u.key_created_at = datetime.now()
-        u.is_active = True
+        for key in all_keys:
+            s = get_sessionmaker(key)()
+            try:
+                u = s.scalar(select(User).where(User.username == seed["username"]))
+                if not u:
+                    continue
+                u.public_key = public_ssh
+                u.fingerprint = fp
+                u.key_created_at = datetime.now()
+                u.is_active = True
+                s.commit()
+            finally:
+                s.close()
         items.append(
-            {"username": u.username, "name": u.name, "private_key": private_pem, "fingerprint": fp}
+            {"username": seed["username"], "name": seed["name"], "private_key": private_pem, "fingerprint": fp}
         )
-    db.commit()
     return {
         "ok": True,
-        "note": "已重置初始管理员密码并重新生成 ERP 登录私钥（旧私钥已失效），请立即下载保存",
+        "note": "已重置初始管理员密码并重新生成 ERP 登录私钥（旧私钥已失效，同一私钥可用于所有分仓），请立即下载保存",
         "items": items,
     }
 
