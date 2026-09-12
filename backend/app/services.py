@@ -1,7 +1,8 @@
-"""核心业务逻辑：单位换算、加权平均成本、库存/成本重算、入库/出库创建。"""
+"""核心业务逻辑：单位换算、先进先出(FIFO)成本、库存/成本重算、入库/出库创建。"""
 import json
 import math
 import os
+from collections import deque
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -175,10 +176,120 @@ def get_or_create_express_product(db: Session) -> Product:
     return p
 
 
-def recompute_product(db: Session, product_id: int) -> Product:
-    """以库存流水为准重算商品的库存、加权平均成本、库存价值。
+def _fifo_replay(moves, fallback: float = 0.0) -> tuple[float, float, list, float, dict]:
+    """按「先进先出(FIFO)」重放库存流水，计算库存量、库存价值、剩余批次与每次出库成本。
 
-    入库行 amount 作为入库金额；出库/包装行按当前平均成本结转。
+    - 入库 / 盘点增加：先按新入库成本「补回」历史上的超卖(负库存)，再把余量作为新批次(layer)；
+    - 出库 / 包装消耗 / 盘点减少：从最早批次依次扣减，成本 = Σ(批次单位成本 × 扣减数量)；
+      批次不足(超卖)时，缺口先按兜底成本暂估，并登记为「待补负库存」，待后续入库时按实际进价回补，
+      同步修正该次出库成本——从而保证「进货 − 出库成本 = 剩余库存价值」始终成立；
+    - 均价重估(avg)：把「每基础单位均价增量」平摊到所有现存批次；旧式成本重估(cost)的
+      amount 为库存价值增量，换算成单位增量后同样处理；
+    - 参考成本(ucost)：仅作记录，不影响库存与成本。
+
+    返回 (stock, value, layers, base, out_costs)：
+      layers   剩余批次 [[qty, unit_cost], ...]（qty > 0）
+      base     兜底单位成本（取最新一批的单位成本；库存为 0/负时用于均价展示与出库兜底）
+      out_costs  {出库流水 id: 该次 FIFO 结转成本（含后续补回修正）}
+    """
+    layers: deque[list[float]] = deque()  # [剩余数量, 单位成本]
+    backorders: deque[list] = deque()  # 超卖待补：[待补数量, 暂估单位成本, 对应出库流水id]
+    stock = 0.0
+    base = 0.0
+    out_costs: dict[int, float] = {}
+    for m in moves:
+        qty = m.quantity_base or 0.0
+        if m.move_type == "ucost":  # 成本单价(参考成本)调整：仅作记录
+            continue
+        if m.move_type in ("avg", "cost"):
+            # 成本重估：单位均价增量 = avg 直接给出；cost 为价值增量 → 除以现有库存
+            if m.move_type == "avg":
+                delta = m.amount or 0.0
+            else:
+                delta = ((m.amount or 0.0) / stock) if stock > 1e-9 else 0.0
+            if delta:
+                for l in layers:
+                    l[1] = max(l[1] + delta, 0.0)
+                base = max(base + delta, 0.0)
+            continue
+        if qty >= 0:  # 入库 / 盘点增加
+            if qty > 0:
+                cur_value = sum(l[0] * l[1] for l in layers)
+                unit = (m.amount / qty) if m.amount else ((cur_value / stock) if stock > 1e-9 else base)
+                unit = max(unit, 0.0)
+                base = unit
+                rest = qty
+                # 先补回历史超卖：按本次入库成本计价，并同步修正当时那次出库的成本
+                while rest > 1e-9 and backorders:
+                    bo = backorders[0]
+                    take = bo[0] if bo[0] < rest else rest
+                    out_costs[bo[2]] = out_costs.get(bo[2], 0.0) + take * (unit - bo[1])
+                    bo[0] -= take
+                    rest -= take
+                    if bo[0] <= 1e-9:
+                        backorders.popleft()
+                if rest > 1e-9:
+                    layers.append([rest, unit])
+            stock += qty
+            continue
+        # 出库 / 包装消耗 / 盘点减少：先进先出扣减
+        out = -qty
+        cost = 0.0
+        remain = out
+        while remain > 1e-9 and layers:
+            l = layers[0]
+            take = l[0] if l[0] < remain else remain
+            cost += take * l[1]
+            l[0] -= take
+            remain -= take
+            if l[0] <= 1e-9:
+                layers.popleft()
+        if remain > 1e-9:  # 超卖：先按兜底成本暂估，登记待后续入库回补
+            assumed = base if base > 0 else fallback
+            if base <= 0:
+                base = assumed  # 无任何入库批次时，用兜底成本参与均价展示与后续暂估
+            cost += remain * assumed
+            backorders.append([remain, assumed, m.id])
+        stock -= out
+        out_costs[m.id] = out_costs.get(m.id, 0.0) + cost
+    value = 0.0
+    for l in layers:
+        value += l[0] * l[1]
+    return stock, value, list(layers), base, out_costs
+
+
+def _sync_outbound_cogs(db: Session, outbound_id: int) -> None:
+    """把 FIFO 重算后的出库流水金额回写到出库单行成本与单据总成本。
+
+    出库时会为每条明细同序生成一条库存流水，故按 id 顺序一一对应；
+    结构不一致(数量不等)时保守跳过，避免错配。
+    """
+    out = db.get(Outbound, outbound_id)
+    if not out:
+        return
+    lines = sorted(out.lines, key=lambda x: x.id)
+    moves = list(
+        db.execute(
+            select(StockMovement)
+            .where(StockMovement.ref_type == "outbound", StockMovement.ref_id == outbound_id)
+            .order_by(StockMovement.id)
+        ).scalars()
+    )
+    if len(lines) != len(moves):
+        return
+    total = 0.0
+    for line, mv in zip(lines, moves):
+        amount = round(mv.amount or 0.0, 2)
+        if abs((line.cogs or 0.0) - amount) > 1e-6:
+            line.cogs = amount
+        total += line.cogs or 0.0
+    out.total_cogs = round(total, 2)
+
+
+def recompute_product(db: Session, product_id: int) -> Product:
+    """以库存流水为准，按「先进先出(FIFO)」重算商品的库存、库存均价与库存价值。
+
+    入库行 amount 作为批次成本；出库/包装行按最早批次成本结转。
     """
     product = db.get(Product, product_id)
     db.flush()  # 确保本事务中新写入的流水在重算前可见
@@ -189,36 +300,21 @@ def recompute_product(db: Session, product_id: int) -> Product:
             .order_by(StockMovement.id)
         ).scalars()
     )
-    stock = 0.0
-    value = 0.0
-    avg = 0.0
+    stock, value, _layers, base, out_costs = _fifo_replay(moves, fallback=product.unit_cost or 0.0)
+    # 出库/包装消耗行回写 FIFO 结转成本（库存流水是成本的源数据），并同步出库单行成本与总成本
+    affected_outbounds: set[int] = set()
     for m in moves:
-        qty = m.quantity_base
-        if m.move_type == "cost":  # 旧式成本重估：amount 为库存价值增量，库存<=0 时无法重估
-            if stock > 0:
-                value = max(value + (m.amount or 0.0), 0.0)
-                avg = value / stock
+        if m.id not in out_costs:
             continue
-        if m.move_type == "avg":  # 均价重估：amount 为每基础单位均价增量，库存为 0/负时同样生效
-            avg = max(avg + (m.amount or 0.0), 0.0)
-            if stock > 0:
-                value = avg * stock
-            continue
-        if m.move_type == "ucost":  # 成本单价(参考成本)调整：仅作记录，不影响库存/均价/库存价值
-            continue
-        if qty >= 0:  # 入库 / 盘点增加
-            new_stock = stock + qty
-            amount = m.amount if m.amount else qty * avg
-            if new_stock > 0:
-                avg = (value + amount) / new_stock
-            stock = new_stock
-            value = value + amount
-        else:  # 出库 / 包装消耗 / 盘点减少
-            out = -qty
-            cogs = out * avg
-            stock = stock - out
-            value = max(value - cogs, 0.0)
-            m.amount = cogs
+        new_amount = out_costs[m.id]
+        if abs((m.amount or 0.0) - new_amount) > 1e-9:
+            m.amount = new_amount
+        if m.ref_type == "outbound" and m.ref_id:
+            affected_outbounds.add(m.ref_id)
+    for oid in affected_outbounds:
+        _sync_outbound_cogs(db, oid)
+    # 库存均价 = 剩余批次加权均价；无剩余批次时用兜底成本（保证无库存/负库存商品仍有成本参与利润与报表）
+    avg = (value / stock) if stock > 1e-9 else base
     product.stock = round(stock, 6)
     product.stock_value = round(value, 6)
     product.avg_cost = round(avg, 6)
@@ -229,6 +325,37 @@ def recompute_product(db: Session, product_id: int) -> Product:
         product.stock_value = 0.0
     db.flush()
     return product
+
+
+def fifo_state(db: Session, product_id: int) -> tuple[deque, float]:
+    """取商品当前 FIFO 剩余批次与兜底成本（供出库前预估结转成本，不落库、不修改数据）。"""
+    p = db.get(Product, product_id)
+    moves = list(
+        db.execute(
+            select(StockMovement)
+            .where(StockMovement.product_id == product_id)
+            .order_by(StockMovement.id)
+        ).scalars()
+    )
+    _, _, layers, base, _ = _fifo_replay(moves, fallback=(p.unit_cost if p else 0.0) or 0.0)
+    return deque([list(l) for l in layers]), base
+
+
+def fifo_take(layers: deque, base: float, qty: float, fallback: float) -> float:
+    """从 FIFO 批次消耗 qty，返回结转成本；批次不足的缺口按 base（无则 fallback）计价。"""
+    cost = 0.0
+    remain = qty
+    while remain > 1e-9 and layers:
+        l = layers[0]
+        take = l[0] if l[0] < remain else remain
+        cost += take * l[1]
+        l[0] -= take
+        remain -= take
+        if l[0] <= 1e-9:
+            layers.popleft()
+    if remain > 1e-9:
+        cost += remain * (base if base > 0 else fallback)
+    return cost
 
 
 def fmt_qty(qty: float) -> str:
@@ -325,11 +452,22 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
 
 
 def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
-    """构建出库单明细：销售行 + 关联结算行(包装材料) + 费用，并校验库存。不落库。"""
+    """构建出库单明细：销售行 + 关联结算行(包装材料) + 费用，并校验库存。不落库。
+
+    成本结转按「先进先出(FIFO)」：从商品最早的入库批次依次扣减，成本 = Σ(批次单位成本 × 扣减数量)。
+    """
     pack_lines = pack_lines or []
     sale_rows, pack_rows, warnings = [], [], []
     total_amount = total_cogs = 0.0
     express_weight = 0.0  # 整单毛重(kg)，用于自动计算快递费
+    # FIFO 批次缓存：{库存商品id: (剩余批次deque, 兜底成本)}；同单内对同一商品的多行按顺序依次扣减
+    fifo_cache: dict[int, tuple] = {}
+
+    def _fifo_cogs(target: Product, qty: float) -> float:
+        if target.id not in fifo_cache:
+            fifo_cache[target.id] = fifo_state(db, target.id)
+        layers, base = fifo_cache[target.id]
+        return fifo_take(layers, base, qty, target.unit_cost or 0.0)
 
     for ln in lines:
         if hasattr(ln, "product_id"):  # Pydantic 对象
@@ -367,7 +505,7 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
             if line_net_kg <= 0:
                 line_net_kg = line_weight_kg(p, qty_base)
         express_weight += line_net_kg
-        cogs = round(deduction_base * (target.avg_cost or target.unit_cost), 2)
+        cogs = round(_fifo_cogs(target, deduction_base), 2)
         if fee is None:
             fee = p.pack_fee
         sale_rows.append(
@@ -424,9 +562,10 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
             cogs = round(float(spec["cogs"]), 2)
             unit_price = round(cogs / spec["quantity"], 4) if spec["quantity"] else 0.0
         else:
-            cost = m.avg_cost if m.avg_cost else m.unit_cost
-            cogs = round(qty_base * cost, 2)
-            unit_price = cost
+            # 关联材料成本：按先进先出结转；无批次时回退参考成本。
+            # unit_price 与显式成本行口径一致，均按「每展示单位」给出，供前端直接展示与重算。
+            cogs = round(_fifo_cogs(m, qty_base), 2)
+            unit_price = round(cogs / spec["quantity"], 6) if spec["quantity"] else 0.0
         pack_rows.append(
             {
                 "product_id": m.id, "product_name": m.name, "base_unit": m.base_unit,

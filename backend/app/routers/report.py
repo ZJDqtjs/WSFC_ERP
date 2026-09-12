@@ -224,7 +224,7 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
                 "amount": 0.0,
                 "gross_sales": 0.0,
                 "cogs": 0.0,  # 兼容旧字段：仅商品本身的结算成本
-                "goods_cogs": 0.0,  # 商品本身的加权平均成本
+                "goods_cogs": 0.0,  # 商品本身的先进先出结转成本
                 "pack_cogs": 0.0,  # 打包人工费 + 包材耗材
                 "express_cogs": 0.0,  # 快递运费
             },

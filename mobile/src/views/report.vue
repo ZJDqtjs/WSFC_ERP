@@ -52,7 +52,7 @@
               <span class="bold">{{ fmtMoney(r.value) }}</span>
             </div>
             <div class="item-meta">
-              {{ pctOf(r.value).toFixed(1) }}% · {{ r.tag ? '出库时按包装清单自动结算，已计入结转成本' : '销售商品本身的加权平均成本' }}
+              {{ pctOf(r.value).toFixed(1) }}% · {{ r.tag ? '出库时按包装清单自动结算，已计入结转成本' : '销售商品本身的先进先出成本' }}
             </div>
           </div>
           <div class="divider"></div>

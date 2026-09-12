@@ -51,7 +51,7 @@
 
       <div class="card">
         <van-button block round type="success" :loading="saving" @click="submit">确认入库</van-button>
-        <div class="muted" style="margin-top:8px;">按采购单位录入，系统自动折算到基础单位并重算加权平均成本。</div>
+        <div class="muted" style="margin-top:8px;">按采购单位录入，系统自动折算到基础单位并重算先进先出成本。</div>
       </div>
     </template>
 

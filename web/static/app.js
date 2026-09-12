@@ -228,7 +228,7 @@ function fmtCost(p) {
   const f = unitFactor(p, du);
   return `${fmtMoney(p.avg_cost * f)}/${du}`;
 }
-/* 参考成本（默认单位）：优先加权平均成本（自动随入库重算），无入库则用参考成本 */
+/* 参考成本（默认单位）：优先库存均价（先进先出，自动随出入库重算），无则用参考成本 */
 function refCostHtml(p) {
   const du = defaultUnit(p);
   const f = unitFactor(p, du);
@@ -236,7 +236,7 @@ function refCostHtml(p) {
   if (p.unit_cost > 0) return `${fmtMoney(p.unit_cost * f)}/${du}`;
   return "—";
 }
-/* 出库默认单价：优先默认售价，其次参考成本（加权平均/参考成本，按所选单位换算） */
+/* 出库默认单价：优先默认售价，其次参考成本（库存均价/参考成本，按所选单位换算） */
 function fillSalePrice(tr, p, unit) {
   const factor = (p.conversions || {})[unit] || 1;
   let price = 0;
@@ -2237,6 +2237,7 @@ async function deleteInbound(id) {
 
 /* =============== 出库 =============== */
 let outSaleRowId = 0;
+let OUT_PREVIEW = null;  // 最近一次服务端出库预览（含先进先出结转成本），用于展示真实成本
 function initOutbound() {
   if (!$("outDate").value) $("outDate").value = today();
   if (!$("outSaleBody").children.length) addSaleRow();
@@ -2355,12 +2356,13 @@ async function previewOutbound() {
   } catch (e) { toast("预览失败：" + e.message); }
 }
 function renderPackPreview(r) {
+  OUT_PREVIEW = r;
   $("outPreview").style.display = "block";
   $("outFee").value = r.total_fee;
   $("outWarn").innerHTML = (r.warnings || []).map((w) => `<div class="alert warn">⚠ ${esc(w)}（仍可继续，可先补货）</div>`).join("");
   $("outPackBody").innerHTML = r.pack_lines.map((pl, i) => {
     const m = PRODUCTS.find((x) => x.id === pl.product_id);
-    return `<tr data-idx="${i}">
+    return `<tr data-idx="${i}" data-unit="${esc(pl.unit)}" data-up="${pl.unit_price}">
       <td><b>${esc(pl.product_name)}</b></td>
       <td><select class="searchable" onchange="packLineUnitChanged(this)">${m ? unitOptions(m, pl.unit) : `<option>${pl.unit}</option>`}</select></td>
       <td><input type="number" step="any" value="${pl.quantity}" oninput="packLineChanged(this)" style="width:90px;" /></td>
@@ -2385,8 +2387,11 @@ function packLineChanged(inp) {
   const name = tr.querySelector("b").textContent;
   const m = PRODUCTS.find((x) => x.name === name);
   if (m && unit) {
-    const factor = (m.conversions || {})[unit] || 1;
-    const cost = (m.avg_cost || 0) * qty * factor;
+    // 优先按服务端预览给出的先进先出单位成本(每展示单位)重算；单位被改过则回退估计
+    const up = (tr.dataset.unit === unit) ? parseFloat(tr.dataset.up) : NaN;
+    const cost = (up > 0)
+      ? up * qty
+      : (m.avg_cost || 0) * qty * ((m.conversions || {})[unit] || 1);
     tr.querySelector(".pl-amount").textContent = fmtMoney(cost);
   }
   calcOutboundTotals();
@@ -2404,6 +2409,7 @@ function collectPackLines() {
 }
 function calcOutboundTotals() {
   let amount = 0, cogs = 0;
+  let vi = 0;  // 有效销售行序号，与服务端预览 sale_lines 的顺序一致
   document.querySelectorAll("#outSaleBody tr").forEach((tr) => {
     const p = PRODUCTS.find((x) => x.id === +tr.dataset.pid);
     const unitSel = tr.querySelector(".sale-unit");
@@ -2411,7 +2417,16 @@ function calcOutboundTotals() {
     const qty = parseFloat(tr.querySelectorAll("input[type=number]")[0].value) || 0;
     const price = parseFloat(tr.querySelectorAll("input[type=number]")[1].value) || 0;
     amount += qty * price;
-    if (p && unit) cogs += qty * (p.conversions?.[unit] || 1) * (p.avg_cost || 0);
+    if (p && unit && qty > 0) {
+      const sl = OUT_PREVIEW && OUT_PREVIEW.sale_lines ? OUT_PREVIEW.sale_lines[vi] : null;
+      // 与最近一次服务端预览一致时，直接采用后端先进先出结转成本（与保存后一致）
+      if (sl && sl.product_id === p.id && sl.unit === unit && Math.abs(sl.quantity - qty) < 1e-9) {
+        cogs += sl.cogs;
+      } else {
+        cogs += qty * (p.conversions?.[unit] || 1) * (p.avg_cost || 0);  // 估算兜底
+      }
+      vi++;
+    }
   });
   document.querySelectorAll("#outPackBody tr").forEach((tr) => {
     const amt = parseFloat((tr.querySelector(".pl-amount")?.textContent || "0").replace(/[^\d.-]/g, "")) || 0;
@@ -2423,7 +2438,7 @@ function calcOutboundTotals() {
   $("otGross").textContent = fmtMoney(amount - cogs);
   $("otNet").textContent = fmtMoney(amount - cogs - fee);
 }
-function clearPreview() { $("outPreview").style.display = "none"; }
+function clearPreview() { $("outPreview").style.display = "none"; OUT_PREVIEW = null; }
 async function submitOutbound() {
   const lines = collectSaleLines();
   if (!lines.length) { toast("请至少添加一行销售商品"); return; }
@@ -2993,7 +3008,7 @@ function renderCostBreakdown(rep) {
           ${r.tag ? `<span class="badge pack" style="margin-left:6px;">${r.tag}</span>` : ""}</td>
         <td class="num mono">${fmtMoney(r.value)}</td>
         <td class="num mono">${pctOf(r.value).toFixed(1)}%</td>
-        <td class="muted">${r.tag ? "出库时按包装清单自动结算，已计入结转成本" : "销售商品本身的加权平均成本"}</td>
+        <td class="muted">${r.tag ? "出库时按包装清单自动结算，已计入结转成本" : "销售商品本身的先进先出成本"}</td>
       </tr>`).join("")}</tbody>
       <tfoot><tr>
         <td><b>结转成本合计</b></td>

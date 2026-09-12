@@ -9,7 +9,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from .auth import ensure_seed_users
-from .database import Base, get_engine, get_sessionmaker
+from .database import Base, DATA_DIR, get_engine, get_sessionmaker
 from .models import Outbound, OutboundLine, PackRule, Product, User
 from .services import recompute_product, seed_units
 
@@ -249,6 +249,28 @@ def copy_users(src_key: str, dst_key: str) -> None:
         dst.close()
 
 
+def _fifo_recompute_once(maker: sessionmaker, key: str) -> None:
+    """成本口径由「加权平均」切换为「先进先出(FIFO)」：首次启动按 FIFO 全量重算一次。
+
+    幂等：以 data/.cost_method_fifo_v3_{key} 标记是否已重算（标记丢失只会再算一次，无副作用）。
+    会重算商品缓存(stock/avg_cost/stock_value)、出库流水金额，并同步修正出库单成本（含超卖回补）。
+    """
+    marker = DATA_DIR / f".cost_method_fifo_v3_{key}"
+    if marker.exists():
+        return
+    db = maker()
+    try:
+        for pid in db.execute(select(Product.id)).scalars():
+            recompute_product(db, pid)
+        db.commit()
+        marker.write_text("fifo\n", encoding="utf-8")
+    except Exception as e:  # 重算失败不影响主流程（下次启动自动重试）
+        print("[迁移] FIFO 全量重算失败:", e)
+        db.rollback()
+    finally:
+        db.close()
+
+
 def init_warehouse(key: str, copy_users_from: str | None = None) -> None:
     """幂等初始化分仓：建表 + 迁移 + 单位/账号种子 + 回填。"""
     eng = get_engine(key)
@@ -265,3 +287,4 @@ def init_warehouse(key: str, copy_users_from: str | None = None) -> None:
         db.commit()
     finally:
         db.close()
+    _fifo_recompute_once(maker, key)

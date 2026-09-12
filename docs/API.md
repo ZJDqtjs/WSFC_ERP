@@ -116,7 +116,7 @@ Product 字段：
 | multiplier           | float    | 1 单订单商品 = multiplier × 库存默认单位           |
 | is\_active           | bool     | 是否启用                                    |
 | stock                | float    | 当前库存（基础单位）                              |
-| avg\_cost            | float    | 加权平均成本（基础单位）                            |
+| avg\_cost            | float    | 库存均价（先进先出剩余批次加权，基础单位）                   |
 | stock\_value         | float    | 库存总值                                    |
 
 ### 3.2 新建商品

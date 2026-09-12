@@ -293,7 +293,8 @@ async function doPreview() {
 }
 
 /* 预览区成本重算（包材数量/单位被手动改过时）
-   口径与后端 build_order 一致：成本 = (均价 or 参考成本，每基础单位) × 数量 × 单位换算系数；
+   成本优先采用后端 build_order 给出的先进先出(FIFO)单位成本（unit_price，按展示单位），
+   与保存后的出库单一致；缺失时回退「库存均价 or 参考成本 × 单位换算系数」估算。
    快递费行的商品无库存成本，直接沿用后端给出的每单费用（unit_price）。 */
 function packLineBaseCost(pl) {
   const p = PRODUCTS.value.find((x) => x.id === pl.product_id)
@@ -301,12 +302,14 @@ function packLineBaseCost(pl) {
   return p ? (num(p.avg_cost) || num(p.unit_cost)) : 0
 }
 function packLineUnitPrice(pl) {
+  const up = num(pl.unit_price)
+  if (up > 0) return up
   const base = packLineBaseCost(pl)
   if (base > 0) {
     const p = PRODUCTS.value.find((x) => x.id === pl.product_id)
     return base * unitFactor(p, pl.unit)
   }
-  return num(pl.unit_price)
+  return 0
 }
 function packLineCost(pl) {
   return packLineUnitPrice(pl) * num(pl.quantity)
