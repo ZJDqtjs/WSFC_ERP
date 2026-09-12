@@ -273,8 +273,8 @@ capacitor/android/captures/
 
 !/deploy
 
-# 运行时数据目录：数据库、WAL/SHM、备份、上传发票、密钥（勿提交）
-/backend/data/
+# 运行时数据目录：私有仓库下 backend/data 允许追踪（含数据库/WAL/备份/上传）
+# data1 为历史目录，仍忽略
 /backend/data1/
 
 # AI 工具工作目录（本机缓存，勿提交）
