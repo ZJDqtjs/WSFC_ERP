@@ -272,6 +272,12 @@ capacitor/android/captures/
 
 
 !/deploy
-/backend/data/uploads
+
+# 运行时数据目录：数据库、WAL/SHM、备份、上传发票、密钥（勿提交）
+/backend/data/
+/backend/data1/
+
+# AI 工具工作目录（本机缓存，勿提交）
+/.workbuddy/
 
 
