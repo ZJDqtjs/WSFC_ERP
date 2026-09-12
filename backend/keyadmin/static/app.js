@@ -126,6 +126,14 @@ async function delUser(id, username) {
     loadUsers();
   } catch (e) { toast("删除失败：" + e.message); }
 }
+async function syncUsers() {
+  if (!confirm("确认将默认仓（奥斯迪）的全部账号与私钥同步到其他分仓？\n这样同一私钥即可登录所有分仓。")) return;
+  try {
+    const r = await api("/api/users/sync", "POST");
+    toast(r.note || "已同步");
+    loadUsers();
+  } catch (e) { toast("同步失败：" + e.message); }
+}
 
 /* ---------- 备份与应急抢救（后门） ---------- */
 async function loadBackups() {
