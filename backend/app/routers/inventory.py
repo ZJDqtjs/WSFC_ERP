@@ -110,24 +110,24 @@ def adjust_stock(data: AdjustIn, db: Session = Depends(get_db), user: User = Dep
     delta_disp = 0.0
     parts = []
 
-    # 1) 平均成本相对调整：在现有均价基础上增减（按展示单位单价），作用于当前全部库存
+    # 1) 平均成本相对调整：在现有均价基础上增减（按展示单位单价）。
+    #    以「每基础单位均价增量」记录流水(move_type=avg)，库存为 0 或负时同样生效，
+    #    使无库存/负库存商品也能设定成本，进而参与后续出库成本结转与利润/报表计算。
     avg_delta_disp = 0.0
     if avg_str:
         avg_delta_disp = _parse_rel(avg_str, "平均成本")
         avg_delta_base = round(avg_delta_disp / f_disp, 6)
-        value_delta = round(p.stock * avg_delta_base, 2)
-        if value_delta != 0:
-            movements.append(
-                StockMovement(
-                    product_id=p.id,
-                    move_type="cost",
-                    quantity_base=0.0,
-                    amount=value_delta,
-                    ref_type="manual",
-                    date=data.date,
-                    operator=op,
-                )
+        movements.append(
+            StockMovement(
+                product_id=p.id,
+                move_type="avg",
+                quantity_base=0.0,
+                amount=avg_delta_base,  # 每基础单位均价增量
+                ref_type="manual",
+                date=data.date,
+                operator=op,
             )
+        )
         parts.append(f"均价{avg_delta_disp:+g}元/{du}")
 
     # 2) 成本单价（参考成本）相对调整：直接修改 product.unit_cost 字段，并记录一条 ucost 流水用于回退
@@ -163,9 +163,10 @@ def adjust_stock(data: AdjustIn, db: Session = Depends(get_db), user: User = Dep
             S0 = p.stock or 0.0
             V_eff = p.stock_value or 0.0  # 现库存价值（负库存时为0）
             A_eff = p.avg_cost or 0.0     # 现均价（每基础单位）
-            if avg_str and S0 > 0:        # 与均价重估流水同步：先重估再盘盈
-                A_eff += avg_delta_base
-                V_eff += S0 * avg_delta_base
+            if avg_str:                   # 与均价重估流水同步：先重估再盘盈
+                A_eff += avg_delta_base   # 均价重估在库存<=0 时也会生效
+                if S0 > 0:                # 仅库存>0 时重估同步改变库存价值
+                    V_eff += S0 * avg_delta_base
             ns = S0 + delta_base
             if ns > 0:
                 amount = round(A_eff * ns - V_eff, 2)
@@ -269,13 +270,18 @@ def list_adjustments(
         du = p.default_unit or p.base_unit
         f = (p.conversions or {}).get(du, 1) or 1
         qty_move = next((r for r in g["rows"] if r.move_type == "adjust"), None)
-        cost_move = next((r for r in g["rows"] if r.move_type == "cost"), None)
+        cost_move = next((r for r in g["rows"] if r.move_type in ("avg", "cost")), None)
         uc_move = next((r for r in g["rows"] if r.move_type == "ucost"), None)
         qty_disp = (qty_move.quantity_base / f) if qty_move else 0.0
         cost_delta = 0.0
         if cost_move:
-            b = basis.get(cost_move.id, 0.0)
-            cost_delta = (cost_move.amount / b * f) if b > 0 else 0.0
+            if cost_move.move_type == "avg":
+                # 新式均价流水：amount 即每基础单位均价增量
+                cost_delta = cost_move.amount * f
+            else:
+                # 旧式成本重估流水：amount 为库存价值增量，需除以当时库存基数还原单位均价增量
+                b = basis.get(cost_move.id, 0.0)
+                cost_delta = (cost_move.amount / b * f) if b > 0 else 0.0
         uc_delta = (uc_move.amount * f) if uc_move else 0.0
         first = g["rows"][0]
         remark = (qty_move.remark if qty_move else uc_move.remark if uc_move else cost_move.remark) or ""

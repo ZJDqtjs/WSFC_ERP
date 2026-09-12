@@ -281,5 +281,6 @@ capacitor/android/captures/
 
 # AI 工具工作目录（本机缓存，勿提交）
 /.workbuddy/
+/.trae/
 
 !/mobile/dist

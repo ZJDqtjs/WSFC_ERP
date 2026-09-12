@@ -3048,7 +3048,7 @@ async function loadMovements() {
   if (kw) rows = rows.filter((m) => [m.date, m.product_name, m.remark, m.operator].join(" ").toLowerCase().includes(kw));
   const t = $("mvTable");
   rows = applyTableSort(t, rows);
-  const typeBadge = { in: '<span class="badge in">入库</span>', out: '<span class="badge out">出库</span>', pack_out: '<span class="badge pack">包装消耗</span>', work: '<span class="badge income">工作量</span>', adjust: '<span class="badge adjust">盘点</span>' };
+  const typeBadge = { in: '<span class="badge in">入库</span>', out: '<span class="badge out">出库</span>', pack_out: '<span class="badge pack">包装消耗</span>', work: '<span class="badge income">工作量</span>', adjust: '<span class="badge adjust">盘点</span>', cost: '<span class="badge adjust">均价重估</span>', avg: '<span class="badge adjust">均价重估</span>', ucost: '<span class="badge adjust">成本单价</span>' };
   t.innerHTML = `<thead><tr>
     <th data-key="date">时间${sortArrow("mvTable", "date")}</th>
     <th data-key="product_name">商品${sortArrow("mvTable", "product_name")}</th>

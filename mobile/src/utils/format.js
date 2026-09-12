@@ -71,6 +71,6 @@ export const daysAgoStr = (n) => {
 export const isRelAdjust = (s) => /^[+-]\d+(\.\d+)?$/.test((s || '').trim())
 
 export const moveTypeLabel = (t) =>
-  ({ in: '入库', out: '出库', pack_out: '关联扣减', adjust: '盘点', cost: '均价重估', ucost: '成本单价' }[t] || t || '')
+  ({ in: '入库', out: '出库', pack_out: '关联扣减', adjust: '盘点', cost: '均价重估', avg: '均价重估', ucost: '成本单价' }[t] || t || '')
 
 export const shrink = (arr) => [...new Set((arr || []).filter(Boolean))]

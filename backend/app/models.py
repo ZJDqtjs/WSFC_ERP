@@ -139,7 +139,7 @@ class OutboundLine(Base):
 
 
 class StockMovement(Base):
-    """库存流水（源数据）。move_type: in / out / pack_out / adjust。quantity_base 有符号。"""
+    """库存流水（源数据）。move_type: in / out / pack_out / adjust / avg / ucost。quantity_base 有符号。"""
 
     __tablename__ = "stock_movements"
 

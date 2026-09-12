@@ -324,7 +324,7 @@ Outbound 字段：`id, code, customer, operator, date, remark, total_amount, tot
 ]
 ```
 
-`move_type`：`in` 入库 / `out` 出库 / `pack_out` 关联扣减 / `adjust` 盘点。
+`move_type`：`in` 入库 / `out` 出库 / `pack_out` 关联扣减 / `adjust` 盘点 / `avg` 均价重估 / `ucost` 成本单价。
 
 ### 6.2 库存盘点调整
 

@@ -194,10 +194,15 @@ def recompute_product(db: Session, product_id: int) -> Product:
     avg = 0.0
     for m in moves:
         qty = m.quantity_base
-        if m.move_type == "cost":  # 成本重估：不改变库存，仅按当前库存总量调整价值与均价
+        if m.move_type == "cost":  # 旧式成本重估：amount 为库存价值增量，库存<=0 时无法重估
             if stock > 0:
                 value = max(value + (m.amount or 0.0), 0.0)
                 avg = value / stock
+            continue
+        if m.move_type == "avg":  # 均价重估：amount 为每基础单位均价增量，库存为 0/负时同样生效
+            avg = max(avg + (m.amount or 0.0), 0.0)
+            if stock > 0:
+                value = avg * stock
             continue
         if m.move_type == "ucost":  # 成本单价(参考成本)调整：仅作记录，不影响库存/均价/库存价值
             continue
