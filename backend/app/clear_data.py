@@ -62,10 +62,10 @@ CLEAR_ITEMS: list[dict] = [
     },
     {
         "key": "stock_only",
-        "name": "仅清库存数量",
-        "desc": "仅将商品的 stock 归零，保留 avg_cost / stock_value / workload",
+        "name": "仅清库存（数量与价值）",
+        "desc": "仅将商品的 stock / stock_value 归零，保留 avg_cost / workload",
         "tables": [],
-        "reset_fields": ["stock"],
+        "reset_fields": ["stock", "stock_value"],
     },
 ]
 
