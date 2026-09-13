@@ -67,6 +67,22 @@ CLEAR_ITEMS: list[dict] = [
         "tables": [],
         "reset_fields": ["stock", "stock_value"],
     },
+    {
+        "key": "products",
+        "name": "商品资料（含关联业务）",
+        "desc": "删除全部商品，并清空引用商品的出库/入库/流水/财务/入仓数据（工作台统计随之归零）",
+        "tables": [
+            "outbound_lines",
+            "outbounds",
+            "inbounds",
+            "stock_movements",
+            "finance_records",
+            "warehouse_ins",
+            "warehouse_products",
+            "code_mappings",
+        ],
+        "delete_products": True,
+    },
 ]
 
 # 商品库存字段中文标签（用于结果展示）
@@ -86,6 +102,7 @@ _TABLE_ORDER = [
     "finance_records",
     "warehouse_ins",
     "warehouse_products",
+    "code_mappings",
 ]
 
 _ITEM_BY_KEY = {it["key"]: it for it in CLEAR_ITEMS}
@@ -155,7 +172,9 @@ def preview(key: str | None = None) -> dict:
     try:
         items = []
         for it in CLEAR_ITEMS:
-            if it.get("reset_fields"):
+            if it.get("delete_products"):
+                count = _count_table(conn, "products")
+            elif it.get("reset_fields"):
                 count = _stock_reset_count(conn, it["reset_fields"])
             else:
                 count = sum(_count_table(conn, t) for t in it["tables"])
@@ -205,11 +224,14 @@ def execute(key: str | None, item_keys: list[str], backup: bool = True) -> dict:
     if not item_keys:
         raise ValueError("未选择任何要清除的数据类别")
 
-    # 收集要删除的表（按外键安全顺序去重），以及需要归零的商品库存字段
+    # 收集要删除的表（按外键安全顺序去重）、需要归零的商品库存字段、是否删除商品
     tables: list[str] = []
     reset_fields: list[str] = []
+    delete_products = False
     for k in item_keys:
         it = _ITEM_BY_KEY[k]
+        if it.get("delete_products"):
+            delete_products = True
         for f in it.get("reset_fields", []):
             if f not in reset_fields:
                 reset_fields.append(f)
@@ -235,16 +257,27 @@ def execute(key: str | None, item_keys: list[str], backup: bool = True) -> dict:
             conn.execute(f"DELETE FROM {t}")
             cleared[t] = n
 
-        if reset_fields and _table_exists(conn, "products"):
+        # 删除商品时无需再单独归零字段（商品已整体删除）
+        if reset_fields and not delete_products and _table_exists(conn, "products"):
             n = _stock_reset_count(conn, reset_fields)
             set_sql = ", ".join(f"{f} = 0" for f in reset_fields)
             conn.execute(f"UPDATE products SET {set_sql}")
             label = "、".join(_STOCK_FIELD_LABELS.get(f, f) for f in reset_fields)
             cleared[f"products({label}归零)"] = n
 
+        # 删除商品：先解除订单商品→库存商品的自引用外键，再整体删除
+        if delete_products and _table_exists(conn, "products"):
+            conn.execute("UPDATE products SET stock_product_id = NULL")
+            n = _count_table(conn, "products")
+            conn.execute("DELETE FROM products")
+            cleared["products"] = n
+
         # 重置已清除表的自增序列
         if _table_exists(conn, "sqlite_sequence"):
-            for t in tables:
+            seq_tables = list(tables)
+            if delete_products and "products" not in seq_tables:
+                seq_tables.append("products")
+            for t in seq_tables:
                 conn.execute("DELETE FROM sqlite_sequence WHERE name = ?", (t,))
 
         conn.commit()
