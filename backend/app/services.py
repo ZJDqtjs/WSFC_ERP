@@ -179,10 +179,11 @@ def get_or_create_express_product(db: Session) -> Product:
 def _fifo_replay(moves, fallback: float = 0.0) -> tuple[float, float, list, float, dict]:
     """按「先进先出(FIFO)」重放库存流水，计算库存量、库存价值、剩余批次与每次出库成本。
 
-    - 入库 / 盘点增加：先按新入库成本「补回」历史上的超卖(负库存)，再把余量作为新批次(layer)；
+    - 入库 / 盘点增加：先按本次入库成本「补回」历史上的超卖(负库存)，余量作为新批次(layer)；
     - 出库 / 包装消耗 / 盘点减少：从最早批次依次扣减，成本 = Σ(批次单位成本 × 扣减数量)；
-      批次不足(超卖)时，缺口先按兜底成本暂估，并登记为「待补负库存」，待后续入库时按实际进价回补，
-      同步修正该次出库成本——从而保证「进货 − 出库成本 = 剩余库存价值」始终成立；
+      批次不足(超卖)时，缺口先按「当时已知」的最后进价暂估（超卖时无法预知下次进货价），
+      并登记为「待补负库存」；后续入库优先补回，并按**实际进价**回溯修正当时那次出库的成本，
+      使「进货 − 出库成本 = 剩余库存价值」始终成立（与标准 FIFO 一致）；
     - 均价重估(avg)：把「每基础单位均价增量」平摊到所有现存批次；旧式成本重估(cost)的
       amount 为库存价值增量，换算成单位增量后同样处理；
     - 参考成本(ucost)：仅作记录，不影响库存与成本。
@@ -190,7 +191,7 @@ def _fifo_replay(moves, fallback: float = 0.0) -> tuple[float, float, list, floa
     返回 (stock, value, layers, base, out_costs)：
       layers   剩余批次 [[qty, unit_cost], ...]（qty > 0）
       base     兜底单位成本（取最新一批的单位成本；库存为 0/负时用于均价展示与出库兜底）
-      out_costs  {出库流水 id: 该次 FIFO 结转成本（含后续补回修正）}
+      out_costs  {出库流水 id: 该次 FIFO 结转成本（含后续按实际进价的回补修正）}
     """
     layers: deque[list[float]] = deque()  # [剩余数量, 单位成本]
     backorders: deque[list] = deque()  # 超卖待补：[待补数量, 暂估单位成本, 对应出库流水id]
@@ -219,7 +220,7 @@ def _fifo_replay(moves, fallback: float = 0.0) -> tuple[float, float, list, floa
                 unit = max(unit, 0.0)
                 base = unit
                 rest = qty
-                # 先补回历史超卖：按本次入库成本计价，并同步修正当时那次出库的成本
+                # 先补回历史超卖：按本次实际进价计价，并回溯修正当时那次出库的成本
                 while rest > 1e-9 and backorders:
                     bo = backorders[0]
                     take = bo[0] if bo[0] < rest else rest
@@ -301,7 +302,8 @@ def recompute_product(db: Session, product_id: int) -> Product:
         ).scalars()
     )
     stock, value, _layers, base, out_costs = _fifo_replay(moves, fallback=product.unit_cost or 0.0)
-    # 出库/包装消耗行回写 FIFO 结转成本（库存流水是成本的源数据），并同步出库单行成本与总成本
+    # 出库/包装消耗行回写 FIFO 结转成本（库存流水是成本的源数据），并同步出库单行成本与总成本。
+    # 只同步「成本确实发生变化」的那几单（通常是超卖回补涉及的少数单），避免批量导入时 O(N²) 全量重写。
     affected_outbounds: set[int] = set()
     for m in moves:
         if m.id not in out_costs:
@@ -309,8 +311,8 @@ def recompute_product(db: Session, product_id: int) -> Product:
         new_amount = out_costs[m.id]
         if abs((m.amount or 0.0) - new_amount) > 1e-9:
             m.amount = new_amount
-        if m.ref_type == "outbound" and m.ref_id:
-            affected_outbounds.add(m.ref_id)
+            if m.ref_type == "outbound" and m.ref_id:
+                affected_outbounds.add(m.ref_id)
     for oid in affected_outbounds:
         _sync_outbound_cogs(db, oid)
     # 库存均价 = 剩余批次加权均价；无剩余批次时用兜底成本（保证无库存/负库存商品仍有成本参与利润与报表）
@@ -420,19 +422,19 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     )
     db.add(rec)
     db.flush()
-    db.add(
-        StockMovement(
-            product_id=product.id,
-            move_type="in",
-            quantity_base=qty_base,
-            amount=amount,
-            ref_type="inbound",
-            ref_id=rec.id,
-            date=date,
-            operator=op,
-            remark=f"入库 {rec.code}",
-        )
+    mv = StockMovement(
+        product_id=product.id,
+        move_type="in",
+        quantity_base=qty_base,
+        amount=amount,
+        ref_type="inbound",
+        ref_id=rec.id,
+        date=date,
+        operator=op,
+        remark=f"入库 {rec.code}",
     )
+    db.add(mv)
+    db.flush()
     db.add(
         FinanceRecord(
             type="expense",

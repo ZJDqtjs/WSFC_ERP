@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .auth import ensure_seed_users
 from .database import Base, DATA_DIR, get_engine, get_sessionmaker
-from .models import Outbound, OutboundLine, PackRule, Product, User
+from .models import FinanceRecord, Outbound, OutboundLine, PackRule, Product, User
 from .services import recompute_product, seed_units
 
 
@@ -249,19 +249,27 @@ def copy_users(src_key: str, dst_key: str) -> None:
         dst.close()
 
 
-def _fifo_recompute_once(maker: sessionmaker, key: str) -> None:
-    """成本口径由「加权平均」切换为「先进先出(FIFO)」：首次启动按 FIFO 全量重算一次。
+def _drop_cost_variance_records(db) -> None:
+    """清理历史「成本差异」记录：该差额现已按标准 FIFO 直接计入出库成本，避免重复计账。"""
+    for f in db.execute(select(FinanceRecord).where(FinanceRecord.category == "成本差异")).scalars():
+        db.delete(f)
 
-    幂等：以 data/.cost_method_fifo_v3_{key} 标记是否已重算（标记丢失只会再算一次，无副作用）。
-    会重算商品缓存(stock/avg_cost/stock_value)、出库流水金额，并同步修正出库单成本（含超卖回补）。
+
+def _fifo_recompute_once(maker: sessionmaker, key: str) -> None:
+    """先进先出(FIFO)成本一次性迁移：全量重算 + 清理历史「成本差异」记录。
+
+    幂等：以 data/.cost_method_fifo_v5_{key} 标记是否已处理（标记丢失只会再算一次，无副作用）。
+    重算商品缓存(stock/avg_cost/stock_value)与出库流水金额（超卖部分按后续实际进价回溯修正），
+    并同步出库单行/总成本。
     """
-    marker = DATA_DIR / f".cost_method_fifo_v3_{key}"
+    marker = DATA_DIR / f".cost_method_fifo_v5_{key}"
     if marker.exists():
         return
     db = maker()
     try:
         for pid in db.execute(select(Product.id)).scalars():
             recompute_product(db, pid)
+        _drop_cost_variance_records(db)
         db.commit()
         marker.write_text("fifo\n", encoding="utf-8")
     except Exception as e:  # 重算失败不影响主流程（下次启动自动重试）
