@@ -270,8 +270,12 @@ class WarehouseProduct(Base):
     sku: Mapped[str] = mapped_column(String(64), default="")  # SKU
     barcode: Mapped[str] = mapped_column(String(64), default="")  # 69 码
     box_spec: Mapped[float] = mapped_column(Float, default=0.0)  # 箱规（袋/箱）
-    purchase_price: Mapped[float] = mapped_column(Float, default=0.0)  # 采购价（元/袋）
+    purchase_price: Mapped[float] = mapped_column(Float, default=0.0)  # 采购价（元/袋）＝给「我」的收入单价
     freight: Mapped[float] = mapped_column(Float, default=0.0)  # 运费（元/袋），暂空待维护
+    stock_product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("products.id"), nullable=True, index=True
+    )  # 关联的库存商品（成本按库存管理的均价/参考成本计算）
+    bag_weight: Mapped[float] = mapped_column(Float, default=0.0)  # 每袋净重（关联库存商品的基础单位，通常克）
     shelf_life: Mapped[str] = mapped_column(String(32), default="")  # 保质期，如 半年/一年
     remark: Mapped[str] = mapped_column(String(255), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -300,9 +304,16 @@ class WarehouseIn(Base):
     quantity: Mapped[float] = mapped_column(Float, default=0.0)  # 数量（袋）
     box_count: Mapped[float] = mapped_column(Float, default=0.0)  # 箱数
     box_spec: Mapped[float] = mapped_column(Float, default=0.0)  # 箱规（袋/箱）
-    unit_price: Mapped[float] = mapped_column(Float, default=0.0)  # 采购价（元/袋）
-    freight: Mapped[float] = mapped_column(Float, default=0.0)  # 运费（元/袋），暂空
-    amount: Mapped[float] = mapped_column(Float, default=0.0)  # 入仓成本合计
+    unit_price: Mapped[float] = mapped_column(Float, default=0.0)  # 采购价（元/袋）＝收入单价
+    freight: Mapped[float] = mapped_column(Float, default=0.0)  # 运费（元/袋）
+    # 成本口径：收入 = 数量×采购价；商品成本 = 数量×每袋净重×库存单位成本；运费 = 数量×运费单价
+    stock_product_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 关联库存商品
+    bag_weight: Mapped[float] = mapped_column(Float, default=0.0)  # 每袋净重快照（基础单位）
+    unit_cost: Mapped[float] = mapped_column(Float, default=0.0)  # 库存单位成本快照（元/基础单位）
+    cogs: Mapped[float] = mapped_column(Float, default=0.0)  # 商品成本
+    amount: Mapped[float] = mapped_column(Float, default=0.0)  # 收入合计（=数量×采购价）
+    freight_total: Mapped[float] = mapped_column(Float, default=0.0)  # 运费合计
+    profit: Mapped[float] = mapped_column(Float, default=0.0)  # 毛利 = 收入 - 商品成本 - 运费
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
     operator: Mapped[str] = mapped_column(String(32), default="")
     remark: Mapped[str] = mapped_column(String(255), default="")

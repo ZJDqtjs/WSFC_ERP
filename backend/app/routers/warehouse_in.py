@@ -1,11 +1,15 @@
 """入仓：按「袋」采购的备货商品（半加工等）入仓台账。
 
-- 入仓品资料：名称 / 类目 / SKU / 69码 / 箱规 / 采购价(元/袋) / 运费(元/袋，暂空待维护)。
-- 入仓记录：入库数量（袋）、箱数、采购单号、配送中心、采购价/运费快照与成本合计。
-- 导入《入仓配送明细》常温贴单：按「采购单号 / 商品名称 / 箱数 / 配送中心 / 数量 / 箱规」
-  解析每一行，自动匹配入仓品（可人工调整），确认后按对应数量入仓。
+口径：
+- 入仓品资料：名称 / 类目 / SKU / 69码 / 箱规 / 采购价(元/袋，即给「我」的收入单价) / 运费(元/袋)，
+  并关联一个「库存商品(大类)」+ 每袋净重（库存管理的基础单位，通常克），用于成本核算。
+- 入仓记录：收入 = 数量 × 采购价；商品成本 = 数量 × 每袋净重 × 库存单位成本（库存均价优先，回退参考成本）；
+  运费 = 数量 × 运费单价；毛利 = 收入 − 商品成本 − 运费。
+- 导入《入仓配送明细》常温贴单：表头「采购单号 / 商品名称 / 箱数 / 配送中心 / 数量 / 箱规」，
+  采购单号为合并单元格时自动向下回填；每袋净重优先从商品名解析（净重2斤 / 228g / 1.2kg），
+  否则取入仓品的每袋净重；箱数、数量、价格、运费、净重均可在预览页修正。
 
-入仓记录独立于库存商品(Product)，不改变现有库存；仅作为入仓成本台账。
+入仓记录独立于库存商品(Product)，不改变现有库存；商品成本按库存管理的成本口径取值。
 """
 import difflib
 import re
@@ -20,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import User, WarehouseIn, WarehouseProduct
+from ..models import Product, User, WarehouseIn, WarehouseProduct
 
 router = APIRouter(prefix="/api/warehouse-in", tags=["warehouse-in"])
 
@@ -85,6 +89,21 @@ def _to_float(v, default=0.0) -> float:
             return default
 
 
+# 从商品名解析每袋净重（克）：净重2斤 → 1000；1.2kg → 1200；228g → 228
+def _parse_weight_grams(name: str) -> float:
+    s = str(name or "").lower()
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:公斤|千克|kg)", s)
+    if m:
+        return round(float(m.group(1)) * 1000, 4)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*斤", s)
+    if m:
+        return round(float(m.group(1)) * 500, 4)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:克|g)", s)
+    if m:
+        return round(float(m.group(1)), 4)
+    return 0.0
+
+
 def _detect_header(rows, aliases) -> tuple[dict, int]:
     """扫描前 20 行找表头行，返回 {字段: 列索引} 与数据起始行号。"""
     flat = {name for names in aliases.values() for name in names}
@@ -108,23 +127,56 @@ def _load_workbook(file: UploadFile):
         raise HTTPException(400, "无法读取文件，请上传 .xlsx 格式")
 
 
+# 库存成本：库存均价(先进先出)优先，无库存时回退参考成本 unit_cost。
+# 返回 (库存商品, 基础单位成本, 默认单位换算系数, 默认单位成本)。
+# 成本口径统一按「默认单位」（如 公斤），与库存管理展示口径一致。
+def _stock_info(db: Session, stock_product_id: int | None) -> tuple[Product | None, float, float, float]:
+    if not stock_product_id:
+        return None, 0.0, 1.0, 0.0
+    sp = db.get(Product, stock_product_id)
+    if not sp:
+        return None, 0.0, 1.0, 0.0
+    base_cost = float((sp.avg_cost if (sp.avg_cost or 0) > 0 else (sp.unit_cost or 0)) or 0)
+    du = sp.default_unit or sp.base_unit
+    factor = float((sp.conversions or {}).get(du) or 1) or 1.0
+    return sp, base_cost, factor, base_cost * factor
+
+
+def _stock_default_unit(sp: Product | None) -> str:
+    return (sp.default_unit or sp.base_unit) if sp else ""
+
+
 # ---------------- 序列化 ----------------
-def _product_dict(p: WarehouseProduct) -> dict:
+def _product_dict(db: Session, p: WarehouseProduct) -> dict:
+    sp, _base_cost, _factor, unit_cost = _stock_info(db, p.stock_product_id)
     return {
         "id": p.id, "name": p.name, "category": p.category, "sku": p.sku,
         "barcode": p.barcode, "box_spec": p.box_spec,
         "purchase_price": p.purchase_price, "freight": p.freight,
+        "stock_product_id": p.stock_product_id,
+        "stock_product_name": sp.name if sp else "",
+        "stock_base_unit": (sp.base_unit if sp else ""),
+        "stock_default_unit": _stock_default_unit(sp),
+        "stock_unit_cost": round(unit_cost, 6),  # 元/默认单位（如 元/公斤）
+        "bag_weight": p.bag_weight,  # 每袋净重（默认单位，如 公斤）
+        "bag_cost": round((p.bag_weight or 0) * unit_cost, 4),  # 每袋商品成本
         "shelf_life": p.shelf_life, "remark": p.remark, "is_active": p.is_active,
     }
 
 
-def _in_dict(r: WarehouseIn) -> dict:
+def _in_dict(db: Session, r: WarehouseIn) -> dict:
+    sp = db.get(Product, r.stock_product_id) if r.stock_product_id else None
     return {
         "id": r.id, "code": r.code, "product_id": r.product_id,
         "product_name": r.product_name, "category": r.category, "unit": r.unit,
         "purchase_no": r.purchase_no, "center": r.center,
         "quantity": r.quantity, "box_count": r.box_count, "box_spec": r.box_spec,
-        "unit_price": r.unit_price, "freight": r.freight, "amount": r.amount,
+        "unit_price": r.unit_price, "freight": r.freight,
+        "stock_product_id": r.stock_product_id,
+        "stock_product_name": sp.name if sp else "",
+        "stock_default_unit": _stock_default_unit(sp),
+        "bag_weight": r.bag_weight, "unit_cost": r.unit_cost,
+        "cogs": r.cogs, "amount": r.amount, "freight_total": r.freight_total, "profit": r.profit,
         "date": r.date, "operator": r.operator, "remark": r.remark,
         "import_group": r.import_group,
     }
@@ -139,6 +191,8 @@ class ProductIn(BaseModel):
     box_spec: float = 0.0
     purchase_price: float = 0.0
     freight: float = 0.0
+    stock_product_id: int | None = None
+    bag_weight: float = 0.0
     shelf_life: str = ""
     remark: str = ""
     is_active: bool = True
@@ -147,7 +201,7 @@ class ProductIn(BaseModel):
 @router.get("/products")
 def list_products(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     rows = db.execute(select(WarehouseProduct).order_by(WarehouseProduct.id)).scalars()
-    return [_product_dict(p) for p in rows]
+    return [_product_dict(db, p) for p in rows]
 
 
 @router.post("/products")
@@ -159,7 +213,7 @@ def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = 
     db.add(p)
     db.commit()
     db.refresh(p)
-    return _product_dict(p)
+    return _product_dict(db, p)
 
 
 @router.put("/products/{pid}")
@@ -175,7 +229,7 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
     p.name = name
     db.commit()
     db.refresh(p)
-    return _product_dict(p)
+    return _product_dict(db, p)
 
 
 @router.delete("/products/{pid}")
@@ -199,8 +253,9 @@ class InboundIn(BaseModel):
     quantity: float
     box_count: float = 0.0
     box_spec: float = 0.0
-    unit_price: float = 0.0
-    freight: float = 0.0
+    unit_price: float = 0.0  # 采购价（元/袋，收入单价）
+    freight: float = 0.0  # 运费（元/袋）
+    bag_weight: float = 0.0  # 每袋净重（基础单位），0=用入仓品默认
     date: str
     operator: str = ""
     remark: str = ""
@@ -218,6 +273,7 @@ class InboundUpdate(BaseModel):
     box_spec: float = 0.0
     unit_price: float = 0.0
     freight: float = 0.0
+    bag_weight: float = 0.0
     date: str
     remark: str = ""
 
@@ -241,6 +297,16 @@ def _create_record(db: Session, payload: dict, operator: str, import_group: str 
     name = (payload.get("product_name") or "").strip() or (product.name if product else "")
     if not name:
         raise ValueError("缺少商品名称")
+
+    # 成本口径：库存管理的默认单位成本 × 每袋净重（默认单位）
+    stock_product_id = product.stock_product_id if product else None
+    sp, _base_cost, _factor, unit_cost = _stock_info(db, stock_product_id)
+    bag_weight = float(payload.get("bag_weight") or 0) or float((product.bag_weight if product else 0) or 0)
+    revenue = round(quantity * unit_price, 2)
+    cogs = round(quantity * bag_weight * unit_cost, 2)
+    freight_total = round(quantity * freight, 2)
+    profit = round(revenue - cogs - freight_total, 2)
+
     rec = WarehouseIn(
         code=_gen_code(db, date),
         product_id=product.id if product else None,
@@ -254,7 +320,13 @@ def _create_record(db: Session, payload: dict, operator: str, import_group: str 
         box_spec=float(payload.get("box_spec") or 0),
         unit_price=unit_price,
         freight=freight,
-        amount=round(quantity * (unit_price + freight), 2),
+        stock_product_id=sp.id if sp else None,
+        bag_weight=bag_weight,
+        unit_cost=unit_cost,
+        cogs=cogs,
+        amount=revenue,
+        freight_total=freight_total,
+        profit=profit,
         date=date,
         operator=(payload.get("operator") or "").strip() or operator,
         remark=(payload.get("remark") or "").strip(),
@@ -281,8 +353,15 @@ def list_inbounds(
         rows = [r for r in rows if kw in " ".join(
             [r.code, r.product_name, r.purchase_no, r.center, r.operator]
         ).lower()]
-    total_amount = round(sum(r.amount or 0 for r in rows), 2)
-    return {"items": [_in_dict(r) for r in rows], "total_amount": total_amount, "count": len(rows)}
+    items = [_in_dict(db, r) for r in rows]
+    total = {
+        "amount": round(sum(r.amount or 0 for r in rows), 2),  # 收入
+        "cogs": round(sum(r.cogs or 0 for r in rows), 2),      # 商品成本
+        "freight": round(sum(r.freight_total or 0 for r in rows), 2),
+        "profit": round(sum(r.profit or 0 for r in rows), 2),
+        "quantity": round(sum(r.quantity or 0 for r in rows), 2),
+    }
+    return {"items": items, "total": total, "count": len(rows)}
 
 
 @router.post("")
@@ -293,7 +372,7 @@ def create_inbound(data: InboundIn, db: Session = Depends(get_db), user: User = 
         raise HTTPException(400, str(e))
     db.commit()
     db.refresh(rec)
-    return _in_dict(rec)
+    return _in_dict(db, rec)
 
 
 @router.put("/{rid}")
@@ -323,10 +402,19 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
     rec.freight = float(d.get("freight") or 0)
     rec.date = (d.get("date") or rec.date).strip() or rec.date
     rec.remark = (d.get("remark") or "").strip()
-    rec.amount = round(rec.quantity * (rec.unit_price + rec.freight), 2)
+    # 成本重算：关联库存商品/每袋净重变化时同步成本口径
+    stock_product_id = product.stock_product_id if product else rec.stock_product_id
+    sp, _base_cost, _factor, unit_cost = _stock_info(db, stock_product_id)
+    rec.stock_product_id = sp.id if sp else None
+    rec.bag_weight = float(d.get("bag_weight") or 0) or float((product.bag_weight if product else 0) or 0) or rec.bag_weight
+    rec.unit_cost = unit_cost
+    rec.amount = round(rec.quantity * rec.unit_price, 2)
+    rec.cogs = round(rec.quantity * rec.bag_weight * rec.unit_cost, 2)
+    rec.freight_total = round(rec.quantity * rec.freight, 2)
+    rec.profit = round(rec.amount - rec.cogs - rec.freight_total, 2)
     db.commit()
     db.refresh(rec)
-    return _in_dict(rec)
+    return _in_dict(db, rec)
 
 
 @router.delete("/{rid}")
@@ -411,8 +499,13 @@ def import_preview(
     products = list(db.execute(select(WarehouseProduct)).scalars())
     default_date = (date or "").strip() or datetime.now().strftime("%Y-%m-%d")
     items, failed = [], []
+    last_purchase_no = ""
     for i in range(start, len(rows)):
         row = rows[i]
+        raw_pn = _cell(row, mapping.get("purchase_no"))
+        if raw_pn:  # 合并单元格：采购单号仅首行有值，向下回填
+            last_purchase_no = raw_pn
+        purchase_no = raw_pn or last_purchase_no
         name = _cell(row, mapping.get("product"))
         if not name:
             continue
@@ -423,9 +516,18 @@ def import_preview(
         box_count = _to_float(_cell(row, mapping.get("box_count")), 0.0)
         box_spec = _to_float(_cell(row, mapping.get("box_spec")), 0.0)
         product, score = _match_product(products, name)
+        sp, _base_cost, factor, unit_cost = _stock_info(db, product.stock_product_id if product else None)
+        # 每袋净重（默认单位）：优先商品名内嵌规格(克) ÷ 换算系数，其次入仓品维护值
+        grams = _parse_weight_grams(name)
+        bag_weight = round(grams / factor, 6) if (grams and factor) else float((product.bag_weight if product else 0) or 0)
+        unit_price = product.purchase_price if product else 0.0
+        freight = product.freight if product else 0.0
+        revenue = round(qty * unit_price, 2)
+        cogs = round(qty * bag_weight * unit_cost, 2)
+        freight_total = round(qty * freight, 2)
         items.append({
             "row": i + 1,
-            "purchase_no": _cell(row, mapping.get("purchase_no")),
+            "purchase_no": purchase_no,
             "product_name": name,
             "center": _cell(row, mapping.get("center")),
             "quantity": qty,
@@ -434,15 +536,31 @@ def import_preview(
             "product_id": product.id if product else None,
             "matched_name": product.name if product else "",
             "category": product.category if product else "",
-            "unit_price": product.purchase_price if product else 0.0,
-            "freight": product.freight if product else 0.0,
+            "unit_price": unit_price,
+            "freight": freight,
+            "bag_weight": bag_weight,
+            "unit_cost": unit_cost,
+            "stock_product_name": sp.name if sp else "",
+            "stock_default_unit": _stock_default_unit(sp),
+            "revenue": revenue,
+            "cogs": cogs,
+            "freight_total": freight_total,
+            "profit": round(revenue - cogs - freight_total, 2),
             "match_score": score,
         })
+    totals = {
+        "revenue": round(sum(it["revenue"] for it in items), 2),
+        "cogs": round(sum(it["cogs"] for it in items), 2),
+        "freight": round(sum(it["freight_total"] for it in items), 2),
+        "profit": round(sum(it["profit"] for it in items), 2),
+        "quantity": round(sum(it["quantity"] for it in items), 2),
+    }
     return {
         "sheet": sheet_name,
         "sheets": sheets,
         "date": default_date,
         "items": items,
+        "totals": totals,
         "failed": failed,
         "failed_count": len(failed),
     }
@@ -460,6 +578,7 @@ class ConfirmItem(BaseModel):
     box_spec: float = 0.0
     unit_price: float = 0.0
     freight: float = 0.0
+    bag_weight: float = 0.0
     date: str = ""
     remark: str = ""
 

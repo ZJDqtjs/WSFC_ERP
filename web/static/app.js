@@ -9,17 +9,22 @@ const prodSel = new Set();
 const inSel = new Set();
 const outSel = new Set();
 const prSel = new Set();  // 一单多货批量选择
+const winSel = new Set(); // 入仓记录批量选择
 let OUT_GROUP = null;  // 当前打开的出库批次（array of Outbound 记录）
+let WGROUP = null;     // 当前打开的入仓批次（array of WarehouseIn 记录）
 
 /* ---------- 批量选择工具 ---------- */
 function selSet(kind) {
-  return kind === "prod" ? prodSel : kind === "in" ? inSel : kind === "out" ? outSel : prSel;
+  return kind === "prod" ? prodSel : kind === "in" ? inSel : kind === "out" ? outSel
+    : kind === "win" ? winSel : prSel;
 }
 function selBarId(kind) {
-  return kind === "prod" ? "prodBatch" : kind === "in" ? "inBatch" : kind === "out" ? "outBatch" : "prBatch";
+  return kind === "prod" ? "prodBatch" : kind === "in" ? "inBatch" : kind === "out" ? "outBatch"
+    : kind === "win" ? "wInBatch" : "prBatch";
 }
 function selCountId(kind) {
-  return kind === "prod" ? "prodSelCount" : kind === "in" ? "inSelCount" : kind === "out" ? "outSelCount" : "prSelCount";
+  return kind === "prod" ? "prodSelCount" : kind === "in" ? "inSelCount" : kind === "out" ? "outSelCount"
+    : kind === "win" ? "wInSelCount" : "prSelCount";
 }
 function updateBatchBar(kind) {
   const bar = $(selBarId(kind));
@@ -37,7 +42,8 @@ function toggleSel(kind, id, checked) {
 function toggleAll(cb, kind) {
   const set = selSet(kind);
   set.clear();
-  const tableId = kind === "prod" ? "prodTable" : kind === "in" ? "inTable" : kind === "out" ? "outTable" : "prTable";
+  const tableId = kind === "prod" ? "prodTable" : kind === "in" ? "inTable" : kind === "out" ? "outTable"
+    : kind === "win" ? "wInTable" : "prTable";
   document.querySelectorAll(`#${tableId} input[type="checkbox"][value]`).forEach((c) => {
     c.checked = cb.checked;
     if (cb.checked) set.add(+c.value);
@@ -63,6 +69,7 @@ function clearBatch(kind) {
   if (kind === "prod") renderProducts();
   else if (kind === "in") loadInbounds();
   else if (kind === "out") loadOutbounds();
+  else if (kind === "win") loadWarehouseIns();
   else renderPackRules();
 }
 
@@ -134,6 +141,9 @@ function compareVal(a, b) {
   if (a == null || a === "") a = -Infinity;
   if (b == null || b === "") b = -Infinity;
   if (typeof a === "number" && typeof b === "number") return a - b;
+  // 日期字符串（YYYY-MM-DD）按字典序排序，避免 parseFloat 将其截断为同一个年份导致排序失效
+  const reDate = /^\d{4}-\d{2}-\d{2}/;
+  if (reDate.test(String(a)) && reDate.test(String(b))) return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
   const na = parseFloat(a), nb = parseFloat(b);
   if (!isNaN(na) && !isNaN(nb)) return na - nb;
   return String(a).localeCompare(String(b), "zh");
@@ -262,7 +272,7 @@ function daysAgo(n) {
 /* ---------- 导航 ---------- */
 const PAGE_TITLES = {
   home: "工作台", stock: "库存管理", inbound: "入库", outbound: "出库 / 销售",
-  "warehouse-in": "入仓",
+  "warehouse-in": "入仓", "wingroup": "入仓批次明细",
   products: "商品", report: "财务报表", import: "批量导入", jushuitan: "聚水潭关联",
   backup: "备份与恢复",
 };
@@ -283,7 +293,7 @@ function goPage(name) {
   page.classList.add("active");
   const loaders = {
     home: loadDashboard, stock: loadStock, inbound: initInbound, outbound: initOutbound,
-    "warehouse-in": loadWarehouseIn,
+    "warehouse-in": loadWarehouseIn, wingroup: renderWinGroupPage,
     products: renderProducts, report: loadReport, import: loadImportPage, jushuitan: loadMappingPage,
     backup: loadBackupPage, fresh: loadFresh, packrules: loadPackRules, pdata: loadPdataPage,
     deduction: loadDeductionPage, express: loadExpressPage, settings: loadSettingsPage,
@@ -668,7 +678,7 @@ function openModal(html) {
   $("modalMask").classList.add("show");
   bindSearchable($("modalBox"));
 }
-function closeModal() { $("modalMask").classList.remove("show"); const r = _aiDoneResolve; _aiDoneResolve = null; if (r) r(); }
+function closeModal() { $("modalMask").classList.remove("show"); $("modalBox").classList.remove("wide"); const r = _aiDoneResolve; _aiDoneResolve = null; if (r) r(); }
 $("modalMask").addEventListener("click", (e) => { if (e.target.id === "modalMask") closeModal(); });
 
 /* =============== 库存 =============== */
@@ -1364,6 +1374,7 @@ async function loadWarehouseIn() {
 /* ---------- 入仓品资料 ---------- */
 async function loadWarehouseProducts() {
   try {
+    if (!PRODUCTS.length) PRODUCTS = await api("/api/products");
     WPROD = await api("/api/warehouse-in/products");
     renderWarehouseProducts();
   } catch (e) { toast("加载入仓品失败：" + e.message); }
@@ -1372,24 +1383,30 @@ function renderWarehouseProducts() {
   const t = $("wprodTable");
   const rows = WPROD || [];
   t.innerHTML = `<thead><tr>
-    <th>名称</th><th>类目</th><th>SKU</th><th>69码</th>
-    <th class="num">箱规(袋/箱)</th><th class="num">采购价(元/袋)</th><th class="num">运费(元/袋)</th>
-    <th>保质期</th><th>备注</th><th></th></tr></thead><tbody>` +
+    <th>名称</th><th>类目</th><th class="num">箱规(袋/箱)</th><th class="num">每袋净重</th>
+    <th class="num">采购价(收入/袋)</th><th class="num">运费(元/袋)</th><th class="num">每袋成本</th>
+    <th>关联库存商品</th><th>保质期</th><th></th></tr></thead><tbody>` +
     rows.map((p) => `<tr>
-      <td><b>${esc(p.name)}</b></td>
+      <td><b>${esc(p.name)}</b><div class="muted" style="font-size:12px;">${esc(p.sku) || "—"}${p.barcode ? ` · ${esc(p.barcode)}` : ""}</div></td>
       <td>${esc(p.category) || "—"}</td>
-      <td class="mono">${esc(p.sku) || "—"}</td>
-      <td class="mono">${esc(p.barcode) || "—"}</td>
       <td class="num mono">${p.box_spec ? fmtNum(p.box_spec) : "—"}</td>
+      <td class="num mono">${p.bag_weight ? `${fmtNum(p.bag_weight)} ${esc(p.stock_default_unit || "")}`.trim() : "—"}</td>
       <td class="num mono">${fmtMoney(p.purchase_price)}</td>
       <td class="num mono">${p.freight ? fmtMoney(p.freight) : "—"}</td>
+      <td class="num mono">${p.bag_cost ? fmtMoney(p.bag_cost) : "—"}</td>
+      <td>${p.stock_product_name ? esc(p.stock_product_name) : '<span class="muted">未关联</span>'}
+        ${p.stock_product_id ? `<div class="muted" style="font-size:12px;">单位成本 ${fmtMoney(p.stock_unit_cost)}/${esc(p.stock_default_unit || "单位")}</div>` : ""}</td>
       <td>${esc(p.shelf_life) || "—"}</td>
-      <td class="muted" style="max-width:160px;">${esc(p.remark) || "—"}</td>
       <td style="white-space:nowrap;">
         <button class="btn sm" onclick="wprodEdit(${p.id})">改</button>
         <button class="btn sm danger" onclick="wprodDelete(${p.id})">删</button>
       </td></tr>`).join("") + `</tbody>`;
   if (!rows.length) t.innerHTML = `<tr><td colspan="10" class="empty">暂无入仓品，可点「新增入仓品」录入</td></tr>`;
+}
+function stockProductOptions(selId) {
+  const list = (PRODUCTS || []).filter((p) => p.product_type === "stock" && !["人工", "快递"].includes(p.category));
+  return '<option value="">（不关联库存商品）</option>' +
+    list.map((p) => `<option value="${p.id}" ${selId === p.id ? "selected" : ""}>${esc(p.name)}（${esc(p.category || "—")}）</option>`).join("");
 }
 function wprodEdit(id) {
   const p = (WPROD || []).find((x) => x.id === id) || {};
@@ -1401,15 +1418,31 @@ function wprodEdit(id) {
       <div class="field"><label>SKU</label><input id="wpSku" value="${esc(p.sku || "")}" /></div>
       <div class="field"><label>69码</label><input id="wpBarcode" value="${esc(p.barcode || "")}" /></div>
       <div class="field"><label>箱规（袋/箱）</label><input id="wpBoxSpec" type="number" step="any" min="0" value="${p.box_spec || ""}" /></div>
-      <div class="field"><label>采购价（元/袋）</label><input id="wpPrice" type="number" step="any" min="0" value="${p.purchase_price || ""}" /></div>
+      <div class="field"><label>采购价（元/袋，收入）</label><input id="wpPrice" type="number" step="any" min="0" value="${p.purchase_price || ""}" /></div>
       <div class="field"><label>运费（元/袋）</label><input id="wpFreight" type="number" step="any" min="0" value="${p.freight || ""}" placeholder="可留空，后续维护" /></div>
+      <div class="field"><label>关联库存商品（成本来源）</label><select id="wpStock" class="searchable">${stockProductOptions(p.stock_product_id)}</select></div>
+      <div class="field"><label>每袋净重（默认单位，如 公斤）</label><input id="wpBagWeight" type="number" step="any" min="0" value="${p.bag_weight || ""}" placeholder="如 1" oninput="wprodCostHint()" /></div>
       <div class="field"><label>保质期</label><input id="wpShelf" value="${esc(p.shelf_life || "")}" placeholder="如 半年 / 一年" /></div>
       <div class="field" style="grid-column:1/-1;"><label>备注</label><input id="wpRemark" value="${esc(p.remark || "")}" /></div>
     </div>
+    <p class="hint" id="wpCostHint" style="margin-top:8px;"></p>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
       <button class="btn green" onclick="wprodSave(${id || 0})">✓ 保存</button>
     </div>`);
+  $("wpStock").addEventListener("change", wprodCostHint);
+  wprodCostHint();
+}
+function wprodCostHint() {
+  const sp = (PRODUCTS || []).find((x) => x.id === +$("wpStock").value);
+  const bw = parseFloat($("wpBagWeight").value) || 0;
+  const du = sp ? (sp.default_unit || sp.base_unit) : "";
+  const factor = sp ? ((sp.conversions || {})[du] || 1) : 1;
+  const uc = sp ? ((sp.avg_cost > 0 ? sp.avg_cost : sp.unit_cost) || 0) * factor : 0;
+  const hint = $("wpCostHint");
+  if (!hint) return;
+  if (!sp) { hint.textContent = "未关联库存商品：商品成本将按 0 计。"; return; }
+  hint.textContent = `库存单位成本 ${fmtMoney(uc)}/${du}（库存均价优先，无则用参考成本）；每袋成本 = ${fmtNum(bw)} × ${fmtMoney(uc)} = ${fmtMoney(bw * uc)}`;
 }
 async function wprodSave(id) {
   const name = ($("wpName").value || "").trim();
@@ -1422,6 +1455,8 @@ async function wprodSave(id) {
     box_spec: parseFloat($("wpBoxSpec").value) || 0,
     purchase_price: parseFloat($("wpPrice").value) || 0,
     freight: parseFloat($("wpFreight").value) || 0,
+    stock_product_id: +$("wpStock").value || null,
+    bag_weight: parseFloat($("wpBagWeight").value) || 0,
     shelf_life: $("wpShelf").value.trim(),
     remark: $("wpRemark").value.trim(),
     is_active: true,
@@ -1441,7 +1476,18 @@ async function wprodDelete(id) {
 }
 
 /* ---------- 入仓记录 ---------- */
+/* 默认显示本月；切换本月快捷按钮 */
+function wInThisMonth() {
+  if ($("wInDateFrom")) $("wInDateFrom").value = monthStart();
+  if ($("wInDateTo")) $("wInDateTo").value = today();
+  loadWarehouseIns();
+}
 async function loadWarehouseIns() {
+  // 首次进入（两个日期都为空）默认显示本月
+  if ($("wInDateFrom") && $("wInDateTo") && !$("wInDateFrom").value && !$("wInDateTo").value) {
+    $("wInDateFrom").value = monthStart();
+    $("wInDateTo").value = today();
+  }
   const from = $("wInDateFrom")?.value || "", to = $("wInDateTo")?.value || "";
   const q = $("wInSearch")?.value || "";
   try {
@@ -1449,38 +1495,220 @@ async function loadWarehouseIns() {
     renderWarehouseIns(d);
   } catch (e) { toast("加载入仓记录失败：" + e.message); }
 }
+/* 按导入批次聚合：同一 import_group 的记录合并为一行 */
+function buildWinGroup(recs) {
+  const dates = recs.map((r) => r.date).sort();
+  const pnames = [...new Set(recs.map((r) => r.product_name).filter(Boolean))];
+  const pns = [...new Set(recs.map((r) => r.purchase_no).filter(Boolean))];
+  const centers = [...new Set(recs.map((r) => r.center).filter(Boolean))];
+  return {
+    import_group: recs[0].import_group,
+    ids: recs.map((r) => r.id),
+    records: recs,
+    count: recs.length,
+    products: pnames.length,
+    quantity: recs.reduce((s, r) => s + (r.quantity || 0), 0),
+    amount: recs.reduce((s, r) => s + (r.amount || 0), 0),
+    cogs: recs.reduce((s, r) => s + (r.cogs || 0), 0),
+    freight: recs.reduce((s, r) => s + (r.freight_total || 0), 0),
+    profit: recs.reduce((s, r) => s + (r.profit || 0), 0),
+    code: `批量 · ${recs.length}条`,
+    date: dates[0] === dates[dates.length - 1] ? dates[0] : `${dates[0]} ~ ${dates[dates.length - 1]}`,
+    product: pnames.length > 3 ? `${pnames.slice(0, 3).join("、")} 等${pnames.length}种` : pnames.join("、"),
+    purchase_no: pns.length ? (pns.length === 1 ? pns[0] : `${pns[0]} 等${pns.length}个`) : "—",
+    center: centers.length ? (centers.length === 1 ? centers[0] : `${centers[0]} 等${centers.length}个`) : "—",
+  };
+}
 function renderWarehouseIns(d) {
-  const rows = d.items || [];
-  WINS = rows;
+  const flat = d.items || [];
+  WINS = flat;
   const t = $("wInTable");
-  const qtySum = rows.reduce((s, r) => s + (r.quantity || 0), 0);
-  if ($("winHint")) $("winHint").textContent = `共 ${rows.length} 条`;
+  const groups = new Map();
+  const rows = [];
+  for (const r of flat) {
+    if (r.import_group) {
+      if (!groups.has(r.import_group)) groups.set(r.import_group, []);
+      groups.get(r.import_group).push(r);
+    } else {
+      rows.push({ _group: false, rec: r });
+    }
+  }
+  for (const [, recs] of groups) rows.push({ _group: true, g: buildWinGroup(recs) });
+  // 统一可排序字段（批次行与单条行字段名对齐）
+  const sortable = rows.map((x) => x._group
+    ? { _group: true, g: x.g, code: x.g.code, date: x.g.date, purchase_no: x.g.purchase_no,
+        center: x.g.center, product: x.g.product, quantity: x.g.quantity, amount: x.g.amount,
+        cogs: x.g.cogs, freight: x.g.freight, profit: x.g.profit }
+    : { _group: false, rec: x.rec, code: x.rec.code, date: x.rec.date, purchase_no: x.rec.purchase_no,
+        center: x.rec.center, product: x.rec.product_name, quantity: x.rec.quantity, amount: x.rec.amount,
+        cogs: x.rec.cogs, freight: x.rec.freight_total, profit: x.rec.profit });
+  sortable.sort((a, b) => {
+    if (t._sort) { const dd = compareVal(a[t._sort.key], b[t._sort.key]) * t._sort.dir; if (dd) return dd; }
+    return 0;
+  });
+  const tot = d.total || {};
+  if ($("winHint")) $("winHint").textContent = `共 ${flat.length} 条，合并 ${rows.length} 行`;
   if ($("wInSummary")) {
-    $("wInSummary").innerHTML = `共 <b>${rows.length}</b> 条入仓记录 · 合计 <b>${fmtNum(qtySum)}</b> 袋 · 入仓成本合计 <b>${fmtMoney(d.total_amount)}</b>`;
-    $("wInSummary").style.display = rows.length ? "block" : "none";
+    $("wInSummary").innerHTML =
+      `共 <b>${flat.length}</b> 条 · 数量 <b>${fmtNum(tot.quantity)}</b> 袋 · ` +
+      `收入 <b>${fmtMoney(tot.amount)}</b> · 商品成本 <b>${fmtMoney(tot.cogs)}</b> · ` +
+      `运费 <b>${fmtMoney(tot.freight)}</b> · 毛利 <b style="color:var(--green)">${fmtMoney(tot.profit)}</b>`;
+    $("wInSummary").style.display = flat.length ? "block" : "none";
   }
   t.innerHTML = `<thead><tr>
-    <th>单号</th><th>日期</th><th>采购单号</th><th>配送中心</th><th>商品</th>
-    <th class="num">数量(袋)</th><th class="num">箱数</th><th>箱规</th>
-    <th class="num">采购价</th><th class="num">运费</th><th class="num">金额</th><th>操作员</th><th></th>
-  </tr></thead><tbody>` + rows.map((r) => `<tr>
+    <th class="cb-col"><input type="checkbox" onclick="toggleAll(this,'win')" /></th>
+    <th data-key="code">单号/批次${sortArrow("wInTable", "code")}</th>
+    <th data-key="date">日期${sortArrow("wInTable", "date")}</th>
+    <th data-key="purchase_no">采购单号${sortArrow("wInTable", "purchase_no")}</th>
+    <th data-key="center">配送中心${sortArrow("wInTable", "center")}</th>
+    <th data-key="product">商品${sortArrow("wInTable", "product")}</th>
+    <th data-key="quantity" class="num">数量(袋)${sortArrow("wInTable", "quantity")}</th>
+    <th data-key="amount" class="num">收入${sortArrow("wInTable", "amount")}</th>
+    <th data-key="cogs" class="num">商品成本${sortArrow("wInTable", "cogs")}</th>
+    <th data-key="freight" class="num">运费${sortArrow("wInTable", "freight")}</th>
+    <th data-key="profit" class="num">毛利${sortArrow("wInTable", "profit")}</th>
+    <th></th></tr></thead><tbody>` +
+    sortable.map((x) => x._group ? renderWinGroupRow(x.g) : renderWinRow(x.rec)).join("") + `</tbody>`;
+  if (!rows.length) t.innerHTML = `<tr><td colspan="12" class="empty">该时间段暂无入仓记录，可点「导入常温贴单」或「手动入仓」</td></tr>`;
+  t._rows = sortable;
+  t._render = loadWarehouseIns;
+  updateBatchBar("win");
+}
+function renderWinRow(r) {
+  const checked = winSel.has(r.id) ? "checked" : "";
+  return `<tr>
+    <td class="cb-col"><input type="checkbox" value="${r.id}" ${checked} onchange="toggleSel('win',${r.id},this.checked)" /></td>
     <td class="mono">${esc(r.code)}</td>
     <td>${esc(r.date)}</td>
     <td class="mono">${esc(r.purchase_no) || "—"}</td>
     <td>${esc(r.center) || "—"}</td>
-    <td><b>${esc(r.product_name)}</b>${r.product_id ? "" : ' <span class="badge" style="background:#fff3cd;color:#8a6d3b;">未关联</span>'}</td>
+    <td><b>${esc(r.product_name)}</b>${r.product_id ? "" : ' <span class="badge" style="background:#fff3cd;color:#8a6d3b;">未关联</span>'}
+      <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"} · 净重 ${r.bag_weight ? `${fmtNum(r.bag_weight)} ${esc(r.stock_default_unit || "")}`.trim() : "—"} · 单位成本 ${fmtMoney(r.unit_cost)}/${esc(r.stock_default_unit || "单位")}</div>
+    </td>
+    <td class="num mono">${fmtNum(r.quantity)}</td>
+    <td class="num mono">${fmtMoney(r.amount)}</td>
+    <td class="num mono">${fmtMoney(r.cogs)}</td>
+    <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}</td>
+    <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
+    <td style="white-space:nowrap;">
+      <button class="btn sm" onclick="wInEdit(${r.id})">改</button>
+      <button class="btn sm danger" onclick="wInDelete(${r.id})">删</button>
+    </td></tr>`;
+}
+function renderWinGroupRow(g) {
+  const allChecked = g.ids.length && g.ids.every((id) => winSel.has(id));
+  return `<tr>
+    <td class="cb-col"><input type="checkbox" data-ids="${g.ids.join(",")}" ${allChecked ? "checked" : ""} onchange="toggleWinGroupCB(this)" /></td>
+    <td class="mono" title="${esc(g.import_group)}">${esc(g.code)}</td>
+    <td>${esc(g.date)}</td>
+    <td class="mono">${esc(g.purchase_no)}</td>
+    <td>${esc(g.center)}</td>
+    <td>${esc(g.product) || "—"}
+      <div class="muted" style="font-size:12px;">${g.products} 种商品 · 合计 ${fmtNum(g.quantity)} 袋</div></td>
+    <td class="num mono">${fmtNum(g.quantity)}</td>
+    <td class="num mono">${fmtMoney(g.amount)}</td>
+    <td class="num mono">${fmtMoney(g.cogs)}</td>
+    <td class="num mono">${g.freight ? fmtMoney(g.freight) : "—"}</td>
+    <td class="num mono" style="color:${g.profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(g.profit)}</td>
+    <td style="white-space:nowrap;">
+      <button class="btn sm secondary" onclick="openWinGroup('${esc(g.import_group)}')">明细</button>
+      <button class="btn sm danger" onclick="deleteWinGroup('${esc(g.import_group)}')">删</button>
+    </td></tr>`;
+}
+function toggleWinGroupCB(cb) {
+  const on = cb.checked;
+  (cb.dataset.ids || "").split(",").forEach((id) => {
+    if (!id) return;
+    if (on) winSel.add(+id); else winSel.delete(+id);
+  });
+  updateBatchBar("win");
+}
+async function batchDeleteWarehouseIns() {
+  const ids = [...winSel];
+  if (!ids.length) { toast("请先勾选要删除的记录"); return; }
+  if (!confirm(`确认删除选中的 ${ids.length} 条入仓记录？`)) return;
+  try {
+    const r = await api("/api/warehouse-in/batch-delete", "POST", { ids });
+    winSel.clear();
+    toast(`已删除 ${r.deleted} 条`);
+    loadWarehouseIns();
+  } catch (e) { toast("删除失败：" + e.message); }
+}
+/* 打开批次二级页 */
+function openWinGroup(groupKey) {
+  WGROUP = (WINS || []).filter((r) => r.import_group === groupKey);
+  if (!WGROUP.length) { toast("未找到该批次"); return; }
+  goPage("wingroup");
+}
+/* 批次二级页渲染（支持表头排序） */
+function renderWinGroupPage() {
+  if (!WGROUP || !WGROUP.length) return;
+  const g = buildWinGroup(WGROUP);
+  $("wgTitle").textContent = `入仓批次明细 · ${g.count} 条`;
+  $("wgHint").textContent = `批次 ${g.import_group} · ${esc(g.date)}`;
+  $("wgSummary").innerHTML = `
+    <div class="stat"><div class="label">入仓数量</div><div class="value">${fmtNum(g.quantity)} 袋</div></div>
+    <div class="stat"><div class="label">收入</div><div class="value">${fmtMoney(g.amount)}</div></div>
+    <div class="stat"><div class="label">商品成本</div><div class="value">${fmtMoney(g.cogs)}</div></div>
+    <div class="stat"><div class="label">运费</div><div class="value">${fmtMoney(g.freight)}</div></div>
+    <div class="stat success"><div class="label">毛利</div><div class="value" style="color:var(--green)">${fmtMoney(g.profit)}</div></div>`;
+  const t = $("wgTable");
+  const rows = applyTableSort(t, WGROUP);
+  t.innerHTML = `<thead><tr>
+    <th data-key="code">单号${sortArrow("wgTable", "code")}</th>
+    <th data-key="date">日期${sortArrow("wgTable", "date")}</th>
+    <th data-key="purchase_no">采购单号${sortArrow("wgTable", "purchase_no")}</th>
+    <th data-key="center">配送中心${sortArrow("wgTable", "center")}</th>
+    <th data-key="product_name">商品${sortArrow("wgTable", "product_name")}</th>
+    <th data-key="quantity" class="num">数量(袋)${sortArrow("wgTable", "quantity")}</th>
+    <th data-key="box_count" class="num">箱数${sortArrow("wgTable", "box_count")}</th>
+    <th data-key="unit_price" class="num">采购价(收入/袋)${sortArrow("wgTable", "unit_price")}</th>
+    <th data-key="amount" class="num">收入${sortArrow("wgTable", "amount")}</th>
+    <th data-key="cogs" class="num">商品成本${sortArrow("wgTable", "cogs")}</th>
+    <th data-key="freight_total" class="num">运费${sortArrow("wgTable", "freight_total")}</th>
+    <th data-key="profit" class="num">毛利${sortArrow("wgTable", "profit")}</th>
+    <th></th></tr></thead><tbody>` + rows.map((r) => `<tr>
+    <td class="mono">${esc(r.code)}</td>
+    <td>${esc(r.date)}</td>
+    <td class="mono">${esc(r.purchase_no) || "—"}</td>
+    <td>${esc(r.center) || "—"}</td>
+    <td><b>${esc(r.product_name)}</b>
+      <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"} · 净重 ${r.bag_weight ? `${fmtNum(r.bag_weight)} ${esc(r.stock_default_unit || "")}`.trim() : "—"}</div></td>
     <td class="num mono">${fmtNum(r.quantity)}</td>
     <td class="num mono">${r.box_count ? fmtNum(r.box_count) : "—"}</td>
-    <td class="mono">${r.box_spec ? fmtNum(r.box_spec) : "—"}</td>
     <td class="num mono">${fmtMoney(r.unit_price)}</td>
-    <td class="num mono">${r.freight ? fmtMoney(r.freight) : "—"}</td>
     <td class="num mono">${fmtMoney(r.amount)}</td>
-    <td>${esc(r.operator) || "—"}</td>
+    <td class="num mono">${fmtMoney(r.cogs)}</td>
+    <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}</td>
+    <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
     <td style="white-space:nowrap;">
       <button class="btn sm" onclick="wInEdit(${r.id})">改</button>
       <button class="btn sm danger" onclick="wInDelete(${r.id})">删</button>
     </td></tr>`).join("") + `</tbody>`;
-  if (!rows.length) t.innerHTML = `<tr><td colspan="13" class="empty">暂无入仓记录，可点「导入常温贴单」或「手动入仓」</td></tr>`;
+  t._rows = rows;
+  t._render = renderWinGroupPage;
+}
+async function deleteWinGroup(groupKey) {
+  const recs = (WINS || []).filter((r) => r.import_group === groupKey);
+  if (!recs.length) { toast("未找到该批次"); return; }
+  if (!confirm(`确认删除该批次（共 ${recs.length} 条入仓记录）？`)) return;
+  try {
+    const r = await api("/api/warehouse-in/batch-delete", "POST", { ids: recs.map((x) => x.id) });
+    recs.forEach((x) => winSel.delete(x.id));
+    toast(`已删除 ${r.deleted} 条`);
+    if (WGROUP && WGROUP[0] && WGROUP[0].import_group === groupKey) { WGROUP = null; goPage("warehouse-in"); }
+    else loadWarehouseIns();
+  } catch (e) { toast("删除失败：" + e.message); }
+}
+/* 刷新入仓视图：列表始终刷新；若当前在批次明细页则同步刷新该批次 */
+async function refreshWinView() {
+  const key = WGROUP && WGROUP[0] ? WGROUP[0].import_group : null;
+  await loadWarehouseIns();
+  if (key && $("page-wingroup")?.classList.contains("active")) {
+    WGROUP = (WINS || []).filter((r) => r.import_group === key);
+    if (WGROUP.length) renderWinGroupPage();
+    else { WGROUP = null; goPage("warehouse-in"); }
+  }
 }
 function wInFormModal(rec) {
   rec = rec || {};
@@ -1498,31 +1726,58 @@ function wInFormModal(rec) {
       <div class="field"><label>数量（袋）*</label><input id="wiQty" type="number" step="any" min="0" value="${rec.quantity ?? ""}" oninput="wInCalc()" /></div>
       <div class="field"><label>箱数</label><input id="wiBoxCount" type="number" step="any" min="0" value="${rec.box_count ?? ""}" /></div>
       <div class="field"><label>箱规（袋/箱）</label><input id="wiBoxSpec" type="number" step="any" min="0" value="${rec.box_spec ?? ""}" /></div>
-      <div class="field"><label>采购价（元/袋）</label><input id="wiPrice" type="number" step="any" min="0" value="${rec.unit_price ?? ""}" oninput="wInCalc()" /></div>
+      <div class="field"><label>每袋净重（默认单位）</label><input id="wiBagWeight" type="number" step="any" min="0" value="${rec.bag_weight ?? ""}" oninput="wInCalc()" /></div>
+      <div class="field"><label>采购价（元/袋，收入）</label><input id="wiPrice" type="number" step="any" min="0" value="${rec.unit_price ?? ""}" oninput="wInCalc()" /></div>
       <div class="field"><label>运费（元/袋）</label><input id="wiFreight" type="number" step="any" min="0" value="${rec.freight ?? ""}" oninput="wInCalc()" /></div>
-      <div class="field"><label>金额合计</label><input id="wiAmount" readonly /></div>
+      <div class="field"><label>收入合计</label><input id="wiAmount" readonly /></div>
+      <div class="field"><label>商品成本</label><input id="wiCogs" readonly /></div>
+      <div class="field"><label>运费合计</label><input id="wiFreightTotal" readonly /></div>
+      <div class="field"><label>毛利</label><input id="wiProfit" readonly /></div>
       <div class="field" style="grid-column:1/-1;"><label>备注</label><input id="wiRemark" value="${esc(rec.remark || "")}" /></div>
     </div>
+    <p class="hint" id="wiCostHint" style="margin-top:8px;"></p>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
       <button class="btn green" onclick="wInSave(${rec.id || 0})">✓ 保存</button>
     </div>`);
+  const sel = $("wiProduct");
+  const p0 = (WPROD || []).find((x) => x.id === +sel.value);
+  sel.dataset.uc = p0 ? (p0.stock_unit_cost || 0) : 0;
   wInCalc();
 }
 function wInPickProduct() {
-  const p = (WPROD || []).find((x) => x.id === +$("wiProduct").value);
-  if (!p) return;
+  const sel = $("wiProduct");
+  const p = (WPROD || []).find((x) => x.id === +sel.value);
+  sel.dataset.uc = p ? (p.stock_unit_cost || 0) : 0;
+  if (!p) { wInCalc(); return; }
   $("wiName").value = p.name;
   $("wiPrice").value = p.purchase_price || "";
   $("wiFreight").value = p.freight || "";
   $("wiBoxSpec").value = p.box_spec || "";
+  $("wiBagWeight").value = p.bag_weight || "";
   wInCalc();
 }
 function wInCalc() {
+  const sel = $("wiProduct");
+  const p = (WPROD || []).find((x) => x.id === +sel.value);
+  const uc = +(sel.dataset.uc || (p ? p.stock_unit_cost : 0) || 0);
   const qty = parseFloat($("wiQty").value) || 0;
   const price = parseFloat($("wiPrice").value) || 0;
   const freight = parseFloat($("wiFreight").value) || 0;
-  $("wiAmount").value = (qty * (price + freight)).toFixed(2);
+  const bw = parseFloat($("wiBagWeight").value) || 0;
+  const revenue = qty * price;
+  const cogs = qty * bw * uc;
+  const ft = qty * freight;
+  $("wiAmount").value = revenue.toFixed(2);
+  $("wiCogs").value = cogs.toFixed(2);
+  $("wiFreightTotal").value = ft.toFixed(2);
+  $("wiProfit").value = (revenue - cogs - ft).toFixed(2);
+  const hint = $("wiCostHint");
+  if (hint) {
+    hint.textContent = p && p.stock_product_name
+      ? `成本来源：${p.stock_product_name}，单位成本 ${fmtMoney(uc)}/${p.stock_default_unit || "单位"}；商品成本 = 数量 × 每袋净重(${fmtNum(bw)}) × 单位成本`
+      : "未关联库存商品：商品成本按 0 计。";
+  }
 }
 async function openWarehouseInAdd() {
   if (!(WPROD || []).length) { try { WPROD = await api("/api/warehouse-in/products"); } catch (e) {} }
@@ -1549,6 +1804,7 @@ async function wInSave(id) {
     box_spec: parseFloat($("wiBoxSpec").value) || 0,
     unit_price: parseFloat($("wiPrice").value) || 0,
     freight: parseFloat($("wiFreight").value) || 0,
+    bag_weight: parseFloat($("wiBagWeight").value) || 0,
     date: $("wiDate").value || today(),
     remark: $("wiRemark").value.trim(),
   };
@@ -1557,12 +1813,12 @@ async function wInSave(id) {
     else await api("/api/warehouse-in", "POST", body);
     toast("已保存");
     closeModal();
-    loadWarehouseIns();
+    refreshWinView();
   } catch (e) { toast("保存失败：" + e.message); }
 }
 async function wInDelete(id) {
   if (!confirm("确认删除该入仓记录？")) return;
-  try { await api("/api/warehouse-in/" + id, "DELETE"); toast("已删除"); loadWarehouseIns(); }
+  try { await api("/api/warehouse-in/" + id, "DELETE"); toast("已删除"); refreshWinView(); }
   catch (e) { toast("删除失败：" + e.message); }
 }
 
@@ -1596,6 +1852,7 @@ async function wImportPreview(sheet) {
   $("modalBox").innerHTML =
     `<h3>导入《入仓配送明细》常温贴单 <button class="close" onclick="closeModal()">✕</button></h3>` +
     `<div id="wiImportResult"><div class="alert ok">⏳ 正在解析…</div></div>`;
+  $("modalBox").classList.add("wide");
   const out = $("wiImportResult");
   try {
     const fd = new FormData();
@@ -1633,15 +1890,22 @@ function renderWImportPreview(d, dateVal) {
     </div>
     <div class="table-wrap" style="max-height:46vh;overflow:auto;">
       <table id="wiImportTable">
-        <thead><tr><th>商品名称（贴单）</th><th>入仓品</th><th class="num">数量(袋)</th><th class="num">采购价</th><th class="num">运费</th></tr></thead>
-        <tbody>${rows.map((r, i) => `<tr data-i="${i}">
+        <thead><tr>
+          <th>商品名称（贴单）</th><th>入仓品</th><th class="num">箱数</th><th class="num">数量(袋)</th>
+          <th class="num">每袋净重</th><th class="num">采购价(收入)</th><th class="num">运费</th><th class="num">商品成本</th>
+        </tr></thead>
+        <tbody>${rows.map((r, i) => `<tr data-i="${i}" data-uc="${r.unit_cost || 0}">
           <td>${esc(r.product_name)}
-            <div class="muted" style="font-size:12px;">${esc(r.purchase_no) || "—"} · ${esc(r.center) || "—"}${r.box_count ? ` · ${fmtNum(r.box_count)}箱` : ""}</div>
+            <div class="muted" style="font-size:12px;">${esc(r.purchase_no) || "—"} · ${esc(r.center) || "—"}</div>
           </td>
-          <td><select class="wi-prod" onchange="wImportPick(${i})">${opts(r.product_id)}</select></td>
-          <td><input class="wi-qty" type="number" step="any" min="0" value="${r.quantity}" style="width:70px;" oninput="wImportCalc()" /></td>
-          <td><input class="wi-price" type="number" step="any" min="0" value="${r.unit_price || ""}" style="width:72px;" oninput="wImportCalc()" /></td>
-          <td><input class="wi-freight" type="number" step="any" min="0" value="${r.freight || ""}" style="width:72px;" oninput="wImportCalc()" /></td>
+          <td><select class="wi-prod" onchange="wImportPick(${i})">${opts(r.product_id)}</select>
+            <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"}</div></td>
+          <td><input class="wi-box" type="number" step="any" min="0" value="${r.box_count || ""}" style="width:58px;" /></td>
+          <td><input class="wi-qty" type="number" step="any" min="0" value="${r.quantity}" style="width:68px;" oninput="wImportCalc()" /></td>
+          <td><input class="wi-weight" type="number" step="any" min="0" value="${r.bag_weight || ""}" style="width:72px;" oninput="wImportCalc()" /></td>
+          <td><input class="wi-price" type="number" step="any" min="0" value="${r.unit_price || ""}" style="width:70px;" oninput="wImportCalc()" /></td>
+          <td><input class="wi-freight" type="number" step="any" min="0" value="${r.freight || ""}" style="width:64px;" oninput="wImportCalc()" /></td>
+          <td class="num mono wi-cogs">—</td>
         </tr>`).join("")}</tbody>
       </table>
     </div>
@@ -1657,23 +1921,31 @@ function wImportPick(i) {
   const tr = document.querySelector(`#wiImportTable tr[data-i="${i}"]`);
   if (!tr) return;
   const p = (WPROD || []).find((x) => x.id === +tr.querySelector(".wi-prod").value);
+  tr.dataset.uc = p ? (p.stock_unit_cost || 0) : 0;
   if (p) {
     tr.querySelector(".wi-price").value = p.purchase_price || "";
     tr.querySelector(".wi-freight").value = p.freight || "";
+    if (p.bag_weight) tr.querySelector(".wi-weight").value = p.bag_weight;
+    const sub = tr.querySelector("td:nth-child(2) .muted");
+    if (sub) sub.textContent = p.stock_product_name || "未关联库存商品";
   }
   wImportCalc();
 }
 function wImportCalc() {
-  let total = 0, qtySum = 0;
+  let rev = 0, cogs = 0, ft = 0, qtySum = 0;
   document.querySelectorAll("#wiImportTable tbody tr").forEach((tr) => {
     const q = parseFloat(tr.querySelector(".wi-qty").value) || 0;
     const pr = parseFloat(tr.querySelector(".wi-price").value) || 0;
     const fr = parseFloat(tr.querySelector(".wi-freight").value) || 0;
-    total += q * (pr + fr);
-    qtySum += q;
+    const bw = parseFloat(tr.querySelector(".wi-weight").value) || 0;
+    const uc = +(tr.dataset.uc || 0);
+    const rowCogs = q * bw * uc;
+    const cell = tr.querySelector(".wi-cogs");
+    if (cell) cell.textContent = fmtMoney(rowCogs);
+    rev += q * pr; cogs += rowCogs; ft += q * fr; qtySum += q;
   });
   const el = $("wiImportTotal");
-  if (el) el.innerHTML = `合计 <b>${fmtNum(qtySum)}</b> 袋 · 入仓成本 <b>${fmtMoney(total)}</b>`;
+  if (el) el.innerHTML = `数量 <b>${fmtNum(qtySum)}</b> 袋 · 收入 <b>${fmtMoney(rev)}</b> · 成本 <b>${fmtMoney(cogs)}</b> · 运费 <b>${fmtMoney(ft)}</b> · 毛利 <b style="color:var(--green)">${fmtMoney(rev - cogs - ft)}</b>`;
 }
 async function wImportConfirm() {
   if (!WIMPORT) { toast("请先解析预览"); return; }
@@ -1692,10 +1964,11 @@ async function wImportConfirm() {
       purchase_no: base.purchase_no || "",
       center: base.center || "",
       quantity: q,
-      box_count: base.box_count || 0,
+      box_count: parseFloat(tr.querySelector(".wi-box").value) || 0,
       box_spec: base.box_spec || 0,
       unit_price: parseFloat(tr.querySelector(".wi-price").value) || 0,
       freight: parseFloat(tr.querySelector(".wi-freight").value) || 0,
+      bag_weight: parseFloat(tr.querySelector(".wi-weight").value) || 0,
       date: $("wiImportDate")?.value || today(),
       remark: "",
     });

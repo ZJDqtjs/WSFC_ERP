@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .auth import ensure_seed_users
 from .database import Base, DATA_DIR, get_engine, get_sessionmaker
-from .models import FinanceRecord, Outbound, OutboundLine, PackRule, Product, User, WarehouseProduct
+from .models import FinanceRecord, Outbound, OutboundLine, PackRule, Product, User, WarehouseIn, WarehouseProduct
 from .services import recompute_product, seed_units
 
 
@@ -79,6 +79,30 @@ def migrate(engine: Engine, maker: sessionmaker) -> None:
             conn.commit()
     _backfill_pack_rule_box_items(maker)
     _backfill_gross_sales(maker)
+
+    # 入仓表：入仓品新增「关联库存商品 / 每袋净重」，入仓记录新增「收入/成本/运费/毛利」口径（新增列，幂等）
+    with engine.connect() as conn:
+        wpcols = [r[1] for r in conn.execute(text("PRAGMA table_info(warehouse_products)")).fetchall()]
+        if wpcols:
+            if "stock_product_id" not in wpcols:
+                conn.execute(text("ALTER TABLE warehouse_products ADD COLUMN stock_product_id INTEGER"))
+            if "bag_weight" not in wpcols:
+                conn.execute(text("ALTER TABLE warehouse_products ADD COLUMN bag_weight FLOAT DEFAULT 0"))
+            conn.commit()
+    with engine.connect() as conn:
+        wicols = [r[1] for r in conn.execute(text("PRAGMA table_info(warehouse_ins)")).fetchall()]
+        if wicols:
+            for col, ddl in (
+                ("stock_product_id", "INTEGER"),
+                ("bag_weight", "FLOAT DEFAULT 0"),
+                ("unit_cost", "FLOAT DEFAULT 0"),
+                ("cogs", "FLOAT DEFAULT 0"),
+                ("freight_total", "FLOAT DEFAULT 0"),
+                ("profit", "FLOAT DEFAULT 0"),
+            ):
+                if col not in wicols:
+                    conn.execute(text(f"ALTER TABLE warehouse_ins ADD COLUMN {col} {ddl}"))
+            conn.commit()
 
 
 def _backfill_gross_sales(maker: sessionmaker) -> None:
@@ -229,33 +253,87 @@ def _backfill_products(db: Session) -> None:
             p.weight_kg = round(gm / 1000.0, 4)
 
 
-# 入仓品种子（半加工叶梅）——仅当入仓品表为空时写入，幂等。
-# 字段：名称, 类目, SKU, 69码, 箱规(袋/箱), 采购价(元/袋), 保质期, 备注
+# 入仓品种子（半加工叶梅）——表为空时写入，幂等。
+# 字段：名称, 类目, SKU, 69码, 箱规(袋/箱), 采购价(元/袋,=收入单价), 保质期, 备注, 关联库存商品ID, 每袋净重(默认单位，通常公斤)
 _WAREHOUSE_PRODUCT_SEED = [
-    ("白拇指玉米", "半加工叶梅", "100024877397", "6978122780046", 25, 25, "半年", ""),
-    ("紫拇指玉米", "半加工叶梅", "100024227294", "6980027710011", 20, 16, "半年", "给李狮说的30"),
-    ("玉米段1.2kg", "半加工叶梅", "100051680966", "6980027713692", 25, 16, "一年", ""),
-    ("甜玉米粒1000g", "半加工叶梅", "100012495050", "6980027711681", 10, 16, "一年", ""),
-    ("花糯玉米3斤礼盒装", "半加工叶梅", "100244806952", "6980027712220", 18, 20, "半年", ""),
-    ("白拇指玉米2斤礼盒", "半加工叶梅", "100296324589", "6980027711117", 18, 39, "半年", ""),
-    ("七彩冻干花生228g", "半加工叶梅", "100172098848", "6980027711131", 15, 26, "", ""),
-    ("冻干黑花生228g", "半加工叶梅", "100306607178", "6980027711148", 15, 28, "", ""),
+    ("白拇指玉米", "半加工叶梅", "100024877397", "6978122780046", 25, 25, "半年", "", 131, 1),
+    ("紫拇指玉米", "半加工叶梅", "100024227294", "6980027710011", 20, 16, "半年", "给李狮说的30", 236, 0.5),
+    ("玉米段1.2kg", "半加工叶梅", "100051680966", "6980027713692", 25, 16, "一年", "", 197, 1.2),
+    ("甜玉米粒1000g", "半加工叶梅", "100012495050", "6980027711681", 10, 16, "一年", "", 204, 1),
+    ("花糯玉米3斤礼盒装", "半加工叶梅", "100244806952", "6980027712220", 18, 20, "半年", "", 125, 1.5),
+    ("白拇指玉米2斤礼盒", "半加工叶梅", "100296324589", "6980027711117", 18, 39, "半年", "", 131, 1),
+    ("七彩冻干花生228g", "半加工叶梅", "100172098848", "6980027711131", 15, 26, "", "", 3, 0.228),
+    ("冻干黑花生228g", "半加工叶梅", "100306607178", "6980027711148", 15, 28, "", "", 5, 0.228),
 ]
 
 
 def seed_warehouse_products(db: Session) -> None:
-    """入仓品（半加工叶梅）种子。运费暂留空(0)，后续在系统维护。仅空表时写入。"""
-    if db.scalar(select(WarehouseProduct).limit(1)):
-        return
-    for name, category, sku, barcode, box_spec, price, shelf_life, remark in _WAREHOUSE_PRODUCT_SEED:
-        db.add(
-            WarehouseProduct(
-                name=name, category=category, sku=sku, barcode=barcode,
-                box_spec=float(box_spec), purchase_price=float(price), freight=0.0,
-                shelf_life=shelf_life, remark=remark, is_active=True,
+    """入仓品（半加工叶梅）种子 + 默认配置补齐。
+
+    - 表为空：写入全部种子（运费留空，后续在系统维护）；
+    - 表非空：仅对同名种子行补齐「关联库存商品 / 每袋净重」（未配置时），不新增、不覆盖用户改动。
+    关联库存商品仅在目标仓确实存在该商品时才写入（避免外键失败）。
+    """
+    valid_pids = set(db.execute(select(Product.id)).scalars())
+    existing = {p.name: p for p in db.execute(select(WarehouseProduct)).scalars()}
+    if not existing:
+        for name, category, sku, barcode, box_spec, price, shelf_life, remark, spid, bw in _WAREHOUSE_PRODUCT_SEED:
+            db.add(
+                WarehouseProduct(
+                    name=name, category=category, sku=sku, barcode=barcode,
+                    box_spec=float(box_spec), purchase_price=float(price), freight=0.0,
+                    stock_product_id=spid if spid in valid_pids else None, bag_weight=float(bw),
+                    shelf_life=shelf_life, remark=remark, is_active=True,
+                )
             )
-        )
+        db.flush()
+        return
+    for name, _cat, _sku, _bc, _bs, _price, _sl, _rm, spid, bw in _WAREHOUSE_PRODUCT_SEED:
+        p = existing.get(name)
+        if not p:
+            continue
+        if not p.stock_product_id and spid in valid_pids:
+            p.stock_product_id = spid
+        if not p.bag_weight and bw:
+            p.bag_weight = float(bw)
     db.flush()
+
+
+def _migrate_warehouse_bag_weight(maker: sessionmaker, key: str) -> None:
+    """一次性迁移：入仓品「每袋净重」与入仓记录「每袋净重/单位成本」由基础单位(克)换算为默认单位(通常公斤)。
+
+    仅对种子内的入仓品按名称重设；入仓记录按关联库存商品的换算系数换算（金额口径不变）。
+    幂等（标记文件控制只跑一次）。
+    """
+    marker = DATA_DIR / f".wh_bag_weight_kg_{key}"
+    if marker.exists():
+        return
+    db = maker()
+    try:
+        by_name = {spec[0]: float(spec[9]) for spec in _WAREHOUSE_PRODUCT_SEED}
+        for p in db.execute(select(WarehouseProduct)).scalars():
+            if p.name in by_name:
+                p.bag_weight = by_name[p.name]
+        for r in db.execute(select(WarehouseIn)).scalars():
+            if not r.stock_product_id:
+                continue
+            sp = db.get(Product, r.stock_product_id)
+            if not sp:
+                continue
+            du = sp.default_unit or sp.base_unit
+            factor = float((sp.conversions or {}).get(du) or 1) or 1.0
+            if factor and factor != 1:
+                if r.bag_weight:
+                    r.bag_weight = round(r.bag_weight / factor, 6)
+                if r.unit_cost:
+                    r.unit_cost = round(r.unit_cost * factor, 6)
+        db.commit()
+        marker.write_text("kg\n", encoding="utf-8")
+    except Exception as e:
+        print("[迁移] 入仓品每袋净重单位换算失败:", e)
+        db.rollback()
+    finally:
+        db.close()
 
 
 def copy_users(src_key: str, dst_key: str) -> None:
@@ -326,3 +404,4 @@ def init_warehouse(key: str, copy_users_from: str | None = None) -> None:
     finally:
         db.close()
     _fifo_recompute_once(maker, key)
+    _migrate_warehouse_bag_weight(maker, key)

@@ -982,6 +982,10 @@ td.num, th.num {
   border: 1px solid var(--border);
 }
 
+.modal.wide {
+  max-width: 1060px;
+}
+
 @keyframes pop { 
   from { transform: translateY(16px) scale(0.98); opacity: 0; } 
   to { transform: none; scale(1); opacity: 1; } 

@@ -327,7 +327,7 @@
         <div class="card">
           <div class="card-head">
             <h3>入仓品资料</h3>
-            <span class="hint">按「袋」采购的备货商品（半加工等）：采购价、运费均以每袋计；运费可留空，后续在系统维护</span>
+            <span class="hint">按「袋」采购的备货商品（半加工等）：采购价为给「我」的收入单价；商品成本按「关联库存商品的单位成本 × 每袋净重」计算；运费可留空，后续维护</span>
             <div class="grow"></div>
             <button class="btn green" onclick="wprodEdit()"><svg class="ic"><use href="#i-plus"/></svg> 新增入仓品</button>
             <button class="btn secondary" onclick="loadWarehouseProducts()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
@@ -348,9 +348,29 @@
             <input id="wInDateFrom" type="date" /><span>-</span><input id="wInDateTo" type="date" />
             <input id="wInSearch" placeholder="🔍 筛选商品 / 采购单号 / 配送中心..." oninput="loadWarehouseIns()" />
             <button class="btn secondary" onclick="loadWarehouseIns()">筛选</button>
+            <button class="btn secondary" onclick="wInThisMonth()">本月</button>
+          </div>
+          <div class="batch-bar" id="wInBatch" style="display:none;">
+            <span class="muted">已选 <b id="wInSelCount">0</b> 条</span>
+            <button class="btn danger" onclick="batchDeleteWarehouseIns()">批量删除</button>
+            <button class="btn secondary" onclick="clearBatch('win')">取消选择</button>
           </div>
           <div class="fresh-summary" id="wInSummary" style="display:none;"></div>
           <div class="table-wrap"><table id="wInTable"></table></div>
+        </div>
+      </section>
+
+      <!-- 入仓批次明细（二级页） -->
+      <section id="page-wingroup" class="page">
+        <div class="card">
+          <div class="card-head">
+            <h3 id="wgTitle">入仓批次明细</h3><span class="hint" id="wgHint"></span>
+            <div class="grow"></div>
+            <button class="btn danger" onclick="WGROUP && WGROUP[0] && deleteWinGroup(WGROUP[0].import_group)">删 除本批</button>
+            <button class="btn secondary" onclick="goPage('warehouse-in')">← 返回入仓列表</button>
+          </div>
+          <div class="stat-grid" id="wgSummary" style="margin-bottom:12px;"></div>
+          <div class="table-wrap"><table id="wgTable"></table></div>
         </div>
       </section>
 
