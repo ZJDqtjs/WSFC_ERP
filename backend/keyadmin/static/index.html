@@ -60,6 +60,29 @@
 
       <div class="card card-danger">
         <div class="card-head">
+          <h3>🧹 数据清理（细化清除）</h3>
+          <span class="hint">按分仓、按类别细化清除业务数据，如只清空某仓的入库信息或库存信息，不影响其他数据。<b>清除前会自动备份，操作不可撤销，请谨慎。</b></span>
+          <button class="btn sm ghost" style="margin-left:auto;" onclick="loadClearItems()">刷新</button>
+        </div>
+        <div class="form-grid" style="max-width:340px;">
+          <div class="field">
+            <label>目标分仓</label>
+            <select id="clWarehouse" onchange="loadClearItems()"></select>
+          </div>
+        </div>
+        <div id="clItems" class="clear-list"></div>
+        <div class="form-actions">
+          <label class="check-inline"><input type="checkbox" id="clBackup" checked /> 清除前自动备份数据库</label>
+        </div>
+        <div class="form-actions" style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn sm ghost" onclick="toggleAllClear(true)">全选</button>
+          <button class="btn sm ghost" onclick="toggleAllClear(false)">全不选</button>
+          <button class="btn danger" onclick="runClear()">⚠ 执行清除所选数据</button>
+        </div>
+      </div>
+
+      <div class="card card-danger">
+        <div class="card-head">
           <h3>⚡ 备份与应急抢救（后门）</h3>
           <span class="hint">当 ERP 主账号无法登录 / 数据异常时，可在此创建备份、恢复备份或重置初始管理员登录私钥来抢救。<b>恢复备份会覆盖当前数据，请谨慎操作。</b></span>
           <button class="btn sm ghost" style="margin-left:auto;" onclick="loadBackups()">刷新</button>

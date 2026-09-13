@@ -21,6 +21,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import ensure_seed_users, verify_password
+from app.clear_data import (
+    CLEAR_ITEMS,
+    all_item_keys,
+    execute as clear_execute,
+    preview as clear_preview,
+    warehouse_choices,
+)
 from app.routers.backup import _list_backups, _safe_path, create_backup_file
 from app.database import (
     DATA_DIR, DB_PATH, DEFAULT_WAREHOUSE_KEY, get_db_default as get_db,
@@ -410,6 +417,53 @@ def rescue_reset_admin(db: Session = Depends(get_db), _: bool = Depends(_require
         "note": "已重置初始管理员密码并重新生成 ERP 登录私钥（旧私钥已失效，同一私钥可用于所有分仓），请立即下载保存",
         "items": items,
     }
+
+
+# ============================================================
+#  数据清理：按分仓、按类别细化清除业务数据（原 clear_stock.py 功能）
+# ============================================================
+class ClearIn(BaseModel):
+    key: str = DEFAULT_WAREHOUSE_KEY
+    items: list[str] = []
+    backup: bool = True
+
+
+@app.get("/api/clear/warehouses")
+def clear_warehouses(_: bool = Depends(_require)):
+    """可选分仓列表。"""
+    return {"warehouses": warehouse_choices()}
+
+
+@app.get("/api/clear/items")
+def clear_items(key: str = DEFAULT_WAREHOUSE_KEY, _: bool = Depends(_require)):
+    """指定分仓各清除类别的当前行数。"""
+    try:
+        return clear_preview(key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/clear/categories")
+def clear_categories(_: bool = Depends(_require)):
+    """清除类别说明（静态）。"""
+    return {
+        "items": [
+            {"key": it["key"], "name": it["name"], "desc": it["desc"]}
+            for it in CLEAR_ITEMS
+        ],
+        "all": all_item_keys(),
+    }
+
+
+@app.post("/api/clear")
+def clear_execute_endpoint(data: ClearIn, _: bool = Depends(_require)):
+    """执行细化清除：指定分仓 + 指定类别。清除前自动备份（可关）。"""
+    try:
+        return clear_execute(data.key, data.items, backup=bool(data.backup))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"清除失败：{e}")
 
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="keyadmin_static")

@@ -189,6 +189,57 @@ async function resetAdminLogin() {
   } catch (e) { toast("重置失败：" + e.message); }
 }
 
+/* ---------- 数据清理（细化清除） ---------- */
+async function loadClearWarehouses() {
+  try {
+    const r = await api("/api/clear/warehouses");
+    const sel = $("clWarehouse");
+    sel.innerHTML = (r.warehouses || []).map((w) =>
+      `<option value="${esc(w.key)}">${esc(w.name)}（${esc(w.key)}）</option>`
+    ).join("");
+    await loadClearItems();
+  } catch (e) { toast("加载分仓失败：" + e.message); }
+}
+async function loadClearItems() {
+  const key = $("clWarehouse").value;
+  if (!key) return;
+  try {
+    const r = await api(`/api/clear/items?key=${encodeURIComponent(key)}`);
+    const box = $("clItems");
+    box.innerHTML = (r.items || []).map((it) => `
+      <label class="clear-item${it.count ? "" : " is-empty"}">
+        <input type="checkbox" class="cl-item" value="${esc(it.key)}" />
+        <span class="ci-name">${esc(it.name)}</span>
+        <span class="ci-count">${it.count} 行</span>
+        <span class="ci-desc">${esc(it.desc)}</span>
+      </label>
+    `).join("");
+  } catch (e) { toast("加载清除项失败：" + e.message); }
+}
+function toggleAllClear(checked) {
+  document.querySelectorAll(".cl-item").forEach((c) => { c.checked = checked; });
+}
+function selectedClearItems() {
+  return [...document.querySelectorAll(".cl-item:checked")].map((c) => c.value);
+}
+async function runClear() {
+  const key = $("clWarehouse").value;
+  const items = selectedClearItems();
+  if (!items.length) { toast("请先勾选要清除的数据类别"); return; }
+  const names = [...document.querySelectorAll(".cl-item:checked")].map((c) =>
+    c.closest(".clear-item").querySelector(".ci-name").textContent
+  );
+  const backup = $("clBackup").checked;
+  const msg = `确认清除分仓「${key}」的以下数据？\n\n· ${names.join("\n· ")}\n\n${backup ? "清除前会自动备份数据库。" : "⚠ 已关闭自动备份！"}此操作不可撤销，请谨慎。`;
+  if (!confirm(msg)) return;
+  try {
+    const r = await api("/api/clear", "POST", { key, items, backup });
+    const detail = Object.entries(r.cleared || {}).map(([t, n]) => `${t}: ${n} 行`).join("，");
+    toast(`清除完成（${r.warehouse}）：${detail || "无数据"}`);
+    await loadClearItems();
+  } catch (e) { toast("清除失败：" + e.message); }
+}
+
 /* ---------- 私钥弹窗 ---------- */
 function openModal(html) {
   $("modalBox").innerHTML = html;
@@ -233,6 +284,7 @@ function copyKey() {
       $("admin").style.display = "";
       await loadUsers();
       loadBackups();
+      loadClearWarehouses();
     }
     // 未通过门禁则保持密码框
   } catch (e) {}

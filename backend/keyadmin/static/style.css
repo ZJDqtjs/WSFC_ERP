@@ -92,6 +92,17 @@ td.empty { text-align: center; color: var(--muted); padding: 28px; }
 .key-box pre { margin: 0; font-family: "Cascadia Code", Consolas, monospace; font-size: 12.5px; line-height: 1.55; white-space: pre; }
 .toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* ---------- 数据清理 ---------- */
+.clear-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.clear-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; transition: var(--transition); }
+.clear-item:hover { border-color: var(--primary); }
+.clear-item input { flex-shrink: 0; width: 16px; height: 16px; cursor: pointer; }
+.ci-name { font-weight: 600; white-space: nowrap; }
+.ci-count { color: var(--red); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.clear-item.is-empty .ci-count { color: var(--muted); }
+.ci-desc { color: var(--muted); font-size: 12px; flex: 1; }
+.check-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+
 /* ---------- 提示/错误 ---------- */
 .alert { border-radius: var(--radius); padding: 8px 12px; font-size: 13px; margin: 8px 0; }
 .alert.err { background: var(--red); color: #fff; }
