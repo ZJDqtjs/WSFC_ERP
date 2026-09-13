@@ -12,6 +12,7 @@ const prSel = new Set();  // 一单多货批量选择
 const winSel = new Set(); // 入仓记录批量选择
 let OUT_GROUP = null;  // 当前打开的出库批次（array of Outbound 记录）
 let WGROUP = null;     // 当前打开的入仓批次（array of WarehouseIn 记录）
+let WIN_DEDUCT = 0;    // 入仓品扣点%（在「扣点」页统一维护）
 
 /* ---------- 批量选择工具 ---------- */
 function selSet(kind) {
@@ -368,7 +369,20 @@ async function loadDeductionPage() {
     window.__DEDUC_LIST__ = list;
     renderDeducTable(list);
     renderShopDeducTable(shops.rules || []);
+    const wh = list.find((d) => d.category === "入仓品");
+    const whInp = $("whDeducPercent");
+    if (whInp) whInp.value = wh ? wh.percent : 0;
   } catch (e) { toast("加载扣点失败：" + e.message); }
+}
+async function whDeducSave() {
+  const pct = parseFloat($("whDeducPercent").value);
+  if (isNaN(pct) || pct < 0 || pct >= 100) { toast("入仓品扣点需在 0 ~ 100 之间"); return; }
+  try {
+    await api("/api/deductions", "POST", { category: "入仓品", percent: pct, remark: "入仓品采购价（收入）扣点" });
+    toast("入仓品扣点已保存（实时生效）");
+    WIN_DEDUCT = pct;
+    loadDeductionPage();
+  } catch (e) { toast("保存失败：" + e.message); }
 }
 function deducCategories() {
   return [...new Set((PRODUCTS || []).map((p) => p.category).filter(Boolean))].sort();
@@ -376,10 +390,11 @@ function deducCategories() {
 function renderDeducTable(list) {
   const t = $("deducTable");
   if (!t) return;
+  const rows = (list || []).filter((d) => d.category !== "入仓品");
   t.innerHTML = `<thead><tr>
     <th>商品类别</th><th class="num">扣点 %</th><th>备注</th><th>操作</th>
   </tr></thead><tbody>` +
-    (list.length ? list.map((d) => `<tr>
+    (rows.length ? rows.map((d) => `<tr>
       <td>${esc(d.category)}</td>
       <td class="num"><span class="badge" style="background:var(--primary,#2563eb);color:#fff;">${Number(d.percent).toFixed(2)}%</span></td>
       <td class="muted">${esc(d.remark || "")}</td>
@@ -1368,6 +1383,7 @@ let WIMPORT = null;   // 常温贴单导入预览结果
 let WI_FILE = null;   // 导入用的 Excel 文件（保持引用，便于切换工作表重新解析）
 
 async function loadWarehouseIn() {
+  try { const d = await api("/api/warehouse-in/deduction"); WIN_DEDUCT = d.percent || 0; } catch (e) {}
   await Promise.all([loadWarehouseProducts(), loadWarehouseIns()]);
 }
 
@@ -1384,7 +1400,8 @@ function renderWarehouseProducts() {
   const rows = WPROD || [];
   t.innerHTML = `<thead><tr>
     <th>名称</th><th>类目</th><th class="num">箱规(袋/箱)</th><th class="num">每袋净重</th>
-    <th class="num">采购价(收入/袋)</th><th class="num">运费(元/袋)</th><th class="num">每袋成本</th>
+    <th class="num">采购价(收入/袋)</th>
+    <th class="num">运费(元/袋)</th><th class="num">每袋成本</th>
     <th>关联库存商品</th><th>保质期</th><th></th></tr></thead><tbody>` +
     rows.map((p) => `<tr>
       <td><b>${esc(p.name)}</b><div class="muted" style="font-size:12px;">${esc(p.sku) || "—"}${p.barcode ? ` · ${esc(p.barcode)}` : ""}</div></td>
@@ -1583,7 +1600,7 @@ function renderWinRow(r) {
     <td class="mono">${esc(r.purchase_no) || "—"}</td>
     <td>${esc(r.center) || "—"}</td>
     <td><b>${esc(r.product_name)}</b>${r.product_id ? "" : ' <span class="badge" style="background:#fff3cd;color:#8a6d3b;">未关联</span>'}
-      <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"} · 净重 ${r.bag_weight ? `${fmtNum(r.bag_weight)} ${esc(r.stock_default_unit || "")}`.trim() : "—"} · 单位成本 ${fmtMoney(r.unit_cost)}/${esc(r.stock_default_unit || "单位")}</div>
+      <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"} · 净重 ${r.bag_weight ? `${fmtNum(r.bag_weight)} ${esc(r.stock_default_unit || "")}`.trim() : "—"} · 单位成本 ${fmtMoney(r.unit_cost)}/${esc(r.stock_default_unit || "单位")}${r.deduction_percent ? ` · 扣点 ${fmtNum(r.deduction_percent)}%` : ""}</div>
     </td>
     <td class="num mono">${fmtNum(r.quantity)}</td>
     <td class="num mono">${fmtMoney(r.amount)}</td>
@@ -1673,7 +1690,7 @@ function renderWinGroupPage() {
     <td class="mono">${esc(r.purchase_no) || "—"}</td>
     <td>${esc(r.center) || "—"}</td>
     <td><b>${esc(r.product_name)}</b>
-      <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"} · 净重 ${r.bag_weight ? `${fmtNum(r.bag_weight)} ${esc(r.stock_default_unit || "")}`.trim() : "—"}</div></td>
+      <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"} · 净重 ${r.bag_weight ? `${fmtNum(r.bag_weight)} ${esc(r.stock_default_unit || "")}`.trim() : "—"}${r.deduction_percent ? ` · 扣点 ${fmtNum(r.deduction_percent)}%` : ""}</div></td>
     <td class="num mono">${fmtNum(r.quantity)}</td>
     <td class="num mono">${r.box_count ? fmtNum(r.box_count) : "—"}</td>
     <td class="num mono">${fmtMoney(r.unit_price)}</td>
@@ -1761,11 +1778,12 @@ function wInCalc() {
   const sel = $("wiProduct");
   const p = (WPROD || []).find((x) => x.id === +sel.value);
   const uc = +(sel.dataset.uc || (p ? p.stock_unit_cost : 0) || 0);
+  const pct = WIN_DEDUCT || 0;
   const qty = parseFloat($("wiQty").value) || 0;
   const price = parseFloat($("wiPrice").value) || 0;
   const freight = parseFloat($("wiFreight").value) || 0;
   const bw = parseFloat($("wiBagWeight").value) || 0;
-  const revenue = qty * price;
+  const revenue = qty * price * (1 - pct / 100);
   const cogs = qty * bw * uc;
   const ft = qty * freight;
   $("wiAmount").value = revenue.toFixed(2);
@@ -1775,8 +1793,8 @@ function wInCalc() {
   const hint = $("wiCostHint");
   if (hint) {
     hint.textContent = p && p.stock_product_name
-      ? `成本来源：${p.stock_product_name}，单位成本 ${fmtMoney(uc)}/${p.stock_default_unit || "单位"}；商品成本 = 数量 × 每袋净重(${fmtNum(bw)}) × 单位成本`
-      : "未关联库存商品：商品成本按 0 计。";
+      ? `收入 = 采购价 × (1 − 扣点${fmtNum(pct)}%)；成本来源：${p.stock_product_name}，单位成本 ${fmtMoney(uc)}/${p.stock_default_unit || "单位"}`
+      : `扣点 ${fmtNum(pct)}%；未关联库存商品：商品成本按 0 计。`;
   }
 }
 async function openWarehouseInAdd() {
@@ -1894,12 +1912,12 @@ function renderWImportPreview(d, dateVal) {
           <th>商品名称（贴单）</th><th>入仓品</th><th class="num">箱数</th><th class="num">数量(袋)</th>
           <th class="num">每袋净重</th><th class="num">采购价(收入)</th><th class="num">运费</th><th class="num">商品成本</th>
         </tr></thead>
-        <tbody>${rows.map((r, i) => `<tr data-i="${i}" data-uc="${r.unit_cost || 0}">
+        <tbody>${rows.map((r, i) => `<tr data-i="${i}" data-uc="${r.unit_cost || 0}" data-pct="${r.deduction_percent || 0}">
           <td>${esc(r.product_name)}
             <div class="muted" style="font-size:12px;">${esc(r.purchase_no) || "—"} · ${esc(r.center) || "—"}</div>
           </td>
           <td><select class="wi-prod" onchange="wImportPick(${i})">${opts(r.product_id)}</select>
-            <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"}</div></td>
+            <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"}${r.deduction_percent ? ` · 扣点 ${fmtNum(r.deduction_percent)}%` : ""}</div></td>
           <td><input class="wi-box" type="number" step="any" min="0" value="${r.box_count || ""}" style="width:58px;" /></td>
           <td><input class="wi-qty" type="number" step="any" min="0" value="${r.quantity}" style="width:68px;" oninput="wImportCalc()" /></td>
           <td><input class="wi-weight" type="number" step="any" min="0" value="${r.bag_weight || ""}" style="width:72px;" oninput="wImportCalc()" /></td>
@@ -1927,7 +1945,7 @@ function wImportPick(i) {
     tr.querySelector(".wi-freight").value = p.freight || "";
     if (p.bag_weight) tr.querySelector(".wi-weight").value = p.bag_weight;
     const sub = tr.querySelector("td:nth-child(2) .muted");
-    if (sub) sub.textContent = p.stock_product_name || "未关联库存商品";
+    if (sub) sub.textContent = (p.stock_product_name || "未关联库存商品") + (WIN_DEDUCT ? ` · 扣点 ${fmtNum(WIN_DEDUCT)}%` : "");
   }
   wImportCalc();
 }
@@ -1939,10 +1957,11 @@ function wImportCalc() {
     const fr = parseFloat(tr.querySelector(".wi-freight").value) || 0;
     const bw = parseFloat(tr.querySelector(".wi-weight").value) || 0;
     const uc = +(tr.dataset.uc || 0);
+    const pct = +(tr.dataset.pct || 0);
     const rowCogs = q * bw * uc;
     const cell = tr.querySelector(".wi-cogs");
     if (cell) cell.textContent = fmtMoney(rowCogs);
-    rev += q * pr; cogs += rowCogs; ft += q * fr; qtySum += q;
+    rev += q * pr * (1 - pct / 100); cogs += rowCogs; ft += q * fr; qtySum += q;
   });
   const el = $("wiImportTotal");
   if (el) el.innerHTML = `数量 <b>${fmtNum(qtySum)}</b> 袋 · 收入 <b>${fmtMoney(rev)}</b> · 成本 <b>${fmtMoney(cogs)}</b> · 运费 <b>${fmtMoney(ft)}</b> · 毛利 <b style="color:var(--green)">${fmtMoney(rev - cogs - ft)}</b>`;

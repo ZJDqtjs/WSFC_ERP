@@ -304,7 +304,8 @@ class WarehouseIn(Base):
     quantity: Mapped[float] = mapped_column(Float, default=0.0)  # 数量（袋）
     box_count: Mapped[float] = mapped_column(Float, default=0.0)  # 箱数
     box_spec: Mapped[float] = mapped_column(Float, default=0.0)  # 箱规（袋/箱）
-    unit_price: Mapped[float] = mapped_column(Float, default=0.0)  # 采购价（元/袋）＝收入单价
+    unit_price: Mapped[float] = mapped_column(Float, default=0.0)  # 采购价（元/袋）＝收入单价（扣点前）
+    deduction_percent: Mapped[float] = mapped_column(Float, default=0.0)  # 采购价扣点%快照
     freight: Mapped[float] = mapped_column(Float, default=0.0)  # 运费（元/袋）
     # 成本口径：收入 = 数量×采购价；商品成本 = 数量×每袋净重×库存单位成本；运费 = 数量×运费单价
     stock_product_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 关联库存商品

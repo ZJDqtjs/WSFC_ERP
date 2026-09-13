@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .auth import ensure_seed_users
 from .database import Base, DATA_DIR, get_engine, get_sessionmaker
-from .models import FinanceRecord, Outbound, OutboundLine, PackRule, Product, User, WarehouseIn, WarehouseProduct
+from .models import Deduction, FinanceRecord, Outbound, OutboundLine, PackRule, Product, User, WarehouseIn, WarehouseProduct
 from .services import recompute_product, seed_units
 
 
@@ -99,6 +99,7 @@ def migrate(engine: Engine, maker: sessionmaker) -> None:
                 ("cogs", "FLOAT DEFAULT 0"),
                 ("freight_total", "FLOAT DEFAULT 0"),
                 ("profit", "FLOAT DEFAULT 0"),
+                ("deduction_percent", "FLOAT DEFAULT 0"),
             ):
                 if col not in wicols:
                     conn.execute(text(f"ALTER TABLE warehouse_ins ADD COLUMN {col} {ddl}"))
@@ -299,6 +300,18 @@ def seed_warehouse_products(db: Session) -> None:
     db.flush()
 
 
+# 入仓品扣点：使用 Deduction 表，保留类别名「入仓品」表示（在「扣点」页统一维护）
+WAREHOUSE_DEDUCTION_CATEGORY = "入仓品"
+
+
+def ensure_warehouse_deduction(db: Session) -> None:
+    """入仓品扣点种子：默认 6%（可在「扣点」页统一维护）。幂等，不覆盖用户后续修改。"""
+    if db.scalar(select(Deduction).where(Deduction.category == WAREHOUSE_DEDUCTION_CATEGORY)):
+        return
+    db.add(Deduction(category=WAREHOUSE_DEDUCTION_CATEGORY, percent=6.0, remark="入仓品采购价（收入）扣点"))
+    db.flush()
+
+
 def _migrate_warehouse_bag_weight(maker: sessionmaker, key: str) -> None:
     """一次性迁移：入仓品「每袋净重」与入仓记录「每袋净重/单位成本」由基础单位(克)换算为默认单位(通常公斤)。
 
@@ -400,6 +413,7 @@ def init_warehouse(key: str, copy_users_from: str | None = None) -> None:
         ensure_seed_users(db)
         _backfill_products(db)
         seed_warehouse_products(db)
+        ensure_warehouse_deduction(db)
         db.commit()
     finally:
         db.close()

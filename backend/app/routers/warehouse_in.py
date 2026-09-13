@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Product, User, WarehouseIn, WarehouseProduct
+from ..models import Deduction, Product, User, WarehouseIn, WarehouseProduct
 
 router = APIRouter(prefix="/api/warehouse-in", tags=["warehouse-in"])
 
@@ -146,13 +146,30 @@ def _stock_default_unit(sp: Product | None) -> str:
     return (sp.default_unit or sp.base_unit) if sp else ""
 
 
+# 入仓品扣点：统一在「扣点」页维护，保留类别名「入仓品」
+WAREHOUSE_DEDUCTION_CATEGORY = "入仓品"
+
+
+def _warehouse_deduction(db: Session) -> float:
+    """入仓品采购价（收入）扣点百分比；未配置返回 0（不折算）。"""
+    d = db.scalar(select(Deduction).where(Deduction.category == WAREHOUSE_DEDUCTION_CATEGORY))
+    return float(d.percent if d else 0)
+
+
+@router.get("/deduction")
+def get_warehouse_deduction(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """返回入仓品扣点百分比（供入仓页使用）。"""
+    return {"percent": _warehouse_deduction(db)}
+
+
 # ---------------- 序列化 ----------------
 def _product_dict(db: Session, p: WarehouseProduct) -> dict:
     sp, _base_cost, _factor, unit_cost = _stock_info(db, p.stock_product_id)
     return {
         "id": p.id, "name": p.name, "category": p.category, "sku": p.sku,
         "barcode": p.barcode, "box_spec": p.box_spec,
-        "purchase_price": p.purchase_price, "freight": p.freight,
+        "purchase_price": p.purchase_price,
+        "freight": p.freight,
         "stock_product_id": p.stock_product_id,
         "stock_product_name": sp.name if sp else "",
         "stock_base_unit": (sp.base_unit if sp else ""),
@@ -171,7 +188,7 @@ def _in_dict(db: Session, r: WarehouseIn) -> dict:
         "product_name": r.product_name, "category": r.category, "unit": r.unit,
         "purchase_no": r.purchase_no, "center": r.center,
         "quantity": r.quantity, "box_count": r.box_count, "box_spec": r.box_spec,
-        "unit_price": r.unit_price, "freight": r.freight,
+        "unit_price": r.unit_price, "deduction_percent": r.deduction_percent, "freight": r.freight,
         "stock_product_id": r.stock_product_id,
         "stock_product_name": sp.name if sp else "",
         "stock_default_unit": _stock_default_unit(sp),
@@ -302,7 +319,8 @@ def _create_record(db: Session, payload: dict, operator: str, import_group: str 
     stock_product_id = product.stock_product_id if product else None
     sp, _base_cost, _factor, unit_cost = _stock_info(db, stock_product_id)
     bag_weight = float(payload.get("bag_weight") or 0) or float((product.bag_weight if product else 0) or 0)
-    revenue = round(quantity * unit_price, 2)
+    deduction = _warehouse_deduction(db)
+    revenue = round(quantity * unit_price * (1 - deduction / 100), 2)
     cogs = round(quantity * bag_weight * unit_cost, 2)
     freight_total = round(quantity * freight, 2)
     profit = round(revenue - cogs - freight_total, 2)
@@ -319,6 +337,7 @@ def _create_record(db: Session, payload: dict, operator: str, import_group: str 
         box_count=float(payload.get("box_count") or 0),
         box_spec=float(payload.get("box_spec") or 0),
         unit_price=unit_price,
+        deduction_percent=deduction,
         freight=freight,
         stock_product_id=sp.id if sp else None,
         bag_weight=bag_weight,
@@ -408,7 +427,8 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
     rec.stock_product_id = sp.id if sp else None
     rec.bag_weight = float(d.get("bag_weight") or 0) or float((product.bag_weight if product else 0) or 0) or rec.bag_weight
     rec.unit_cost = unit_cost
-    rec.amount = round(rec.quantity * rec.unit_price, 2)
+    rec.deduction_percent = _warehouse_deduction(db)
+    rec.amount = round(rec.quantity * rec.unit_price * (1 - (rec.deduction_percent or 0) / 100), 2)
     rec.cogs = round(rec.quantity * rec.bag_weight * rec.unit_cost, 2)
     rec.freight_total = round(rec.quantity * rec.freight, 2)
     rec.profit = round(rec.amount - rec.cogs - rec.freight_total, 2)
@@ -497,6 +517,7 @@ def import_preview(
         raise HTTPException(400, "未识别到表头（需包含「商品名称」等列），请确认工作表内容")
 
     products = list(db.execute(select(WarehouseProduct)).scalars())
+    deduction = _warehouse_deduction(db)
     default_date = (date or "").strip() or datetime.now().strftime("%Y-%m-%d")
     items, failed = [], []
     last_purchase_no = ""
@@ -522,7 +543,7 @@ def import_preview(
         bag_weight = round(grams / factor, 6) if (grams and factor) else float((product.bag_weight if product else 0) or 0)
         unit_price = product.purchase_price if product else 0.0
         freight = product.freight if product else 0.0
-        revenue = round(qty * unit_price, 2)
+        revenue = round(qty * unit_price * (1 - deduction / 100), 2)
         cogs = round(qty * bag_weight * unit_cost, 2)
         freight_total = round(qty * freight, 2)
         items.append({
@@ -537,6 +558,8 @@ def import_preview(
             "matched_name": product.name if product else "",
             "category": product.category if product else "",
             "unit_price": unit_price,
+            "deduction_percent": deduction,
+            "net_price": round(unit_price * (1 - deduction / 100), 4),
             "freight": freight,
             "bag_weight": bag_weight,
             "unit_cost": unit_cost,
