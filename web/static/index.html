@@ -54,6 +54,7 @@
         <button class="nav-item" data-page="stock"><span class="nav-ico"><svg class="ic"><use href="#i-box"/></svg></span>库存管理</button>
         <button class="nav-item" data-page="inbound"><span class="nav-ico"><svg class="ic"><use href="#i-in"/></svg></span>入库</button>
         <button class="nav-item" data-page="outbound"><span class="nav-ico"><svg class="ic"><use href="#i-out"/></svg></span>出库 / 销售</button>
+        <button class="nav-item" data-page="warehouse-in"><span class="nav-ico"><svg class="ic"><use href="#i-in"/></svg></span>入仓</button>
         <div class="nav-group">商品资料</div>
         <button class="nav-item" data-page="products"><span class="nav-ico"><svg class="ic"><use href="#i-tag"/></svg></span>商品</button>
         <button class="nav-item" data-page="products" data-type="order"><span class="nav-ico"><svg class="ic"><use href="#i-receipt"/></svg></span>关联结算</button>
@@ -318,6 +319,38 @@
             <button class="btn secondary" onclick="clearBatch('out')">取消选择</button>
           </div>
           <div class="table-wrap"><table id="outTable"></table></div>
+        </div>
+      </section>
+
+      <!-- 入仓 -->
+      <section id="page-warehouse-in" class="page">
+        <div class="card">
+          <div class="card-head">
+            <h3>入仓品资料</h3>
+            <span class="hint">按「袋」采购的备货商品（半加工等）：采购价、运费均以每袋计；运费可留空，后续在系统维护</span>
+            <div class="grow"></div>
+            <button class="btn green" onclick="wprodEdit()"><svg class="ic"><use href="#i-plus"/></svg> 新增入仓品</button>
+            <button class="btn secondary" onclick="loadWarehouseProducts()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+          </div>
+          <div class="table-wrap"><table id="wprodTable"></table></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>入仓记录</h3>
+            <span class="hint" id="winHint"></span>
+            <div class="grow"></div>
+            <button class="btn" onclick="openWarehouseInImport()"><svg class="ic"><use href="#i-download"/></svg> 导入常温贴单</button>
+            <button class="btn secondary" onclick="openWarehouseInAdd()"><svg class="ic"><use href="#i-plus"/></svg> 手动入仓</button>
+            <button class="btn secondary" onclick="loadWarehouseIns()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+          </div>
+          <div class="toolbar">
+            <input id="wInDateFrom" type="date" /><span>-</span><input id="wInDateTo" type="date" />
+            <input id="wInSearch" placeholder="🔍 筛选商品 / 采购单号 / 配送中心..." oninput="loadWarehouseIns()" />
+            <button class="btn secondary" onclick="loadWarehouseIns()">筛选</button>
+          </div>
+          <div class="fresh-summary" id="wInSummary" style="display:none;"></div>
+          <div class="table-wrap"><table id="wInTable"></table></div>
         </div>
       </section>
 

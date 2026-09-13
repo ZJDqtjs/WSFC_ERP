@@ -253,3 +253,60 @@ class Deduction(Base):
     remark: Mapped[str] = mapped_column(String(255), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class WarehouseProduct(Base):
+    """入仓品：按「袋」采购的备货商品（半加工等），与库存商品(Product)解耦。
+
+    采购价、运费均以「袋」为单位（每袋采购价 / 每袋运费）；运费暂留空，后续在系统维护。
+    用于「入仓」台账与入仓成本核算（入仓成本 = 数量 × (采购价 + 运费)）。
+    """
+
+    __tablename__ = "warehouse_products"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), index=True)  # 入仓品名称
+    category: Mapped[str] = mapped_column(String(64), default="")  # 类目，如 半加工叶梅
+    sku: Mapped[str] = mapped_column(String(64), default="")  # SKU
+    barcode: Mapped[str] = mapped_column(String(64), default="")  # 69 码
+    box_spec: Mapped[float] = mapped_column(Float, default=0.0)  # 箱规（袋/箱）
+    purchase_price: Mapped[float] = mapped_column(Float, default=0.0)  # 采购价（元/袋）
+    freight: Mapped[float] = mapped_column(Float, default=0.0)  # 运费（元/袋），暂空待维护
+    shelf_life: Mapped[str] = mapped_column(String(32), default="")  # 保质期，如 半年/一年
+    remark: Mapped[str] = mapped_column(String(255), default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class WarehouseIn(Base):
+    """入仓记录：某入仓品入库数量与成本（按袋）。
+
+    amount = 数量 × (采购价 + 运费)；采购价/运费均为快照，后续可在系统单独维护。
+    可按「采购单号 + 配送中心」保留入仓明细，供导入《入仓配送明细》常温贴单使用。
+    """
+
+    __tablename__ = "warehouse_ins"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(32), index=True)  # 入仓单号 RC{date}-NNN
+    product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("warehouse_products.id"), nullable=True, index=True
+    )  # 关联入仓品（可空，导入未匹配时留空）
+    product_name: Mapped[str] = mapped_column(String(128), default="")  # 名称快照
+    category: Mapped[str] = mapped_column(String(64), default="")
+    unit: Mapped[str] = mapped_column(String(16), default="袋")
+    purchase_no: Mapped[str] = mapped_column(String(64), default="")  # 采购单号
+    center: Mapped[str] = mapped_column(String(64), default="")  # 配送中心
+    quantity: Mapped[float] = mapped_column(Float, default=0.0)  # 数量（袋）
+    box_count: Mapped[float] = mapped_column(Float, default=0.0)  # 箱数
+    box_spec: Mapped[float] = mapped_column(Float, default=0.0)  # 箱规（袋/箱）
+    unit_price: Mapped[float] = mapped_column(Float, default=0.0)  # 采购价（元/袋）
+    freight: Mapped[float] = mapped_column(Float, default=0.0)  # 运费（元/袋），暂空
+    amount: Mapped[float] = mapped_column(Float, default=0.0)  # 入仓成本合计
+    date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
+    operator: Mapped[str] = mapped_column(String(32), default="")
+    remark: Mapped[str] = mapped_column(String(255), default="")
+    import_group: Mapped[str] = mapped_column(String(32), default="")  # 导入批次号，空=手动
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    product: Mapped[WarehouseProduct | None] = relationship()

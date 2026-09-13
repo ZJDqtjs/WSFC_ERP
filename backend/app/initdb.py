@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .auth import ensure_seed_users
 from .database import Base, DATA_DIR, get_engine, get_sessionmaker
-from .models import FinanceRecord, Outbound, OutboundLine, PackRule, Product, User
+from .models import FinanceRecord, Outbound, OutboundLine, PackRule, Product, User, WarehouseProduct
 from .services import recompute_product, seed_units
 
 
@@ -229,6 +229,35 @@ def _backfill_products(db: Session) -> None:
             p.weight_kg = round(gm / 1000.0, 4)
 
 
+# 入仓品种子（半加工叶梅）——仅当入仓品表为空时写入，幂等。
+# 字段：名称, 类目, SKU, 69码, 箱规(袋/箱), 采购价(元/袋), 保质期, 备注
+_WAREHOUSE_PRODUCT_SEED = [
+    ("白拇指玉米", "半加工叶梅", "100024877397", "6978122780046", 25, 25, "半年", ""),
+    ("紫拇指玉米", "半加工叶梅", "100024227294", "6980027710011", 20, 16, "半年", "给李狮说的30"),
+    ("玉米段1.2kg", "半加工叶梅", "100051680966", "6980027713692", 25, 16, "一年", ""),
+    ("甜玉米粒1000g", "半加工叶梅", "100012495050", "6980027711681", 10, 16, "一年", ""),
+    ("花糯玉米3斤礼盒装", "半加工叶梅", "100244806952", "6980027712220", 18, 20, "半年", ""),
+    ("白拇指玉米2斤礼盒", "半加工叶梅", "100296324589", "6980027711117", 18, 39, "半年", ""),
+    ("七彩冻干花生228g", "半加工叶梅", "100172098848", "6980027711131", 15, 26, "", ""),
+    ("冻干黑花生228g", "半加工叶梅", "100306607178", "6980027711148", 15, 28, "", ""),
+]
+
+
+def seed_warehouse_products(db: Session) -> None:
+    """入仓品（半加工叶梅）种子。运费暂留空(0)，后续在系统维护。仅空表时写入。"""
+    if db.scalar(select(WarehouseProduct).limit(1)):
+        return
+    for name, category, sku, barcode, box_spec, price, shelf_life, remark in _WAREHOUSE_PRODUCT_SEED:
+        db.add(
+            WarehouseProduct(
+                name=name, category=category, sku=sku, barcode=barcode,
+                box_spec=float(box_spec), purchase_price=float(price), freight=0.0,
+                shelf_life=shelf_life, remark=remark, is_active=True,
+            )
+        )
+    db.flush()
+
+
 def copy_users(src_key: str, dst_key: str) -> None:
     """把源仓 users 全表复制到目标仓（保持 id 不变）。须在 ensure_seed_users 前调用（目标仓 users 为空）。"""
     src = get_sessionmaker(src_key)()
@@ -292,6 +321,7 @@ def init_warehouse(key: str, copy_users_from: str | None = None) -> None:
             copy_users(copy_users_from, key)  # 先拷用户（空表显式 id 插入），再 ensure 兜底
         ensure_seed_users(db)
         _backfill_products(db)
+        seed_warehouse_products(db)
         db.commit()
     finally:
         db.close()

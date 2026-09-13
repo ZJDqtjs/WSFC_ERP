@@ -262,6 +262,7 @@ function daysAgo(n) {
 /* ---------- 导航 ---------- */
 const PAGE_TITLES = {
   home: "工作台", stock: "库存管理", inbound: "入库", outbound: "出库 / 销售",
+  "warehouse-in": "入仓",
   products: "商品", report: "财务报表", import: "批量导入", jushuitan: "聚水潭关联",
   backup: "备份与恢复",
 };
@@ -282,6 +283,7 @@ function goPage(name) {
   page.classList.add("active");
   const loaders = {
     home: loadDashboard, stock: loadStock, inbound: initInbound, outbound: initOutbound,
+    "warehouse-in": loadWarehouseIn,
     products: renderProducts, report: loadReport, import: loadImportPage, jushuitan: loadMappingPage,
     backup: loadBackupPage, fresh: loadFresh, packrules: loadPackRules, pdata: loadPdataPage,
     deduction: loadDeductionPage, express: loadExpressPage, settings: loadSettingsPage,
@@ -1347,6 +1349,364 @@ async function saveFreshConfig() {
     closeModal();
     loadFresh();
   } catch (e) { toast("保存失败：" + e.message); }
+}
+
+/* =============== 入仓 =============== */
+let WPROD = [];       // 入仓品资料缓存
+let WINS = [];        // 入仓记录缓存
+let WIMPORT = null;   // 常温贴单导入预览结果
+let WI_FILE = null;   // 导入用的 Excel 文件（保持引用，便于切换工作表重新解析）
+
+async function loadWarehouseIn() {
+  await Promise.all([loadWarehouseProducts(), loadWarehouseIns()]);
+}
+
+/* ---------- 入仓品资料 ---------- */
+async function loadWarehouseProducts() {
+  try {
+    WPROD = await api("/api/warehouse-in/products");
+    renderWarehouseProducts();
+  } catch (e) { toast("加载入仓品失败：" + e.message); }
+}
+function renderWarehouseProducts() {
+  const t = $("wprodTable");
+  const rows = WPROD || [];
+  t.innerHTML = `<thead><tr>
+    <th>名称</th><th>类目</th><th>SKU</th><th>69码</th>
+    <th class="num">箱规(袋/箱)</th><th class="num">采购价(元/袋)</th><th class="num">运费(元/袋)</th>
+    <th>保质期</th><th>备注</th><th></th></tr></thead><tbody>` +
+    rows.map((p) => `<tr>
+      <td><b>${esc(p.name)}</b></td>
+      <td>${esc(p.category) || "—"}</td>
+      <td class="mono">${esc(p.sku) || "—"}</td>
+      <td class="mono">${esc(p.barcode) || "—"}</td>
+      <td class="num mono">${p.box_spec ? fmtNum(p.box_spec) : "—"}</td>
+      <td class="num mono">${fmtMoney(p.purchase_price)}</td>
+      <td class="num mono">${p.freight ? fmtMoney(p.freight) : "—"}</td>
+      <td>${esc(p.shelf_life) || "—"}</td>
+      <td class="muted" style="max-width:160px;">${esc(p.remark) || "—"}</td>
+      <td style="white-space:nowrap;">
+        <button class="btn sm" onclick="wprodEdit(${p.id})">改</button>
+        <button class="btn sm danger" onclick="wprodDelete(${p.id})">删</button>
+      </td></tr>`).join("") + `</tbody>`;
+  if (!rows.length) t.innerHTML = `<tr><td colspan="10" class="empty">暂无入仓品，可点「新增入仓品」录入</td></tr>`;
+}
+function wprodEdit(id) {
+  const p = (WPROD || []).find((x) => x.id === id) || {};
+  openModal(`
+    <h3>${id ? "编辑" : "新增"}入仓品 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="form-grid">
+      <div class="field"><label>名称 *</label><input id="wpName" value="${esc(p.name || "")}" /></div>
+      <div class="field"><label>类目</label><input id="wpCat" value="${esc(p.category || "")}" placeholder="如 半加工叶梅" /></div>
+      <div class="field"><label>SKU</label><input id="wpSku" value="${esc(p.sku || "")}" /></div>
+      <div class="field"><label>69码</label><input id="wpBarcode" value="${esc(p.barcode || "")}" /></div>
+      <div class="field"><label>箱规（袋/箱）</label><input id="wpBoxSpec" type="number" step="any" min="0" value="${p.box_spec || ""}" /></div>
+      <div class="field"><label>采购价（元/袋）</label><input id="wpPrice" type="number" step="any" min="0" value="${p.purchase_price || ""}" /></div>
+      <div class="field"><label>运费（元/袋）</label><input id="wpFreight" type="number" step="any" min="0" value="${p.freight || ""}" placeholder="可留空，后续维护" /></div>
+      <div class="field"><label>保质期</label><input id="wpShelf" value="${esc(p.shelf_life || "")}" placeholder="如 半年 / 一年" /></div>
+      <div class="field" style="grid-column:1/-1;"><label>备注</label><input id="wpRemark" value="${esc(p.remark || "")}" /></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn green" onclick="wprodSave(${id || 0})">✓ 保存</button>
+    </div>`);
+}
+async function wprodSave(id) {
+  const name = ($("wpName").value || "").trim();
+  if (!name) { toast("请填写名称"); return; }
+  const body = {
+    name,
+    category: $("wpCat").value.trim(),
+    sku: $("wpSku").value.trim(),
+    barcode: $("wpBarcode").value.trim(),
+    box_spec: parseFloat($("wpBoxSpec").value) || 0,
+    purchase_price: parseFloat($("wpPrice").value) || 0,
+    freight: parseFloat($("wpFreight").value) || 0,
+    shelf_life: $("wpShelf").value.trim(),
+    remark: $("wpRemark").value.trim(),
+    is_active: true,
+  };
+  try {
+    if (id) await api("/api/warehouse-in/products/" + id, "PUT", body);
+    else await api("/api/warehouse-in/products", "POST", body);
+    toast("已保存");
+    closeModal();
+    loadWarehouseProducts();
+  } catch (e) { toast("保存失败：" + e.message); }
+}
+async function wprodDelete(id) {
+  if (!confirm("确认删除该入仓品？（已产生的入仓记录不受影响）")) return;
+  try { await api("/api/warehouse-in/products/" + id, "DELETE"); toast("已删除"); loadWarehouseProducts(); }
+  catch (e) { toast("删除失败：" + e.message); }
+}
+
+/* ---------- 入仓记录 ---------- */
+async function loadWarehouseIns() {
+  const from = $("wInDateFrom")?.value || "", to = $("wInDateTo")?.value || "";
+  const q = $("wInSearch")?.value || "";
+  try {
+    const d = await api(`/api/warehouse-in?date_from=${from}&date_to=${to}&q=${encodeURIComponent(q)}`);
+    renderWarehouseIns(d);
+  } catch (e) { toast("加载入仓记录失败：" + e.message); }
+}
+function renderWarehouseIns(d) {
+  const rows = d.items || [];
+  WINS = rows;
+  const t = $("wInTable");
+  const qtySum = rows.reduce((s, r) => s + (r.quantity || 0), 0);
+  if ($("winHint")) $("winHint").textContent = `共 ${rows.length} 条`;
+  if ($("wInSummary")) {
+    $("wInSummary").innerHTML = `共 <b>${rows.length}</b> 条入仓记录 · 合计 <b>${fmtNum(qtySum)}</b> 袋 · 入仓成本合计 <b>${fmtMoney(d.total_amount)}</b>`;
+    $("wInSummary").style.display = rows.length ? "block" : "none";
+  }
+  t.innerHTML = `<thead><tr>
+    <th>单号</th><th>日期</th><th>采购单号</th><th>配送中心</th><th>商品</th>
+    <th class="num">数量(袋)</th><th class="num">箱数</th><th>箱规</th>
+    <th class="num">采购价</th><th class="num">运费</th><th class="num">金额</th><th>操作员</th><th></th>
+  </tr></thead><tbody>` + rows.map((r) => `<tr>
+    <td class="mono">${esc(r.code)}</td>
+    <td>${esc(r.date)}</td>
+    <td class="mono">${esc(r.purchase_no) || "—"}</td>
+    <td>${esc(r.center) || "—"}</td>
+    <td><b>${esc(r.product_name)}</b>${r.product_id ? "" : ' <span class="badge" style="background:#fff3cd;color:#8a6d3b;">未关联</span>'}</td>
+    <td class="num mono">${fmtNum(r.quantity)}</td>
+    <td class="num mono">${r.box_count ? fmtNum(r.box_count) : "—"}</td>
+    <td class="mono">${r.box_spec ? fmtNum(r.box_spec) : "—"}</td>
+    <td class="num mono">${fmtMoney(r.unit_price)}</td>
+    <td class="num mono">${r.freight ? fmtMoney(r.freight) : "—"}</td>
+    <td class="num mono">${fmtMoney(r.amount)}</td>
+    <td>${esc(r.operator) || "—"}</td>
+    <td style="white-space:nowrap;">
+      <button class="btn sm" onclick="wInEdit(${r.id})">改</button>
+      <button class="btn sm danger" onclick="wInDelete(${r.id})">删</button>
+    </td></tr>`).join("") + `</tbody>`;
+  if (!rows.length) t.innerHTML = `<tr><td colspan="13" class="empty">暂无入仓记录，可点「导入常温贴单」或「手动入仓」</td></tr>`;
+}
+function wInFormModal(rec) {
+  rec = rec || {};
+  const opts = ['<option value="">（不关联入仓品）</option>']
+    .concat((WPROD || []).map((p) => `<option value="${p.id}" ${rec.product_id === p.id ? "selected" : ""}>${esc(p.name)}</option>`))
+    .join("");
+  openModal(`
+    <h3>${rec.id ? "编辑" : "手动"}入仓 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="form-grid">
+      <div class="field"><label>入仓品</label><select id="wiProduct" onchange="wInPickProduct()">${opts}</select></div>
+      <div class="field"><label>商品名称</label><input id="wiName" value="${esc(rec.product_name || "")}" /></div>
+      <div class="field"><label>日期 *</label><input id="wiDate" type="date" value="${esc(rec.date || today())}" /></div>
+      <div class="field"><label>采购单号</label><input id="wiPurchaseNo" value="${esc(rec.purchase_no || "")}" /></div>
+      <div class="field"><label>配送中心</label><input id="wiCenter" value="${esc(rec.center || "")}" /></div>
+      <div class="field"><label>数量（袋）*</label><input id="wiQty" type="number" step="any" min="0" value="${rec.quantity ?? ""}" oninput="wInCalc()" /></div>
+      <div class="field"><label>箱数</label><input id="wiBoxCount" type="number" step="any" min="0" value="${rec.box_count ?? ""}" /></div>
+      <div class="field"><label>箱规（袋/箱）</label><input id="wiBoxSpec" type="number" step="any" min="0" value="${rec.box_spec ?? ""}" /></div>
+      <div class="field"><label>采购价（元/袋）</label><input id="wiPrice" type="number" step="any" min="0" value="${rec.unit_price ?? ""}" oninput="wInCalc()" /></div>
+      <div class="field"><label>运费（元/袋）</label><input id="wiFreight" type="number" step="any" min="0" value="${rec.freight ?? ""}" oninput="wInCalc()" /></div>
+      <div class="field"><label>金额合计</label><input id="wiAmount" readonly /></div>
+      <div class="field" style="grid-column:1/-1;"><label>备注</label><input id="wiRemark" value="${esc(rec.remark || "")}" /></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn green" onclick="wInSave(${rec.id || 0})">✓ 保存</button>
+    </div>`);
+  wInCalc();
+}
+function wInPickProduct() {
+  const p = (WPROD || []).find((x) => x.id === +$("wiProduct").value);
+  if (!p) return;
+  $("wiName").value = p.name;
+  $("wiPrice").value = p.purchase_price || "";
+  $("wiFreight").value = p.freight || "";
+  $("wiBoxSpec").value = p.box_spec || "";
+  wInCalc();
+}
+function wInCalc() {
+  const qty = parseFloat($("wiQty").value) || 0;
+  const price = parseFloat($("wiPrice").value) || 0;
+  const freight = parseFloat($("wiFreight").value) || 0;
+  $("wiAmount").value = (qty * (price + freight)).toFixed(2);
+}
+async function openWarehouseInAdd() {
+  if (!(WPROD || []).length) { try { WPROD = await api("/api/warehouse-in/products"); } catch (e) {} }
+  if (!WPROD.length) { toast("请先新增入仓品资料"); return; }
+  wInFormModal({ date: today() });
+}
+function wInEdit(id) {
+  const r = (WINS || []).find((x) => x.id === id);
+  if (r) wInFormModal(r);
+}
+async function wInSave(id) {
+  const pid = +$("wiProduct").value || null;
+  const name = ($("wiName").value || "").trim();
+  const qty = parseFloat($("wiQty").value);
+  if (!pid && !name) { toast("请选择入仓品或填写名称"); return; }
+  if (!qty || qty <= 0) { toast("请填写有效数量"); return; }
+  const body = {
+    product_id: pid,
+    product_name: name || (pid ? "" : name),
+    purchase_no: $("wiPurchaseNo").value.trim(),
+    center: $("wiCenter").value.trim(),
+    quantity: qty,
+    box_count: parseFloat($("wiBoxCount").value) || 0,
+    box_spec: parseFloat($("wiBoxSpec").value) || 0,
+    unit_price: parseFloat($("wiPrice").value) || 0,
+    freight: parseFloat($("wiFreight").value) || 0,
+    date: $("wiDate").value || today(),
+    remark: $("wiRemark").value.trim(),
+  };
+  try {
+    if (id) await api("/api/warehouse-in/" + id, "PUT", body);
+    else await api("/api/warehouse-in", "POST", body);
+    toast("已保存");
+    closeModal();
+    loadWarehouseIns();
+  } catch (e) { toast("保存失败：" + e.message); }
+}
+async function wInDelete(id) {
+  if (!confirm("确认删除该入仓记录？")) return;
+  try { await api("/api/warehouse-in/" + id, "DELETE"); toast("已删除"); loadWarehouseIns(); }
+  catch (e) { toast("删除失败：" + e.message); }
+}
+
+/* ---------- 导入《入仓配送明细》常温贴单 ---------- */
+function openWarehouseInImport() {
+  WIMPORT = null; WI_FILE = null;
+  openModal(`
+    <h3>导入《入仓配送明细》常温贴单 <button class="close" onclick="closeModal()">✕</button></h3>
+    <p class="hint" style="margin-bottom:12px;">
+      上传《入仓配送明细》后选择工作表（默认「常温贴单」）；系统按每行「商品名称 + 数量」自动匹配入仓品，
+      确认后按对应数量入仓。未匹配的行可手动选择入仓品，运费可留空后续维护。
+    </p>
+    <div class="form-grid">
+      <div class="field"><label>Excel 文件 *</label><input type="file" id="wiFile" accept=".xlsx" /></div>
+      <div class="field"><label>入仓日期</label><input id="wiImportDate" type="date" value="${today()}" /></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="wImportStart()">解析预览</button>
+    </div>`);
+}
+function wImportStart() {
+  const f = $("wiFile")?.files[0];
+  if (!f) { toast("请先选择 Excel 文件"); return; }
+  WI_FILE = f;
+  wImportPreview("");
+}
+async function wImportPreview(sheet) {
+  if (!WI_FILE) { toast("请先选择 Excel 文件"); return; }
+  const dateVal = $("wiImportDate")?.value || today();
+  $("modalBox").innerHTML =
+    `<h3>导入《入仓配送明细》常温贴单 <button class="close" onclick="closeModal()">✕</button></h3>` +
+    `<div id="wiImportResult"><div class="alert ok">⏳ 正在解析…</div></div>`;
+  const out = $("wiImportResult");
+  try {
+    const fd = new FormData();
+    fd.append("file", WI_FILE);
+    fd.append("sheet", sheet || "");
+    fd.append("date", dateVal);
+    const res = await fetch(routePath("/api/warehouse-in/import/preview"), { method: "POST", body: fd });
+    if (res.status === 401) { showLogin(); return; }
+    if (!res.ok) { let m = "解析失败"; try { m = (await res.json()).detail || m; } catch (e) {} throw new Error(m); }
+    const d = await res.json();
+    WIMPORT = d;
+    renderWImportPreview(d, dateVal);
+  } catch (e) {
+    out.innerHTML = `<div class="alert err">解析失败：${esc(e.message)}</div>
+      <div class="modal-foot">
+        <button class="btn secondary" onclick="openWarehouseInImport()">重新选择文件</button>
+      </div>`;
+  }
+}
+function renderWImportPreview(d, dateVal) {
+  const box = $("wiImportResult");
+  const sheets = (d.sheets || []).map((s) => `<option ${s === d.sheet ? "selected" : ""}>${esc(s)}</option>`).join("");
+  const opts = (selId) => ['<option value="">（不关联）</option>']
+    .concat((WPROD || []).map((x) => `<option value="${x.id}" ${selId === x.id ? "selected" : ""}>${esc(x.name)}</option>`)).join("");
+  const rows = d.items || [];
+  box.innerHTML = `
+    <div class="toolbar" style="margin:12px 0 8px;">
+      <label class="muted">工作表</label>
+      <select id="wiSheetSel" onchange="wImportPreview(this.value)">${sheets}</select>
+      <label class="muted">日期</label>
+      <input id="wiImportDate" type="date" value="${esc(dateVal || d.date || today())}" />
+      <span class="muted">解析 <b>${rows.length}</b> 行${d.failed_count ? `（<span style="color:var(--red)">${d.failed_count} 行异常</span>）` : ""}</span>
+      <div class="grow"></div>
+      <span class="muted" id="wiImportTotal"></span>
+    </div>
+    <div class="table-wrap" style="max-height:46vh;overflow:auto;">
+      <table id="wiImportTable">
+        <thead><tr><th>商品名称（贴单）</th><th>入仓品</th><th class="num">数量(袋)</th><th class="num">采购价</th><th class="num">运费</th></tr></thead>
+        <tbody>${rows.map((r, i) => `<tr data-i="${i}">
+          <td>${esc(r.product_name)}
+            <div class="muted" style="font-size:12px;">${esc(r.purchase_no) || "—"} · ${esc(r.center) || "—"}${r.box_count ? ` · ${fmtNum(r.box_count)}箱` : ""}</div>
+          </td>
+          <td><select class="wi-prod" onchange="wImportPick(${i})">${opts(r.product_id)}</select></td>
+          <td><input class="wi-qty" type="number" step="any" min="0" value="${r.quantity}" style="width:70px;" oninput="wImportCalc()" /></td>
+          <td><input class="wi-price" type="number" step="any" min="0" value="${r.unit_price || ""}" style="width:72px;" oninput="wImportCalc()" /></td>
+          <td><input class="wi-freight" type="number" step="any" min="0" value="${r.freight || ""}" style="width:72px;" oninput="wImportCalc()" /></td>
+        </tr>`).join("")}</tbody>
+      </table>
+    </div>
+    ${d.failed_count ? `<div class="alert err" style="margin-top:8px;">${d.failed.map((f) => `第 ${f.row} 行：${esc(f.reason)}`).join("<br>")}</div>` : ""}
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="openWarehouseInImport()">重新选择文件</button>
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn green" onclick="wImportConfirm()">✓ 确认入仓</button>
+    </div>`;
+  wImportCalc();
+}
+function wImportPick(i) {
+  const tr = document.querySelector(`#wiImportTable tr[data-i="${i}"]`);
+  if (!tr) return;
+  const p = (WPROD || []).find((x) => x.id === +tr.querySelector(".wi-prod").value);
+  if (p) {
+    tr.querySelector(".wi-price").value = p.purchase_price || "";
+    tr.querySelector(".wi-freight").value = p.freight || "";
+  }
+  wImportCalc();
+}
+function wImportCalc() {
+  let total = 0, qtySum = 0;
+  document.querySelectorAll("#wiImportTable tbody tr").forEach((tr) => {
+    const q = parseFloat(tr.querySelector(".wi-qty").value) || 0;
+    const pr = parseFloat(tr.querySelector(".wi-price").value) || 0;
+    const fr = parseFloat(tr.querySelector(".wi-freight").value) || 0;
+    total += q * (pr + fr);
+    qtySum += q;
+  });
+  const el = $("wiImportTotal");
+  if (el) el.innerHTML = `合计 <b>${fmtNum(qtySum)}</b> 袋 · 入仓成本 <b>${fmtMoney(total)}</b>`;
+}
+async function wImportConfirm() {
+  if (!WIMPORT) { toast("请先解析预览"); return; }
+  const items = [];
+  document.querySelectorAll("#wiImportTable tbody tr").forEach((tr) => {
+    const base = WIMPORT.items[+tr.dataset.i] || {};
+    const pid = +tr.querySelector(".wi-prod").value || null;
+    const p = (WPROD || []).find((x) => x.id === pid);
+    const q = parseFloat(tr.querySelector(".wi-qty").value) || 0;
+    if (q <= 0) return;
+    items.push({
+      product_id: pid,
+      product_name: p ? p.name : base.product_name,
+      category: p ? p.category : (base.category || ""),
+      unit: "袋",
+      purchase_no: base.purchase_no || "",
+      center: base.center || "",
+      quantity: q,
+      box_count: base.box_count || 0,
+      box_spec: base.box_spec || 0,
+      unit_price: parseFloat(tr.querySelector(".wi-price").value) || 0,
+      freight: parseFloat(tr.querySelector(".wi-freight").value) || 0,
+      date: $("wiImportDate")?.value || today(),
+      remark: "",
+    });
+  });
+  if (!items.length) { toast("没有可入仓的数据"); return; }
+  try {
+    const r = await api("/api/warehouse-in/import/confirm", "POST", { date: $("wiImportDate")?.value || today(), items });
+    toast(`已入仓 ${r.created} 条${r.failed_count ? `，${r.failed_count} 条失败` : ""}`);
+    closeModal();
+    loadWarehouseIns();
+  } catch (e) { toast("入仓失败：" + e.message); }
 }
 
 function loadImportPage() {}
