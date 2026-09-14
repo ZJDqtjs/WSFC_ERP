@@ -399,6 +399,14 @@ def _fifo_recompute_once(maker: sessionmaker, key: str) -> None:
         db.close()
 
 
+def ensure_schema(key: str) -> None:
+    """只补齐缺失的表结构（不跑迁移/种子/回填）。
+
+    新增表上线时用：每个分仓是独立 db 文件，启动时逐个补建，避免老分仓库缺表报错。
+    """
+    Base.metadata.create_all(bind=get_engine(key))
+
+
 def init_warehouse(key: str, copy_users_from: str | None = None) -> None:
     """幂等初始化分仓：建表 + 迁移 + 单位/账号种子 + 回填。"""
     eng = get_engine(key)

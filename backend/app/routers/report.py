@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import FinanceRecord, Inbound, Outbound, OutboundLine, Product, User
+from ..models import FinanceRecord, Inbound, OtherExpense, Outbound, OutboundLine, Product, User
 
 router = APIRouter(prefix="/api", tags=["report"])
 
@@ -85,9 +85,14 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
         finances = list(
             db.execute(select(FinanceRecord).where(FinanceRecord.date >= f, FinanceRecord.date <= t)).scalars()
         )
+        others = list(
+            db.execute(select(OtherExpense).where(OtherExpense.date >= f, OtherExpense.date <= t)).scalars()
+        )
         revenue = sum(o.total_amount for o in outbounds)
         cogs = sum(o.total_cogs for o in outbounds)
         fee = sum(x.amount for x in finances if x.type == "expense" and x.category != "采购支出")
+        other_fee = round(sum(e.amount or 0.0 for e in others), 2)
+        fee = round(fee + other_fee, 2)  # 期间费用含「其他开支」（与报表口径一致）
         packs = _pack_cost_breakdown(outbounds)
         return {
             "revenue": round(revenue, 2),
@@ -95,6 +100,8 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
             "net": round(revenue - cogs - fee, 2),
             "orders": len(outbounds),
             "cogs": round(cogs, 2),
+            "expense": fee,
+            "other_expense": other_fee,
             "pack_costs": packs,
             "pack_cost_total": round(sum(packs.values()), 2),
         }
@@ -194,12 +201,15 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
     outbounds = list(db.execute(scope(Outbound).options(selectinload(Outbound.lines).selectinload(OutboundLine.product))).scalars())
     inbounds = list(db.execute(scope(Inbound)).scalars())
     finances = list(db.execute(scope(FinanceRecord)).scalars())
+    others = list(db.execute(scope(OtherExpense)).scalars())
 
     revenue = sum(o.total_amount for o in outbounds)
     cogs = sum(o.total_cogs for o in outbounds)
     gross = round(revenue - cogs, 2)
-    # 期间费用：不含采购支出（采购已计入库存成本）
-    expense = sum(f.amount for f in finances if f.type == "expense" and f.category != "采购支出")
+    # 期间费用 = 财务流水里手工登记的支出（不含采购支出，采购已计入库存成本）+ 其他开支
+    manual_expense = sum(f.amount for f in finances if f.type == "expense" and f.category != "采购支出")
+    other_total = round(sum(e.amount or 0.0 for e in others), 2)
+    expense = round(manual_expense + other_total, 2)
     purchase = sum(f.amount for f in finances if f.type == "expense" and f.category == "采购支出")
     purchase_db = sum(i.total_amount for i in inbounds)
     net = round(gross - expense, 2)
@@ -307,6 +317,11 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
             continue
         manual_fees[f.category] = round(manual_fees.get(f.category, 0.0) + f.amount, 2)
 
+    # 其他开支（网线费/安装费/机器费/样品费…），按费用类型归集
+    other_fees: dict[str, float] = {}
+    for e in others:
+        other_fees[e.category] = round(other_fees.get(e.category, 0.0) + (e.amount or 0.0), 2)
+
     return {
         "date_from": date_from,
         "date_to": date_to,
@@ -314,7 +329,10 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
         "cogs": round(cogs, 2),
         "goods_cogs": goods_cogs,
         "gross_profit": gross,
-        "expense": round(expense, 2),
+        # 期间费用 = 手工记账支出 + 其他开支，从毛利中扣减得到净利
+        "expense": expense,
+        "manual_expense": round(manual_expense, 2),
+        "other_expense": other_total,
         "net_profit": net,
         "purchase": round(purchase_db, 2),
         "stock_value": stock_value,
@@ -326,6 +344,8 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
         "pack_cost_total": pack_total,
         # 账外手工登记费用（不含采购支出），会额外从毛利中扣减得到净利
         "manual_fees": manual_fees,
+        # 其他开支明细（按费用类型），同样计入期间费用
+        "other_expenses": other_fees,
         "fee_breakdown": {
             **pack_costs,
             **{k: v for k, v in manual_fees.items() if k not in pack_costs},

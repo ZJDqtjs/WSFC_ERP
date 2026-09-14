@@ -21,7 +21,7 @@
         <div class="stat accent"><div class="label">销售收入</div><div class="value">{{ fmtMoney(rep.revenue) }}</div><div class="sub">{{ rep.order_count || 0 }} 单</div></div>
         <div class="stat warn"><div class="label">结转成本</div><div class="value">{{ fmtMoney(rep.cogs) }}</div><div class="sub">含关联结算 {{ fmtMoney(rep.pack_cost_total) }}</div></div>
         <div class="stat success"><div class="label">毛利</div><div class="value">{{ fmtMoney(rep.gross_profit) }}</div><div class="sub">{{ rep.revenue ? ((rep.gross_profit / rep.revenue) * 100).toFixed(1) + '%' : '—' }}</div></div>
-        <div class="stat danger"><div class="label">期间费用</div><div class="value">{{ fmtMoney(rep.expense) }}</div><div class="sub">账外手工记账</div></div>
+        <div class="stat danger"><div class="label">期间费用</div><div class="value">{{ fmtMoney(rep.expense) }}</div><div class="sub">其他开支 {{ fmtMoney(rep.other_expense) }} · 手工 {{ fmtMoney(rep.manual_expense) }}</div></div>
         <div class="stat" :class="rep.net_profit >= 0 ? 'success' : 'danger'"><div class="label">净利润</div><div class="value">{{ fmtMoney(rep.net_profit) }}</div></div>
         <div class="stat"><div class="label">本期进货</div><div class="value">{{ fmtMoney(rep.purchase) }}</div></div>
       </div>
@@ -64,6 +64,24 @@
             本期没有包材 / 人工 / 快递等关联结算成本。若商品已配置包装清单，请确认出库时是否生成了关联结算行。
           </div>
         </template>
+      </div>
+
+      <!-- 其他开支（网线费 / 安装费 / 机器费 / 样品费…） -->
+      <div v-if="Object.keys(rep.other_expenses || {}).length" class="card">
+        <div class="card-title">
+          <span class="grow">其他开支</span>
+          <span class="muted">{{ fmtMoney(rep.other_expense) }}</span>
+        </div>
+        <div v-for="(v, k) in rep.other_expenses" :key="k" class="list-item">
+          <div class="row">
+            <span class="grow">{{ k }}</span>
+            <span class="bold up">{{ fmtMoney(v) }}</span>
+          </div>
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <span class="grow muted">已计入期间费用，从毛利中扣减得到净利</span>
+          <van-button size="mini" plain type="primary" @click="$router.push('/otherexp')">去登记</van-button>
+        </div>
       </div>
 
       <!-- 账外费用 -->

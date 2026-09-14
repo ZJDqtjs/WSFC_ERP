@@ -8,6 +8,7 @@ import Stock from './views/stock.vue'
 import Products from './views/products.vue'
 import PackRules from './views/packrules.vue'
 import Report from './views/report.vue'
+import OtherExp from './views/otherexp.vue'
 import Deduction from './views/deduction.vue'
 import Express from './views/express.vue'
 import Settings from './views/settings.vue'
@@ -30,6 +31,7 @@ const routes = [
   { path: '/products', component: Products, meta: { title: '商品管理' } },
   { path: '/packrules', component: PackRules, meta: { title: '一单多货' } },
   { path: '/report', component: Report, meta: { title: '财务报表' } },
+  { path: '/otherexp', component: OtherExp, meta: { title: '其他开支' } },
   { path: '/deduction', component: Deduction, meta: { title: '扣点设置' } },
   { path: '/express', component: Express, meta: { title: '快递费规则' } },
   { path: '/settings', component: Settings, meta: { title: '设置' } },

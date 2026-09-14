@@ -19,6 +19,7 @@
 
     <van-cell-group inset title="经营分析">
       <van-cell title="财务报表" icon="bar-chart-o" is-link to="/report" />
+      <van-cell title="其他开支" icon="balance-list-o" is-link to="/otherexp" />
       <van-cell :title="`库存管理（缺货 ${lowStockCount} 项）`" icon="shopping-cart-o" is-link to="/stock" />
     </van-cell-group>
 

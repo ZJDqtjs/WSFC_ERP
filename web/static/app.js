@@ -275,7 +275,7 @@ function daysAgo(n) {
 const PAGE_TITLES = {
   home: "工作台", stock: "库存管理", inbound: "入库", outbound: "出库 / 销售",
   "warehouse-in": "入仓", "wingroup": "入仓批次明细",
-  products: "商品", report: "财务报表", import: "批量导入", jushuitan: "聚水潭关联",
+  products: "商品", report: "财务报表", otherexp: "其他开支", import: "批量导入", jushuitan: "聚水潭关联",
   backup: "备份与恢复",
 };
 let prodForceCat = "";  // 包材 / 人工 / 快递 等独立入口强制筛选的商品分类
@@ -299,6 +299,7 @@ function goPage(name) {
     products: renderProducts, report: loadReport, import: loadImportPage, jushuitan: loadMappingPage,
     backup: loadBackupPage, fresh: loadFresh, packrules: loadPackRules, pdata: loadPdataPage,
     deduction: loadDeductionPage, express: loadExpressPage, settings: loadSettingsPage,
+    otherexp: loadOtherExpensePage,
   };
   (loaders[name] || (() => {}))();
 }
@@ -936,6 +937,7 @@ async function loadDashboard() {
     $("dashStats").innerHTML = `
       <div class="stat accent"><div class="label">今日收入</div><div class="value">${fmtMoney(t.revenue)}</div><div class="sub">${t.orders} 单</div></div>
       <div class="stat success"><div class="label">本月毛利</div><div class="value">${fmtMoney(m.gross)}</div><div class="sub">本月净利 ${fmtMoney(m.net)}</div></div>
+      <div class="stat red"><div class="label">本月其他开支</div><div class="value">${fmtMoney(m.other_expense || 0)}</div><div class="sub">今日 ${fmtMoney(t.other_expense || 0)} · 已计入净利</div></div>
       <div class="stat"><div class="label">本月收入</div><div class="value">${fmtMoney(m.revenue)}</div><div class="sub">${m.orders} 单</div></div>
       <div class="stat accent"><div class="label">当前库存总值</div><div class="value">${fmtMoney(d.stock_value)}</div><div class="sub">${d.product_count} 种商品</div></div>
       <div class="stat ${d.low_stock.length ? "danger" : "success"}"><div class="label">缺货商品</div><div class="value">${d.low_stock.length}</div><div class="sub">${d.low_stock.length ? "需要及时补货" : "库存充足"}</div></div>`;
@@ -3771,12 +3773,13 @@ async function loadReport() {
     <div class="stat blue"><div class="label">销售收入</div><div class="value">${fmtMoney(rep.revenue)}</div><div class="sub">${rep.order_count} 单</div></div>
     <div class="stat amber"><div class="label">结转成本</div><div class="value">${fmtMoney(rep.cogs)}</div><div class="sub">含关联结算 ${fmtMoney(packTotal)}</div></div>
     <div class="stat green"><div class="label">毛利</div><div class="value">${fmtMoney(rep.gross_profit)}</div><div class="sub">${rep.revenue ? ((rep.gross_profit / rep.revenue) * 100).toFixed(1) + "%" : "—"}</div></div>
-    <div class="stat red"><div class="label">期间费用</div><div class="value">${fmtMoney(rep.expense)}</div><div class="sub">账外手工记账</div></div>
+    <div class="stat red"><div class="label">期间费用</div><div class="value">${fmtMoney(rep.expense)}</div><div class="sub">其他开支 ${fmtMoney(rep.other_expense)} · 手工记账 ${fmtMoney(rep.manual_expense)}</div></div>
     <div class="stat ${rep.net_profit >= 0 ? "green" : "red"}"><div class="label">净利润</div><div class="value">${fmtMoney(rep.net_profit)}</div></div>
     <div class="stat"><div class="label">本期进货</div><div class="value">${fmtMoney(rep.purchase)}</div></div>
     <div class="stat blue"><div class="label">当前库存总值</div><div class="value">${fmtMoney(rep.stock_value)}</div></div>`;
 
   renderCostBreakdown(rep);
+  renderFeeBreakdown(rep);
 
   const pt = $("repProductTable");
   let prodRows = applyTableSort(pt, rep.by_product || []);
@@ -3885,6 +3888,52 @@ function renderCostBreakdown(rep) {
     </table></div>
     ${packTotal ? "" : `<div class="alert warn" style="margin-top:10px;">本期没有包材 / 人工 / 快递等关联结算成本。若商品已配置包装清单，请确认出库时是否生成了关联结算行。</div>`}`;
 }
+/* 期间费用明细：其他开支（网线费/安装费/机器费/样品费…）+ 手工记账，均从毛利中扣减得到净利 */
+function renderFeeBreakdown(rep) {
+  const box = $("repFeeBreak");
+  if (!box) return;
+  const others = rep.other_expenses || {};
+  const manuals = rep.manual_fees || {};
+  const otherTotal = rep.other_expense || 0;
+  const manualTotal = rep.manual_expense != null
+    ? rep.manual_expense
+    : Object.values(manuals).reduce((a, b) => a + (Number(b) || 0), 0);
+  const total = rep.expense != null ? rep.expense : otherTotal + manualTotal;
+  const hint = $("repFeeHint");
+  if (hint) hint.textContent = total ? `合计 ${fmtMoney(total)}（毛利 − 期间费用 = 净利）` : "";
+
+  const rows = [
+    ...Object.entries(others).map(([name, v]) => ({ name, value: Number(v) || 0, src: "其他开支" })),
+    ...Object.entries(manuals).map(([name, v]) => ({ name, value: Number(v) || 0, src: "手工记账" })),
+  ].sort((a, b) => b.value - a.value);
+
+  if (!rows.length) {
+    box.innerHTML = `<div class="empty">本期无期间费用。其他开支请到「经营分析 → 其他开支」登记；手工记账见下方财务流水的「＋ 手动记账」</div>`;
+    return;
+  }
+  const pctOf = (v) => (total ? (v / total) * 100 : 0);
+  const COLORS = { "其他开支": "#f97316", "手工记账": "#6366f1" };
+  box.innerHTML = `
+    <div class="cost-stack">
+      ${rows.filter((r) => r.value > 0).map((r) =>
+        `<span title="${esc(r.name)} ${fmtMoney(r.value)}" style="width:${pctOf(r.value)}%;background:${COLORS[r.src]};"></span>`).join("")}
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>费用项</th><th>来源</th><th class="num">金额</th><th class="num">占比</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr>
+        <td><span class="cost-dot" style="background:${COLORS[r.src]};"></span>${esc(r.name)}</td>
+        <td class="muted">${r.src}</td>
+        <td class="num mono">${fmtMoney(r.value)}</td>
+        <td class="num mono">${pctOf(r.value).toFixed(1)}%</td>
+      </tr>`).join("")}</tbody>
+      <tfoot><tr>
+        <td><b>期间费用合计</b></td>
+        <td class="muted">其他开支 ${fmtMoney(otherTotal)} + 手工记账 ${fmtMoney(manualTotal)}</td>
+        <td class="num mono"><b>${fmtMoney(total)}</b></td>
+        <td class="num mono">100%</td>
+      </tr></tfoot>
+    </table></div>`;
+}
 function openFinanceModal() {
   openModal(`
     <h3>手动记账 <button class="close" onclick="closeModal()">✕</button></h3>
@@ -3917,6 +3966,217 @@ async function deleteFinance(id) {
   if (!confirm("确认删除该手动财务记录？")) return;
   try { await api("/api/finance/" + id, "DELETE"); toast("已删除"); loadReport(); }
   catch (e) { toast("失败：" + e.message); }
+}
+
+/* =============== 其他开支（仓库零散支出：网线费 / 安装费 / 机器费 / 样品费 …） =============== */
+let OE_ROWS = [];       // 当前区间的开支明细
+let OE_STATS = null;    // 当前区间的统计（今日/本月/区间/按日/按月/按类型）
+let OE_EDIT_ID = null;  // 正在修改的记录 id；null = 新增
+let oeInited = false;
+
+function lastMonthRange() {
+  const n = new Date();
+  const first = new Date(n.getFullYear(), n.getMonth() - 1, 1);
+  const last = new Date(n.getFullYear(), n.getMonth(), 0);
+  const f = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+  return [f(first), f(last)];
+}
+
+async function loadOtherExpensePage() {
+  if (!oeInited) {
+    oeInited = true;
+    if (!$("oeDate").value) $("oeDate").value = today();
+    if (!$("oeDateFrom").value) $("oeDateFrom").value = monthStart();  // 默认看本月
+    if (!$("oeDateTo").value) $("oeDateTo").value = today();
+  }
+  if ($("oeOperator")) $("oeOperator").value = operatorName();
+  const from = $("oeDateFrom").value, to = $("oeDateTo").value;
+  try {
+    const [rows, stats] = await Promise.all([
+      api(`/api/other-expenses?date_from=${from || ""}&date_to=${to || ""}`),
+      api(`/api/other-expenses/stats?date_from=${from || ""}&date_to=${to || ""}`),
+    ]);
+    OE_ROWS = rows;
+    OE_STATS = stats;
+    renderOeStats(stats);
+    renderOeTables(stats);
+    oeFillCategories(stats);
+    renderOtherExpenseList();
+  } catch (e) { toast("加载其他开支失败：" + e.message); }
+}
+
+function oeQuick(kind) {
+  const t = today();
+  if (kind === "today") { $("oeDateFrom").value = t; $("oeDateTo").value = t; }
+  else if (kind === "week") { $("oeDateFrom").value = daysAgo(6); $("oeDateTo").value = t; }
+  else if (kind === "month") { $("oeDateFrom").value = monthStart(); $("oeDateTo").value = t; }
+  else if (kind === "lastmonth") { const [a, b] = lastMonthRange(); $("oeDateFrom").value = a; $("oeDateTo").value = b; }
+  else { $("oeDateFrom").value = ""; $("oeDateTo").value = ""; }
+  loadOtherExpensePage();
+}
+
+function oeSwitchSeg(btn) {
+  $("oeSeg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
+  const p = btn.dataset.panel;
+  ["oe-day", "oe-month", "oe-cat"].forEach((id) => { $(id).style.display = id === p ? "" : "none"; });
+}
+
+function renderOeStats(s) {
+  const top = (s.by_category || [])[0];
+  $("oeStats").innerHTML = `
+    <div class="stat red"><div class="label">今日开支</div><div class="value">${fmtMoney(s.today_total)}</div><div class="sub">${esc(s.today)}</div></div>
+    <div class="stat red"><div class="label">本月开支</div><div class="value">${fmtMoney(s.month_total)}</div><div class="sub">${esc(s.month)} 月合计</div></div>
+    <div class="stat amber"><div class="label">所选区间合计</div><div class="value">${fmtMoney(s.range_total)}</div><div class="sub">${s.range_count} 笔 · 日均 ${fmtMoney(s.range_daily_avg)}</div></div>
+    <div class="stat"><div class="label">区间天数</div><div class="value">${s.range_days || 0}</div><div class="sub">最大类型：${top ? esc(top.category) + " " + fmtMoney(top.amount) : "—"}</div></div>`;
+  const scope = `统计区间 ${s.date_from || "最早"} ~ ${s.date_to || "至今"}`;
+  $("oeStatsHint").textContent = `${scope}（日均按区间天数计算）`;
+  $("oeListHint").textContent = `${scope} · 合计 ${fmtMoney(s.range_total)}`;
+}
+
+function renderOeTables(s) {
+  // 按日：柱状图（红=支出）+ 明细表
+  const days = s.by_day || [];
+  const box = $("oeChart");
+  if (!days.length) {
+    box.innerHTML = `<div class="mv-chart-title">该区间暂无开支</div>`;
+  } else {
+    const max = Math.max(1, ...days.map((d) => d.amount));
+    const ordered = [...days].reverse();  // 图表按时间正序
+    box.innerHTML = `<div class="mv-chart-title">每日开支（元，共 ${days.length} 天有支出）</div><div class="mv-chart">` +
+      ordered.map((d) => `<div class="mv-col" title="${d.date}：${fmtMoney(d.amount)}（${d.count} 笔）">
+        <span class="mv-val">${Math.round(d.amount)}</span>
+        <div class="mv-track"><div class="mv-bar down" style="height:${Math.max(2, Math.round((d.amount / max) * 100))}%"></div></div>
+        <div class="mv-x">${d.date.slice(5)}</div></div>`).join("") + `</div>`;
+  }
+  const dt = $("oeDayTable");
+  dt.innerHTML = `<thead><tr><th>日期</th><th class="num">笔数</th><th class="num">金额</th></tr></thead><tbody>` +
+    (days.length
+      ? days.map((d) => `<tr><td class="mono">${d.date}</td><td class="num mono">${d.count}</td>
+          <td class="num mono" style="color:var(--red)">${fmtMoney(d.amount)}</td></tr>`).join("") +
+        `<tr><td><b>合计</b></td><td class="num mono"><b>${s.range_count}</b></td><td class="num mono"><b>${fmtMoney(s.range_total)}</b></td></tr>`
+      : `<tr><td colspan="3" class="empty">该区间暂无开支</td></tr>`) + `</tbody>`;
+
+  const months = s.by_month || [];
+  const mt = $("oeMonthTable");
+  mt.innerHTML = `<thead><tr><th>月份</th><th class="num">笔数</th><th class="num">金额</th><th class="num">环比</th></tr></thead><tbody>` +
+    (months.length
+      ? months.map((m, i) => {
+        const prev = months[i + 1];  // 倒序排列，下一项即上一个月
+        const delta = prev && prev.amount ? ((m.amount - prev.amount) / prev.amount) * 100 : null;
+        const txt = delta == null ? "—" : `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}%`;
+        const color = delta == null ? "var(--muted)" : delta >= 0 ? "var(--red)" : "var(--green)";
+        return `<tr><td class="mono">${m.month}</td><td class="num mono">${m.count}</td>
+          <td class="num mono" style="color:var(--red)">${fmtMoney(m.amount)}</td>
+          <td class="num mono" style="color:${color}">${txt}</td></tr>`;
+      }).join("") +
+        `<tr><td><b>合计</b></td><td class="num mono"><b>${s.range_count}</b></td><td class="num mono"><b>${fmtMoney(s.range_total)}</b></td><td></td></tr>`
+      : `<tr><td colspan="4" class="empty">该区间暂无开支</td></tr>`) + `</tbody>`;
+
+  const cats = s.by_category || [];
+  const pct = (v) => (s.range_total ? (v / s.range_total) * 100 : 0);
+  const ct = $("oeCatTable");
+  ct.innerHTML = `<thead><tr><th>费用类型</th><th class="num">笔数</th><th class="num">金额</th><th class="num">占比</th></tr></thead><tbody>` +
+    (cats.length
+      ? cats.map((c) => `<tr><td><span class="badge expense">${esc(c.category)}</span></td><td class="num mono">${c.count}</td>
+          <td class="num mono" style="color:var(--red)">${fmtMoney(c.amount)}</td><td class="num mono">${pct(c.amount).toFixed(1)}%</td></tr>`).join("") +
+        `<tr><td><b>合计</b></td><td class="num mono"><b>${s.range_count}</b></td><td class="num mono"><b>${fmtMoney(s.range_total)}</b></td><td class="num mono">100%</td></tr>`
+      : `<tr><td colspan="4" class="empty">该区间暂无开支</td></tr>`) + `</tbody>`;
+}
+
+/** 类型下拉建议 = 后端预设 + 已用过的自定义类型 */
+function oeFillCategories(s) {
+  const presets = (s && s.presets) || [];
+  $("oeCategoryList").innerHTML = presets.map((c) => `<option value="${esc(c)}"></option>`).join("");
+  const used = [...new Set(OE_ROWS.map((r) => r.category))].sort();
+  const cur = $("oeFilterCat").value;
+  $("oeFilterCat").innerHTML = `<option value="">全部类型</option>` +
+    used.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  $("oeFilterCat").value = used.includes(cur) ? cur : "";
+}
+
+function renderOtherExpenseList() {
+  const cat = $("oeFilterCat").value;
+  const kw = ($("oeSearch").value || "").trim().toLowerCase();
+  let rows = OE_ROWS;
+  if (cat) rows = rows.filter((r) => r.category === cat);
+  if (kw) rows = rows.filter((r) => [r.category, r.remark, r.operator, r.date].join(" ").toLowerCase().includes(kw));
+  const t = $("oeTable");
+  t.innerHTML = `<thead><tr>
+    <th>日期</th><th>费用类型</th><th class="num">金额</th><th>操作员</th><th>备注</th><th style="width:120px;"></th></tr></thead><tbody>` +
+    (rows.length
+      ? rows.map((r) => `<tr>
+        <td class="mono">${r.date}</td>
+        <td><span class="badge expense">${esc(r.category)}</span></td>
+        <td class="num mono" style="color:var(--red)">${fmtMoney(r.amount)}</td>
+        <td>${esc(r.operator) || "—"}</td>
+        <td class="muted">${esc(r.remark)}</td>
+        <td><button class="btn sm secondary" onclick="oeEdit(${r.id})">改</button>
+            <button class="btn sm danger" onclick="oeDelete(${r.id})">删</button></td></tr>`).join("")
+      : `<tr><td colspan="6" class="empty">该区间暂无开支，先在上方登记一笔</td></tr>`) + `</tbody>`;
+  const sum = rows.reduce((a, r) => a + (Number(r.amount) || 0), 0);
+  $("oeListSum").textContent = `共 ${rows.length} 笔 · 合计 ${fmtMoney(sum)}`;
+}
+
+function oeAlertMsg(msg) {
+  const el = $("oeAlert");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.style.display = msg ? "block" : "none";
+}
+
+function oeResetForm() {
+  OE_EDIT_ID = null;
+  $("oeCategory").value = "";
+  $("oeAmount").value = "";
+  $("oeRemark").value = "";
+  $("oeDate").value = today();
+  $("oeSaveBtn").textContent = "✓ 保存开支";
+  oeAlertMsg("");
+}
+
+function oeEdit(id) {
+  const r = OE_ROWS.find((x) => x.id === id);
+  if (!r) return;
+  OE_EDIT_ID = id;
+  $("oeCategory").value = r.category;
+  $("oeAmount").value = r.amount;
+  $("oeDate").value = r.date;
+  $("oeRemark").value = r.remark || "";
+  $("oeSaveBtn").textContent = "✓ 保存修改";
+  oeAlertMsg(`正在修改 ${r.date}「${r.category}」${fmtMoney(r.amount)}（保存后覆盖原记录）`);
+  $("oeCategory").focus();
+}
+
+async function oeSubmit() {
+  const category = ($("oeCategory").value || "").trim();
+  const amount = +$("oeAmount").value;
+  const date = $("oeDate").value;
+  if (!category) { oeAlertMsg("请填写费用类型（如 网线费 / 安装费 / 机器费 / 样品费）"); return; }
+  if (!(amount > 0)) { oeAlertMsg("金额必须大于 0"); return; }
+  if (!date) { oeAlertMsg("请选择日期"); return; }
+  const body = { category, amount, date, remark: ($("oeRemark").value || "").trim() };
+  const editing = !!OE_EDIT_ID;
+  try {
+    if (editing) await api("/api/other-expenses/" + OE_EDIT_ID, "PUT", body);
+    else await api("/api/other-expenses", "POST", body);
+    // 若该日期不在当前统计区间内，自动把区间扩到能看见它（避免"保存了却看不到"）
+    if ($("oeDateFrom").value && date < $("oeDateFrom").value) $("oeDateFrom").value = date;
+    if ($("oeDateTo").value && date > $("oeDateTo").value) $("oeDateTo").value = date;
+    toast(editing ? "已保存修改" : `已登记 ${category} ${fmtMoney(amount)}`);
+    oeResetForm();
+    await loadOtherExpensePage();
+  } catch (e) { oeAlertMsg("保存失败：" + e.message); }
+}
+
+async function oeDelete(id) {
+  const r = OE_ROWS.find((x) => x.id === id);
+  if (!confirm(r ? `确认删除 ${r.date}「${r.category}」${fmtMoney(r.amount)}？` : "确认删除该开支记录？")) return;
+  try {
+    await api("/api/other-expenses/" + id, "DELETE");
+    if (OE_EDIT_ID === id) oeResetForm();
+    toast("已删除");
+    await loadOtherExpensePage();
+  } catch (e) { toast("删除失败：" + e.message); }
 }
 
 /* =============== 库存流水 =============== */

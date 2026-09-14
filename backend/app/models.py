@@ -178,6 +178,24 @@ class FinanceRecord(Base):
     product: Mapped[Product | None] = relationship()
 
 
+class OtherExpense(Base):
+    """其他开支：仓库/经营中发生的零散支出（网线费、安装费、机器费、样品费等）。
+
+    独立于 FinanceRecord（财务流水）：这里只按「费用类型 + 日期」记账，用于经营分析页的
+    按日/按月/按类型统计；财务报表把它并入「期间费用」，从毛利中扣减得到净利。
+    """
+
+    __tablename__ = "other_expenses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    category: Mapped[str] = mapped_column(String(32), index=True)  # 费用类型：网线费/安装费/机器费/样品费…
+    amount: Mapped[float] = mapped_column(Float, default=0.0)  # 金额（元，正数）
+    date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
+    remark: Mapped[str] = mapped_column(String(255), default="")
+    operator: Mapped[str] = mapped_column(String(32), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 class User(Base):
     """系统用户（业务员）。业务员使用 SSH 指纹（Ed25519 私钥）登录；
     管理员账号保留密码用于引导登录。不开放注册，由管理员在密钥管理页创建。"""

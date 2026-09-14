@@ -34,7 +34,7 @@ const route = useRoute()
 const isTab = computed(() => !!route.meta.tab)
 const title = computed(() => route.meta.title || '企业台账')
 
-// 分仓标识：切仓后 token 失效，需重新登录，故只需在进入时取一次
+// 分仓标识：分仓随登录会话（切仓只重签自己的令牌、不会掉线），整页刷新后取一次即可
 const warehouse = ref('')
 onMounted(async () => {
   try {

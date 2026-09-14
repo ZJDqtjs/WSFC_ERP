@@ -40,6 +40,7 @@
     <symbol id="i-coins" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/></symbol>
     <symbol id="i-paperclip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
     <symbol id="i-warehouse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 8.35V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8.35A2 2 0 0 1 3.26 6.5l8-3.2a2 2 0 0 1 1.48 0l8 3.2A2 2 0 0 1 22 8.35Z"/><path d="M6 18h12"/><path d="M6 14h12"/><rect width="12" height="12" x="6" y="10"/></symbol>
+    <symbol id="i-wallet" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></symbol>
   </svg>
   <div class="app" id="app">
     <!-- 左侧导航 -->
@@ -65,6 +66,7 @@
         <button class="nav-item" data-page="packrules"><span class="nav-ico"><svg class="ic"><use href="#i-link"/></svg></span>一单多货</button>
         <div class="nav-group">经营分析</div>
         <button class="nav-item" data-page="report"><span class="nav-ico"><svg class="ic"><use href="#i-chart"/></svg></span>财务报表</button>
+        <button class="nav-item" data-page="otherexp"><span class="nav-ico"><svg class="ic"><use href="#i-wallet"/></svg></span>其他开支</button>
         <div class="nav-group">数据工具</div>
         <button class="nav-item" data-page="fresh"><span class="nav-ico"><svg class="ic"><use href="#i-truck"/></svg></span>鲜货现采</button>
         <button class="nav-item" data-page="deduction"><span class="nav-ico"><svg class="ic"><use href="#i-coins"/></svg></span>扣点</button>
@@ -483,12 +485,95 @@
           <div id="repCostBreak"></div>
         </div>
         <div class="card">
+          <div class="card-head">
+            <h3>期间费用明细</h3>
+            <span class="muted" id="repFeeHint"></span>
+            <div class="grow"></div>
+            <button class="btn secondary" onclick="goPage('otherexp')">去登记其他开支 →</button>
+          </div>
+          <div id="repFeeBreak"></div>
+        </div>
+        <div class="card">
           <div class="card-head"><h3>商品销售明细</h3></div>
           <div class="table-wrap"><table id="repProductTable"></table></div>
         </div>
         <div class="card">
           <div class="card-head"><h3>财务流水</h3><button class="btn secondary" onclick="openFinanceModal()">＋ 手动记账</button></div>
           <div class="table-wrap"><table id="financeTable"></table></div>
+        </div>
+      </section>
+
+      <!-- 其他开支 -->
+      <section id="page-otherexp" class="page">
+        <div class="card">
+          <div class="card-head">
+            <h3><svg class="ic"><use href="#i-wallet"/></svg> 登记其他开支</h3>
+            <span class="hint">仓库/经营中的零散支出：网线费、安装费、机器费、样品费等。保存后计入财务报表「期间费用」，并从毛利中扣减得到净利（无需再到「手动记账」重复登记）</span>
+          </div>
+          <div class="form-grid">
+            <div class="field">
+              <label>费用类型 *</label>
+              <input id="oeCategory" list="oeCategoryList" placeholder="如：网线费" onkeydown="if(event.key==='Enter')oeSubmit()" />
+              <datalist id="oeCategoryList"></datalist>
+            </div>
+            <div class="field"><label>金额（元）*</label><input id="oeAmount" type="number" min="0" step="any" placeholder="0.00" onkeydown="if(event.key==='Enter')oeSubmit()" /></div>
+            <div class="field"><label>日期 *</label><input id="oeDate" type="date" /></div>
+            <div class="field"><label>操作员</label><input id="oeOperator" readonly title="默认当前登录账号，不可修改" /></div>
+          </div>
+          <div class="field" style="margin-top:12px;">
+            <label>备注</label>
+            <textarea id="oeRemark" rows="1" placeholder="可选，如 收款方 / 用途 / 数量"></textarea>
+          </div>
+          <div id="oeAlert" class="alert" style="display:none;"></div>
+          <div class="form-actions">
+            <button class="btn green" id="oeSaveBtn" onclick="oeSubmit()">✓ 保存开支</button>
+            <button class="btn secondary" onclick="oeResetForm()">清空</button>
+          </div>
+        </div>
+
+        <div class="stat-grid" id="oeStats"></div>
+
+        <div class="card">
+          <div class="card-head"><h3>开支统计</h3><span class="hint" id="oeStatsHint"></span></div>
+          <div class="toolbar">
+            <input id="oeDateFrom" type="date" /><span>-</span><input id="oeDateTo" type="date" />
+            <button class="btn" onclick="loadOtherExpensePage()">查询</button>
+            <button class="btn secondary" onclick="oeQuick('today')">今天</button>
+            <button class="btn secondary" onclick="oeQuick('week')">近7天</button>
+            <button class="btn secondary" onclick="oeQuick('month')">本月</button>
+            <button class="btn secondary" onclick="oeQuick('lastmonth')">上月</button>
+            <button class="btn secondary" onclick="oeQuick('all')">全部</button>
+          </div>
+          <div class="seg" id="oeSeg">
+            <button class="seg-item active" data-panel="oe-day" onclick="oeSwitchSeg(this)">按日统计</button>
+            <button class="seg-item" data-panel="oe-month" onclick="oeSwitchSeg(this)">按月统计</button>
+            <button class="seg-item" data-panel="oe-cat" onclick="oeSwitchSeg(this)">按类型统计</button>
+          </div>
+          <div id="oe-day">
+            <div id="oeChart"></div>
+            <div class="table-wrap"><table id="oeDayTable"></table></div>
+          </div>
+          <div id="oe-month" style="display:none;">
+            <div class="table-wrap"><table id="oeMonthTable"></table></div>
+          </div>
+          <div id="oe-cat" style="display:none;">
+            <div class="table-wrap"><table id="oeCatTable"></table></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>开支明细</h3><span class="hint" id="oeListHint"></span>
+            <div class="grow"></div>
+            <button class="btn secondary" onclick="loadOtherExpensePage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+          </div>
+          <div class="toolbar">
+            <select id="oeFilterCat" onchange="renderOtherExpenseList()"><option value="">全部类型</option></select>
+            <input id="oeSearch" placeholder="🔍 搜索类型 / 备注 / 操作员..." oninput="renderOtherExpenseList()" />
+            <div class="grow"></div>
+            <span class="muted" id="oeListSum"></span>
+          </div>
+          <div class="table-wrap"><table id="oeTable"></table></div>
         </div>
       </section>
 

@@ -15,8 +15,8 @@ from .database import (
     get_warehouses,
     set_request_key,
 )
-from .initdb import init_warehouse
-from .routers import ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, outbound, pack_rules, product_data, products, report, uploads, warehouse_in, warehouses
+from .initdb import ensure_schema, init_warehouse
+from .routers import ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, others, outbound, pack_rules, product_data, products, report, uploads, warehouse_in, warehouses
 from .routers.backup import create_backup_file, load_config
 
 # 桌面 Web 前端目录（WSFC_ERP/web/static，前后端分离；SERVE_STATIC=1 时后端顺带托管）
@@ -97,7 +97,10 @@ async def lifespan(app: FastAPI):
     default_key = get_default_key()
     if default_key != DEFAULT_WAREHOUSE_KEY:
         init_warehouse(default_key)
-    # 3) 启动时若开启自动备份则立即为各分仓各生成一份，此后按间隔由后台任务执行
+    # 3) 其余分仓补齐表结构：各分仓是独立 db，新增表后需逐个补建，否则老分仓库会缺表
+    for w in get_warehouses():
+        ensure_schema(w["key"])
+    # 4) 启动时若开启自动备份则立即为各分仓各生成一份，此后按间隔由后台任务执行
     if load_config().get("enabled", True):
         _backup_all_warehouses()
     task = asyncio.create_task(auto_backup_loop())
@@ -131,6 +134,7 @@ app.include_router(product_data.router)
 app.include_router(inbound.router)
 app.include_router(outbound.router)
 app.include_router(inventory.router)
+app.include_router(others.router)
 app.include_router(pack_rules.router)
 app.include_router(deductions.router)
 app.include_router(express.router)
