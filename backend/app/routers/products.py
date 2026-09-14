@@ -7,12 +7,14 @@ from ..auth import get_current_user
 from ..database import get_db
 from ..models import (
     CodeMapping,
+    FinanceRecord,
     Inbound,
     OutboundLine,
     Product,
     StockMovement,
     Unit,
     User,
+    WarehouseProduct,
 )
 from ..services import default_conversions, seed_units
 
@@ -250,9 +252,14 @@ class BatchProductUpdate(BaseModel):
 
 def _product_referenced(db: Session, pid: int) -> bool:
     """该商品是否已被单据/流水/编码关联/其他商品关联或订单商品引用。"""
-    for model in (StockMovement, Inbound, OutboundLine, CodeMapping):
+    for model in (StockMovement, Inbound, OutboundLine, CodeMapping, FinanceRecord):
         if db.scalar(select(func.count()).select_from(model).where(model.product_id == pid)):
             return True
+    # 入仓品关联的库存商品
+    if db.scalar(
+        select(func.count()).select_from(WarehouseProduct).where(WarehouseProduct.stock_product_id == pid)
+    ):
+        return True
     # 被其他商品的关联结算清单引用，或被订单商品作为库存关联引用
     for o in db.execute(select(Product).where(Product.id != pid)).scalars():
         if o.stock_product_id == pid:
