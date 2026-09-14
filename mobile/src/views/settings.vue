@@ -1,9 +1,9 @@
 <template>
   <div class="sub-page">
-    <van-nav-bar title="设置" left-arrow fixed placeholder @click-left="goBack" />
+    <van-nav-bar title="设置" left-arrow fixed safe-area-inset-top placeholder @click-left="goBack" />
 
-    <div style="padding:12px;">
-      <div class="seg" style="overflow-x:auto;">
+    <div class="sub-body">
+      <div class="seg">
         <div v-for="p in panels" :key="p.key" class="seg-item" :class="{ active: panel === p.key }" @click="switchPanel(p.key)">{{ p.label }}</div>
       </div>
 
@@ -11,7 +11,7 @@
       <template v-if="panel === 'wh'">
         <div class="card">
           <div class="card-title">切换分仓</div>
-          <div class="muted" style="margin-bottom:8px;">
+          <div class="card-desc">
             切换或新建分仓后，当前登录会失效，需用私钥重新登录。仅管理员可操作。
           </div>
           <div v-for="w in warehouses" :key="w.key" class="list-item">
@@ -19,13 +19,13 @@
               <span class="grow item-title">{{ w.name }}</span>
               <span class="muted">{{ w.key }}</span>
               <van-tag v-if="w.is_current" type="primary">当前</van-tag>
-              <van-button v-else size="mini" plain type="primary" @click="switchWh(w)">切换</van-button>
+              <van-button v-else size="mini" plain type="primary" :loading="whSwitching === w.key" @click="switchWh(w)">切换</van-button>
             </div>
             <div v-if="w.db" class="item-meta">{{ w.db }}</div>
           </div>
           <div v-if="!warehouses.length" class="empty">暂无分仓信息</div>
           <div class="divider"></div>
-          <van-field v-model="newWhName" label="新建分仓" placeholder="如：昆明仓" />
+          <van-field v-model="newWhName" label="新建分仓" placeholder="如：昆明仓，创建后会立即切换并需要重新登录" />
           <van-button block round type="success" :loading="whSaving" style="margin-top:10px;" @click="createWh">新建并切换</van-button>
         </div>
       </template>
@@ -34,15 +34,15 @@
       <template v-else-if="panel === 'pdata'">
         <div class="card">
           <div class="card-title">商品资料备份（解耦维护）</div>
-          <div class="muted" style="margin-bottom:8px;">
+          <div class="card-desc">
             商品资料按「数据表」拆分为 5 个 JSON 独立保存于后端 <code>backend/json</code>，商品间相互引用用「名称」表达，可跨库 / 跨设备迁移。
           </div>
           <div class="row" style="gap:8px;flex-wrap:wrap;">
             <van-button size="small" type="success" icon="passed" :loading="pdataBusy" @click="pdataExportAll">一键导出到 json 目录</van-button>
             <van-button size="small" type="primary" icon="replay" :loading="pdataBusy" @click="pdataImportAll">从 json 目录一键导入</van-button>
           </div>
-          <div v-if="pdataDir" class="muted" style="margin-top:8px;">目录：{{ pdataDir }}</div>
-          <div v-if="pdataMsg" class="alert ok">{{ pdataMsg }}</div>
+          <div v-if="pdataDir" class="card-desc" style="margin:8px 0 0;">目录：{{ pdataDir }}</div>
+          <div v-if="pdataMsg" class="tip ok">{{ pdataMsg }}</div>
         </div>
 
         <div class="card">
@@ -65,10 +65,10 @@
 
         <div class="card">
           <div class="card-title">从本地上传 JSON 导入</div>
-          <div class="muted" style="margin-bottom:8px;">可在任意电脑编辑 JSON 后上传，按名称导入（upsert），便于手动维护与迁移。</div>
+          <div class="card-desc">可在任意电脑编辑 JSON 后上传，按名称导入（同名数据会被覆盖更新），便于手动维护与迁移。</div>
           <van-button size="small" plain icon="upgrade" @click="pdataFile && pdataFile.click()">选择 JSON 文件并导入</van-button>
           <input ref="pdataFile" type="file" accept=".json,.txt" style="display:none" @change="pdataUpload" />
-          <div v-if="pdataUploadMsg" class="alert ok">{{ pdataUploadMsg }}</div>
+          <div v-if="pdataUploadMsg" class="tip ok">{{ pdataUploadMsg }}</div>
         </div>
       </template>
 
@@ -76,7 +76,7 @@
       <template v-else-if="panel === 'backup'">
         <div class="card">
           <div class="card-title">自动备份设置</div>
-          <div class="muted" style="margin-bottom:8px;">默认开启，每 2 小时备份一次到 data/backups，超出保留份数自动清理旧备份。</div>
+          <div class="card-desc">默认开启，每 2 小时备份一次到 data/backups，超出保留份数自动清理旧备份。</div>
           <van-field label="开启自动备份">
             <template #input><van-switch v-model="bk.enabled" size="20" /></template>
           </van-field>
@@ -94,8 +94,9 @@
 
         <div class="card">
           <div class="card-title">备份列表</div>
-          <div class="muted" style="margin-bottom:8px;">恢复会用所选备份覆盖当前数据库，请谨慎操作。</div>
-          <div v-if="!bkList.length" class="empty">暂无备份</div>
+          <div class="card-desc">恢复会用所选备份覆盖当前数据库，请谨慎操作。</div>
+          <SkeletonList v-if="loadingBackup" :rows="3" />
+          <div v-else-if="!bkList.length" class="empty">暂无备份</div>
           <div v-for="b in bkList" :key="b.name" class="list-item">
             <div class="row">
               <span class="grow item-title ellipsis">{{ b.mtime }}</span>
@@ -119,25 +120,25 @@
             <van-button size="small" plain icon="down" @click="downloadTpl('inbounds')">入库导入模板</van-button>
             <van-button size="small" plain icon="down" @click="downloadTpl('outbounds')">出库导入模板</van-button>
           </div>
-          <div class="alert ok" style="margin-top:10px;">商品模板兼容「柠檬云商品导入模板.xlsx」，整表上传自动识别（编码 / 类别 / 名称 / 规格 / 单位）。</div>
+          <div class="tip ok" style="margin-top:10px;">商品模板兼容「柠檬云商品导入模板.xlsx」，整表上传自动识别（编码 / 类别 / 名称 / 规格 / 单位）。</div>
         </div>
 
         <div class="card">
           <div class="card-title">商品批量导入</div>
           <van-button size="small" plain icon="upgrade" @click="impProdFile && impProdFile.click()">选择 Excel 并导入</van-button>
           <input ref="impProdFile" type="file" accept=".xlsx" style="display:none" @change="importProducts" />
-          <div v-if="impProdMsg" class="alert" :class="impProdOk ? 'ok' : 'err'">{{ impProdMsg }}</div>
+          <div v-if="impProdMsg" class="tip" :class="impProdOk ? 'ok' : 'err'">{{ impProdMsg }}</div>
         </div>
 
         <div class="card">
           <div class="card-title">入库批量导入</div>
-          <div class="muted" style="margin-bottom:8px;">同「单号」自动合并为一单；先解析预览，确认后才真正入库并更新库存。若类别配置了扣点，单价按 原价×(1−扣点%) 自动折算。</div>
+          <div class="card-desc">同「单号」自动合并为一单；先解析预览，确认后才真正入库并更新库存。若类别配置了扣点，单价按 原价×(1−扣点%) 自动折算。</div>
           <van-button size="small" plain icon="upgrade" @click="startBatch('inbound')">选择 Excel 并预览</van-button>
         </div>
 
         <div class="card">
           <div class="card-title">出库批量导入</div>
-          <div class="muted" style="margin-bottom:8px;">同「单号」自动合并为一单，自动结转关联材料与费用。</div>
+          <div class="card-desc">同「单号」自动合并为一单，自动结转关联材料与费用。</div>
           <van-button size="small" plain icon="upgrade" @click="startBatch('outbound')">选择 Excel 并预览</van-button>
         </div>
       </template>
@@ -146,17 +147,17 @@
       <template v-else>
         <div class="card">
           <div class="card-title">① 上传聚水潭销售出库单并自动新增关联</div>
-          <div class="muted" style="margin-bottom:8px;">
+          <div class="card-desc">
             自动新增不存在的订单商品并关键词关联库存商品。需手动维护关联请前往「商品管理」调整商品的关联结算与扣减对象。
           </div>
           <div class="row" style="gap:8px;flex-wrap:wrap;">
             <van-button size="small" type="primary" icon="upgrade" :loading="mpParsing" @click="mpFile && mpFile.click()">解析并自动新增</van-button>
             <van-button size="small" plain icon="fire-o" :loading="mpAuto" @click="autoMapping">自动匹配未关联</van-button>
-            <van-button size="small" plain type="danger" @click="clearMapping">清空关联</van-button>
+            <van-button size="small" plain type="danger" :loading="mpClearing" @click="clearMapping">清空关联</van-button>
             <van-button size="small" plain icon="down" @click="exportMappings">导出 JSON</van-button>
           </div>
           <input ref="mpFile" type="file" accept=".xlsx" style="display:none" @change="parseJushuitan" />
-          <div v-if="mpInfo" class="alert ok">{{ mpInfo }}</div>
+          <div v-if="mpInfo" class="tip ok">{{ mpInfo }}</div>
           <div v-if="mpCodes.length" class="divider"></div>
           <div v-for="c in mpCodes.slice(0, 50)" :key="c.external_code" class="list-item">
             <div class="row">
@@ -169,12 +170,12 @@
               <template v-if="c.score != null"> · 匹配度 {{ (c.score * 100).toFixed(0) }}%</template>
             </div>
           </div>
-          <div v-if="mpCodes.length > 50" class="muted" style="margin-top:6px;">共 {{ mpCodes.length }} 个编码，仅显示前 50 个</div>
+          <div v-if="mpCodes.length > 50" class="card-desc" style="margin:6px 0 0;">共 {{ mpCodes.length }} 个编码，仅显示前 50 个</div>
         </div>
 
         <div class="card">
           <div class="card-title">② 导入聚水潭出库单（自动结算）</div>
-          <div class="muted" style="margin-bottom:8px;">按已保存的关联生成出库单并核算成本；先解析预览，确认后才出库。</div>
+          <div class="card-desc">按已保存的关联生成出库单并核算成本；先解析预览，确认后才出库。</div>
           <van-button size="small" type="success" icon="upgrade" @click="startBatch('jushuitan')">选择 Excel 并预览</van-button>
         </div>
       </template>
@@ -184,7 +185,7 @@
     <van-popup v-model:show="batchShow" position="bottom" round :style="{ height: '90%' }">
       <div class="sheet-body">
         <div class="sheet-title">{{ batchCfg.title }}</div>
-        <div v-if="batchParsing" class="empty">正在解析…</div>
+        <div v-if="batchParsing" class="loading-tip">正在解析…</div>
 
         <template v-if="batchOrders.length">
           <div class="row" style="justify-content:space-between;margin-bottom:6px;">
@@ -200,9 +201,9 @@
             <div class="muted">{{ o.customer || '—' }}{{ o.pack_fee ? ' · 打包费 ' + fmtMoney(o.pack_fee) : '' }}</div>
             <div v-for="(l, li) in o.lines" :key="li" class="batch-line">
               <span class="grow ellipsis">{{ l.product_name }}</span>
-              <van-field v-model="l.quantity" type="number" style="width:74px;" />
-              <van-field v-model="l.price" type="number" style="width:84px;" />
-              <span class="amount">{{ fmtMoney(num(l.quantity) * num(l.price)) }}</span>
+              <van-field v-model="l.quantity" type="number" placeholder="数量" style="width:78px;" />
+              <van-field v-model="l.price" type="number" placeholder="单价" style="width:88px;" />
+              <span class="num-r">{{ fmtMoney(num(l.quantity) * num(l.price)) }}</span>
             </div>
           </div>
         </template>
@@ -227,14 +228,14 @@
           </div>
         </template>
 
-        <div v-if="batchUnmapped.length" class="alert warn">
+        <div v-if="batchUnmapped.length" class="tip warn">
           ⚠ 未关联商品：{{ batchUnmapped.slice(0, 8).join('、') }}{{ batchUnmapped.length > 8 ? ' 等' : '' }}
         </div>
-        <div v-if="batchSkipText" class="alert warn">⚠ 跳过：{{ batchSkipText }}</div>
-        <div v-if="batchFailed.length" class="alert err">
+        <div v-if="batchSkipText" class="tip warn">⚠ 跳过：{{ batchSkipText }}</div>
+        <div v-if="batchFailed.length" class="tip err">
           解析失败 {{ batchFailed.length }} 条：{{ batchFailed.slice(0, 5).map((f) => f.reason).join('；') }}
         </div>
-        <div v-if="batchMsg" class="alert ok">{{ batchMsg }}</div>
+        <div v-if="batchMsg" class="tip ok">{{ batchMsg }}</div>
 
         <div class="sheet-foot">
           <van-button block plain @click="batchShow = false">关闭</van-button>
@@ -256,6 +257,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api, { upload, downloadFile, downloadJson } from '../api'
+import SkeletonList from '../components/SkeletonList.vue'
 import { fmtMoney, num } from '../utils/format'
 
 const route = useRoute()
@@ -285,6 +287,7 @@ function switchPanel(k) {
 const warehouses = ref([])
 const newWhName = ref('')
 const whSaving = ref(false)
+const whSwitching = ref('')   // 正在切换的分仓 key（按行显示 loading，避免连点）
 
 async function loadWarehouses() {
   try {
@@ -301,11 +304,13 @@ async function relogin() {
 
 async function switchWh(w) {
   try { await showConfirmDialog({ title: '切换分仓', message: `切换后当前登录会失效，需重新登录。确认切换到「${w.name}」？` }) } catch (e) { return }
+  whSwitching.value = w.key
   try {
     await api('/api/warehouses/switch', 'POST', { key: w.key })
     showToast('已切换，请重新登录')
     setTimeout(relogin, 600)
   } catch (e) { showToast(e.message || '切换失败') }
+  whSwitching.value = ''
 }
 
 async function createWh() {
@@ -384,6 +389,10 @@ async function pdataUpload(e) {
   const f = e.target.files && e.target.files[0]
   e.target.value = ''
   if (!f) return
+  // 与「从 json 目录导入」口径一致：按名称 upsert 会覆盖同名数据，先确认再导
+  try {
+    await showConfirmDialog({ title: '上传并导入', message: `将导入「${f.name}」，同名数据会被覆盖更新，确认继续？` })
+  } catch (err) { return }
   try {
     const text = await f.text()
     const payload = JSON.parse(text)
@@ -402,8 +411,10 @@ const bk = reactive({ enabled: true, interval_hours: 2, keep: 30 })
 const bkList = ref([])
 const bkSaving = ref(false)
 const bkCreating = ref(false)
+const loadingBackup = ref(true)
 
 async function loadBackup() {
+  if (!bkList.value.length) loadingBackup.value = true
   try {
     const d = await api('/api/backups')
     const c = d.config || {}
@@ -412,6 +423,7 @@ async function loadBackup() {
     bk.keep = c.keep || 30
     bkList.value = d.backups || []
   } catch (e) { showToast(e.message || '加载备份失败') }
+  loadingBackup.value = false
 }
 
 async function saveBkConfig() {
@@ -612,6 +624,7 @@ async function confirmBatch() {
 const mpFile = ref(null)
 const mpParsing = ref(false)
 const mpAuto = ref(false)
+const mpClearing = ref(false)
 const mpInfo = ref('')
 const mpCodes = ref([])
 
@@ -642,13 +655,15 @@ async function autoMapping() {
 }
 
 async function clearMapping() {
-  try { await showConfirmDialog({ title: '清空关联', message: '将清空聚水潭来源的全部编码关联，确认？' }) } catch (e) { return }
+  try { await showConfirmDialog({ title: '清空关联', message: '将清空聚水潭来源的全部编码关联，清空后需重新解析出库单才能关联，确认？' }) } catch (e) { return }
+  mpClearing.value = true
   try {
     await api('/api/mappings?source=jushuitan', 'DELETE')
     showToast('已清空')
     mpCodes.value = []
     mpInfo.value = '已清空聚水潭编码关联'
   } catch (e) { showToast(e.message || '清空失败') }
+  mpClearing.value = false
 }
 
 async function exportMappings() {
@@ -668,15 +683,10 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
-.io-row { padding: 10px 0; border-bottom: 1px solid #f5f5f5; }
-.io-row:last-child { border-bottom: none; }
-.io-name { font-weight: 600; font-size: 14px; }
-.amount { min-width: 76px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; font-size: 13px; }
+/* .sub-page / .sub-body / .io-row / .io-name / .amount / .tip 等已提升为全局样式 */
 .batch-line { display: flex; align-items: center; gap: 6px; padding: 6px 0 0 22px; }
-.alert { border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-top: 8px; }
-.alert.ok { background: #f0f9eb; color: #07c160; }
-.alert.warn { background: #fffbe8; color: #ed6a0c; }
-.alert.err { background: #fff1f0; color: #ee0a24; }
-code { background: #f2f3f5; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+code {
+  background: var(--c-line); padding: 1px 4px; border-radius: 3px;
+  font-size: 11px; color: var(--c-text-2);
+}
 </style>

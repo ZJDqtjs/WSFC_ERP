@@ -1,10 +1,10 @@
 <template>
   <div class="sub-page">
-    <van-nav-bar title="快递费规则" left-arrow fixed placeholder @click-left="goBack" />
-    <div style="padding:12px;">
+    <van-nav-bar title="快递费规则" left-arrow fixed safe-area-inset-top placeholder @click-left="goBack" />
+    <div class="sub-body">
       <div class="card">
         <div class="card-title">计费规则</div>
-        <div class="muted" style="margin-bottom:8px;">
+        <div class="card-desc">
           出库时按「整单毛重」自动计算快递费并计入销售成本。整单毛重 = 商品净重之和 + 每单箱体 0.1kg；
           商品净重由「扣减库存量」推导（重量类），推不出时使用商品资料里手填的单件净重。
         </div>
@@ -20,25 +20,28 @@
           </van-field>
 
           <template v-if="cfg.mode === 'tiered'">
-            <van-field v-model="cfg.first_kg_fee" type="number" label="1kg 以内" placeholder="首重，如 3.6">
+            <van-field v-model="cfg.first_kg_fee" type="number" label="1kg 以内" placeholder="首重，如 3.6" required>
               <template #button><span class="muted">元</span></template>
             </van-field>
-            <van-field v-model="cfg.per_extra_kg" type="number" label="每超 1kg" placeholder="续重，如 1">
+            <van-field v-model="cfg.per_extra_kg" type="number" label="每超 1kg" placeholder="续重，如 1" required>
               <template #button><span class="muted">元</span></template>
             </van-field>
             <van-field label="续重按整 kg 向上取整">
               <template #input><van-switch v-model="cfg.round_up" size="20" /></template>
             </van-field>
-            <div class="muted" style="padding:0 16px 8px;">如 1.5kg 按 2kg 计费（仅对超出部分取整）。</div>
+            <div class="card-desc" style="padding:0 16px 8px;margin-bottom:0;">如 1.5kg 按 2kg 计费（仅对超出部分取整）。</div>
           </template>
 
-          <van-field v-else v-model="cfg.rate_per_kg" type="number" label="每 1kg 单价" placeholder="如 3.6">
+          <van-field v-else v-model="cfg.rate_per_kg" type="number" label="每 1kg 单价" placeholder="如 3.6" required>
             <template #button><span class="muted">元</span></template>
           </van-field>
         </van-cell-group>
 
-        <van-button block round type="primary" :loading="saving" style="margin-top:12px;" @click="save">保存计费规则</van-button>
-        <div class="muted" style="margin-top:8px;">{{ info }}</div>
+        <div class="row" style="gap:10px;margin-top:12px;">
+          <van-button class="grow" type="primary" :loading="saving" @click="save">保存计费规则</van-button>
+          <van-button class="grow" plain :disabled="saving" @click="load">撤销修改</van-button>
+        </div>
+        <div class="card-desc" style="margin:8px 0 0;">{{ info }}</div>
       </div>
 
       <div class="card">
@@ -46,7 +49,7 @@
         <div v-for="w in weights" :key="w" class="list-item">
           <div class="row">
             <span class="grow">毛重 {{ w }} kg</span>
-            <span class="bold">{{ fmtMoney(fee(w)) }}</span>
+            <span class="num-r">{{ fmtMoney(fee(w)) }}</span>
           </div>
         </div>
       </div>
@@ -116,5 +119,5 @@ onMounted(load)
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
+/* .sub-page / .sub-body 已提升为 app.vue 全局样式 */
 </style>

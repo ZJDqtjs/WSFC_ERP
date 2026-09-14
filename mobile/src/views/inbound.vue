@@ -9,7 +9,7 @@
     <template v-if="tab === 'new'">
       <div class="card">
         <div class="card-title">
-          <span class="grow">新增入库单</span>
+          <span class="grow">单据信息</span>
           <van-button size="mini" plain type="primary" icon="down" @click="batchShow = true">批量入库</van-button>
         </div>
         <van-cell-group inset>
@@ -29,9 +29,9 @@
           <div class="row" style="justify-content:space-between;">
             <span class="grow io-name" @click="openPicker(i)">
               <template v-if="r.product_id">{{ r.name }}</template>
-              <template v-else><span class="placeholder">＋ 点击选择商品</span></template>
+              <template v-else><span class="placeholder"><van-icon name="plus" /> 点击选择商品</span></template>
             </span>
-            <van-icon v-if="rows.length > 1" name="delete-o" color="#ee0a24" @click="rows.splice(i, 1)" />
+            <van-icon v-if="rows.length > 1" name="delete-o" class="c-danger" @click="rows.splice(i, 1)" />
           </div>
           <div v-if="r.product_id" class="muted io-hint" @click="openUnit(i)">
             进货单位：{{ r.unit }}（点此切换） · 折算 {{ conversionText(r) }}
@@ -58,15 +58,15 @@
     <!-- ============ 入库记录 ============ -->
     <template v-else>
       <div class="card">
-        <div class="row wrap" style="gap:6px;">
-          <van-field v-model="filter.from" type="date" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
-          <van-field v-model="filter.to" type="date" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
+        <div class="filter-bar">
+          <van-field v-model="filter.from" type="date" />
+          <van-field v-model="filter.to" type="date" />
           <van-button size="small" type="primary" @click="loadList">筛选</van-button>
           <van-button size="small" plain @click="quick(0)">今天</van-button>
           <van-button size="small" plain @click="quick(7)">近7天</van-button>
           <van-button size="small" plain @click="quick(null)">全部</van-button>
         </div>
-        <van-field v-model="kw" placeholder="筛选单号 / 商品 / 供应商" style="background:#f7f8fa;border-radius:6px;margin-top:8px;" />
+        <van-field v-model="kw" placeholder="筛选单号 / 商品 / 供应商" class="kw-field" />
 
         <div v-if="selected.length" class="batch-bar">
           <span class="muted">已选 {{ selected.length }} 条 · 合计 {{ fmtMoney(selectedAmount) }}</span>
@@ -79,28 +79,31 @@
         </div>
 
         <van-pull-refresh v-model="refreshing" @refresh="loadList">
-          <div v-if="!filteredList.length" class="empty">暂无入库记录</div>
-          <div v-for="r in filteredList" :key="r.id" class="list-item">
-            <div class="row">
-              <van-checkbox
-                :model-value="selected.includes(r.id)"
-                style="margin-right:8px;"
-                @click="toggleSel(r.id)"
-              />
-              <span class="grow item-title">{{ r.product_name }}</span>
-              <span class="bold">{{ fmtMoney(r.total_amount) }}</span>
-            </div>
-            <div class="item-meta">
-              {{ r.code }} · {{ fmtNum(r.quantity) }}{{ r.unit }} × {{ fmtMoney(r.unit_price) }} · {{ r.date }}
-            </div>
-            <div class="item-meta">
-              {{ r.supplier || '无供应商' }}{{ r.operator ? ' · ' + r.operator : '' }}
-              <span style="float:right;">
+          <SkeletonList v-if="loading" :rows="4" />
+          <template v-else>
+            <div v-if="!filteredList.length" class="empty">暂无入库记录</div>
+            <div v-for="r in filteredList" :key="r.id" class="list-item">
+              <div class="row">
+                <van-checkbox
+                  :model-value="selected.includes(r.id)"
+                  style="margin-right:8px;"
+                  @click="toggleSel(r.id)"
+                />
+                <span class="grow item-title">{{ r.product_name }}</span>
+                <span class="bold">{{ fmtMoney(r.total_amount) }}</span>
+              </div>
+              <div class="item-meta">
+                {{ r.code }} · {{ fmtNum(r.quantity) }}{{ r.unit }} × {{ fmtMoney(r.unit_price) }} · {{ r.date }}
+              </div>
+              <div class="row" style="justify-content:space-between;margin-top:6px;">
+                <span class="grow muted ellipsis">
+                  {{ r.supplier || '无供应商' }}{{ r.operator ? ' · ' + r.operator : '' }}
+                </span>
                 <van-button size="mini" plain type="danger" @click="del(r)">删除</van-button>
-              </span>
+              </div>
+              <RemarkView v-if="r.remark" :remark="r.remark" />
             </div>
-            <RemarkView v-if="r.remark" :remark="r.remark" />
-          </div>
+          </template>
         </van-pull-refresh>
       </div>
     </template>
@@ -129,7 +132,7 @@
         </div>
         <input ref="batchFile" type="file" accept=".xlsx" style="display:none" @change="parseBatch" />
 
-        <div v-if="batchParsing" class="empty">正在解析…</div>
+        <div v-if="batchParsing" class="loading-tip">正在解析…</div>
 
         <template v-if="batchItems.length">
           <div class="row" style="justify-content:space-between;margin-bottom:6px;">
@@ -149,7 +152,7 @@
             </div>
             <div class="muted">{{ it.supplier || '无供应商' }} · {{ it.date }}</div>
           </div>
-          <div v-if="batchFailed.length" class="alert err">
+          <div v-if="batchFailed.length" class="tip err">
             解析失败 {{ batchFailed.length }} 条：{{ batchFailed.slice(0, 5).map((f) => f.reason).join('；') }}
           </div>
         </template>
@@ -173,11 +176,13 @@ import ProductPicker from '../components/ProductPicker.vue'
 import AttachmentField from '../components/AttachmentField.vue'
 import RemarkView from '../components/RemarkView.vue'
 import OperatorField from '../components/OperatorField.vue'
+import SkeletonList from '../components/SkeletonList.vue'
 import { ensureUserName } from '../utils/user'
 import { fmtMoney, fmtNum, num, defaultUnit, unitFactor, todayStr } from '../utils/format'
 
 const tab = ref('new')
 const refreshing = ref(false)
+const loading = ref(true)   // 记录列表首屏骨架屏
 
 // ---------- 新增 ----------
 const form = reactive({ date: todayStr(), supplier: '', operator: '', remark: '' })
@@ -294,6 +299,7 @@ const selectedAmount = computed(() =>
 const allSelected = computed(() => filteredList.value.length > 0 && filteredList.value.every((r) => selected.value.includes(r.id)))
 
 async function loadList() {
+  if (!list.value.length) loading.value = true
   try {
     const q = []
     if (filter.from) q.push(`date_from=${filter.from}`)
@@ -301,6 +307,7 @@ async function loadList() {
     list.value = await api('/api/inbounds' + (q.length ? '?' + q.join('&') : ''))
     selected.value = selected.value.filter((id) => list.value.some((r) => r.id === id))
   } catch (e) { showToast(e.message || '加载失败') }
+  loading.value = false
   refreshing.value = false
 }
 function quick(days) {
@@ -419,16 +426,5 @@ onActivated(() => { if (tab.value === 'list') loadList() })
 </script>
 
 <style scoped>
-.io-row { padding: 10px 0; border-bottom: 1px solid #f5f5f5; }
-.io-row:last-child { border-bottom: none; }
-.io-name { font-weight: 600; font-size: 14px; }
-.io-name .placeholder { color: #1989fa; font-weight: 500; }
-.io-hint { color: #1989fa; font-size: 12px; cursor: pointer; }
-.io-amount { min-width: 76px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; font-size: 13px; }
-.batch-bar {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  background: #fff7e6; border-radius: 8px; padding: 8px 10px; margin-top: 8px;
-}
-.alert { border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-top: 8px; }
-.alert.err { background: #fff1f0; color: #ee0a24; }
+/* io-row / io-name / io-hint / io-amount / kw-field 已提升为 app.vue 全局样式，两端共用 */
 </style>

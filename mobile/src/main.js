@@ -15,6 +15,13 @@ router.beforeEach((to) => {
   if (to.path === '/login' && authed) return { path: '/home' }
 })
 
+// 标题跟随页面：手机多任务/添加到主屏后，能一眼分辨当前在哪个页面
+router.afterEach((to) => {
+  document.title = to.path === '/login' ? '登录 · 企业台账' : `${to.meta.title || '企业台账'} · 企业台账`
+  // 切换页面回到顶部，否则从长列表进二级页会停在半中间
+  window.scrollTo(0, 0)
+})
+
 const app = createApp(App)
 app.use(Vant)          // 全量注册 Vant 组件（van-field / van-button / van-tabbar 等）
 app.use(router)

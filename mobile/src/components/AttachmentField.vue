@@ -17,8 +17,10 @@
   </div>
   <div v-if="files.length" class="attach-chips">
     <div v-for="f in files" :key="f.url" class="attach-chip">
-      <span class="ellipsis" @click="open(f)">{{ f.isImage ? '🖼' : '📎' }} {{ f.name }}</span>
-      <van-icon name="cross" @click="remove(f.url)" />
+      <span class="ellipsis" @click="open(f)">
+        <van-icon :name="f.isImage ? 'photo-o' : 'description'" /> {{ f.name }}
+      </span>
+      <van-icon name="cross" class="c-danger" @click="remove(f.url)" />
     </div>
   </div>
 </template>
@@ -79,13 +81,13 @@ function open(f) {
 </script>
 
 <style scoped>
-.attach-bar { display: flex; align-items: center; gap: 8px; padding: 8px 16px 0; }
-.attach-tip { color: #969799; font-size: 12px; }
+.attach-bar { display: flex; align-items: center; gap: 8px; padding: 8px 16px 0; flex-wrap: wrap; }
+.attach-tip { color: var(--c-muted); font-size: 12px; }
 .attach-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 16px 10px; }
 .attach-chip {
   display: inline-flex; align-items: center; gap: 6px; max-width: 60vw;
-  padding: 3px 8px; border: 1px solid #e5e6eb; border-radius: 6px;
-  background: #f0f8ff; font-size: 12px; color: #646566;
+  padding: 3px 8px; border: 1px solid var(--c-line-2); border-radius: var(--radius-sm);
+  background: var(--c-primary-bg); font-size: 12px; color: var(--c-text-2);
 }
 .attach-chip .ellipsis { max-width: 46vw; }
 </style>

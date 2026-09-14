@@ -1,10 +1,14 @@
 <template>
-  <div class="og-page">
-    <van-nav-bar title="出库批次明细" left-arrow fixed placeholder @click-left="goBack" />
+  <div class="sub-page">
+    <van-nav-bar title="出库批次明细" left-arrow fixed safe-area-inset-top placeholder @click-left="goBack" />
 
-    <div v-if="loading" class="empty">加载中…</div>
+    <div class="sub-body">
+    <template v-if="loading">
+      <van-skeleton title :row="2" class="skeleton-card" />
+      <SkeletonList :rows="4" />
+    </template>
     <template v-else-if="rows.length">
-      <div class="stat-grid cols2" style="padding:0 12px;">
+      <div class="stat-grid cols2" style="margin-bottom:12px;">
         <div class="stat accent"><div class="label">批次单数</div><div class="value">{{ rows.length }}</div></div>
         <div class="stat"><div class="label">销售商品种数</div><div class="value">{{ aggSale.length }}</div></div>
         <div class="stat"><div class="label">耗材种数</div><div class="value">{{ aggPack.length }}</div></div>
@@ -14,7 +18,7 @@
         <div class="stat success"><div class="label">净利</div><div class="value">{{ fmtMoney(total.net) }}</div></div>
       </div>
 
-      <div class="seg" style="margin:12px;">
+      <div class="seg">
         <div
           v-for="s in segs"
           :key="s.key"
@@ -24,9 +28,9 @@
         >{{ s.label }}</div>
       </div>
 
-      <div class="card" style="margin:0 12px 12px;">
+      <div class="card">
         <van-search v-model="kw" placeholder="搜索商品" shape="round" />
-        <div v-if="!current.length" class="empty">无记录</div>
+        <div v-if="!current.length" class="empty">暂无记录</div>
 
         <!-- 销售商品：卡片展示单数/数量/金额/毛利/毛利率 -->
         <template v-if="seg === 'sale'">
@@ -43,7 +47,7 @@
               <b :class="a.amount - a.cogs >= 0 ? 'up' : 'down'">{{ fmtMoney(a.amount - a.cogs) }}</b>
               · 毛利率 {{ (a.gpRate || 0).toFixed(1) }}%
             </div>
-            <div v-if="a.pack_cogs || a.express_cogs" class="item-meta faint">
+            <div v-if="a.pack_cogs || a.express_cogs" class="item-meta muted">
               商品成本 {{ fmtMoney(a.base_cogs) }}
               <template v-if="a.pack_cogs"> ＋ 打包人工+耗材 {{ fmtMoney(a.pack_cogs) }}</template>
               <template v-if="a.express_cogs"> ＋ 快递费 {{ fmtMoney(a.express_cogs) }}</template>
@@ -64,18 +68,17 @@
             <div v-else class="item-meta">
               成本 {{ fmtMoney(a.cogs) }}
             </div>
-            <div v-if="a.subSub || a.sub" class="item-meta faint">{{ a.subSub || a.sub }}</div>
+            <div v-if="a.subSub || a.sub" class="item-meta muted">{{ a.subSub || a.sub }}</div>
           </div>
         </template>
       </div>
 
-      <div style="padding:0 12px 24px;">
-        <van-button block round type="danger" plain :loading="deleting" @click="deleteBatch">
-          删除本批（{{ rows.length }} 单）
-        </van-button>
-      </div>
+      <van-button block round type="danger" plain :loading="deleting" @click="deleteBatch">
+        删除本批（{{ rows.length }} 单）
+      </van-button>
     </template>
-    <van-empty v-else description="未找到该批次" />
+    <div v-else class="empty">未找到该批次</div>
+    </div>
   </div>
 </template>
 
@@ -84,6 +87,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api from '../api'
+import SkeletonList from '../components/SkeletonList.vue'
 import { fmtMoney, fmtNum, num } from '../utils/format'
 
 const route = useRoute()
@@ -261,6 +265,5 @@ onMounted(load)
 </script>
 
 <style scoped>
-.og-page { min-height: 100vh; background: #f7f8fa; }
-.faint { color: #a6a8ab; }
+/* 外层结构已与其它二级页统一为 .sub-page / .sub-body */
 </style>

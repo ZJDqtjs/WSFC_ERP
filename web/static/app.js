@@ -183,38 +183,105 @@ function routePath(path) {
 }
 
 async function api(path, method = "GET", body) {
-  const opt = { method, headers: { "Content-Type": "application/json" } };
-  if (body !== undefined) opt.body = JSON.stringify(body);
-  const res = await fetch(routePath(path), opt);
-  if (res.status === 401) { showLogin(); throw new Error("请先登录"); }
-  if (!res.ok) {
-    let msg = "请求失败";
-    try { const j = await res.json(); msg = j.detail || msg; } catch (e) {}
-    throw new Error(msg);
+  const btn = _busyButton();
+  if (btn) { btn.classList.add("is-busy"); btn.disabled = true; }
+  _loadingStart();
+  try {
+    const opt = { method, headers: { "Content-Type": "application/json" } };
+    if (body !== undefined) opt.body = JSON.stringify(body);
+    const res = await fetch(routePath(path), opt);
+    if (res.status === 401) { showLogin(); throw new Error("请先登录"); }
+    if (!res.ok) {
+      let msg = "请求失败";
+      try { const j = await res.json(); msg = j.detail || msg; } catch (e) {}
+      throw new Error(msg);
+    }
+    return res.json();
+  } finally {
+    _loadingEnd();
+    if (btn) { btn.classList.remove("is-busy"); btn.disabled = false; }
   }
-  return res.json();
 }
 
 async function apiUpload(path, file) {
-  const fd = new FormData();
-  fd.append("file", file);
-  const res = await fetch(routePath(path), { method: "POST", body: fd });
-  if (res.status === 401) { showLogin(); throw new Error("请先登录"); }
-  if (!res.ok) {
-    let msg = "请求失败";
-    try { const j = await res.json(); msg = j.detail || msg; } catch (e) {}
-    throw new Error(msg);
+  const btn = _busyButton();
+  if (btn) { btn.classList.add("is-busy"); btn.disabled = true; }
+  _loadingStart();
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(routePath(path), { method: "POST", body: fd });
+    if (res.status === 401) { showLogin(); throw new Error("请先登录"); }
+    if (!res.ok) {
+      let msg = "请求失败";
+      try { const j = await res.json(); msg = j.detail || msg; } catch (e) {}
+      throw new Error(msg);
+    }
+    return res.json();
+  } finally {
+    _loadingEnd();
+    if (btn) { btn.classList.remove("is-busy"); btn.disabled = false; }
   }
-  return res.json();
 }
 
 let toastTimer = null;
-function toast(msg, ms = 2400) {
+/** 按文案自动分型：成功=绿、失败=红、提醒=黄，用户不用逐字读也能看懂结果 */
+function toastKind(msg) {
+  const s = String(msg || "");
+  if (/失败|错误|不能|无法|请先|无效|不匹配|超时|异常|不存在|冲突|已满|禁止/.test(s)) return "err";
+  if (/成功|已保存|已删除|已导入|已导出|已完成|已回填|已刷新|已退出|欢迎|已生成/.test(s)) return "ok";
+  if (/警告|注意|请确认|不可撤销|谨慎|将/.test(s)) return "warn";
+  return "";
+}
+function toast(msg, ms = 2400, kind) {
   const t = $("toast");
+  const k = kind || toastKind(msg);
+  t.className = "toast" + (k ? " " + k : "");
   t.textContent = msg;
+  // 强制回流，保证连续两条提示也能重新播放入场动画
+  void t.offsetWidth;
   t.classList.add("show");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove("show"), ms);
+}
+
+/* ---------- 请求态：顶部进度条 + 按钮防重复点击 ---------- */
+let _inflight = 0;
+let _clickBtn = null;
+let _clickAt = 0;
+document.addEventListener(
+  "click",
+  (e) => {
+    const b = e.target.closest ? e.target.closest("button.btn") : null;
+    _clickBtn = b;
+    _clickAt = performance.now();
+  },
+  true
+);
+function _loadingStart() {
+  _inflight++;
+  const el = $("loadingBar");
+  if (el) el.classList.add("on");
+}
+function _loadingEnd() {
+  _inflight = Math.max(0, _inflight - 1);
+  if (!_inflight) {
+    const el = $("loadingBar");
+    if (el) el.classList.remove("on");
+  }
+}
+/**
+ * 取出"刚刚被点击的按钮"，在该请求期间禁用并显示转圈。
+ * 用于防止双击「确认入库 / 确认出库 / 删除」造成重复单据，
+ * 只对 .btn 生效（导航项、页签、关闭按钮不受影响）；按钮可加 data-nobusy 跳过。
+ */
+function _busyButton() {
+  const b = _clickBtn;
+  _clickBtn = null;
+  if (!b || b.disabled || b.dataset.nobusy !== undefined) return null;
+  if (performance.now() - _clickAt > 500) return null;
+  if (!b.isConnected) return null;
+  return b;
 }
 
 function fmtMoney(v) {
@@ -271,12 +338,39 @@ function daysAgo(n) {
 }
 
 /* ---------- 导航 ---------- */
+/* 页面标题 / 一句话说明：统一由页头展示，避免"打开一个页面不知道这是哪" */
 const PAGE_TITLES = {
   home: "工作台", stock: "库存管理", inbound: "入库", outbound: "出库 / 销售",
-  "warehouse-in": "入仓", "wingroup": "入仓批次明细",
-  products: "商品", report: "财务报表", import: "批量导入", jushuitan: "聚水潭关联",
-  backup: "备份与恢复",
+  "warehouse-in": "入仓", wingroup: "入仓批次明细", outgroup: "出库批次明细",
+  products: "商品管理", report: "财务报表", fresh: "鲜货现采",
+  packrules: "一单多货", deduction: "扣点设置", express: "快递费规则",
+  settings: "设置",
 };
+const PAGE_DESCS = {
+  home: "今日经营概览、AI 智能录入与缺货预警",
+  stock: "库存总览、盘点记录、库存流水与人工工作量统计",
+  inbound: "按采购单位录入，系统自动折算到基础单位并重算先进先出成本",
+  outbound: "销售商品自动结转关联包装耗材、打包人工与快递费",
+  "warehouse-in": "按「袋」采购的备货商品资料与入仓记录",
+  wingroup: "当前入仓批次的明细，可整批删除并回退",
+  outgroup: "当前出库批次按销售商品 / 耗材 / 人工拆分后的明细",
+  products: "库存商品、订单商品、包材与人工资料的维护与关联",
+  report: "收入、成本、毛利与净利的汇总与明细；支持手动记账",
+  fresh: "展示鲜货库存；导入今日订单可预演算消耗需求（不实际扣库存）",
+  packrules: "一张订单含多种商品时的合并打包规则（纸箱 + 人工）",
+  deduction: "按商品类别 / 店铺设置扣点，影响入库成本与订单收入",
+  express: "出库时按整单毛重自动计算快递费并计入销售成本",
+  settings: "商品资料备份、数据库备份与恢复、批量导入、聚水潭关联",
+};
+function setPageHead(title, desc) {
+  const t = $("pageTitle");
+  if (t) t.textContent = title || "";
+  const d = $("pageDesc");
+  if (d) {
+    d.textContent = desc || "";
+    d.style.display = desc ? "" : "none";
+  }
+}
 let prodForceCat = "";  // 包材 / 人工 / 快递 等独立入口强制筛选的商品分类
 let prodForceType = ""; // 关联结算 等独立入口强制筛选的商品类型（order）
 function goProducts() { prodForceCat = ""; prodForceType = ""; goPage("products"); }
@@ -292,19 +386,35 @@ function goPage(name) {
   document.querySelectorAll(".page").forEach((x) => x.classList.remove("active"));
   const page = $("page-" + name);
   page.classList.add("active");
+  // 商品页可能被侧栏以"包材 / 人工 / 关联结算"等入口打开，标题随之变化
+  if (name === "products") {
+    const title = prodForceType === "order" ? "关联结算（订单商品）"
+      : prodForceCat ? `${prodForceCat}商品` : PAGE_TITLES.products;
+    setPageHead(title, PAGE_DESCS.products);
+  } else {
+    setPageHead(PAGE_TITLES[name] || name, PAGE_DESCS[name] || "");
+  }
   const loaders = {
     home: loadDashboard, stock: loadStock, inbound: initInbound, outbound: initOutbound,
     "warehouse-in": loadWarehouseIn, wingroup: renderWinGroupPage,
-    products: renderProducts, report: loadReport, import: loadImportPage, jushuitan: loadMappingPage,
-    backup: loadBackupPage, fresh: loadFresh, packrules: loadPackRules, pdata: loadPdataPage,
-    deduction: loadDeductionPage, express: loadExpressPage, settings: loadSettingsPage,
+    products: renderProducts, report: loadReport, fresh: loadFresh, packrules: loadPackRules,
+    pdata: loadPdataPage, deduction: loadDeductionPage, express: loadExpressPage,
+    settings: loadSettingsPage,
   };
   (loaders[name] || (() => {}))();
+  if (window.innerWidth <= 1024) closeSidebar();
 }
 /* 设置二级页面：商品资料备份 / 备份与恢复 / 批量导入 / 聚水潭关联 */
+const SETTINGS_DESCS = {
+  pdata: "把商品资料拆成 5 份 JSON 独立备份到 backend/json，便于跨库 / 跨设备迁移",
+  backup: "数据库自动备份与恢复（恢复会覆盖当前全部数据，请谨慎）",
+  import: "商品 / 入库 / 出库的 Excel 批量导入，先预览确认再落库",
+  jushuitan: "上传聚水潭销售出库单自动新增并关联商品，再按关联导入出库单结算",
+};
 function switchSettingsTab(panel) {
   document.querySelectorAll("#settingsSeg .seg-item").forEach((x) => x.classList.toggle("active", x.dataset.panel === panel));
   document.querySelectorAll("#page-settings .settings-panel").forEach((x) => { x.style.display = x.dataset.panel === panel ? "" : "none"; });
+  setPageHead("设置", SETTINGS_DESCS[panel] || "");
   if (panel === "pdata") loadPdataPage();
   else if (panel === "backup") loadBackupPage();
   else if (panel === "jushuitan") loadMappingPage();
@@ -461,7 +571,7 @@ async function deducSave(id) {
   } catch (e) { toast("保存失败：" + e.message); }
 }
 async function deducDelete(id, category) {
-  if (!confirm(`确认删除「${category}」的扣点规则？删除后该类别入库将不再折算。`)) return;
+  if (!(await uiConfirm(`确认删除「${category}」的扣点规则？删除后该类别入库将不再折算。`, { okText: "删除" }))) return;
   try {
     await api("/api/deductions/" + id, "DELETE");
     toast("已删除"); loadDeductionPage();
@@ -475,7 +585,7 @@ function shopCatRowHtml(k, v) {
   return `<div class="shop-cat-row">
       <input class="sdc-cat" list="deducCatList" value="${esc(k || "")}" placeholder="分类，如 蔬菜" style="flex:1;" />
       <input class="sdc-pct" type="number" min="0" step="0.01" value="${v != null ? v : ""}" placeholder="%" style="width:90px;" />
-      <button class="btn danger sm" onclick="this.closest('.shop-cat-row').remove()">删</button>
+      ${iconBtn("i-trash", "移除该分类", "this.closest('.shop-cat-row').remove()", "btn danger sm")}
     </div>`;
 }
 function shopCatAddRow() {
@@ -507,7 +617,7 @@ function shopDeducFormHtml(r) {
     <div id="shopDeducCatBox" style="display:${fixed ? "none" : ""};">
       <label style="font-size:13px;color:var(--text-secondary);">按分类扣点</label>
       <div id="shopDeducRows" style="display:flex;flex-direction:column;gap:8px;">${Object.entries(r.categories || {}).map(([k, v]) => shopCatRowHtml(k, v)).join("")}</div>
-      <button class="btn sm secondary" onclick="shopCatAddRow()" style="margin-top:8px;">＋ 加一行分类</button>
+      <button class="btn sm secondary" onclick="shopCatAddRow()" style="margin-top:8px;">加一行分类</button>
     </div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
@@ -543,7 +653,7 @@ async function shopDeducSave() {
   } catch (e) { toast("保存失败：" + e.message); }
 }
 async function shopDeducDelete(shop) {
-  if (!confirm(`确认删除店铺「${shop}」的扣点规则？删除后该店订单不再折算。`)) return;
+  if (!(await uiConfirm(`确认删除店铺「${shop}」的扣点规则？删除后该店订单不再折算。`, { okText: "删除" }))) return;
   try {
     await api("/api/deductions/shops/" + encodeURIComponent(shop), "DELETE");
     toast("已删除"); loadDeductionPage();
@@ -568,7 +678,7 @@ async function openWarehouseModal() {
     <div class="field"><label>新建分仓名称</label>
       <input id="whName" placeholder="如：昆明仓" onkeydown="if(event.key==='Enter')createWarehouse()" /></div>
     <div class="toolbar"><div class="grow"></div>
-      <button class="btn green" onclick="createWarehouse()">＋ 新建并切换</button></div>`);
+      <button class="btn green" onclick="createWarehouse()">新建并切换</button></div>`);
   loadWarehouses();
 }
 async function loadWarehouses() {
@@ -585,7 +695,7 @@ async function loadWarehouses() {
   } catch (e) { whErr(e.message); }
 }
 async function switchWarehouse(key) {
-  if (!confirm("切换分仓后当前登录会失效，需重新登录，确定切换？")) return;
+  if (!(await uiConfirm("切换分仓后当前登录会失效，需要重新登录。", { danger: false, title: "切换分仓", okText: "切换并重新登录" }))) return;
   try {
     await api("/api/warehouses/switch", "POST", { key });
     try { await api("/api/auth/logout", "POST"); } catch (e) {}
@@ -595,6 +705,7 @@ async function switchWarehouse(key) {
 async function createWarehouse() {
   const name = ($("whName").value || "").trim();
   if (!name) { whErr("请输入分仓名称"); return; }
+  if (!(await uiConfirm(`将新建分仓「${name}」并切换过去（会复制当前仓用户），随后需要重新登录。`, { title: "新建分仓", okText: "新建并切换" }))) return;
   try {
     await api("/api/warehouses", "POST", { name });
     try { await api("/api/auth/logout", "POST"); } catch (e) {}
@@ -680,6 +791,7 @@ async function doLogin() {
     const j = await r.json();
     setUser(j.user);
     hideLogin();
+    rememberUser(username);
     toast("欢迎，" + (j.user.name || j.user.username));
     location.reload(); // 重新初始化所有页面数据
   } catch (e) { showLoginErr("登录失败：" + e.message); }
@@ -692,17 +804,116 @@ function showLoginErr(msg) {
 $("logoutBtn").addEventListener("click", async () => {
   try { await fetch(routePath("/api/auth/logout"), { method: "POST" }); } catch (e) {}
   CURRENT_USER = null;
+  try { closeSidebar(); } catch (e) {}
   showLogin();
 });
 
 /* ---------- 弹窗 ---------- */
-function openModal(html) {
-  $("modalBox").innerHTML = html;
-  $("modalMask").classList.add("show");
-  bindSearchable($("modalBox"));
+let _modalOnClose = null;  // 关闭钩子（确认框用它保证"任何关闭方式"都能让 Promise 落地）
+let _lastFocused = null;
+
+/**
+ * 打开弹窗。
+ * @param {string} html 弹窗内容
+ * @param {{wide?:boolean, small?:boolean, centered?:boolean, danger?:boolean, autofocus?:boolean, onClose?:Function}} opts
+ */
+/** 取容器内第一个可见的输入控件（跳过被 scombo 隐藏的原生 select / 只读框） */
+function _firstFocusable(box) {
+  const list = box.querySelectorAll("input:not([type=file]), select, textarea");
+  for (const el of list) {
+    if (el.readOnly || el.disabled) continue;
+    if (el.offsetParent === null) continue; // 隐藏元素（如被 scombo 替换掉的 select）
+    return el;
+  }
+  return null;
 }
-function closeModal() { $("modalMask").classList.remove("show"); $("modalBox").classList.remove("wide"); const r = _aiDoneResolve; _aiDoneResolve = null; if (r) r(); }
+function openModal(html, opts = {}) {
+  const box = $("modalBox");
+  const mask = $("modalMask");
+  _lastFocused = document.activeElement;
+  _modalOnClose = opts.onClose || null;
+  box.className = "modal" + (opts.wide ? " wide" : "") + (opts.small ? " sm" : "") + (opts.danger ? " danger" : "");
+  box.innerHTML = html;
+  mask.classList.toggle("centered", !!opts.centered);
+  mask.classList.add("show");
+  document.body.classList.add("modal-open");
+  bindSearchable(box);
+  // 自动聚焦第一个"可见"的可输入项；没有输入项则聚焦主按钮，回车即可提交
+  if (opts.autofocus !== false) {
+    const target = _firstFocusable(box) || box.querySelector(".modal-foot .btn:last-child");
+    if (target) setTimeout(() => { try { target.focus(); } catch (e) {} }, 30);
+  }
+}
+function closeModal() {
+  const mask = $("modalMask");
+  const box = $("modalBox");
+  if (!mask.classList.contains("show")) return;
+  mask.classList.remove("show");
+  mask.classList.remove("centered");
+  box.className = "modal";
+  box.innerHTML = "";
+  document.body.classList.remove("modal-open");
+  const hook = _modalOnClose;
+  _modalOnClose = null;
+  if (hook) hook();
+  const r = _aiDoneResolve;
+  _aiDoneResolve = null;
+  if (r) r();
+  if (_lastFocused && _lastFocused.isConnected) { try { _lastFocused.focus(); } catch (e) {} }
+  _lastFocused = null;
+}
 $("modalMask").addEventListener("click", (e) => { if (e.target.id === "modalMask") closeModal(); });
+// Esc 关闭最上层弹层（先确认框，再业务弹窗）；键盘用户不必去够右上角的 ✕
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const cm = $("confirmMask");
+  if (cm && cm.classList.contains("show")) { e.preventDefault(); __uiConfirmCancel(); return; }
+  if ($("modalMask").classList.contains("show")) { e.preventDefault(); closeModal(); }
+});
+
+/* ---------- 统一确认框（替代原生 confirm） ---------- */
+let _confirmFinish = null;
+
+/**
+ * 原生 confirm 的问题：样式不可定制、被浏览器"阻止弹窗"时静默返回 false、
+ * 移动端体验割裂。这里用独立的一层遮罩实现，可叠加在业务弹窗之上
+ * （例如「单位管理」弹窗里删除单位时不会把整个弹窗顶掉）。
+ * 支持 Esc / 点遮罩 = 取消。
+ * @returns {Promise<boolean>}
+ */
+function uiConfirm(message, opts = {}) {
+  const danger = opts.danger !== undefined ? opts.danger : true;
+  const okText = opts.okText || "确定";
+  const cancelText = opts.cancelText || "取消";
+  return new Promise((resolve) => {
+    const mask = $("confirmMask");
+    const box = $("confirmBox");
+    if (!mask || !box) { resolve(window.confirm(message)); return; }
+    box.className = "modal sm" + (danger ? " danger" : "");
+    box.innerHTML =
+      `<h3>${esc(opts.title || (danger ? "请确认操作" : "请确认"))}<button class="close" type="button" aria-label="关闭" onclick="__uiConfirmCancel()">✕</button></h3>
+       <div class="modal-msg">${opts.html ? message : esc(message)}</div>
+       <div class="modal-foot">
+         <button class="btn secondary" type="button" onclick="__uiConfirmCancel()">${esc(cancelText)}</button>
+         <button class="btn ${danger ? "danger" : ""}" data-ok type="button" onclick="__uiConfirmOk()">${esc(okText)}</button>
+       </div>`;
+    mask.classList.add("show");
+    document.body.classList.add("modal-open");
+    _confirmFinish = (v) => {
+      mask.classList.remove("show");
+      box.className = "modal sm";
+      box.innerHTML = "";
+      _confirmFinish = null;
+      if (!$("modalMask").classList.contains("show")) document.body.classList.remove("modal-open");
+      resolve(v);
+    };
+    // 回车 = 确定（与系统原生确认框一致），Esc = 取消
+    setTimeout(() => { const t = box.querySelector("[data-ok]"); if (t) { try { t.focus(); } catch (e) {} } }, 30);
+  });
+}
+function __uiConfirmOk() { if (_confirmFinish) _confirmFinish(true); }
+function __uiConfirmCancel() { if (_confirmFinish) _confirmFinish(false); }
+$("confirmMask").addEventListener("click", (e) => { if (e.target.id === "confirmMask") __uiConfirmCancel(); });
 
 /* =============== 库存 =============== */
 let STOCK_OVERVIEW = [];
@@ -898,7 +1109,7 @@ async function loadAdjustments() {
   t._render = loadAdjustments;
 }
 async function deleteAdjustment(gid) {
-  if (!confirm("确认删除该盘点调整记录？将回退其对库存、平均成本与成本单价的影响。")) return;
+  if (!(await uiConfirm("确认删除该盘点调整记录？将回退其对库存、平均成本与成本单价的影响。", { okText: "删除回退" }))) return;
   try {
     await api(`/api/adjustments/${gid}`, "DELETE");
     toast("已删除并回退调整");
@@ -948,7 +1159,7 @@ async function loadDashboard() {
           <button class="btn sm danger" onclick="goPage('inbound')">补货</button>
         </div>`).join("") +
         (low.length > 8 ? `<div class="empty-tip">… 还有 ${low.length - 8} 种缺货</div>` : "")
-      : `<div class="empty-tip">🎉 暂无缺货商品，库存状态良好</div>`;
+      : `<div class="empty-tip">暂无缺货商品，库存状态良好</div>`;
 
     const acts = [];
     (d.recent_outbounds || []).forEach((o) => acts.push({
@@ -1264,11 +1475,11 @@ function openAiConfirm(r) {
       <td><input class="ai-unit" value="${esc(ln.unit || "")}" style="width:70px;" />${unitBadge}</td>
       <td class="ai-price-cell"><input type="number" step="any" class="ai-price" value="${ln.unit_price ? ln.unit_price : ""}" placeholder="可留空" style="width:100px;" />${ln.price_defaulted ? '<span class="ai-price-badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按最近价</span>' : ""}</td>
       <td class="muted" style="font-size:12px;min-width:200px;">${esc(ln.hint || "")}</td>
-      <td style="white-space:nowrap;"><button class="btn secondary" style="padding:4px 8px;" title="删除这一行" onclick="aiDelLine(${i})">🗑 删除</button></td>
+      <td style="white-space:nowrap;"><button class="btn secondary" style="padding:4px 8px;" title="删除这一行" onclick="aiDelLine(${i})">删除</button></td>
     </tr>`;
   }).join("");
   const invImg = r.image_url
-    ? `<div class="ai-invoice"><span class="muted">📎 票据凭证</span><img src="${esc(r.image_url)}" alt="票据" onclick="window.open('${esc(r.image_url)}','_blank')" /></div>`
+    ? `<div class="ai-invoice"><span class="muted"><svg class="ic"><use href="#i-paperclip"/></svg> 票据凭证</span><img src="${esc(r.image_url)}" alt="票据" onclick="window.open('${esc(r.image_url)}','_blank')" /></div>`
     : "";
   openModal(`
     <h3>确认录入（${isIn ? "入库" : "出库"}） <button class="close" onclick="closeModal()">✕</button></h3>
@@ -1289,7 +1500,7 @@ function openAiConfirm(r) {
     </table></div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
-      <button class="btn green" onclick="aiSubmit()">✓ 确认提交</button>
+      <button class="btn green" onclick="aiSubmit()">确认提交</button>
     </div>`);
   $("modalBox").classList.add("wide");   // 明细列多，弹窗放宽，避免信息被挤没
 }
@@ -1422,7 +1633,7 @@ function renderRemarkHtml(rmk) {
     if (s.isImage) {
       return `<a href="${u}" target="_blank" title="${esc(s.name)}"><img src="${u}" alt="${esc(s.name)}" style="height:34px;vertical-align:middle;border-radius:4px;margin-right:4px;border:1px solid var(--border-light);" /></a>`;
     }
-    return `<a class="attach-link" href="${u}" target="_blank" title="${esc(s.name)}">📎 ${esc(s.name)}</a>`;
+    return `<a class="attach-link" href="${u}" target="_blank" title="${esc(s.name)}"><svg class="ic"><use href="#i-paperclip"/></svg> ${esc(s.name)}</a>`;
   }).join("");
 }
 
@@ -1448,7 +1659,7 @@ function renderRemarkAttachments(textareaId) {
   if (!box) return;
   const files = splitRemark($(textareaId).value).filter((s) => s.url);
   box.innerHTML = files.map((s) =>
-    `<span class="attach-chip"><span>${s.isImage ? "🖼" : "📎"} ${esc(s.name)}</span><b onclick="removeRemarkAttachment('${textareaId}','${s.url}')">✕</b></span>`
+    `<span class="attach-chip"><span><svg class="ic"><use href="#${s.isImage ? "i-camera" : "i-paperclip"}"/></svg> ${esc(s.name)}</span><b onclick="removeRemarkAttachment('${textareaId}','${s.url}')"><svg class="ic" style="width:13px;height:13px;"><use href="#i-x"/></svg></b></span>`
   ).join("");
 }
 
@@ -1479,7 +1690,7 @@ async function freshPlan() {
     $("freshSummary").innerHTML =
       `今日订单 <b>${d.order_count}</b> 单，涉及 <b>${d.items.length}</b> 种蔬菜采购需求；` +
       (d.failed_count ? `另有 <b>${d.failed_count}</b> 单因未配置换算跳过；` : "") +
-      (unmapped.length ? `未关联编码：<b style="color:var(--red)">${esc(unmapped.join("、"))}</b>` : "全部已关联 ✔");
+      (unmapped.length ? `未关联编码：<b style="color:var(--red)">${esc(unmapped.join("、"))}</b>` : "全部已关联");
     $("freshSummary").style.display = "block";
   } catch (e) { toast("演算失败：" + e.message); }
   finally { $("freshFile").value = ""; }
@@ -1528,7 +1739,7 @@ async function openFreshConfig() {
       <div class="fc-wrap">
         <div class="fc-pane">
           <div class="fc-label">候选商品</div>
-          <input id="fcSearch" placeholder="🔍 搜索…" oninput="renderFreshConfig()" style="margin-bottom:8px;" />
+          <input id="fcSearch" data-search placeholder="搜索…" oninput="renderFreshConfig()" style="margin-bottom:8px;" />
           <div id="fcOptions" class="fc-list"></div>
         </div>
         <div class="fc-pane">
@@ -1538,7 +1749,7 @@ async function openFreshConfig() {
       </div>
       <div class="modal-foot">
         <button class="btn secondary" onclick="closeModal()">取消</button>
-        <button class="btn green" onclick="saveFreshConfig()">✓ 保存清单</button>
+        <button class="btn green" onclick="saveFreshConfig()">保存清单</button>
       </div>`);
     renderFreshConfig();
   } catch (e) { toast("加载失败：" + e.message); }
@@ -1653,7 +1864,7 @@ function wprodEdit(id) {
     <p class="hint" id="wpCostHint" style="margin-top:8px;"></p>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
-      <button class="btn green" onclick="wprodSave(${id || 0})">✓ 保存</button>
+      <button class="btn green" onclick="wprodSave(${id || 0})">保存</button>
     </div>`);
   $("wpStock").addEventListener("change", wprodCostHint);
   wprodCostHint();
@@ -1695,7 +1906,7 @@ async function wprodSave(id) {
   } catch (e) { toast("保存失败：" + e.message); }
 }
 async function wprodDelete(id) {
-  if (!confirm("确认删除该入仓品？（已产生的入仓记录不受影响）")) return;
+  if (!(await uiConfirm("确认删除该入仓品？（已产生的入仓记录不受影响）", { okText: "删除" }))) return;
   try { await api("/api/warehouse-in/products/" + id, "DELETE"); toast("已删除"); loadWarehouseProducts(); }
   catch (e) { toast("删除失败：" + e.message); }
 }
@@ -1815,9 +2026,9 @@ function renderWinRow(r) {
     <td class="num mono">${fmtMoney(r.cogs)}</td>
     <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}</td>
     <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
-    <td style="white-space:nowrap;">
-      <button class="btn sm" onclick="wInEdit(${r.id})">改</button>
-      <button class="btn sm danger" onclick="wInDelete(${r.id})">删</button>
+    <td class="line-actions">
+      ${iconBtn("i-edit", "编辑该入仓记录", `wInEdit(${r.id})`)}
+      ${iconBtn("i-trash", "删除该入仓记录", `wInDelete(${r.id})`, "btn sm danger")}
     </td></tr>`;
 }
 function renderWinGroupRow(g) {
@@ -1837,7 +2048,7 @@ function renderWinGroupRow(g) {
     <td class="num mono" style="color:${g.profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(g.profit)}</td>
     <td style="white-space:nowrap;">
       <button class="btn sm secondary" onclick="openWinGroup('${esc(g.import_group)}')">明细</button>
-      <button class="btn sm danger" onclick="deleteWinGroup('${esc(g.import_group)}')">删</button>
+      ${iconBtn("i-trash", "删除本批", `deleteWinGroup('${esc(g.import_group)}')`, "btn sm danger")}
     </td></tr>`;
 }
 function toggleWinGroupCB(cb) {
@@ -1851,7 +2062,7 @@ function toggleWinGroupCB(cb) {
 async function batchDeleteWarehouseIns() {
   const ids = [...winSel];
   if (!ids.length) { toast("请先勾选要删除的记录"); return; }
-  if (!confirm(`确认删除选中的 ${ids.length} 条入仓记录？`)) return;
+  if (!(await uiConfirm(`确认删除选中的 ${ids.length} 条入仓记录？`, { okText: "删除" }))) return;
   try {
     const r = await api("/api/warehouse-in/batch-delete", "POST", { ids });
     winSel.clear();
@@ -1867,7 +2078,13 @@ function openWinGroup(groupKey) {
 }
 /* 批次二级页渲染（支持表头排序） */
 function renderWinGroupPage() {
-  if (!WGROUP || !WGROUP.length) return;
+  if (!WGROUP || !WGROUP.length) {
+    $("wgTitle").textContent = "入仓批次明细";
+    $("wgHint").textContent = "";
+    $("wgSummary").innerHTML = "";
+    $("wgTable").innerHTML = `<tr><td class="empty">批次不存在或已被删除，请返回入仓列表</td></tr>`;
+    return;
+  }
   const g = buildWinGroup(WGROUP);
   $("wgTitle").textContent = `入仓批次明细 · ${g.count} 条`;
   $("wgHint").textContent = `批次 ${g.import_group} · ${esc(g.date)}`;
@@ -1906,9 +2123,9 @@ function renderWinGroupPage() {
     <td class="num mono">${fmtMoney(r.cogs)}</td>
     <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}</td>
     <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
-    <td style="white-space:nowrap;">
-      <button class="btn sm" onclick="wInEdit(${r.id})">改</button>
-      <button class="btn sm danger" onclick="wInDelete(${r.id})">删</button>
+    <td class="line-actions">
+      ${iconBtn("i-edit", "编辑该入仓记录", `wInEdit(${r.id})`)}
+      ${iconBtn("i-trash", "删除该入仓记录", `wInDelete(${r.id})`, "btn sm danger")}
     </td></tr>`).join("") + `</tbody>`;
   t._rows = rows;
   t._render = renderWinGroupPage;
@@ -1916,7 +2133,7 @@ function renderWinGroupPage() {
 async function deleteWinGroup(groupKey) {
   const recs = (WINS || []).filter((r) => r.import_group === groupKey);
   if (!recs.length) { toast("未找到该批次"); return; }
-  if (!confirm(`确认删除该批次（共 ${recs.length} 条入仓记录）？`)) return;
+  if (!(await uiConfirm(`确认删除该批次（共 ${recs.length} 条入仓记录）？`, { okText: "删除本批" }))) return;
   try {
     const r = await api("/api/warehouse-in/batch-delete", "POST", { ids: recs.map((x) => x.id) });
     recs.forEach((x) => winSel.delete(x.id));
@@ -1963,7 +2180,7 @@ function wInFormModal(rec) {
     <p class="hint" id="wiCostHint" style="margin-top:8px;"></p>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
-      <button class="btn green" onclick="wInSave(${rec.id || 0})">✓ 保存</button>
+      <button class="btn green" onclick="wInSave(${rec.id || 0})">保存</button>
     </div>`);
   const sel = $("wiProduct");
   const p0 = (WPROD || []).find((x) => x.id === +sel.value);
@@ -2043,7 +2260,7 @@ async function wInSave(id) {
   } catch (e) { toast("保存失败：" + e.message); }
 }
 async function wInDelete(id) {
-  if (!confirm("确认删除该入仓记录？")) return;
+  if (!(await uiConfirm("确认删除该入仓记录？", { okText: "删除" }))) return;
   try { await api("/api/warehouse-in/" + id, "DELETE"); toast("已删除"); refreshWinView(); }
   catch (e) { toast("删除失败：" + e.message); }
 }
@@ -2077,7 +2294,7 @@ async function wImportPreview(sheet) {
   const dateVal = $("wiImportDate")?.value || today();
   $("modalBox").innerHTML =
     `<h3>导入《入仓配送明细》常温贴单 <button class="close" onclick="closeModal()">✕</button></h3>` +
-    `<div id="wiImportResult"><div class="alert ok">⏳ 正在解析…</div></div>`;
+    `<div id="wiImportResult"><div class="alert loading">正在解析…</div></div>`;
   $("modalBox").classList.add("wide");
   const out = $("wiImportResult");
   try {
@@ -2139,7 +2356,7 @@ function renderWImportPreview(d, dateVal) {
     <div class="modal-foot">
       <button class="btn secondary" onclick="openWarehouseInImport()">重新选择文件</button>
       <button class="btn secondary" onclick="closeModal()">取消</button>
-      <button class="btn green" onclick="wImportConfirm()">✓ 确认入仓</button>
+      <button class="btn green" onclick="wImportConfirm()">确认入仓</button>
     </div>`;
   wImportCalc();
 }
@@ -2259,8 +2476,8 @@ async function saveBkConfig() {
   } catch (e) { toast("保存失败：" + e.message); }
 }
 async function restoreBackup(name) {
-  if (!confirm(`确认用「${name}」恢复？\n当前数据库将被该备份覆盖，且不可撤销。`)) return;
-  if (!confirm("再次确认：恢复会覆盖现有全部数据，建议先「立即备份」一份。确定继续？")) return;
+  if (!(await uiConfirm(`确认用「${name}」恢复？\n当前数据库将被该备份覆盖，且不可撤销。`, { title: "恢复备份", okText: "继续" }))) return;
+  if (!(await uiConfirm("再次确认：恢复会覆盖现有全部数据，建议先「立即备份」一份。确定继续？", { title: "危险操作 · 二次确认", okText: "确认恢复" }))) return;
   try {
     const r = await api("/api/backup/restore", "POST", { name });
     toast("恢复成功，正在刷新数据…");
@@ -2268,7 +2485,7 @@ async function restoreBackup(name) {
   } catch (e) { toast("恢复失败：" + e.message); }
 }
 async function deleteBackup(name) {
-  if (!confirm(`确认删除备份「${name}」？`)) return;
+  if (!(await uiConfirm(`确认删除备份「${name}」？`, { okText: "删除" }))) return;
   try {
     const r = await api("/api/backup/" + encodeURIComponent(name), "DELETE");
     toast("已删除备份");
@@ -2318,7 +2535,7 @@ async function pdataExportAll() {
   } catch (e) { toast("导出失败：" + e.message); }
 }
 async function pdataImportAll() {
-  if (!confirm("从 json 目录一键导入全部 5 类？将按名称新增/更新（upsert），不会删除已有数据。")) return;
+  if (!(await uiConfirm("从 json 目录一键导入全部 5 类？将按名称新增/更新（upsert），不会删除已有数据。", { danger: false, title: "导入商品资料", okText: "开始导入" }))) return;
   try {
     const r = await api("/api/product-data/import", "POST");
     renderPdataImportResult(r.results || []);
@@ -2326,7 +2543,7 @@ async function pdataImportAll() {
   } catch (e) { toast("导入失败：" + e.message); }
 }
 async function pdataImportOne(kind) {
-  if (!confirm("从 json 目录导入「" + kind + "」？将按名称新增/更新，不会删除已有数据。")) return;
+  if (!(await uiConfirm("从 json 目录导入「" + kind + "」？将按名称新增/更新，不会删除已有数据。", { danger: false, title: "导入商品资料", okText: "开始导入" }))) return;
   try {
     const r = await api("/api/product-data/import/" + kind, "POST");
     renderPdataImportResult([r]);
@@ -2371,7 +2588,7 @@ async function pdataUploadImport() {
   catch (e) { toast("JSON 解析失败：" + e.message); return; }
   const kind = payload && payload.kind;
   if (!kind || !PDATA_KINDS[kind]) { toast("无法识别文件类型：json 需含 kind 字段（可在本页下载对应 json 参考结构）"); return; }
-  if (!confirm(`本地上传导入「${kind}」？将按名称新增/更新，不会删除已有数据。`)) return;
+  if (!(await uiConfirm(`本地上传导入「${kind}」？将按名称新增/更新，不会删除已有数据。`, { danger: false, title: "上传并导入", okText: "开始导入" }))) return;
   try {
     const r = await api("/api/product-data/import-one", "POST", { payload });
     renderPdataImportResult([r]);
@@ -2536,7 +2753,7 @@ async function submitUnit() {
   } catch (e) { toast("新增失败：" + e.message); }
 }
 async function deleteUnit(id, name) {
-  if (!confirm(`确认删除单位「${name}」？`)) return;
+  if (!(await uiConfirm(`确认删除单位「${name}」？`, { okText: "删除" }))) return;
   try { await api("/api/units/" + id, "DELETE"); toast("已删除"); closeModal(); openUnitsModal(); }
   catch (e) { toast("删除失败：" + e.message); }
 }
@@ -2582,7 +2799,7 @@ function addPackRow() {
     <input value="${esc(m.name)}" readonly style="background:#f9fafb;" />
     <select class="pack-unit" onchange="packUnitChanged(this)">${unitOptions(m, unit)}</select>
     <input type="number" step="any" value="${qty}" class="pack-qty" />
-    <button class="btn danger sm" onclick="this.closest('.pack-row').remove()">删</button>`;
+    ${iconBtn("i-trash", "移除该结算项", "this.closest('.pack-row').remove()", "btn danger sm")}`;
   box.insertAdjacentHTML("beforeend", `
     <div class="pack-row">
       <select class="pack-product" onchange="packProductChanged(this)">
@@ -2725,7 +2942,7 @@ async function saveProduct(pid) {
   } catch (e) { toast("保存失败：" + e.message); }
 }
 async function deleteProduct(pid) {
-  if (!confirm("确认删除该商品？其历史单据会一并删除，请谨慎。")) return;
+  if (!(await uiConfirm("确认删除该商品？其历史单据会一并删除，请谨慎。", { okText: "删除商品" }))) return;
   try { await api("/api/products/" + pid, "DELETE"); closeModal(); toast("已删除"); PRODUCTS = await api("/api/products"); renderProducts(); }
   catch (e) { toast("删除失败：" + e.message); }
 }
@@ -2804,7 +3021,7 @@ function prBoxRowHtml(bx) {
     <select class="pr-box-product searchable" onchange="prBoxLinked(this)">${prBoxOptions(pid)}</select>
     <input class="pr-box-name" value="${esc(name)}" placeholder="箱型号，如 3号 / 邮政6号" />
     <input class="pr-box-qty" type="number" step="any" min="1" value="${bx.quantity != null ? bx.quantity : 1}" />
-    <button class="btn danger sm" onclick="this.closest('.pr-box-row').remove()">删</button>
+    ${iconBtn("i-trash", "移除该箱型行", "this.closest('.pr-box-row').remove()", "btn danger sm")}
   </div>`;
 }
 function prBoxLinked(sel) {
@@ -2863,10 +3080,10 @@ function openPackRuleModal(rid = 0) {
     <h3>${rid ? "编辑" : "新增"}一单多货规则 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="block-title">组合商品（多货打包：一张订单含以下多种商品）</div>
     <div id="prItems">${items.map((it) => prItemRowHtml(it)).join("")}</div>
-    <button class="btn secondary sm" style="margin-top:8px;" onclick="addPrItemRow()">＋ 添加组合商品</button>
+    <button class="btn secondary sm" style="margin-top:8px;" onclick="addPrItemRow()">添加组合商品</button>
     <div class="block-title" style="margin-top:16px;">纸箱型号（关联包材纸箱） <span class="hint">选择包材商品并填数量，自动生成箱型号</span></div>
     <div id="prBoxItems">${boxes.map((bx) => prBoxRowHtml(bx)).join("")}</div>
-    <button class="btn secondary sm" style="margin-top:8px;" onclick="addPrBoxRow()">＋ 添加箱型</button>
+    <button class="btn secondary sm" style="margin-top:8px;" onclick="addPrBoxRow()">添加箱型</button>
     <div class="form-grid" style="margin-top:14px;">
       <div class="field"><label>工人单价（元/单）</label><input id="prLabor" type="number" step="any" value="${r?.labor_price ?? ""}" placeholder="可空" /></div>
       <div class="field"><label>箱单比</label><input id="prRatio" type="number" step="any" min="1" value="${r?.box_ratio || 1}" /></div>
@@ -2899,7 +3116,7 @@ async function savePackRule(rid) {
   } catch (e) { toast("保存失败：" + e.message); }
 }
 async function deletePackRule(rid) {
-  if (!confirm("确认删除该一单多货规则？")) return;
+  if (!(await uiConfirm("确认删除该一单多货规则？", { okText: "删除" }))) return;
   try { await api("/api/pack-rules/" + rid, "DELETE"); closeModal(); toast("已删除"); PACK_RULES = await api("/api/pack-rules"); renderPackRules(); }
   catch (e) { toast("删除失败：" + e.message); }
 }
@@ -2952,7 +3169,7 @@ function renderPackRules() {
 async function batchDeletePackRules() {
   const ids = [...prSel];
   if (!ids.length) { toast("请先勾选要删除的规则"); return; }
-  if (!confirm(`确认删除选中的 ${ids.length} 条一单多货规则？`)) return;
+  if (!(await uiConfirm(`确认删除选中的 ${ids.length} 条一单多货规则？`, { okText: "删除" }))) return;
   try {
     let deleted = 0;
     for (const id of ids) { await api("/api/pack-rules/" + id, "DELETE"); deleted++; }
@@ -2980,7 +3197,7 @@ function openInboundPicker() {
   openModal(`
     <h3>选择入库商品 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="toolbar" style="margin-bottom:10px;">
-      <input id="spSearch" placeholder="🔍 搜索商品名称 / 分类..." oninput="renderInboundPicker()" />
+      <input id="spSearch" data-search placeholder="搜索商品名称 / 分类..." oninput="renderInboundPicker()" />
       <select id="spType" style="display:none;"><option value="">全部类型</option><option value="stock">库存商品</option></select>
       <select id="spCat" class="searchable" onchange="renderInboundPicker()"><option value="">全部分类</option>${cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
     </div>
@@ -3059,12 +3276,13 @@ async function loadInbounds() {
   if (kw) rows = rows.filter((r) => [r.code, r.product_name, r.supplier, r.operator].join(" ").toLowerCase().includes(kw));
   const t = $("inTable");
   rows = applyTableSort(t, rows);
-  $("inListHint").textContent = `共 ${rows.length} 条`;
+  const inSum = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  $("inListHint").textContent = `共 ${rows.length} 条 · 合计 ${fmtMoney(inSum)}`;
   t.innerHTML = `<thead><tr>
     <th class="cb-col"><input type="checkbox" onclick="toggleAll(this,'in')" /></th>
     <th data-key="code">单号${sortArrow("inTable", "code")}</th>
     <th data-key="product_name">商品${sortArrow("inTable", "product_name")}</th>
-    <th data-key="quantity">数量${sortArrow("inTable", "quantity")}</th>
+    <th data-key="quantity" class="num">数量${sortArrow("inTable", "quantity")}</th>
     <th>折算</th>
     <th data-key="unit_price" class="num">单价${sortArrow("inTable", "unit_price")}</th>
     <th data-key="total_amount" class="num">金额${sortArrow("inTable", "total_amount")}</th>
@@ -3073,25 +3291,26 @@ async function loadInbounds() {
     <th data-key="date">日期${sortArrow("inTable", "date")}</th>
     <th>备注</th>
     <th></th></tr></thead><tbody>` +
-    rows.map((r) => `<tr>
+    (rows.length ? rows.map((r) => `<tr>
       <td class="cb-col"><input type="checkbox" value="${r.id}" ${inSel.has(r.id) ? "checked" : ""} onchange="toggleSel('in',${r.id},this.checked)" /></td>
       <td class="mono">${r.code}</td>
       <td><b>${esc(r.product_name)}</b></td>
-      <td>${fmtNum(r.quantity)} ${r.unit}</td>
+      <td class="num mono">${fmtNum(r.quantity)} ${esc(r.unit)}</td>
       <td class="muted">= ${fmtNum(r.quantity_base)} 基础单位</td>
-      <td class="num mono">${fmtMoney(r.unit_price)}/${r.unit}</td>
+      <td class="num mono">${fmtMoney(r.unit_price)}/${esc(r.unit)}</td>
       <td class="num mono">${fmtMoney(r.total_amount)}</td>
       <td>${esc(r.supplier) || "—"}</td>
       <td>${esc(r.operator) || "—"}</td>
       <td>${r.date}</td>
       <td class="muted" style="max-width:150px;">${renderRemarkHtml(r.remark)}</td>
-      <td><button class="btn sm danger" onclick="deleteInbound(${r.id})">删</button></td></tr>`).join("") + `</tbody>`;
+      <td class="line-actions"><button class="btn sm danger" title="删除该入库单（回退库存与成本）" onclick="deleteInbound(${r.id})">删除</button></td></tr>`).join("")
+      : `<tr><td colspan="12" class="empty">当前筛选条件下暂无入库记录</td></tr>`) + `</tbody>`;
   t._rows = rows;
   t._render = loadInbounds;
   updateBatchBar("in");
 }
 async function deleteInbound(id) {
-  if (!confirm("确认删除该入库单？将回退库存与成本。")) return;
+  if (!(await uiConfirm("确认删除该入库单？将回退库存与成本。", { okText: "删除" }))) return;
   try { await api("/api/inbounds/" + id, "DELETE"); toast("已删除"); loadInbounds(); loadStock(); }
   catch (e) { toast("删除失败：" + e.message); }
 }
@@ -3109,7 +3328,7 @@ function addSaleRow() {
   const tr = document.createElement("tr");
   tr.dataset.id = id;
   tr.innerHTML = `
-    <td><input class="sale-pick-name" readonly placeholder="＋ 点击选择商品" onclick="openSalePicker(this)" style="cursor:pointer;background:var(--primary-50);" /></td>
+    <td><input class="sale-pick-name" readonly placeholder="点击选择商品" onclick="openSalePicker(this)" style="cursor:pointer;background:var(--primary-50);" /></td>
     <td><select class="searchable sale-unit" onchange="saleUnitChanged(this)"></select></td>
     <td><input type="number" step="any" value="1" oninput="saleCalcRow(this)" style="width:90px;" /></td>
     <td><input type="number" step="any" value="0" oninput="saleCalcRow(this)" style="width:100px;" /></td>
@@ -3128,7 +3347,7 @@ function openSalePicker(inp) {
   openModal(`
     <h3>选择销售商品 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="toolbar" style="margin-bottom:10px;">
-      <input id="spSearch" placeholder="🔍 搜索商品名称 / 分类..." oninput="renderSalePicker()" />
+      <input id="spSearch" data-search placeholder="搜索商品名称 / 分类..." oninput="renderSalePicker()" />
       <select id="spType" onchange="renderSalePicker()"><option value="">全部类型</option><option value="order">订单商品</option><option value="stock">库存商品</option></select>
       <select id="spCat" class="searchable" onchange="renderSalePicker()"><option value="">全部分类</option>${cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
     </div>
@@ -3354,8 +3573,12 @@ async function loadOutbounds() {
     if (t._sort) { const d = compareVal(a[t._sort.key], b[t._sort.key]) * t._sort.dir; if (d) return d; }
     return 0;
   });
-  const totalOrders = flat.length;
-  $("outListHint").textContent = `共 ${totalOrders} 单，合并 ${rows.length} 行`;
+  // 合计按"当前筛选后实际展示的行"统计，和表格里的数字对得上
+  const shownOrders = sortable.reduce((s, r) => s + (r._group ? (r.g.records || []).length : 1), 0);
+  const outSum = sortable.reduce((s, r) => s + (Number(r.total_amount) || 0), 0);
+  const outNet = sortable.reduce((s, r) => s + (Number(r.net_profit) || 0), 0);
+  $("outListHint").textContent =
+    `共 ${shownOrders} 单，合并 ${rows.length} 行 · 收入 ${fmtMoney(outSum)} · 净利 ${fmtMoney(outNet)}`;
   t.innerHTML = `<thead><tr>
     <th class="cb-col"><input type="checkbox" onclick="toggleAll(this,'out')" /></th>
     <th data-key="code">单号/批次${sortArrow("outTable", "code")}</th>
@@ -3368,7 +3591,9 @@ async function loadOutbounds() {
     <th data-key="date">日期${sortArrow("outTable", "date")}</th>
     <th>备注</th>
     <th></th></tr></thead><tbody>` +
-    sortable.map((r) => r._group ? renderOutGroupRow(r.g) : renderOutRow(r.rec)).join("") + `</tbody>`;
+    (sortable.length
+      ? sortable.map((r) => r._group ? renderOutGroupRow(r.g) : renderOutRow(r.rec)).join("")
+      : `<tr><td colspan="11" class="empty">当前筛选条件下暂无出库记录</td></tr>`) + `</tbody>`;
   t._rows = sortable;
   t._render = loadOutbounds;
   updateBatchBar("out");
@@ -3386,7 +3611,7 @@ function renderOutRow(o) {
       <td class="num mono" style="color:${o.net_profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(o.net_profit)}</td>
       <td>${o.date}</td>
       <td class="muted" style="max-width:140px;">${renderRemarkHtml(o.remark)}</td>
-      <td><button class="btn sm danger" onclick="deleteOutbound(${o.id})">删</button></td></tr>
+      <td class="line-actions">${iconBtn("i-trash", "删除该出库单（回退库存与成本）", `deleteOutbound(${o.id})`, "btn sm danger")}</td></tr>
       <tr id="od-${o.id}" style="display:none;"><td colspan="11"><div class="subtable"><table>` +
       o.lines.map((l) => `<tr>
         <td>${esc(l.product_name)}</td>
@@ -3591,12 +3816,12 @@ function renderOutGroup() {
      <div class="stat"><div class="label">结转成本</div><div class="value">${fmtMoney(total.cogs)}</div></div>
      <div class="stat success"><div class="label">净利</div><div class="value" style="color:${net >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(net)}</div></div>`;
   const seg = segActive("ogSeg");
-  let isSale = false, isLaborPack = false, emptyText = "无记录";
+  let isSale = false, isLaborPack = false, emptyText = "暂无记录";
   let data;
-  if (seg === "og-sale") { isSale = true; data = aggSale; emptyText = "无销售商品"; }
-  else if (seg === "og-labor") { data = aggLabor; emptyText = "无人工记录"; }
-  else if (seg === "og-laborpack") { isLaborPack = true; data = aggLaborPack; emptyText = "无打包人工/耗材记录"; }
-  else { data = aggPack; emptyText = "无耗材/包装记录"; }
+  if (seg === "og-sale") { isSale = true; data = aggSale; emptyText = "本批次暂无销售商品"; }
+  else if (seg === "og-labor") { data = aggLabor; emptyText = "本批次暂无人工记录"; }
+  else if (seg === "og-laborpack") { isLaborPack = true; data = aggLaborPack; emptyText = "本批次暂无打包人工 / 耗材记录"; }
+  else { data = aggPack; emptyText = "本批次暂无耗材 / 包装记录"; }
   data = data.map((a) => {
     const gp = (a.amount - a.cogs) || 0;
     const denom = a.gross_sales || a.amount || 0; // 扣点前销售金额
@@ -3625,7 +3850,7 @@ function renderOutGroup() {
       ${isSale ? `<td class="num mono" style="color:${(a.amount - a.cogs) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(a.amount - a.cogs)}</td>` : ""}
       ${isSale ? `<td class="num mono">${(a.gp_rate || 0).toFixed(1)}%</td>` : ""}
     </tr>`).join("")
-      : `<tr><td colspan="${colSpan}" class="muted">${emptyText}</td></tr>`) + `</tbody>`;
+      : `<tr><td colspan="${colSpan}" class="empty">${emptyText}</td></tr>`) + `</tbody>`;
   // 点击表头排序
   t._rows = data;
   t._render = function () { renderOutGroup(); };
@@ -3651,7 +3876,7 @@ async function deleteOutGroupKeys(groupKeys) {
     const all = await api(`/api/outbounds?g=${groupKeys.map(encodeURIComponent).join(",")}`);
     const want = all.filter((r) => groupKeys.includes(r.import_group)).map((r) => r.id);
     if (!want.length) { toast("未找到该批次"); return; }
-    if (!confirm(`确认删除该批次 ${want.length} 张出库单？将回退库存、成本与财务记录。`)) return;
+    if (!(await uiConfirm(`确认删除该批次 ${want.length} 张出库单？将回退库存、成本与财务记录。`, { okText: "删除本批" }))) return;
     const r = await api("/api/outbounds/batch-delete", "POST", { ids: want });
     toast(`已删除 ${r.deleted} 张出库单`);
     loadOutbounds(); loadStock();
@@ -3664,7 +3889,7 @@ function toggleOutDetail(id) {
   else { tr.style.display = "none"; btn.textContent = "▸ 查看明细"; }
 }
 async function deleteOutbound(id) {
-  if (!confirm("确认删除该出库单？将回退库存、成本与财务记录。")) return;
+  if (!(await uiConfirm("确认删除该出库单？将回退库存、成本与财务记录。", { okText: "删除" }))) return;
   try { await api("/api/outbounds/" + id, "DELETE"); toast("已删除"); loadOutbounds(); loadStock(); }
   catch (e) { toast("删除失败：" + e.message); }
 }
@@ -3672,7 +3897,7 @@ async function deleteOutbound(id) {
 /* =============== 批量操作 =============== */
 async function batchDeleteProducts() {
   if (!prodSel.size) return;
-  if (!confirm(`确认删除选中的 ${prodSel.size} 个商品？已有出入库记录、被其他商品关联的商品将自动跳过。`)) return;
+  if (!(await uiConfirm(`确认删除选中的 ${prodSel.size} 个商品？已有出入库记录、被其他商品关联的商品将自动跳过。`, { okText: "删除" }))) return;
   try {
     const r = await api("/api/products/batch-delete", "POST", { ids: [...prodSel] });
     prodSel.clear();
@@ -3723,7 +3948,7 @@ async function submitBatchProduct() {
 }
 async function batchDeleteInbounds() {
   if (!inSel.size) return;
-  if (!confirm(`确认删除选中的 ${inSel.size} 条入库单？将回退库存与成本。`)) return;
+  if (!(await uiConfirm(`确认删除选中的 ${inSel.size} 条入库单？将回退库存与成本。`, { okText: "删除" }))) return;
   try {
     const r = await api("/api/inbounds/batch-delete", "POST", { ids: [...inSel] });
     inSel.clear();
@@ -3733,7 +3958,7 @@ async function batchDeleteInbounds() {
 }
 async function batchDeleteOutbounds() {
   if (!outSel.size) return;
-  if (!confirm(`确认删除选中的 ${outSel.size} 张出库单？将回退库存、成本与财务记录。`)) return;
+  if (!(await uiConfirm(`确认删除选中的 ${outSel.size} 张出库单？将回退库存、成本与财务记录。`, { okText: "删除" }))) return;
   try {
     const r = await api("/api/outbounds/batch-delete", "POST", { ids: [...outSel] });
     outSel.clear();
@@ -3743,6 +3968,14 @@ async function batchDeleteOutbounds() {
 }
 
 /* =============== 报表 =============== */
+/** 通用日期快捷范围（入库/出库等列表工具栏复用；报表页有专门的 quickRange） */
+function quickDates(fromId, toId, kind, reload) {
+  if (kind === "today") { $(fromId).value = today(); $(toId).value = today(); }
+  else if (kind === "week") { $(fromId).value = daysAgo(6); $(toId).value = today(); }
+  else if (kind === "month") { $(fromId).value = monthStart(); $(toId).value = today(); }
+  else { $(fromId).value = ""; $(toId).value = ""; }
+  reload();
+}
 function quickRange(kind) {
   if (kind === "today") { $("repDateFrom").value = today(); $("repDateTo").value = today(); }
   else if (kind === "month") { $("repDateFrom").value = monthStart(); $("repDateTo").value = today(); }
@@ -3829,7 +4062,7 @@ async function loadReport() {
       <td class="num mono" style="color:${f.type === "income" ? "var(--green)" : "var(--red)"}">${f.type === "income" ? "+" : "-"}${fmtMoney(f.amount)}</td>
       <td>${esc(f.operator) || "—"}</td><td>${f.date}</td>
       <td class="muted">${esc(f.remark)}</td>
-      <td>${f.ref_type === "manual" ? `<button class="btn sm danger" onclick="deleteFinance(${f.id})">删</button>` : ""}</td></tr>`).join("") + `</tbody>`;
+      <td class="line-actions">${f.ref_type === "manual" ? iconBtn("i-trash", "删除该手动记账", `deleteFinance(${f.id})`, "btn sm danger") : ""}</td></tr>`).join("") + `</tbody>`;
   if (!finRows.length) ft.innerHTML = `<tr><td colspan="8" class="empty">本期无财务流水</td></tr>`;
   ft._rows = finRows;
   ft._render = loadReport;
@@ -3910,7 +4143,7 @@ async function submitFinance() {
   } catch (e) { toast("失败：" + e.message); }
 }
 async function deleteFinance(id) {
-  if (!confirm("确认删除该手动财务记录？")) return;
+  if (!(await uiConfirm("确认删除该手动财务记录？", { okText: "删除" }))) return;
   try { await api("/api/finance/" + id, "DELETE"); toast("已删除"); loadReport(); }
   catch (e) { toast("失败：" + e.message); }
 }
@@ -4022,6 +4255,79 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+/**
+ * 表格行内操作按钮：统一成"图标 + title"。
+ * 之前是"改 / 删"这种单字按钮，语义弱、鼠标悬停也没有说明，密集表格里很难扫读。
+ */
+function iconBtn(ico, title, onclick, cls = "btn sm secondary") {
+  return `<button class="${cls}" type="button" title="${esc(title)}" aria-label="${esc(title)}" onclick="${onclick}"><svg class="ic"><use href="#${ico}"/></svg></button>`;
+}
+
+/* ---------- 窄屏抽屉导航（≤1024px 侧边栏收起） ---------- */
+function openSidebar() {
+  const sb = $("sidebar"), mk = $("sidebarMask"), btn = $("menuBtn");
+  if (!sb) return;
+  sb.classList.add("open");
+  if (mk) mk.classList.add("show");
+  if (btn) btn.setAttribute("aria-expanded", "true");
+}
+function closeSidebar() {
+  const sb = $("sidebar"), mk = $("sidebarMask"), btn = $("menuBtn");
+  if (!sb) return;
+  sb.classList.remove("open");
+  if (mk) mk.classList.remove("show");
+  if (btn) btn.setAttribute("aria-expanded", "false");
+}
+function toggleSidebar() {
+  const sb = $("sidebar");
+  if (sb && sb.classList.contains("open")) closeSidebar();
+  else openSidebar();
+}
+(function bindSidebar() {
+  const btn = $("menuBtn");
+  const mk = $("sidebarMask");
+  const nav = document.querySelector(".side-nav");
+  if (btn) btn.addEventListener("click", toggleSidebar);
+  if (mk) mk.addEventListener("click", closeSidebar);
+  // 选中任一导航后自动收起，避免抽屉挡着内容
+  if (nav) nav.addEventListener("click", (e) => { if (e.target.closest(".nav-item")) closeSidebar(); });
+  window.addEventListener("resize", () => { if (window.innerWidth > 1024) closeSidebar(); });
+})();
+
+/* ---------- 登录页：记住用户名 + 拖拽导入私钥文件 ---------- */
+const LAST_USER_KEY = "erp_last_user";
+function rememberUser(name) { try { localStorage.setItem(LAST_USER_KEY, name || ""); } catch (e) {} }
+(function initLoginForm() {
+  const zone = $("loginDropZone");
+  const fileInput = $("loginKeyFile");
+  const nameInput = $("loginKeyName");
+  const userInput = $("loginUser");
+  if (!zone || !fileInput) return;
+  try {
+    const last = localStorage.getItem(LAST_USER_KEY);
+    if (last && userInput && !userInput.value) userInput.value = last;
+  } catch (e) {}
+  ["dragenter", "dragover"].forEach((t) =>
+    zone.addEventListener(t, (e) => { e.preventDefault(); zone.classList.add("drag"); })
+  );
+  ["dragleave", "drop"].forEach((t) =>
+    zone.addEventListener(t, (e) => { e.preventDefault(); zone.classList.remove("drag"); })
+  );
+  zone.addEventListener("drop", (e) => {
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!f) return;
+    try {
+      const dt = new DataTransfer();
+      dt.items.add(f);
+      fileInput.files = dt.files;
+      nameInput.value = f.name;
+      $("loginErr").style.display = "none";
+    } catch (err) {
+      toast("该浏览器不支持拖拽，请点击「选择文件」", 2600, "warn");
+    }
+  });
+})();
+
 /* ---------- 初始化 ---------- */
 (async function init() {
   try {
@@ -4079,10 +4385,10 @@ async function doImport(kind) {
   const file = $(idMap[kind]).files[0];
   if (!file) { toast("请先选择 Excel 文件"); return; }
   const box = $(resMap[kind]);
-  box.innerHTML = `<div class="alert ok">⏳ 正在导入，请稍候…</div>`;
+  box.innerHTML = `<div class="alert loading">正在导入，请稍候…</div>`;
   try {
     const r = await apiUpload(`/api/import/${kind}`, file);
-    let html = `<div class="alert ok">✓ 导入完成：成功 <b>${r.created}</b> 条` +
+    let html = `<div class="alert ok">导入完成：成功 <b>${r.created}</b> 条` +
       (r.skipped ? `，跳过已存在 <b>${r.skipped}</b> 条` : "") +
       (r.failed_count ? `，失败 <b>${r.failed_count}</b> 条` : "") + `</div>`;
     if (r.failed && r.failed.length) {
@@ -4157,7 +4463,7 @@ async function runBatchModal(kind) {
   if (!file) { toast("请先选择 Excel 文件"); return; }
   if (kind === "jushuitan") window.__BM_FILE__ = file; // 供 AI 关联后一键重新解析
   const box = $("bmResult");
-  box.innerHTML = `<div class="alert ok">⏳ 正在解析…</div>`;
+  box.innerHTML = `<div class="alert loading">正在解析…</div>`;
   try {
     const r = await apiUpload(cfg.preview, file);
     if (kind === "inbound") renderInboundReview(kind, r);
@@ -4170,11 +4476,11 @@ async function aiAutoMap(kind) {
   if (!codes.length) { toast("没有可关联的商品名"); return; }
   const box = $("bmResult");
   try {
-    if (box) box.innerHTML = `<div class="alert ok">🤖 AI 正在归并库存大类并建立编码关联…（通常数秒）</div>`;
+    if (box) box.innerHTML = `<div class="alert loading">AI 正在归并库存大类并建立编码关联…（通常数秒）</div>`;
     const r = await api("/api/mappings/ai-suggest", "POST", { source: "jushuitan", codes });
     const add = (r.created_products || []).map((p) => p.name).join("、");
     toast(r.message || "AI 关联完成");
-    if (box) box.innerHTML = `<div class="alert ok">✅ ${esc(r.message)}${add ? "（新建：" + esc(add) + "）" : ""}</div>`;
+    if (box) box.innerHTML = `<div class="alert ok">${esc(r.message)}${add ? "（新建：" + esc(add) + "）" : ""}</div>`;
     if ((r.leftover || []).length) {
       box.innerHTML += `<div class="alert warn">仍无法关联：${r.leftover.map(esc).join("、")}，可到「编码关联」手动补充后重试。</div>`;
     }
@@ -4195,7 +4501,7 @@ function renderDraftReview(kind, r) {
     window.__LAST_UNMAPPED__ = kind === "jushuitan" ? (r.unmapped_codes || []) : [];
     warn += `<div class="alert warn">⚠ 未关联商品：${r.unmapped_codes.map(esc).join("、")}` +
       (kind === "jushuitan"
-        ? `<div style="margin-top:8px;"><button class="btn secondary" onclick="aiAutoMap('${kind}')">🤖 AI 自动新增并关联，重新解析</button>
+        ? `<div style="margin-top:8px;"><button class="btn secondary" onclick="aiAutoMap('${kind}')"><svg class="ic"><use href="#i-ai"/></svg> AI 自动新增并关联，重新解析</button>
            <span class="muted" style="font-size:12px;">用 AI 识别这些商品名，自动建库存大类并关联编码</span></div>`
         : `<div class="muted" style="font-size:12px;margin-top:6px;">请到「编码关联」关联后重新解析。</div>`) +
       `</div>`;
@@ -4236,7 +4542,7 @@ function renderDraftReview(kind, r) {
     <div class="draft-list">${body}</div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="openBatchModal('${kind}')">重新选择文件</button>
-      <button class="btn green" onclick="confirmDraft('${kind}')">✓ 确认出库（<span id="draftCount">${orders.length}</span> 单）</button>
+      <button class="btn green" onclick="confirmDraft('${kind}')">确认出库（<span id="draftCount">${orders.length}</span> 单）</button>
     </div>`;
 }
 function draftLineCalc(inp) {
@@ -4281,12 +4587,12 @@ async function confirmDraft(kind) {
   window.__CONFIRMING__ = true;
   $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="alert ok" style="text-align:center;">
-      <div style="font-size:16px;font-weight:bold;margin-bottom:6px;">⏳ 正在提交出库，操作运行中…</div>
+      <div style="font-size:16px;font-weight:bold;margin-bottom:6px;"><svg class="ic spin" style="width:18px;height:18px;vertical-align:-3px;margin-right:4px;"><use href="#i-refresh"/></svg>正在提交出库，操作运行中…</div>
       <div class="muted" style="font-size:13px;">共 ${orders.length} 单，一般数秒内完成；请勿关闭窗口或重复点击。完成后将自动展示结果。</div>
     </div>`;
   try {
     const r = await api(BATCH_MODAL[kind].confirm, "POST", { orders });
-    let html = `<div class="alert ok">✓ 已创建 <b>${r.created}</b> 个出库单`;
+    let html = `<div class="alert ok">已创建 <b>${r.created}</b> 个出库单`;
     if (r.failed_count) html += `，失败 <b>${r.failed_count}</b>`;
     html += `</div>`;
     if (r.warnings && r.warnings.length) html += `<div class="alert warn">⚠ ${r.warnings.map(esc).join("；")}</div>`;
@@ -4335,7 +4641,7 @@ function renderInboundReview(kind, r) {
     </table>
     <div class="modal-foot">
       <button class="btn secondary" onclick="openBatchModal('${kind}')">重新选择文件</button>
-      <button class="btn green" onclick="confirmInbound('${kind}')">✓ 确认入库（<span id="inDraftCount">${items.length}</span> 行）</button>
+      <button class="btn green" onclick="confirmInbound('${kind}')">确认入库（<span id="inDraftCount">${items.length}</span> 行）</button>
     </div>`;
 }
 function toggleDraftAll(cb) {
@@ -4359,7 +4665,7 @@ async function confirmInbound(kind) {
   if (!items.length) { toast("没有可入库的数据"); return; }
   try {
     const r = await api(BATCH_MODAL[kind].confirm, "POST", { items });
-    let html = `<div class="alert ok">✓ 已入库 <b>${r.created}</b> 条`;
+    let html = `<div class="alert ok">已入库 <b>${r.created}</b> 条`;
     if (r.failed_count) html += `，失败 <b>${r.failed_count}</b>`;
     html += `</div>`;
     if (r.failed && r.failed.length) html += `<div class="alert err">失败：${r.failed.map((f) => esc(f.reason)).join("；")}</div>`;
@@ -4413,18 +4719,18 @@ async function autoMapping() {
   } catch (e) { toast("匹配失败：" + e.message); }
 }
 async function clearMapping() {
-  if (!confirm("确认清空全部编码关联？")) return;
+  if (!(await uiConfirm("确认清空全部编码关联？", { okText: "清空" }))) return;
   try { await api("/api/mappings", "DELETE"); toast("已清空"); loadMappingPage(); }
   catch (e) { toast("清空失败：" + e.message); }
 }
 async function importJushuitan() {
   const file = $("mpImportFile").files[0];
   if (!file) { toast("请先选择聚水潭出库单文件"); return; }
-  $("mpImportResult").innerHTML = `<div class="alert ok">⏳ 正在导入并结算，请稍候…</div>`;
+  $("mpImportResult").innerHTML = `<div class="alert loading">正在导入并结算，请稍候…</div>`;
   try {
     const r = await apiUpload("/api/jushuitan/import", file);
     const skip = Object.entries(r.skip).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}单`).join("、");
-    let html = `<div class="alert ok">✓ 已生成 <b>${r.created}</b> 个出库单` +
+    let html = `<div class="alert ok">已生成 <b>${r.created}</b> 个出库单` +
       (skip ? `，跳过（${skip}）` : "") +
       (r.failed_count ? `，失败 <b>${r.failed_count}</b> 单` : "") + `</div>`;
     if (r.unmapped_codes && r.unmapped_codes.length) {

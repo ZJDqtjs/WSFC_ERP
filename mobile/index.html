@@ -2,8 +2,17 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+  <!-- 保留 viewport-fit=cover 以支持刘海屏安全区；不再禁用缩放（可访问性） -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <!-- 移动端只为浅色主题设计了界面，声明 light 可避免原生控件（日期选择等）跟随系统变暗后与页面割裂 -->
+  <meta name="color-scheme" content="light" />
   <meta name="theme-color" content="#1989fa" />
+  <!-- iOS「添加到主屏幕」后以独立 App 形态全屏运行 -->
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="企业台账" />
+  <meta name="format-detection" content="telephone=no,email=no,address=no" />
   <title>企业台账</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />

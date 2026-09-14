@@ -1,15 +1,15 @@
 <template>
   <div class="sub-page">
-    <van-nav-bar title="一单多货（多货打包规则）" left-arrow fixed placeholder @click-left="goBack">
+    <van-nav-bar title="一单多货" left-arrow fixed safe-area-inset-top placeholder @click-left="goBack">
       <template #right><van-icon name="plus" size="18" @click="openRule()" /></template>
     </van-nav-bar>
 
-    <div style="padding:12px;">
+    <div class="sub-body">
       <div class="card">
-        <div class="muted" style="margin-bottom:8px;">
+        <div class="card-desc">
           区别于「关联结算 / 人工」的一单一货；此处维护一张订单含多种商品时的合并打包规则（纸箱 + 人工）。
         </div>
-        <van-field v-model="kw" placeholder="搜索组合 / 商品 / 纸箱" style="background:#f7f8fa;border-radius:6px;" />
+        <van-field v-model="kw" placeholder="搜索组合 / 商品 / 纸箱" class="kw-field" style="margin-top:0;" />
         <div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap;">
           <van-button size="mini" plain icon="down" @click="exportJson">导出 JSON</van-button>
           <van-button size="mini" plain icon="plus" @click="openRule()">新增规则</van-button>
@@ -21,6 +21,8 @@
           <van-button size="mini" plain @click="selected = []">取消</van-button>
         </div>
 
+        <SkeletonList v-if="loading" :rows="3" />
+        <template v-else>
         <div v-if="!filtered.length" class="empty">暂无一单多货规则</div>
         <div v-for="r in filtered" :key="r.id" class="list-item">
           <div class="row">
@@ -46,6 +48,7 @@
             <van-button size="mini" plain type="danger" @click="delRule(r)">删除</van-button>
           </div>
         </div>
+        </template>
       </div>
     </div>
 
@@ -60,11 +63,14 @@
         </div>
         <div class="muted" style="margin-bottom:6px;">选择订单商品时会自动带出名称；「扣减库存大类」决定出库时从哪个库存大类扣减。</div>
 
-        <div v-if="!form.items.length" class="empty" style="padding:10px 0;">请至少添加一条组合商品</div>
+        <div v-if="!form.items.length" class="empty" style="padding:10px 0;">尚未添加组合商品</div>
         <div v-for="(it, i) in form.items" :key="i" class="edit-row">
           <div class="row">
-            <span class="grow pick-name" @click="openOrderPicker(i)">{{ it.name || '＋ 选择订单商品' }}</span>
-            <van-icon name="delete-o" color="#ee0a24" @click="form.items.splice(i, 1)" />
+            <span class="grow pick-name" @click="openOrderPicker(i)">
+              <template v-if="it.name">{{ it.name }}</template>
+              <template v-else><span class="placeholder"><van-icon name="plus" /> 选择订单商品</span></template>
+            </span>
+            <van-icon name="delete-o" class="c-danger" @click="form.items.splice(i, 1)" />
           </div>
           <div class="row mt8">
             <van-field v-model="it.quantity" type="number" label="数量" />
@@ -74,7 +80,7 @@
             <span class="muted grow" @click="openStockPicker(i)">
               扣减库存大类：{{ nameOf(it.stock_product_id) || '（未设置，按商品自身扣减）' }}
             </span>
-            <van-icon name="arrow" color="#c8c9cc" @click="openStockPicker(i)" />
+            <van-icon name="arrow" class="c-disabled" @click="openStockPicker(i)" />
           </div>
         </div>
 
@@ -85,11 +91,14 @@
         </div>
         <div class="muted" style="margin-bottom:6px;">选择包材纸箱商品；箱型显示名会自动按商品名推导（如「3号纸箱」→「3号」）。</div>
 
-        <div v-if="!form.box_items.length" class="empty" style="padding:10px 0;">未配置箱型</div>
+        <div v-if="!form.box_items.length" class="empty" style="padding:10px 0;">尚未添加箱型</div>
         <div v-for="(bx, i) in form.box_items" :key="i" class="edit-row">
           <div class="row">
-            <span class="grow pick-name" @click="openBoxPicker(i)">{{ bx.name || '＋ 选择包材纸箱' }}</span>
-            <van-icon name="delete-o" color="#ee0a24" @click="form.box_items.splice(i, 1)" />
+            <span class="grow pick-name" @click="openBoxPicker(i)">
+              <template v-if="bx.name">{{ bx.name }}</template>
+              <template v-else><span class="placeholder"><van-icon name="plus" /> 选择包材纸箱</span></template>
+            </span>
+            <van-icon name="delete-o" class="c-danger" @click="form.box_items.splice(i, 1)" />
           </div>
           <div class="row mt8">
             <van-field v-model="bx.quantity" type="number" label="数量" />
@@ -124,6 +133,7 @@ import { useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api, { downloadJson } from '../api'
 import ProductPicker from '../components/ProductPicker.vue'
+import SkeletonList from '../components/SkeletonList.vue'
 import { fmtMoney, fmtNum, num } from '../utils/format'
 
 const router = useRouter()
@@ -137,6 +147,7 @@ const RULES = ref([])
 const kw = ref('')
 const selected = ref([])
 const saving = ref(false)
+const loading = ref(true)
 
 const nameOf = (pid) => (PRODUCTS.value.find((p) => p.id === +pid) || {}).name || ''
 const orderProducts = computed(() => PRODUCTS.value.filter((p) => p.product_type === 'order'))
@@ -154,6 +165,7 @@ const filtered = computed(() => {
 async function load() {
   try { PRODUCTS.value = await api('/api/products') } catch (e) {}
   try { RULES.value = await api('/api/pack-rules') } catch (e) { showToast(e.message || '加载失败') }
+  loading.value = false
 }
 
 function toggleSel(id) {
@@ -283,8 +295,7 @@ onMounted(load)
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
-.batch-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: #fff7e6; border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
-.edit-row { padding: 8px 0; border-bottom: 1px dashed #f0f0f0; }
-.pick-name { font-weight: 600; font-size: 13px; color: #1989fa; }
+/* .sub-page / .sub-body / .batch-bar / .kw-field / .edit-row 通用部分已提升为全局样式 */
+.edit-row { padding: 8px 0; border-bottom: 1px dashed var(--c-line-2); }
+.pick-name { font-weight: 600; font-size: 13px; color: var(--c-primary); }
 </style>

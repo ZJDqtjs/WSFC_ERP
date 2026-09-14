@@ -7,12 +7,15 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 const configDir = dirname(fileURLToPath(import.meta.url))
 const config = JSON.parse(readFileSync(resolve(configDir, '../config.json'), 'utf8'))
+const pkg = JSON.parse(readFileSync(resolve(configDir, 'package.json'), 'utf8'))
 const mobileBase = `${config.routes.mobile.replace(/\/$/, '')}/`
 
 export default defineConfig({
   base: mobileBase,
   define: {
-    __API_BASE__: JSON.stringify(config.routes.api.replace(/\/$/, ''))
+    __API_BASE__: JSON.stringify(config.routes.api.replace(/\/$/, '')),
+    // 版本号统一取自 package.json，避免页面上手写导致与发版不一致
+    __APP_VERSION__: JSON.stringify(pkg.version)
   },
   plugins: [
     vue(),

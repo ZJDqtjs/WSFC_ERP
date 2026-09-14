@@ -6,6 +6,7 @@
     :style="{ height: typeTabs ? '88%' : '82%' }"
     @update:show="(v) => emit('update:show', v)"
   >
+    <div class="pk-wrap">
     <div class="pk-head">
       <span class="pk-title">{{ title }}</span>
       <van-icon name="cross" size="18" @click="emit('update:show', false)" />
@@ -45,9 +46,10 @@
             <template v-if="p.stock_product_name"> · 扣库存：{{ p.stock_product_name }}×{{ p.multiplier }}</template>
           </div>
         </div>
-        <van-icon name="chevron-right" color="#c8c9cc" />
+        <van-icon name="chevron-right" class="c-disabled" />
       </div>
-      <van-empty v-if="!filtered.length" description="无匹配商品" />
+      <div v-if="!filtered.length" class="empty">没有匹配的商品</div>
+    </div>
     </div>
   </van-popup>
 </template>
@@ -91,16 +93,18 @@ function onPick(p) {
 </script>
 
 <style scoped>
+/* 用 flex 撑满弹层，列表区自适应高度（原来按固定像素偏移，切换页签后会算错） */
+.pk-wrap { display: flex; flex-direction: column; height: 100%; }
 .pk-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 4px; }
 .pk-title { font-weight: 600; font-size: 16px; }
 .pk-cats { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 16px; max-height: 76px; overflow-y: auto; }
 .pk-cats .van-tag { cursor: pointer; }
-.pk-list { height: calc(100% - 160px); overflow-y: auto; padding: 0 4px 24px; }
-.pk-item { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid #f5f5f5; }
+.pk-list { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 0 4px calc(24px + env(safe-area-inset-bottom, 0px)); }
+.pk-item { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--c-hairline); }
 .pk-item:active { background: #f5f6f7; }
 .pk-info { min-width: 0; }
 .pk-name { font-weight: 600; font-size: 14px; margin-bottom: 2px; word-break: break-all; }
 .pk-badge { display: inline-block; font-size: 10px; font-weight: 500; padding: 1px 5px; border-radius: 4px; vertical-align: 1px; }
-.pk-badge.is-stock { background: #e8f3ff; color: #1989fa; }
+.pk-badge.is-stock { background: var(--c-primary-bg); color: var(--c-primary); }
 .pk-badge.is-order { background: #fff3e8; color: #ff8f1f; }
 </style>

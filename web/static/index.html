@@ -3,7 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#0067c0" />
+  <meta name="description" content="库存与财务一体化台账系统：入库 / 出库 / 库存 / 报表" />
   <title>企业台账系统</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230067c0'/%3E%3Cpath d='M8 12l8-4 8 4v9l-8 4-8-4z' fill='none' stroke='white' stroke-width='2.2' stroke-linejoin='round'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -39,11 +43,28 @@
     <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></symbol>
     <symbol id="i-coins" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/></symbol>
     <symbol id="i-paperclip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
-    <symbol id="i-warehouse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 8.35V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8.35A2 2 0 0 1 3.26 6.5l8-3.2a2 2 0 0 1 1.48 0l8 3.2A2 2 0 0 1 22 8.35Z"/><path d="M6 18h12"/><path d="M6 14h12"/><rect width="12" height="12" x="6" y="10"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></symbol>
+    <symbol id="i-warehouse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 8.35V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8.35A2 2 0 0 1 3.26 6.5l8-3.2a2 2 0 0 1 1.48 0l8 3.2A2 2 0 0 1 22 8.35Z"/><path d="M6 18h12"/><path d="M6 14h12"/><path d="M6 10h12"/></symbol>
+    <symbol id="i-leaf" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/></symbol>
   </svg>
+
+  <!-- 顶部请求进度条 -->
+  <div class="loading-bar" id="loadingBar" aria-hidden="true"><div class="bar"></div></div>
+
   <div class="app" id="app">
+    <!-- 窄屏顶栏：汉堡菜单（≥1025px 隐藏） -->
+    <div class="mobile-bar">
+      <button class="menu-btn" id="menuBtn" type="button" aria-label="打开导航菜单" aria-controls="sidebar" aria-expanded="false">
+        <svg class="ic" style="width:22px;height:22px;"><use href="#i-menu"/></svg>
+      </button>
+      <div class="brand"><span class="brand-dot"></span><span class="brand-name">企业台账</span></div>
+    </div>
+    <div class="sidebar-mask" id="sidebarMask"></div>
+
     <!-- 左侧导航 -->
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <div class="brand">
         <span class="brand-dot"></span>
         <span class="brand-name">企业台账</span>
@@ -66,7 +87,7 @@
         <div class="nav-group">经营分析</div>
         <button class="nav-item" data-page="report"><span class="nav-ico"><svg class="ic"><use href="#i-chart"/></svg></span>财务报表</button>
         <div class="nav-group">数据工具</div>
-        <button class="nav-item" data-page="fresh"><span class="nav-ico"><svg class="ic"><use href="#i-truck"/></svg></span>鲜货现采</button>
+        <button class="nav-item" data-page="fresh"><span class="nav-ico"><svg class="ic"><use href="#i-leaf"/></svg></span>鲜货现采</button>
         <button class="nav-item" data-page="deduction"><span class="nav-ico"><svg class="ic"><use href="#i-coins"/></svg></span>扣点</button>
         <div class="nav-group">设置</div>
         <button class="nav-item" data-action="warehouses"><span class="nav-ico"><svg class="ic"><use href="#i-database"/></svg></span>切换分仓</button>
@@ -78,12 +99,18 @@
           <div class="user-name" id="userName">未登录</div>
           <div class="user-role" id="userRole"></div>
         </div>
-        <button class="logout-btn" id="logoutBtn" title="退出登录">⏻</button>
+        <button class="logout-btn" id="logoutBtn" type="button" title="退出登录" aria-label="退出登录"><svg class="ic"><use href="#i-power"/></svg></button>
       </div>
     </aside>
 
     <!-- 主内容 -->
     <main class="main">
+      <!-- 统一页头：标题与一句话说明由 goPage() 按页面填充，避免各页面标题缺失/层级不一致 -->
+      <div class="page-head">
+        <h1 id="pageTitle">工作台</h1>
+        <p class="page-desc" id="pageDesc"></p>
+      </div>
+
       <!-- 工作台 -->
       <section id="page-home" class="page active">
         <div class="card welcome">
@@ -152,7 +179,7 @@
           <div class="card">
             <div class="toolbar">
               <select id="stockCategory" class="searchable" onchange="renderStock()"><option value="">全部分类</option></select>
-              <input id="stockSearch" placeholder="🔍 搜索商品名称 / 分类..." oninput="renderStock()" />
+              <input id="stockSearch" data-search placeholder="搜索商品名称 / 分类..." oninput="renderStock()" />
               <div class="grow"></div>
               <button class="btn secondary" onclick="openAdjust()"><svg class="ic"><use href="#i-edit"/></svg> 盘点调整</button>
               <button class="btn secondary" onclick="loadStock()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
@@ -172,8 +199,6 @@
               <select id="adjProductFilter" class="searchable"><option value="0">全部商品</option></select>
               <input id="adjDateFrom" type="date" /><span>-</span><input id="adjDateTo" type="date" />
               <button class="btn" onclick="loadAdjustments()">查询</button>
-              <div class="grow"></div>
-              <button class="btn secondary" onclick="loadAdjustments()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
             </div>
             <div class="table-wrap"><table id="adjRecordTable"></table></div>
           </div>
@@ -184,7 +209,7 @@
             <div class="toolbar">
               <select id="mvProduct" class="searchable"><option value="0">全部商品</option></select>
               <input id="mvDateFrom" type="date" /><span>-</span><input id="mvDateTo" type="date" />
-              <input id="mvSearch" placeholder="🔍 筛选流水..." oninput="loadMovements()" />
+              <input id="mvSearch" data-search placeholder="筛选流水..." oninput="loadMovements()" />
               <button class="btn" onclick="loadMovements()">查询</button>
             </div>
             <div id="mvChart"></div>
@@ -197,8 +222,7 @@
             <div class="toolbar">
               <input id="wlDateFrom" type="date" /><span>-</span><input id="wlDateTo" type="date" />
               <button class="btn" onclick="loadWorkload()">查询</button>
-              <div class="grow"></div>
-              <button class="btn secondary" onclick="loadWorkload()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+              <button class="btn secondary" onclick="$('wlDateFrom').value=monthStart();$('wlDateTo').value=today();loadWorkload()">本月</button>
             </div>
             <div id="wlChart"></div>
             <div class="stat-grid">
@@ -219,7 +243,7 @@
           <div class="form-grid">
             <div class="field">
               <label>商品 *</label>
-              <input id="inProduct" readonly placeholder="＋ 点击选择商品" onclick="openInboundPicker()" style="cursor:pointer;background:var(--primary-50);" />
+              <input id="inProduct" readonly placeholder="点击选择商品" onclick="openInboundPicker()" style="cursor:pointer;background:var(--primary-50);" />
               <div class="field-hint" id="inStockHint"></div>
             </div>
             <div class="field"><label>进货单位 *</label><select id="inUnit" class="searchable"></select><div class="field-hint" id="inUnitHint"></div></div>
@@ -241,14 +265,17 @@
             <div class="attach-list" id="inRemarkFiles"></div>
           </div>
           <div id="inAlert" class="alert" style="display:none;"></div>
-          <div class="form-actions"><button class="btn green" onclick="submitInbound()">✓ 确认入库</button></div>
+          <div class="form-actions"><button class="btn green" onclick="submitInbound()">确认入库</button></div>
         </div>
 
         <div class="card">
           <div class="card-head"><h3>入库记录</h3><span class="hint" id="inListHint"></span></div>
           <div class="toolbar">
             <input id="inDateFrom" type="date" /><span>-</span><input id="inDateTo" type="date" />
-            <input id="inSearch" placeholder="🔍 筛选单号/商品/供应商..." oninput="loadInbounds()" />
+            <button class="btn secondary" onclick="quickDates('inDateFrom','inDateTo','today',loadInbounds)">今天</button>
+            <button class="btn secondary" onclick="quickDates('inDateFrom','inDateTo','week',loadInbounds)">近7天</button>
+            <button class="btn secondary" onclick="quickDates('inDateFrom','inDateTo','month',loadInbounds)">本月</button>
+            <input id="inSearch" data-search placeholder="筛选单号/商品/供应商..." oninput="loadInbounds()" />
             <button class="btn secondary" onclick="loadInbounds()">筛选</button>
           </div>
           <div class="batch-bar" id="inBatch" style="display:none;">
@@ -294,8 +321,8 @@
             </table>
           </div>
           <div class="toolbar" style="margin-top:12px;">
-            <button class="btn secondary" onclick="addSaleRow()">＋ 添加商品行</button>
-            <button class="btn" onclick="previewOutbound()">🔍 预览结算</button>
+            <button class="btn secondary" onclick="addSaleRow()">添加商品行</button>
+            <button class="btn" onclick="previewOutbound()"><svg class="ic"><use href="#i-search"/></svg> 预览结算</button>
             <span class="muted">自动带出泡沫箱 / 泡沫垫 / 打包费等关联结算项</span>
           </div>
 
@@ -319,7 +346,7 @@
               <div class="stat success"><div class="label">净利</div><div class="value" id="otNet" style="color:var(--green)">¥0.00</div></div>
             </div>
             <div class="form-actions">
-              <button class="btn green" onclick="submitOutbound()">✓ 确认出库</button>
+              <button class="btn green" onclick="submitOutbound()">确认出库</button>
               <button class="btn secondary" onclick="clearPreview()">取消</button>
             </div>
           </div>
@@ -329,7 +356,10 @@
           <div class="card-head"><h3>出库记录</h3><span class="hint" id="outListHint"></span></div>
           <div class="toolbar">
             <input id="outDateFrom" type="date" /><span>-</span><input id="outDateTo" type="date" />
-            <input id="outSearch" placeholder="🔍 筛选单号/客户..." oninput="loadOutbounds()" />
+            <button class="btn secondary" onclick="quickDates('outDateFrom','outDateTo','today',loadOutbounds)">今天</button>
+            <button class="btn secondary" onclick="quickDates('outDateFrom','outDateTo','week',loadOutbounds)">近7天</button>
+            <button class="btn secondary" onclick="quickDates('outDateFrom','outDateTo','month',loadOutbounds)">本月</button>
+            <input id="outSearch" data-search placeholder="筛选单号/客户..." oninput="loadOutbounds()" />
             <button class="btn secondary" onclick="loadOutbounds()">筛选</button>
           </div>
           <div class="batch-bar" id="outBatch" style="display:none;">
@@ -365,7 +395,7 @@
           </div>
           <div class="toolbar">
             <input id="wInDateFrom" type="date" /><span>-</span><input id="wInDateTo" type="date" />
-            <input id="wInSearch" placeholder="🔍 筛选商品 / 采购单号 / 配送中心..." oninput="loadWarehouseIns()" />
+            <input id="wInSearch" data-search placeholder="筛选商品 / 采购单号 / 配送中心..." oninput="loadWarehouseIns()" />
             <button class="btn secondary" onclick="loadWarehouseIns()">筛选</button>
             <button class="btn secondary" onclick="wInThisMonth()">本月</button>
           </div>
@@ -385,8 +415,8 @@
           <div class="card-head">
             <h3 id="wgTitle">入仓批次明细</h3><span class="hint" id="wgHint"></span>
             <div class="grow"></div>
-            <button class="btn danger" onclick="WGROUP && WGROUP[0] && deleteWinGroup(WGROUP[0].import_group)">删 除本批</button>
-            <button class="btn secondary" onclick="goPage('warehouse-in')">← 返回入仓列表</button>
+            <button class="btn secondary" onclick="goPage('warehouse-in')"><svg class="ic"><use href="#i-back"/></svg> 返回入仓列表</button>
+            <button class="btn danger" onclick="WGROUP && WGROUP[0] && deleteWinGroup(WGROUP[0].import_group)"><svg class="ic"><use href="#i-trash"/></svg> 删除本批</button>
           </div>
           <div class="stat-grid" id="wgSummary" style="margin-bottom:12px;"></div>
           <div class="table-wrap"><table id="wgTable"></table></div>
@@ -398,7 +428,8 @@
         <div class="card">
           <div class="card-head">
             <h3 id="ogTitle">出库批次明细</h3><span class="hint" id="ogHint"></span>
-            <button class="btn secondary" style="margin-left:auto;" onclick="goPage('outbound');loadOutbounds()">← 返回出库列表</button>
+            <div class="grow"></div>
+            <button class="btn secondary" onclick="goPage('outbound');loadOutbounds()"><svg class="ic"><use href="#i-back"/></svg> 返回出库列表</button>
           </div>
           <div class="stat-grid" id="ogSummary" style="margin-bottom:12px;"></div>
           <div class="toolbar">
@@ -408,10 +439,10 @@
               <button class="seg-item" data-panel="og-labor" onclick="switchOgSeg(this)">人工</button>
               <button class="seg-item" data-panel="og-laborpack" onclick="switchOgSeg(this)">打包人工 + 耗材</button>
             </div>
-            <input id="ogSearch" placeholder="🔍 搜索商品..." oninput="renderOutGroup()" />
+            <input id="ogSearch" data-search placeholder="搜索商品..." oninput="renderOutGroup()" />
             <button class="btn secondary" onclick="renderOutGroup()">筛选</button>
             <div class="grow"></div>
-            <button class="btn danger" onclick="deleteOutGroup()">🗑 删除本批（<span id="ogDelCount">0</span> 单）</button>
+            <button class="btn danger" onclick="deleteOutGroup()">删除本批（<span id="ogDelCount">0</span> 单）</button>
           </div>
           <div class="table-wrap"><table id="ogTable"></table></div>
         </div>
@@ -426,7 +457,7 @@
               <option value="">全部类型</option><option value="stock" selected>库存商品</option><option value="order">订单商品</option>
             </select>
             <select id="prodCategory" class="searchable" onchange="renderProducts()"><option value="">全部分类</option></select>
-            <input id="prodSearch" placeholder="🔍 搜索商品..." oninput="renderProducts()" />
+            <input id="prodSearch" data-search placeholder="搜索商品..." oninput="renderProducts()" />
             <div class="grow"></div>
             <button class="btn secondary" onclick="openUnitsModal()"><svg class="ic"><use href="#i-ruler"/></svg> 计量单位管理</button>
             <button class="btn secondary" onclick="pdataDownload('products_stock')"><svg class="ic"><use href="#i-download"/></svg> 导出库存JSON</button>
@@ -448,7 +479,7 @@
         <div class="card">
           <div class="card-head"><h3>一单多货（多货打包规则）</h3><span class="hint">区别于「关联结算/人工」的一单一货；此处维护一张订单含多种商品时的合并打包规则（纸箱 + 人工）</span></div>
           <div class="toolbar">
-            <input id="prSearch" placeholder="🔍 搜索组合 / 商品 / 纸箱..." oninput="renderPackRules()" />
+            <input id="prSearch" data-search placeholder="搜索组合 / 商品 / 纸箱..." oninput="renderPackRules()" />
             <select id="prBox" class="searchable" onchange="renderPackRules()"><option value="">全部纸箱型号</option></select>
             <div class="grow"></div>
             <button class="btn secondary" onclick="pdataDownload('pack_rules')"><svg class="ic"><use href="#i-download"/></svg> 导出JSON</button>
@@ -470,7 +501,7 @@
           <div class="card-head"><h3>财务利润报表</h3></div>
           <div class="toolbar">
             <input id="repDateFrom" type="date" /><span>-</span><input id="repDateTo" type="date" />
-            <input id="repSearch" placeholder="🔍 筛选财务流水..." oninput="loadReport()" />
+            <input id="repSearch" data-search placeholder="筛选财务流水..." oninput="loadReport()" />
             <button class="btn" onclick="loadReport()">查询</button>
             <button class="btn secondary" onclick="quickRange('today')">今天</button>
             <button class="btn secondary" onclick="quickRange('month')">本月</button>
@@ -487,7 +518,7 @@
           <div class="table-wrap"><table id="repProductTable"></table></div>
         </div>
         <div class="card">
-          <div class="card-head"><h3>财务流水</h3><button class="btn secondary" onclick="openFinanceModal()">＋ 手动记账</button></div>
+          <div class="card-head"><h3>财务流水</h3><button class="btn secondary" onclick="openFinanceModal()">手动记账</button></div>
           <div class="table-wrap"><table id="financeTable"></table></div>
         </div>
       </section>
@@ -712,26 +743,26 @@
 
   <!-- 登录 -->
   <div class="login-mask" id="loginMask">
-    <div class="login-box">
+    <form class="login-box" id="loginForm" onsubmit="event.preventDefault();doLogin();">
       <div class="login-brand"><span class="brand-dot"></span>企业台账系统</div>
       <p class="login-sub">库存 · 财务 · 一体化</p>
       <div class="field" style="margin-bottom:12px;">
-        <label>用户名</label>
-        <input id="loginUser" autocomplete="username" placeholder="请输入用户名" onkeydown="if(event.key==='Enter')doLogin()" />
+        <label for="loginUser">用户名</label>
+        <input id="loginUser" name="username" autocomplete="username" placeholder="请输入用户名" autofocus />
       </div>
       <div id="loginKeyRow" class="field" style="margin-bottom:16px;">
-        <label>私钥文件</label>
-        <div class="keyfile-row">
+        <label for="loginKeyName">私钥文件</label>
+        <div class="keyfile-row" id="loginDropZone">
           <input id="loginKeyFile" type="file" accept=".pem,.key,.txt,text/plain" style="display:none;" onchange="onKeyFileChange('loginKeyFile','loginKeyName')" />
-          <input id="loginKeyName" readonly placeholder="点击选择 Ed25519 私钥文件" onclick="$('loginKeyFile').click()" onkeydown="if(event.key==='Enter')doLogin()" style="cursor:pointer;background:var(--primary-50);" />
+          <input id="loginKeyName" readonly placeholder="点击选择，或把私钥文件拖进来" onclick="$('loginKeyFile').click()" style="cursor:pointer;background:var(--primary-50);" />
           <button class="btn secondary" type="button" onclick="$('loginKeyFile').click()">选择文件</button>
         </div>
-        <div class="field-hint" id="loginKeyHint" style="color:var(--muted);font-size:12px;margin-top:4px;">选择由私钥管理工具生成的私钥文件（.pem / id_ed25519）</div>
+        <div class="field-hint" id="loginKeyHint" style="color:var(--muted);font-size:12px;margin-top:4px;">选择由私钥管理工具生成的私钥文件（.pem / id_ed25519），可直接拖拽到输入框</div>
       </div>
-      <div id="loginErr" class="alert err" style="display:none;"></div>
-      <button class="btn" style="width:100%;" onclick="doLogin()">登 录</button>
+      <div id="loginErr" class="alert err" role="alert" style="display:none;"></div>
+      <button class="btn" type="submit" style="width:100%;justify-content:center;">登 录</button>
       <p class="login-foot">请使用管理员分发的私钥文件登录</p>
-    </div>
+    </form>
   </div>
 
   <!-- 弹窗 -->
@@ -739,7 +770,12 @@
     <div class="modal" id="modalBox"></div>
   </div>
 
-  <div class="toast" id="toast"></div>
+  <!-- 确认框（独立一层，可叠加在业务弹窗之上） -->
+  <div class="modal-mask centered" id="confirmMask">
+    <div class="modal sm" id="confirmBox"></div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script src="/app.js"></script>
 </body>

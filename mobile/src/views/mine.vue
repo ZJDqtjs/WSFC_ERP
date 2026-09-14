@@ -2,7 +2,7 @@
   <div>
     <div class="card">
       <div class="row">
-        <van-icon name="manager" size="40" color="#1989fa" />
+        <van-icon name="manager" size="40" class="c-primary" />
         <div class="grow">
           <div style="font-weight:700;font-size:17px;">{{ user.name || user.username || '—' }}</div>
           <div class="muted">{{ roleText }} · 企业台账系统</div>
@@ -51,7 +51,8 @@ import api from '../api'
 const router = useRouter()
 const user = ref({})
 const lowStockCount = ref(0)
-const version = '0.2.0'
+// 由 vite.config.js 从 package.json 注入，避免手写版本号与发版不一致
+const version = __APP_VERSION__
 
 const roleText = computed(() => (user.value.role === 'admin' ? '管理员' : '业务员'))
 

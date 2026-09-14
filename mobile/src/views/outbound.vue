@@ -9,7 +9,7 @@
     <template v-if="tab === 'new'">
       <div class="card">
         <div class="card-title">
-          <span class="grow">新增出库 / 销售单</span>
+          <span class="grow">单据信息</span>
           <van-button size="mini" plain type="primary" icon="down" @click="openBatch('jushuitan')">聚水潭</van-button>
           <van-button size="mini" plain icon="down" @click="openBatch('outbound')">批量</van-button>
         </div>
@@ -30,9 +30,9 @@
           <div class="row" style="justify-content:space-between;">
             <span class="grow io-name" @click="openPicker(i)">
               <template v-if="r.product_id">{{ r.name }}</template>
-              <template v-else><span class="placeholder">＋ 点击选择商品</span></template>
+              <template v-else><span class="placeholder"><van-icon name="plus" /> 点击选择商品</span></template>
             </span>
-            <van-icon v-if="rows.length > 1" name="delete-o" color="#ee0a24" @click="removeRow(i)" />
+            <van-icon v-if="rows.length > 1" name="delete-o" class="c-danger" @click="removeRow(i)" />
           </div>
           <div v-if="r.product_id" class="muted io-hint" @click="openUnit(i)">
             销售单位：{{ r.unit }}（点此切换） · 折算 {{ fmtNum(num(r.qty) * num(r._factor)) }} {{ r._base_unit }}
@@ -57,15 +57,15 @@
           <van-button size="mini" plain @click="preview = null">取消</van-button>
         </div>
 
-        <div v-for="w in preview.warnings || []" :key="w" class="alert warn">⚠ {{ w }}（仍可继续，可先补货）</div>
+        <div v-for="w in preview.warnings || []" :key="w" class="tip warn">⚠ {{ w }}（仍可继续，可先补货）</div>
 
         <div v-if="!(preview.pack_lines || []).length" class="empty" style="padding:12px 0;">
-          无关联结算项（该商品未配置包装清单）
+          该商品未配置包装清单，无需关联结算
         </div>
         <div v-for="(pl, i) in preview.pack_lines || []" :key="i" class="pack-line">
           <div class="row">
             <span class="grow item-title">{{ pl.product_name }}</span>
-            <van-icon name="cross" color="#ee0a24" @click="removePackLine(i)" />
+            <van-icon name="cross" class="c-danger" @click="removePackLine(i)" />
           </div>
           <div class="row mt8">
             <span class="muted" @click="openPackUnit(i)">
@@ -109,24 +109,28 @@
     <!-- ============ 出库记录 ============ -->
     <template v-else>
       <div class="card">
-        <div class="row wrap" style="gap:6px;">
-          <van-field v-model="filter.from" type="date" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
-          <van-field v-model="filter.to" type="date" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
+        <div class="filter-bar">
+          <van-field v-model="filter.from" type="date" />
+          <van-field v-model="filter.to" type="date" />
           <van-button size="small" type="primary" @click="loadList">筛选</van-button>
           <van-button size="small" plain @click="quick(0)">今天</van-button>
           <van-button size="small" plain @click="quick(7)">近7天</van-button>
           <van-button size="small" plain @click="quick(null)">全部</van-button>
         </div>
-        <van-field v-model="kw" placeholder="筛选单号 / 客户" style="background:#f7f8fa;border-radius:6px;margin-top:8px;" />
+        <van-field v-model="kw" placeholder="筛选单号 / 客户" class="kw-field" />
 
         <div v-if="selectedIds.length" class="batch-bar">
-          <span class="muted">已选 {{ selectedIds.length }} 单</span>
+          <span class="muted">已选 {{ selectedIds.length }} 单 · 合计 {{ fmtMoney(selectedAmount) }}</span>
           <van-button size="mini" type="danger" @click="batchDelete">批量删除</van-button>
           <van-button size="mini" plain @click="selectedIds = []">取消</van-button>
         </div>
-        <div class="muted" style="margin-top:8px;">共 {{ list.length }} 单，合并 {{ entries.length }} 行</div>
+        <div class="muted" style="margin-top:8px;">
+          共 {{ list.length }} 单，合并 {{ entries.length }} 行 · 收入 {{ fmtMoney(listAmount) }} · 净利 {{ fmtMoney(listNet) }}
+        </div>
 
         <van-pull-refresh v-model="refreshing" @refresh="loadList">
+          <SkeletonList v-if="loading" :rows="4" />
+          <template v-else>
           <div v-if="!entries.length" class="empty">暂无出库记录</div>
           <div v-for="e in entries" :key="e.key" class="list-item">
             <div class="row">
@@ -172,6 +176,7 @@
               </div>
             </div>
           </div>
+          </template>
         </van-pull-refresh>
       </div>
     </template>
@@ -199,7 +204,7 @@
         </div>
         <input ref="batchFile" type="file" accept=".xlsx" style="display:none" @change="parseBatch" />
 
-        <div v-if="batchParsing" class="empty">正在解析…</div>
+        <div v-if="batchParsing" class="loading-tip">正在解析…</div>
 
         <template v-if="batchOrders.length">
           <div class="row" style="justify-content:space-between;margin-bottom:6px;">
@@ -215,21 +220,21 @@
             <div class="muted">{{ o.customer || '—' }}{{ o.pack_fee ? ' · 打包费 ' + fmtMoney(o.pack_fee) : '' }}{{ o.pack_rule_name ? ' · 规则：' + o.pack_rule_name : '' }}</div>
             <div v-for="(l, li) in o.lines" :key="li" class="batch-line">
               <span class="grow ellipsis">{{ l.product_name }}{{ l.deduct ? `（${l.deduct}）` : '' }}</span>
-              <van-field v-model="l.quantity" type="number" style="width:74px;" />
-              <van-field v-model="l.price" type="number" style="width:84px;" />
+              <van-field v-model="l.quantity" type="number" placeholder="数量" style="width:78px;" />
+              <van-field v-model="l.price" type="number" placeholder="单价" style="width:88px;" />
               <span class="io-amount">{{ fmtMoney(num(l.quantity) * num(l.price)) }}</span>
             </div>
           </div>
         </template>
 
-        <div v-if="batchUnmapped.length" class="alert warn">
+        <div v-if="batchUnmapped.length" class="tip warn">
           ⚠ 未关联商品：{{ batchUnmapped.join('、') }}
           <div v-if="batchKind === 'jushuitan'" style="margin-top:8px;">
             <van-button size="mini" plain type="primary" :loading="aiMapping" @click="aiAutoMap">AI 自动新增并关联，重新解析</van-button>
           </div>
         </div>
-        <div v-if="batchSkipText" class="alert warn">⚠ 跳过：{{ batchSkipText }}</div>
-        <div v-if="batchFailed.length" class="alert err">
+        <div v-if="batchSkipText" class="tip warn">⚠ 跳过：{{ batchSkipText }}</div>
+        <div v-if="batchFailed.length" class="tip err">
           解析失败 {{ batchFailed.length }} 条：{{ batchFailed.slice(0, 5).map((f) => f.reason).join('；') }}
         </div>
 
@@ -253,12 +258,14 @@ import ProductPicker from '../components/ProductPicker.vue'
 import AttachmentField from '../components/AttachmentField.vue'
 import RemarkView from '../components/RemarkView.vue'
 import OperatorField from '../components/OperatorField.vue'
+import SkeletonList from '../components/SkeletonList.vue'
 import { ensureUserName } from '../utils/user'
 import { fmtMoney, fmtNum, num, defaultUnit, unitFactor, priceOf, todayStr } from '../utils/format'
 
 const router = useRouter()
 const tab = ref('new')
 const refreshing = ref(false)
+const loading = ref(true)   // 记录列表首屏骨架屏
 
 /* ---------- 新增 ---------- */
 const form = reactive({ date: todayStr(), customer: '', operator: '', remark: '' })
@@ -485,6 +492,7 @@ const entries = computed(() => {
 })
 
 async function loadList() {
+  if (!list.value.length) loading.value = true
   try {
     const q = []
     if (filter.from) q.push(`date_from=${filter.from}`)
@@ -492,8 +500,16 @@ async function loadList() {
     list.value = await api('/api/outbounds' + (q.length ? '?' + q.join('&') : ''))
     selectedIds.value = selectedIds.value.filter((id) => list.value.some((r) => r.id === id))
   } catch (e) { showToast(e.message || '加载失败') }
+  loading.value = false
   refreshing.value = false
 }
+/* 列表汇总：让"共 N 单"之外还能直接看到收入与净利，不用进报表 */
+const listAmount = computed(() => list.value.reduce((s, o) => s + num(o.total_amount), 0))
+const listNet = computed(() => list.value.reduce((s, o) => s + num(o.net_profit), 0))
+const selectedAmount = computed(() => {
+  const set = new Set(selectedIds.value)
+  return list.value.filter((o) => set.has(o.id)).reduce((s, o) => s + num(o.total_amount), 0)
+})
 function switchList() { tab.value = 'list'; loadList() }
 function quick(days) {
   if (days === null) { filter.from = ''; filter.to = '' }
@@ -652,19 +668,9 @@ onActivated(() => { if (tab.value === 'list') loadList() })
 </script>
 
 <style scoped>
-.io-row { padding: 10px 0; border-bottom: 1px solid #f5f5f5; }
-.io-row:last-child { border-bottom: none; }
-.io-name { font-weight: 600; font-size: 14px; }
-.io-name .placeholder { color: #1989fa; font-weight: 500; }
-.io-hint { color: #1989fa; font-size: 12px; }
-.io-amount { min-width: 76px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; font-size: 13px; }
-.pack-line { padding: 8px 0; border-bottom: 1px dashed #f0f0f0; }
-.batch-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: #fff7e6; border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
-.alert { border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-top: 8px; }
-.alert.warn { background: #fffbe8; color: #ed6a0c; }
-.alert.err { background: #fff1f0; color: #ee0a24; }
-.detail-box { background: #f7f8fa; border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
-.detail-line { padding: 5px 0; border-bottom: 1px solid #ececec; font-size: 13px; }
+.pack-line { padding: 8px 0; border-bottom: 1px dashed var(--c-line-2); }
+.detail-box { background: var(--c-bg); border-radius: var(--radius-sm); padding: 8px 10px; margin-top: 8px; }
+.detail-line { padding: 5px 0; border-bottom: 1px solid var(--c-line-2); font-size: 13px; }
 .detail-line:last-child { border-bottom: none; }
 .batch-line { display: flex; align-items: center; gap: 6px; padding: 6px 0 0 22px; }
 </style>

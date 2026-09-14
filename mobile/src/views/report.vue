@@ -1,12 +1,12 @@
 <template>
   <div class="sub-page">
-    <van-nav-bar title="财务报表" left-arrow fixed placeholder @click-left="goBack" />
-    <div style="padding:12px;">
+    <van-nav-bar title="财务报表" left-arrow fixed safe-area-inset-top placeholder @click-left="goBack" />
+    <div class="sub-body">
       <!-- 查询条件 -->
       <div class="card">
-        <div class="row wrap" style="gap:6px;">
-          <van-field v-model="df" type="date" placeholder="起" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
-          <van-field v-model="dt" type="date" placeholder="止" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
+        <div class="filter-bar">
+          <van-field v-model="df" type="date" placeholder="起始日期" />
+          <van-field v-model="dt" type="date" placeholder="结束日期" />
           <van-button size="small" type="primary" @click="load">查询</van-button>
         </div>
         <div class="seg" style="margin:8px 0 0;">
@@ -16,7 +16,9 @@
         </div>
       </div>
 
-      <!-- 汇总 -->
+      <!-- 汇总：数据未回来时先给骨架屏，避免一片 ¥0.00 被误读成"本期没赚钱" -->
+      <van-skeleton v-if="loading" title :row="3" class="skeleton-card" />
+      <template v-else>
       <div class="stat-grid" style="margin-bottom:12px;">
         <div class="stat accent"><div class="label">销售收入</div><div class="value">{{ fmtMoney(rep.revenue) }}</div><div class="sub">{{ rep.order_count || 0 }} 单</div></div>
         <div class="stat warn"><div class="label">结转成本</div><div class="value">{{ fmtMoney(rep.cogs) }}</div><div class="sub">含关联结算 {{ fmtMoney(rep.pack_cost_total) }}</div></div>
@@ -29,11 +31,12 @@
         <div class="stat accent"><div class="label">当前库存总值</div><div class="value">{{ fmtMoney(rep.stock_value) }}</div></div>
         <div class="stat"><div class="label">本期入库单数</div><div class="value">{{ rep.inbound_count || 0 }}</div></div>
       </div>
+      </template>
 
       <!-- 销售成本构成 -->
       <div class="card">
         <div class="card-title"><span class="grow">销售成本构成</span><span class="muted">{{ rep.cogs ? '合计 ' + fmtMoney(rep.cogs) : '' }}</span></div>
-        <div v-if="!rep.cogs" class="empty">本期无销售成本</div>
+        <div v-if="!rep.cogs" class="empty">本期暂无销售成本</div>
         <template v-else>
           <div class="cost-stack">
             <span
@@ -60,7 +63,7 @@
             <span class="grow bold">结转成本合计</span>
             <span class="bold">{{ fmtMoney(rep.cogs) }}</span>
           </div>
-          <div v-if="!rep.pack_cost_total" class="alert warn">
+          <div v-if="!rep.pack_cost_total" class="tip warn">
             本期没有包材 / 人工 / 快递等关联结算成本。若商品已配置包装清单，请确认出库时是否生成了关联结算行。
           </div>
         </template>
@@ -84,7 +87,7 @@
           <span class="grow">商品销售明细</span>
           <span class="muted">成本为总成本</span>
         </div>
-        <div v-if="!(rep.by_product || []).length" class="empty">本期无销售</div>
+        <div v-if="!(rep.by_product || []).length" class="empty">本期暂无销售</div>
         <div v-for="p in rep.by_product || []" :key="p.product_id" class="list-item">
           <div class="row">
             <span class="grow item-title">{{ p.name }}</span>
@@ -109,8 +112,8 @@
           <span class="grow">财务流水</span>
           <van-button size="mini" plain type="primary" icon="plus" @click="openFinance">手动记账</van-button>
         </div>
-        <van-field v-model="fkw" placeholder="筛选分类 / 商品 / 备注 / 操作员" style="background:#f7f8fa;border-radius:6px;" />
-        <div v-if="!financeFiltered.length" class="empty">本期无财务流水</div>
+        <van-field v-model="fkw" placeholder="筛选分类 / 商品 / 备注 / 操作员" class="kw-field" />
+        <div v-if="!financeFiltered.length" class="empty">本期暂无财务流水</div>
         <div v-for="f in financeFiltered" :key="f.id" class="list-item">
           <div class="row">
             <van-tag :type="f.type === 'income' ? 'success' : 'danger'" plain>{{ f.type === 'income' ? '收入' : '支出' }}</van-tag>
@@ -142,8 +145,8 @@
               </van-radio-group>
             </template>
           </van-field>
-          <van-field v-model="fin.category" label="分类" placeholder="如 人工费 / 房租 / 其他支出" />
-          <van-field v-model="fin.amount" type="number" label="金额" placeholder="0.00" />
+          <van-field v-model="fin.category" label="分类" placeholder="如 人工费 / 房租 / 其他支出" required />
+          <van-field v-model="fin.amount" type="number" label="金额" placeholder="0.00" required />
           <van-field v-model="fin.date" label="日期" type="date" />
           <OperatorField v-model="fin.operator" />
           <van-field v-model="fin.remark" label="备注" placeholder="可留空" />
@@ -178,6 +181,7 @@ const quickKey = ref('today')
 const rep = ref({})
 const finance = ref([])
 const fkw = ref('')
+const loading = ref(true)
 let inited = false
 
 const COST_COLORS = { 包材耗材: '#ff976a', 人工打包费: '#7232dd', 快递运费: '#07c160', 其他关联结算: '#969799' }
@@ -215,6 +219,7 @@ const financeFiltered = computed(() => {
 })
 
 async function load() {
+  if (!inited) loading.value = true
   try {
     const [r1, r2] = await Promise.all([
       api(`/api/report/summary?date_from=${df.value}&date_to=${dt.value}`),
@@ -224,6 +229,7 @@ async function load() {
     finance.value = r2
     inited = true
   } catch (e) { showToast(e.message || '加载失败') }
+  loading.value = false
 }
 
 function quick(kind) {
@@ -281,10 +287,8 @@ onMounted(() => { if (!inited) load() })
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
-.cost-stack { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: #f2f3f5; margin-bottom: 10px; }
+/* 成本构成堆叠条 + 图例圆点（报表专有） */
+.cost-stack { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--c-line); margin-bottom: 10px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; flex-shrink: 0; }
-.cost-split { color: #969799; font-size: 11px; }
-.alert { border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-top: 8px; }
-.alert.warn { background: #fffbe8; color: #ed6a0c; }
+.cost-split { color: var(--c-muted); font-size: 11px; }
 </style>

@@ -3,7 +3,9 @@
     <template v-for="(s, i) in segments" :key="i">
       <span v-if="s.type === 'text'" class="remark-text">{{ s.text.trim() }}</span>
       <img v-else-if="s.isImage" :src="s.src" class="remark-thumb" @click="openImage(s)" />
-      <a v-else class="remark-file" @click.prevent="openFile(s)">📎 {{ s.name }}</a>
+      <a v-else class="remark-file" @click.prevent="openFile(s)">
+        <van-icon name="description" /> {{ s.name }}
+      </a>
     </template>
   </div>
 </template>
@@ -35,7 +37,7 @@ function openFile(s) {
 
 <style scoped>
 .remark-view { margin-top: 3px; line-height: 1.6; }
-.remark-text { color: #969799; font-size: 12px; }
-.remark-thumb { height: 40px; border-radius: 4px; margin: 2px 4px 0 0; vertical-align: middle; border: 1px solid #eee; }
-.remark-file { display: inline-block; color: #1989fa; font-size: 12px; margin-right: 6px; }
+.remark-text { color: var(--c-muted); font-size: 12px; }
+.remark-thumb { height: 40px; border-radius: 4px; margin: 2px 4px 0 0; vertical-align: middle; border: 1px solid var(--c-line-2); }
+.remark-file { display: inline-flex; align-items: center; gap: 2px; color: var(--c-primary); font-size: 12px; margin-right: 6px; }
 </style>

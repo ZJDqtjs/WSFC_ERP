@@ -1,12 +1,12 @@
 <template>
   <div class="sub-page">
-    <van-nav-bar title="商品管理" left-arrow fixed placeholder @click-left="goBack">
+    <van-nav-bar title="商品管理" left-arrow fixed safe-area-inset-top placeholder @click-left="goBack">
       <template #right>
         <van-icon name="plus" size="18" @click="openProduct()" />
       </template>
     </van-nav-bar>
 
-    <div style="padding:12px;">
+    <div class="sub-body">
       <div class="card">
         <div class="seg" style="margin-bottom:8px;">
           <div
@@ -17,7 +17,7 @@
             @click="ptype = t.key"
           >{{ t.label }}</div>
         </div>
-        <van-field v-model="kw" placeholder="搜索商品名称 / 分类 / 编码" style="background:#f7f8fa;border-radius:6px;" />
+        <van-field v-model="kw" placeholder="搜索商品名称 / 分类 / 编码" class="kw-field" style="margin-top:0;" />
         <div class="row wrap" style="gap:6px;margin-top:8px;">
           <van-tag v-for="c in cats" :key="c" :type="pcat === c ? 'primary' : 'default'" round @click="pcat = pcat === c ? '' : c">{{ c }}</van-tag>
         </div>
@@ -34,13 +34,17 @@
           <van-button size="mini" plain @click="selected = []">取消</van-button>
         </div>
         <div class="row" style="justify-content:space-between;margin-top:8px;">
-          <span class="muted">共 {{ filtered.length }} 项</span>
+          <span class="muted">
+            共 {{ filtered.length }} 项<template v-if="stockValueSum"> · 库存值 {{ fmtMoney(stockValueSum) }}</template>
+          </span>
           <van-button size="mini" plain @click="toggleAll">{{ allSel ? '取消全选' : '全选' }}</van-button>
         </div>
       </div>
 
       <div class="card">
-        <div v-if="!filtered.length" class="empty">无匹配商品</div>
+        <SkeletonList v-if="loading" :rows="4" />
+        <template v-else>
+        <div v-if="!filtered.length" class="empty">没有匹配的商品</div>
         <div v-for="p in filtered" :key="p.id" class="list-item">
           <div class="row">
             <van-checkbox :model-value="selected.includes(p.id)" style="margin-right:8px;" @click="toggleSel(p.id)" />
@@ -70,6 +74,7 @@
             <van-button size="mini" plain type="danger" @click="delProduct(p)">删除</van-button>
           </div>
         </div>
+        </template>
       </div>
     </div>
 
@@ -233,8 +238,9 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
-import api, { downloadFile } from '../api'
+import api, { downloadFile, downloadJson } from '../api'
 import ProductPicker from '../components/ProductPicker.vue'
+import SkeletonList from '../components/SkeletonList.vue'
 import { fmtMoney, fmtNum, num, defaultUnit, unitFactor, fmtStock, shrink } from '../utils/format'
 
 const router = useRouter()
@@ -250,6 +256,7 @@ const ptype = ref('')
 const pcat = ref('')
 const selected = ref([])
 const saving = ref(false)
+const loading = ref(true)
 
 const typeTabs = [
   { key: '', label: '全部类型' },
@@ -279,6 +286,10 @@ const filtered = computed(() => {
 })
 const allSel = computed(() => filtered.value.length > 0 && filtered.value.every((p) => selected.value.includes(p.id)))
 const stockProducts = computed(() => PRODUCTS.value.filter((p) => p.product_type === 'stock'))
+/* 当前筛选结果的库存价值合计：比只看"共 N 项"更贴近老板关心的事 */
+const stockValueSum = computed(() =>
+  filtered.value.filter((p) => p.product_type === 'stock').reduce((s, p) => s + num(p.stock_value), 0)
+)
 
 const nameOf = (pid) => (PRODUCTS.value.find((p) => p.id === +pid) || {}).name || ''
 const unitPrice = (p, field) => num(p[field]) * unitFactor(p, defaultUnit(p))
@@ -286,6 +297,7 @@ const unitPrice = (p, field) => num(p[field]) * unitFactor(p, defaultUnit(p))
 async function load() {
   try { PRODUCTS.value = await api('/api/products') } catch (e) { showToast(e.message || '加载失败') }
   try { UNITS.value = await api('/api/units') } catch (e) {}
+  loading.value = false
 }
 
 /* ---------- 选择 ---------- */
@@ -533,8 +545,7 @@ onMounted(load)
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
-.batch-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: #fff7e6; border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
-.pack-edit-row { padding: 8px 0; border-bottom: 1px dashed #f0f0f0; }
-.pack-name { font-weight: 600; font-size: 13px; color: #1989fa; }
+/* .sub-page / .sub-body / .batch-bar / .kw-field 已提升为全局样式 */
+.pack-edit-row { padding: 8px 0; border-bottom: 1px dashed var(--c-line-2); }
+.pack-name { font-weight: 600; font-size: 13px; color: var(--c-primary); }
 </style>

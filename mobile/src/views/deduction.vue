@@ -1,28 +1,31 @@
 <template>
   <div class="sub-page">
-    <van-nav-bar title="扣点设置" left-arrow fixed placeholder @click-left="goBack" />
-    <div style="padding:12px;">
+    <van-nav-bar title="扣点设置" left-arrow fixed safe-area-inset-top placeholder @click-left="goBack" />
+    <div class="sub-body">
       <!-- 商品类别扣点 -->
       <div class="card">
         <div class="card-title">
           <span class="grow">商品类别扣点</span>
           <van-button size="mini" plain type="primary" icon="plus" @click="openDeduc()">新增</van-button>
         </div>
-        <div class="muted" style="margin-bottom:8px;">
+        <div class="card-desc">
           按商品类别设置入库扣点百分比；批量导入 → 入库解析「进货单价」时按 原价 × (1 − 扣点%) 折算为入库成本（影响库存均价与利润）。
         </div>
-        <div v-if="!list.length" class="empty">暂无扣点规则</div>
-        <div v-for="d in list" :key="d.id" class="list-item">
-          <div class="row">
-            <span class="grow item-title">{{ d.category }}</span>
-            <span class="bold percent">{{ fmtNum(d.percent) }}%</span>
+        <SkeletonList v-if="loading" :rows="3" />
+        <template v-else>
+          <div v-if="!list.length" class="empty">暂无类别扣点规则</div>
+          <div v-for="d in list" :key="d.id" class="list-item">
+            <div class="row">
+              <span class="grow item-title">{{ d.category }}</span>
+              <span class="num-r c-danger">{{ fmtNum(d.percent) }}%</span>
+            </div>
+            <div v-if="d.remark" class="item-meta">{{ d.remark }}</div>
+            <div class="row" style="gap:8px;margin-top:6px;">
+              <van-button size="mini" plain type="primary" @click="openDeduc(d)">编辑</van-button>
+              <van-button size="mini" plain type="danger" @click="delDeduc(d)">删除</van-button>
+            </div>
           </div>
-          <div v-if="d.remark" class="item-meta">{{ d.remark }}</div>
-          <div class="row" style="gap:8px;margin-top:6px;">
-            <van-button size="mini" plain type="primary" @click="openDeduc(d)">编辑</van-button>
-            <van-button size="mini" plain type="danger" @click="delDeduc(d)">删除</van-button>
-          </div>
-        </div>
+        </template>
       </div>
 
       <!-- 店铺扣点 -->
@@ -31,14 +34,14 @@
           <span class="grow">店铺扣点规则</span>
           <van-button size="mini" plain type="primary" icon="plus" @click="openShop()">新增</van-button>
         </div>
-        <div class="muted" style="margin-bottom:8px;">
+        <div class="card-desc">
           聚水潭订单导入时按「店铺名称」扣减订单收入（卖家实收），保存后立即生效。
         </div>
         <div v-if="!shopRules.length" class="empty">暂无店铺扣点规则</div>
         <div v-for="r in shopRules" :key="r.shop" class="list-item">
           <div class="row">
             <span class="grow item-title">{{ r.shop }}</span>
-            <span v-if="r.percent != null" class="bold percent">{{ fmtNum(r.percent) }}%</span>
+            <span v-if="r.percent != null" class="num-r c-danger">{{ fmtNum(r.percent) }}%</span>
             <van-tag v-else type="primary" plain>按分类</van-tag>
           </div>
           <div v-if="r.categories" class="item-meta">
@@ -49,7 +52,7 @@
             <van-button size="mini" plain type="danger" @click="delShop(r)">删除</van-button>
           </div>
         </div>
-        <div class="muted" style="margin-top:8px;">配置文件：{{ shopFile || '—' }}</div>
+        <div class="card-desc" style="margin:8px 0 0;">配置文件：{{ shopFile || '—' }}</div>
       </div>
     </div>
 
@@ -70,7 +73,7 @@
           </van-field>
           <van-field v-model="deducForm.remark" label="备注" placeholder="可留空" />
         </van-cell-group>
-        <div class="muted" style="padding:0 4px 8px;">同类别的规则为「新增或更新」，重复提交会覆盖原百分比。</div>
+        <div class="card-desc" style="padding:0 4px 8px;margin-bottom:0;">同类别的规则为「新增或更新」，重复提交会覆盖原百分比。</div>
         <div class="sheet-foot">
           <van-button block plain @click="deducShow = false">取消</van-button>
           <van-button block type="primary" :loading="saving" @click="saveDeduc">保存</van-button>
@@ -102,11 +105,11 @@
             <span class="bold">分类扣点</span>
             <van-button size="mini" plain type="primary" icon="plus" @click="shopCats.push({ category: '', percent: '' })">添加分类</van-button>
           </div>
-          <div v-if="!shopCats.length" class="empty" style="padding:10px 0;">请添加至少一个分类扣点</div>
+          <div v-if="!shopCats.length" class="empty" style="padding:10px 0;">尚未添加分类扣点</div>
           <div v-for="(c, i) in shopCats" :key="i" class="row" style="margin-bottom:8px;">
-            <van-field v-model="c.category" placeholder="分类名" style="background:#f7f8fa;border-radius:6px;" />
-            <van-field v-model="c.percent" type="number" placeholder="%" style="max-width:96px;background:#f7f8fa;border-radius:6px;" />
-            <van-icon name="cross" color="#ee0a24" @click="shopCats.splice(i, 1)" />
+            <van-field v-model="c.category" placeholder="分类名" class="field-bg" />
+            <van-field v-model="c.percent" type="number" placeholder="%" class="field-bg" style="max-width:96px;" />
+            <van-icon name="cross" class="c-danger" @click="shopCats.splice(i, 1)" />
           </div>
         </template>
 
@@ -126,6 +129,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api from '../api'
+import SkeletonList from '../components/SkeletonList.vue'
 import { fmtNum, num, shrink } from '../utils/format'
 
 const router = useRouter()
@@ -138,6 +142,7 @@ const list = ref([])
 const shopRules = ref([])
 const shopFile = ref('')
 const saving = ref(false)
+const loading = ref(true)
 const cats = ref([])
 const catActions = computed(() => cats.value.map((c) => ({ name: c, value: c })))
 
@@ -152,6 +157,7 @@ async function load() {
     const ps = await api('/api/products')
     cats.value = shrink(ps.map((p) => p.category))
   } catch (e) {}
+  loading.value = false
 }
 
 /* ---------- 类别扣点 ---------- */
@@ -260,7 +266,5 @@ onMounted(load)
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
-.percent { color: #ee0a24; }
-.cat-chip { display: inline-block; background: #f2f3f5; border-radius: 10px; padding: 2px 8px; margin: 2px 4px 0 0; font-size: 11px; }
+.cat-chip { display: inline-block; background: var(--c-line); border-radius: 10px; padding: 2px 8px; margin: 2px 4px 0 0; font-size: 11px; }
 </style>

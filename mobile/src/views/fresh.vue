@@ -1,20 +1,20 @@
 <template>
   <div class="sub-page">
-    <van-nav-bar title="鲜货现采" left-arrow fixed placeholder @click-left="goBack" />
+    <van-nav-bar title="鲜货现采" left-arrow fixed safe-area-inset-top placeholder @click-left="goBack" />
 
-    <div style="padding:12px;">
+    <div class="sub-body">
       <div class="card">
         <div class="card-title">
           <span class="grow">今日鲜货概览</span>
           <van-button size="mini" plain type="primary" icon="setting-o" @click="openConfig">管理清单</van-button>
         </div>
-        <div class="muted" style="margin-bottom:8px;">
+        <div class="card-desc">
           展示鲜货（蔬菜 / 干货）库存与均价；导入今日订单可预演算消耗需求（仅采购参考，不实际扣库存）。
         </div>
         <div class="row" style="gap:8px;">
-          <van-button size="small" plain type="primary" icon="down" @click="planFile && planFile.click()">导入今日订单</van-button>
+          <van-button size="small" plain type="primary" icon="down" :loading="planning" @click="planFile && planFile.click()">导入今日订单</van-button>
           <input ref="planFile" type="file" accept=".xlsx" style="display:none" @change="doPlan" />
-          <van-button size="small" plain icon="replay" @click="load">刷新</van-button>
+          <van-button size="small" plain icon="replay" :loading="loading" @click="load">刷新</van-button>
         </div>
       </div>
 
@@ -29,9 +29,9 @@
           <span class="muted">跳过 {{ planSkip }} 单</span>
           <span v-if="planFailed" class="muted">失败 {{ planFailed }} 条</span>
         </div>
-        <div v-if="planUnmapped.length" class="alert warn">
+        <div v-if="planUnmapped.length" class="tip warn">
           ⚠ 未关联编码：{{ planUnmapped.slice(0, 8).join('、') }}{{ planUnmapped.length > 8 ? ' 等' : '' }}
-          <div class="muted" style="margin-top:4px;">到「设置 → 聚水潭关联」关联后重新导入。</div>
+          <div style="margin-top:4px;">到「设置 → 聚水潭关联」关联后重新导入。</div>
         </div>
         <div v-for="p in planItems" :key="p.id" class="list-item">
           <div class="row">
@@ -52,18 +52,21 @@
           <span class="grow">鲜货库存（按展示清单顺序）</span>
           <span class="muted">{{ items.length }} 项</span>
         </div>
-        <div v-if="!items.length" class="empty">暂无鲜货商品</div>
-        <div v-for="(item, index) in items" :key="item.id" class="list-item">
-          <div class="row">
-            <span class="order-idx">{{ index + 1 }}</span>
-            <span class="grow item-title">{{ item.name }}</span>
-            <van-tag plain>{{ item.category }}</van-tag>
+        <SkeletonList v-if="loading" :rows="4" />
+        <template v-else>
+          <div v-if="!items.length" class="empty">暂无鲜货商品</div>
+          <div v-for="(item, index) in items" :key="item.id" class="list-item">
+            <div class="row">
+              <span class="order-idx">{{ index + 1 }}</span>
+              <span class="grow item-title">{{ item.name }}</span>
+              <van-tag plain>{{ item.category }}</van-tag>
+            </div>
+            <div class="item-meta">
+              库存 {{ fmtNum(item.stock) }} {{ item.unit }} · 均价 {{ fmtMoney(item.avg_cost) }}/{{ item.unit }}
+              · 价值 {{ fmtMoney(item.stock_value) }}
+            </div>
           </div>
-          <div class="item-meta">
-            库存 {{ fmtNum(item.stock) }} {{ item.unit }} · 均价 {{ fmtMoney(item.avg_cost) }}/{{ item.unit }}
-            · 价值 {{ fmtMoney(item.stock_value) }}
-          </div>
-        </div>
+        </template>
       </div>
     </div>
 
@@ -78,18 +81,18 @@
           <span class="bold">已选（{{ sel.length }}）</span>
           <van-button size="mini" plain @click="sel = []">清空</van-button>
         </div>
-        <div v-if="!sel.length" class="empty" style="padding:10px 0;">未配置，将展示全部鲜货</div>
+        <div v-if="!sel.length" class="empty" style="padding:10px 0;">尚未配置清单，将展示全部鲜货</div>
         <div v-for="(s, i) in sel" :key="s.id" class="picker-item">
           <span class="order-idx">{{ i + 1 }}</span>
           <span class="grow">{{ s.name }}</span>
-          <van-icon name="arrow-up" :color="i === 0 ? '#dcdee0' : '#1989fa'" @click="move(i, -1)" />
-          <van-icon name="arrow-down" :color="i === sel.length - 1 ? '#dcdee0' : '#1989fa'" @click="move(i, 1)" />
-          <van-icon name="cross" color="#ee0a24" @click="sel.splice(i, 1)" />
+          <van-icon name="arrow-up" :class="i === 0 ? 'c-disabled' : 'c-primary'" @click="move(i, -1)" />
+          <van-icon name="arrow-down" :class="i === sel.length - 1 ? 'c-disabled' : 'c-primary'" @click="move(i, 1)" />
+          <van-icon name="cross" class="c-danger" @click="sel.splice(i, 1)" />
         </div>
 
         <div class="divider"></div>
         <div class="bold" style="margin-bottom:6px;">全部可选鲜货（{{ all.length }}）</div>
-        <van-field v-model="cfgKw" placeholder="搜索商品" style="background:#f7f8fa;border-radius:6px;margin-bottom:8px;" />
+        <van-field v-model="cfgKw" placeholder="搜索商品" class="kw-field" style="margin:0 0 8px;" />
         <div v-for="a in allFiltered" :key="a.id" class="picker-item" :class="{ on: isSel(a.id) }" @click="toggle(a)">
           <van-checkbox :model-value="isSel(a.id)" style="margin-right:4px;" />
           <span class="grow">{{ a.name }}</span>
@@ -110,6 +113,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast } from 'vant'
 import api, { upload } from '../api'
+import SkeletonList from '../components/SkeletonList.vue'
 import { fmtMoney, fmtNum } from '../utils/format'
 
 const router = useRouter()
@@ -119,6 +123,8 @@ function goBack() {
 }
 
 const items = ref([])
+const loading = ref(true)
+const planning = ref(false)
 const planItems = ref([])
 const planCount = ref(0)
 const planSkip = ref(0)
@@ -127,16 +133,19 @@ const planUnmapped = ref([])
 const planFile = ref(null)
 
 async function load() {
+  if (!items.value.length) loading.value = true
   try {
     const d = await api('/api/fresh')
     items.value = d.items || []
   } catch (e) { showToast(e.message || '加载失败') }
+  loading.value = false
 }
 
 async function doPlan(e) {
   const f = e.target.files && e.target.files[0]
   e.target.value = ''
   if (!f) return
+  planning.value = true
   try {
     const r = await upload('/api/fresh/plan', f)
     planItems.value = r.items || []
@@ -146,6 +155,7 @@ async function doPlan(e) {
     planUnmapped.value = r.unmapped || []
     if (!planItems.value.length) showToast('未解析出需要采购的鲜货')
   } catch (err) { showToast('预演算失败：' + err.message) }
+  planning.value = false
 }
 
 /* ---------- 展示清单 ---------- */
@@ -201,14 +211,13 @@ onMounted(load)
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
+/* 序号徽标（鲜货展示顺序），其余样式已提升为全局 */
 .order-idx {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0;
-  background: #e8f3ff; color: #1989fa; font-size: 11px; font-weight: 600; margin-right: 6px;
+  background: var(--c-primary-bg); color: var(--c-primary);
+  font-size: 11px; font-weight: 600; margin-right: 6px;
 }
-.suggest { color: #ee0a24; font-weight: 600; font-size: 12px; }
-.ok { color: #07c160; font-size: 12px; }
-.alert { border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-bottom: 8px; }
-.alert.warn { background: #fffbe8; color: #ed6a0c; }
+.suggest { color: var(--c-warn-text); font-weight: 600; font-size: 12px; }
+.ok { color: var(--c-success); font-size: 12px; }
 </style>

@@ -1,5 +1,6 @@
 <template>
   <div>
+    <van-pull-refresh v-model="refreshing" @refresh="onRefresh">
     <!-- 欢迎 + 快捷入口 -->
     <div class="card welcome">
       <div class="row">
@@ -18,9 +19,9 @@
     <!-- AI 智能录入 -->
     <div class="card">
       <div class="card-title">
-        <van-icon name="fire-o" color="#1989fa" /> AI 智能录入
+        <van-icon name="fire-o" class="c-primary" /> AI 智能录入
       </div>
-      <div class="muted" style="margin-bottom:8px;">
+      <div class="card-desc">
         用大白话描述入库/出库，AI 自动拆成系统格式；识别后可核对再提交，也可拍票据多张连传。
       </div>
       <van-field
@@ -47,6 +48,9 @@
       </div>
     </div>
 
+    <!-- 首屏加载：骨架屏占位，避免先闪一串 ¥0.00 让人误以为"没有数据" -->
+    <van-skeleton v-if="loading" title :row="3" class="skeleton-card" />
+    <template v-else>
     <!-- 经营数据 -->
     <div class="stat-grid" style="margin-bottom:12px;">
       <div class="stat accent">
@@ -84,11 +88,13 @@
     <!-- 缺货预警 -->
     <div class="card">
       <div class="card-title">
-        <van-icon name="warning-o" color="#ff976a" />
+        <van-icon name="warning-o" class="c-warn" />
         <span class="grow">缺货预警</span>
-        <van-button size="mini" plain type="primary" @click="$router.push('/stock')">去补货</van-button>
+        <van-button size="mini" plain type="primary" @click="$router.push('/stock')">
+          去补货{{ lowStock.length ? `（${lowStock.length}）` : '' }}
+        </van-button>
       </div>
-      <div v-if="!lowStock.length" class="empty">库存充足，暂无缺货商品 🎉</div>
+      <div v-if="!lowStock.length" class="empty">库存充足，暂无缺货商品</div>
       <div
         v-for="p in lowStock.slice(0, 8)"
         :key="p.id"
@@ -106,7 +112,7 @@
 
     <!-- 最近动态 -->
     <div class="card">
-      <div class="card-title"><van-icon name="records" color="#1989fa" /> 最近动态</div>
+      <div class="card-title"><van-icon name="records" class="c-primary" /> 最近动态</div>
       <div class="seg" style="margin-bottom:6px;">
         <div class="seg-item" :class="{ active: feedTab === 'out' }" @click="feedTab = 'out'">最近出库</div>
         <div class="seg-item" :class="{ active: feedTab === 'in' }" @click="feedTab = 'in'">最近入库</div>
@@ -135,7 +141,7 @@
 
     <!-- 功能宫格 -->
     <div class="card">
-      <div class="card-title"><van-icon name="apps-o" color="#1989fa" /> 全部功能</div>
+      <div class="card-title"><van-icon name="apps-o" class="c-primary" /> 全部功能</div>
       <van-grid :column-num="4" :border="false">
         <van-grid-item icon="goods-collect-o" text="商品管理" @click="$router.push('/products')" />
         <van-grid-item icon="logistics" text="一单多货" @click="$router.push('/packrules')" />
@@ -144,8 +150,10 @@
         <van-grid-item icon="gold-coin-o" text="扣点" @click="$router.push('/deduction')" />
         <van-grid-item icon="send-gift-o" text="快递费" @click="$router.push('/express')" />
         <van-grid-item icon="setting-o" text="设置" @click="$router.push('/settings')" />
+        <van-grid-item icon="shopping-cart-o" text="库存管理" @click="$router.push('/stock')" />
       </van-grid>
     </div>
+    </template>
 
     <!-- AI 识别确认弹层 -->
     <van-popup v-model:show="confirmShow" position="bottom" round :style="{ height: '94%' }">
@@ -195,7 +203,7 @@
           <div v-if="ln.price_defaulted" class="muted" style="margin-top:4px;">单价未识别，已按该商品最近一次录入价回填，请核对</div>
           <div v-if="ln.hint" class="muted" style="margin-top:4px;">{{ ln.hint }}</div>
         </div>
-        <div v-if="!aiForm.lines.length" class="empty">无明细，请重新识别</div>
+        <div v-if="!aiForm.lines.length" class="empty">暂无明细，请重新识别</div>
 
         <div class="sheet-foot">
           <van-button block plain @click="confirmShow = false">取消</van-button>
@@ -211,6 +219,7 @@
       :note-stock="false"
       @pick="onReplaceProduct"
     />
+    </van-pull-refresh>
   </div>
 </template>
 
@@ -231,6 +240,8 @@ const lowStock = ref([])
 const recentInbounds = ref([])
 const recentOutbounds = ref([])
 const feedTab = ref('out')
+const loading = ref(true)      // 首屏骨架屏
+const refreshing = ref(false)  // 下拉刷新
 
 // AI
 const aiText = ref('')
@@ -252,6 +263,7 @@ const aiForm = reactive({
 })
 
 const load = async () => {
+  if (!userName.value) loading.value = true
   try {
     const d = await api('/api/dashboard')
     userName.value = d.user_name || ''
@@ -264,7 +276,14 @@ const load = async () => {
     recentOutbounds.value = d.recent_outbounds || []
   } catch (e) {
     showToast(e.message || '加载失败')
+  } finally {
+    loading.value = false
+    refreshing.value = false
   }
+}
+/** 下拉刷新：复用首页数据加载（工作台是 keep-alive 的，回来时不会自动重取） */
+async function onRefresh() {
+  await load()
 }
 onMounted(load)
 onActivated(load)
@@ -458,7 +477,7 @@ async function submitAI() {
 .ai-line { padding: 10px 0; border-bottom: 1px solid #f5f5f5; }
 .ai-line-name { font-weight: 600; font-size: 14px; }
 /* AI 确认弹层：撑满可用高度 + 底部按钮吸底，明细多时也不会被挤没 */
-.ai-sheet { display: flex; flex-direction: column; max-height: 88vh; }
+.ai-sheet { display: flex; flex-direction: column; }
 .ai-sheet .sheet-foot { position: sticky; bottom: 0; background: #fff; padding: 10px 0 4px; }
 :deep(.van-grid-item__content) { padding: 10px 4px; }
 :deep(.van-grid-item__text) { font-size: 12px; }

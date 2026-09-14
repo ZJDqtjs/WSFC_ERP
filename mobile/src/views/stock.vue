@@ -24,16 +24,20 @@
           <van-button size="mini" plain type="primary" icon="edit" @click="openAdjust()">盘点调整</van-button>
         </div>
         <van-pull-refresh v-model="refreshing" @refresh="loadStock">
-          <div v-if="!filtered.length" class="empty">无匹配商品</div>
-          <div v-for="p in filtered" :key="p.id" class="list-item" @click="goProductMv(p)">
-            <div class="row">
-              <span class="grow item-title">{{ p.name }}</span>
-              <span class="stock-num" :class="{ low: num(p.stock) <= 1e-6 }">{{ p.stock_display || fmtStock(p) }}</span>
+          <!-- 首次进入用骨架屏，避免"无匹配商品"一闪而过被误读 -->
+          <van-skeleton v-if="loading" title :row="4" class="skeleton-card" />
+          <template v-else>
+            <div v-if="!filtered.length" class="empty">无匹配商品</div>
+            <div v-for="p in filtered" :key="p.id" class="list-item" @click="goProductMv(p)">
+              <div class="row">
+                <span class="grow item-title">{{ p.name }}</span>
+                <span class="stock-num" :class="{ low: num(p.stock) <= 1e-6 }">{{ p.stock_display || fmtStock(p) }}</span>
+              </div>
+              <div class="item-meta">
+                {{ p.category || '—' }} · 均价 {{ fmtMoney(costOf(p)) }}/{{ p.default_unit || p.base_unit }} · 价值 {{ fmtMoney(p.stock_value) }}
+              </div>
             </div>
-            <div class="item-meta">
-              {{ p.category || '—' }} · 均价 {{ fmtMoney(costOf(p)) }}/{{ p.default_unit || p.base_unit }} · 价值 {{ fmtMoney(p.stock_value) }}
-            </div>
-          </div>
+          </template>
         </van-pull-refresh>
       </div>
     </template>
@@ -41,13 +45,15 @@
     <!-- ============ 盘点记录 ============ -->
     <template v-else-if="tab === 'adj'">
       <div class="card">
-        <div class="row wrap" style="gap:6px;">
-          <van-field v-model="adjFilter.product_id" readonly placeholder="全部商品" style="flex:1;background:#f7f8fa;border-radius:6px;padding:6px 10px;" @click="openProductFilter" />
-          <van-field v-model="adjFilter.from" type="date" placeholder="起" style="max-width:130px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
-          <van-field v-model="adjFilter.to" type="date" placeholder="止" style="max-width:130px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
+        <div class="filter-bar">
+          <van-field v-model="adjFilter.product_id" readonly placeholder="全部商品" @click="openProductFilter" />
+          <van-field v-model="adjFilter.from" type="date" placeholder="起始日期" />
+          <van-field v-model="adjFilter.to" type="date" placeholder="结束日期" />
           <van-button size="small" type="primary" @click="loadAdjustments">查询</van-button>
         </div>
         <van-pull-refresh v-model="refreshing" @refresh="loadAdjustments">
+          <SkeletonList v-if="loadingAdj" :rows="3" />
+          <template v-else>
           <div v-if="!adjList.length" class="empty">暂无盘点记录</div>
           <div v-for="a in adjList" :key="a.id" class="list-item">
             <div class="row">
@@ -62,6 +68,7 @@
             </div>
             <div class="item-meta">{{ a.date }} · {{ a.operator || '—' }}{{ a.remark ? ' · ' + a.remark : '' }}</div>
           </div>
+          </template>
         </van-pull-refresh>
       </div>
     </template>
@@ -69,17 +76,19 @@
     <!-- ============ 库存流水 ============ -->
     <template v-else-if="tab === 'mv'">
       <div class="card">
-        <div class="row wrap" style="gap:6px;">
-          <van-field v-model="mvFilter.product_id" readonly placeholder="全部商品" style="flex:1;background:#f7f8fa;border-radius:6px;padding:6px 10px;" @click="openProductFilter('mv')" />
-          <van-field v-model="mvFilter.from" type="date" placeholder="起" style="max-width:130px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
-          <van-field v-model="mvFilter.to" type="date" placeholder="止" style="max-width:130px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
+        <div class="filter-bar">
+          <van-field v-model="mvFilter.product_id" readonly placeholder="全部商品" @click="openProductFilter('mv')" />
+          <van-field v-model="mvFilter.from" type="date" placeholder="起始日期" />
+          <van-field v-model="mvFilter.to" type="date" placeholder="结束日期" />
           <van-button size="small" type="primary" @click="loadMovements">查询</van-button>
           <van-button size="small" plain @click="quickMv(0)">今天</van-button>
           <van-button size="small" plain @click="quickMv(7)">近7天</van-button>
           <van-button size="small" plain @click="quickMv(null)">全部</van-button>
         </div>
         <van-pull-refresh v-model="refreshing" @refresh="loadMovements">
-          <div v-if="!mvList.length" class="empty">暂无流水</div>
+          <SkeletonList v-if="loadingMv" :rows="4" />
+          <template v-else>
+          <div v-if="!mvList.length" class="empty">暂无库存流水</div>
           <div v-for="m in mvList" :key="m.id" class="list-item">
             <div class="row">
               <span class="grow item-title">{{ m.product_name }}</span>
@@ -93,6 +102,7 @@
             </div>
             <div v-if="m.remark" class="item-meta">{{ m.remark }}</div>
           </div>
+          </template>
         </van-pull-refresh>
       </div>
     </template>
@@ -100,9 +110,9 @@
     <!-- ============ 工作量统计 ============ -->
     <template v-else>
       <div class="card">
-        <div class="row wrap" style="gap:6px;">
-          <van-field v-model="wlFilter.from" type="date" style="max-width:130px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
-          <van-field v-model="wlFilter.to" type="date" style="max-width:130px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
+        <div class="filter-bar">
+          <van-field v-model="wlFilter.from" type="date" placeholder="起始日期" />
+          <van-field v-model="wlFilter.to" type="date" placeholder="结束日期" />
           <van-button size="small" type="primary" @click="loadWorkload">查询</van-button>
           <van-button size="small" plain @click="quickWl('month')">本月</van-button>
           <van-button size="small" plain @click="quickWl('all')">全部</van-button>
@@ -125,18 +135,18 @@
         <div v-for="x in wl.by_product || []" :key="x.id" class="list-item">
           <div class="row">
             <span class="grow item-title">{{ x.name }}</span>
-            <span class="bold">{{ fmtNum(x.workload) }} {{ x.unit }}</span>
+            <span class="num-r">{{ fmtNum(x.workload) }} <span class="unit-weak">{{ x.unit }}</span></span>
           </div>
           <div class="item-meta">单价 {{ fmtMoney(x.rate) }} · 成本 {{ fmtMoney(x.cost) }}</div>
         </div>
       </div>
       <div class="card">
         <div class="card-title">按日期</div>
-        <div v-if="!(wl.by_date || []).length" class="empty">暂无数据</div>
+        <div v-if="!(wl.by_date || []).length" class="empty">暂无按日期统计</div>
         <div v-for="d in wl.by_date || []" :key="d.date" class="list-item">
           <div class="row">
             <span class="grow">{{ d.date }}</span>
-            <span class="bold">{{ fmtNum(d.workload) }}</span>
+            <span class="num-r">{{ fmtNum(d.workload) }}</span>
           </div>
         </div>
       </div>
@@ -193,6 +203,7 @@ import { showToast, showConfirmDialog } from 'vant'
 import api from '../api'
 import ProductPicker from '../components/ProductPicker.vue'
 import OperatorField from '../components/OperatorField.vue'
+import SkeletonList from '../components/SkeletonList.vue'
 import { fmtMoney, fmtNum, fmtSign, fmtStock, num, unitFactor, defaultUnit, moveTypeLabel, todayStr } from '../utils/format'
 import { userName, ensureUserName } from '../utils/user'
 
@@ -206,6 +217,9 @@ const tabs = [
 ]
 const tab = ref('overview')
 const refreshing = ref(false)
+const loading = ref(true)      // 库存总览首屏骨架屏
+const loadingAdj = ref(true)   // 盘点记录
+const loadingMv = ref(true)    // 库存流水
 
 const PRODUCTS = ref([])
 const STOCK = ref([])
@@ -249,9 +263,11 @@ const costOf = (p) => num(p.avg_cost) * unitFactor(p, defaultUnit(p))
 
 /* ---------- 总览 ---------- */
 async function loadStock() {
+  if (!STOCK.value.length) loading.value = true
   try {
     STOCK.value = await api('/api/stock-overview')
   } catch (e) { showToast(e.message || '加载失败') }
+  loading.value = false
   refreshing.value = false
 }
 
@@ -263,6 +279,7 @@ function goProductMv(p) {
 
 /* ---------- 盘点 ---------- */
 async function loadAdjustments() {
+  if (!adjList.value.length) loadingAdj.value = true
   try {
     const q = []
     if (adjFilter.product_id) q.push(`product_id=${adjFilter.product_id}`)
@@ -270,6 +287,7 @@ async function loadAdjustments() {
     if (adjFilter.to) q.push(`date_to=${adjFilter.to}`)
     adjList.value = await api('/api/adjustments' + (q.length ? '?' + q.join('&') : ''))
   } catch (e) { showToast(e.message || '加载失败') }
+  loadingAdj.value = false
   refreshing.value = false
 }
 
@@ -388,6 +406,7 @@ async function submitAdjust() {
 
 /* ---------- 流水 ---------- */
 async function loadMovements() {
+  if (!mvList.value.length) loadingMv.value = true
   try {
     const q = []
     if (mvFilter.product_id) q.push(`product_id=${mvFilter.product_id}`)
@@ -395,6 +414,7 @@ async function loadMovements() {
     if (mvFilter.to) q.push(`date_to=${mvFilter.to}`)
     mvList.value = await api('/api/movements' + (q.length ? '?' + q.join('&') : ''))
   } catch (e) { showToast(e.message || '加载失败') }
+  loadingMv.value = false
   refreshing.value = false
 }
 function quickMv(days) {
@@ -474,11 +494,11 @@ onActivated(() => { if (tab.value === 'overview') loadStock() })
 </script>
 
 <style scoped>
-.stock-num { font-weight: 700; font-variant-numeric: tabular-nums; }
-.stock-num.low { color: #ee0a24; }
-.primary { color: #1989fa; }
+.stock-num { font-weight: 700; }
+.stock-num.low { color: var(--c-danger); }
+.primary { color: var(--c-primary); }
 .adj-preview {
-  background: #f7f8fa; border-radius: 8px; padding: 10px 12px;
-  font-size: 12px; line-height: 1.9; color: #646566;
+  background: var(--c-bg); border-radius: var(--radius-sm); padding: 10px 12px;
+  font-size: 12px; line-height: 1.9; color: var(--c-text-2);
 }
 </style>
