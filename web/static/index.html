@@ -600,7 +600,7 @@
 
         <div class="settings-panel" data-panel="jushuitan" style="display:none;">
           <div class="card">
-            <div class="card-head"><h3>① 上传聚水潭销售出库单并自动新增关联</h3><span class="hint">自动新增不存在的订单商品并关键词关联库存商品；需维护关联请前往出库页「关联结算」</span></div>
+            <div class="card-head"><h3>① 上传聚水潭销售出库单并自动新增关联</h3><span class="hint">自动新增不存在的订单商品并关键词关联库存商品；明细维护见下方「③ 关联明细维护」</span></div>
             <div class="toolbar">
               <input type="file" id="mpFile" accept=".xlsx" />
               <button class="btn" onclick="parseJushuitan()">解析并自动新增</button>
@@ -619,6 +619,35 @@
               <button class="btn green" onclick="batchFromImport('jushuitan')">导入出库单（预览确认）</button>
             </div>
             <div id="mpImportResult"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>③ 关联明细维护</h3><span class="hint">查看每条「聚水潭商品名 → 系统商品」映射，可编辑 / 删除 / 手动新增；顶部统计关联结算（订单商品）占比</span></div>
+            <div id="mpMappingStats"></div>
+            <div class="toolbar">
+              <input id="mpSearch" placeholder="🔍 搜索聚水潭商品名 / 系统商品..." oninput="renderMappings()" />
+              <select id="mpFilter" onchange="renderMappings()">
+                <option value="">全部关联</option>
+                <option value="linked">已关联</option>
+                <option value="unlinked">未关联（待匹配）</option>
+                <option value="order">指向关联结算（订单商品）</option>
+                <option value="stock">指向库存商品</option>
+              </select>
+              <div class="grow"></div>
+              <button class="btn" onclick="mappingAdd()">＋ 手动新增关联</button>
+            </div>
+            <div class="table-wrap">
+              <table id="mpMappingTable">
+                <thead><tr>
+                  <th style="width:34%;">聚水潭商品名</th>
+                  <th>关联系统商品</th>
+                  <th>类型</th>
+                  <th>扣减库存商品</th>
+                  <th style="width:120px;"></th>
+                </tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
           </div>
         </div>
       </section>

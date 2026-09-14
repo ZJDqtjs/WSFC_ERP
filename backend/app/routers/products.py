@@ -230,6 +230,8 @@ def delete_product(pid: int, db: Session = Depends(get_db), user: User = Depends
     p = db.get(Product, pid)
     if not p:
         raise HTTPException(404, "商品不存在")
+    if _product_referenced(db, pid):
+        raise HTTPException(400, f"商品「{p.name}」已被出入库/财务流水/入仓品或其他商品关联引用，无法删除")
     db.delete(p)
     db.commit()
     return {"ok": True}

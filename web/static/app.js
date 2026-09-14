@@ -3,6 +3,7 @@ let PRODUCTS = [];
 let UNITS = [];
 let CURRENT_USER = null;
 let MP_CODES = [];  // 聚水潭解析出的编码列表
+let MAPPINGS = null;  // 聚水潭关联明细 { summary, items }
 
 /* 批量选择状态 */
 const prodSel = new Set();
@@ -4377,11 +4378,102 @@ async function confirmInbound(kind) {
 
 /* =============== 聚水潭编码关联 =============== */
 async function loadMappingPage() {
-  // 页面已改为「解析即自动新增/关联」，这里仅展示当前关联数量供参考
-  const r = await api("/api/mappings");
-  $("mpParseInfo").innerHTML = r.length
-    ? `<div class="alert ok">当前已保存 <b>${r.length}</b> 条商品编码关联（均指向库存商品），导入出库单时将按此关联结算。</div>`
-    : `<div class="alert">暂无商品编码关联，上传聚水潭出库单后会自动新增订单商品并关联库存商品。</div>`;
+  try {
+    MAPPINGS = await api("/api/mappings");
+    renderMappings();
+  } catch (e) {
+    const box = $("mpMappingStats");
+    if (box) box.innerHTML = `<div class="alert err">加载关联明细失败：${esc(e.message)}</div>`;
+  }
+}
+function renderMappings() {
+  const d = MAPPINGS || { summary: {}, items: [] };
+  const s = d.summary || {};
+  $("mpMappingStats").innerHTML = `<div class="mp-summary">
+    <div class="mp-sum-item">关联总数 <b>${s.total || 0}</b></div>
+    <div class="mp-sum-item ok">已关联 <b>${s.linked || 0}</b></div>
+    <div class="mp-sum-item warn">未关联 <b>${s.unlinked || 0}</b></div>
+    <div class="mp-sum-item">→ 关联结算（订单商品）<b>${s.linked_order || 0}</b></div>
+    <div class="mp-sum-item">→ 库存商品 <b>${s.linked_stock || 0}</b></div>
+  </div>`;
+  const kw = ($("mpSearch")?.value || "").trim().toLowerCase();
+  const f = $("mpFilter")?.value || "";
+  let items = d.items || [];
+  if (kw) items = items.filter((m) =>
+    (m.external_code || "").toLowerCase().includes(kw) || (m.product_name || "").toLowerCase().includes(kw));
+  if (f === "linked") items = items.filter((m) => m.product_id);
+  else if (f === "unlinked") items = items.filter((m) => !m.product_id);
+  else if (f === "order") items = items.filter((m) => m.product_type === "order");
+  else if (f === "stock") items = items.filter((m) => m.product_type === "stock");
+  const tbody = items.map((m) => {
+    const typeBadge = !m.product_id
+      ? '<span class="badge off">未关联</span>'
+      : (!m.product_name
+        ? '<span class="badge off">已失效</span>'
+        : (m.product_type === "order" ? '<span class="badge income">订单</span>' : '<span class="badge adjust">库存</span>'));
+    const prodCell = m.product_id
+      ? `<b>${esc(m.product_name || "（已删除商品）")}</b>${m.product_category ? `<div class="muted" style="font-size:12px;">${esc(m.product_category)}</div>` : ""}`
+      : '<span class="muted">—</span>';
+    const stockCell = !m.product_id ? "—"
+      : (m.product_type === "order"
+        ? (m.stock_product_name ? esc(m.stock_product_name) : '<span style="color:var(--red)">未关联库存</span>')
+        : '<span class="muted">—</span>');
+    return `<tr>
+      <td><b>${esc(m.external_code)}</b>${m.external_name && m.external_name !== m.external_code ? `<div class="muted" style="font-size:12px;">${esc(m.external_name)}</div>` : ""}</td>
+      <td>${prodCell}</td>
+      <td>${typeBadge}</td>
+      <td class="muted">${stockCell}</td>
+      <td class="line-actions">
+        <button class="btn sm secondary" onclick="mappingEdit(${m.id})">编辑</button>
+        <button class="btn sm danger" onclick="mappingDelete(${m.id})">删除</button>
+      </td>
+    </tr>`;
+  }).join("");
+  $("mpMappingTable").querySelector("tbody").innerHTML =
+    tbody || `<tr><td colspan="5" class="empty">暂无关联，可上传聚水潭出库单自动生成，或点击「手动新增关联」</td></tr>`;
+}
+function mappingAdd() { mappingEdit(null); }
+async function mappingEdit(id) {
+  if (!PRODUCTS.length) { try { PRODUCTS = await api("/api/products"); } catch (e) {} }
+  const m = id
+    ? ((MAPPINGS?.items || []).find((x) => x.id === id) || { external_code: "", product_id: null })
+    : { external_code: "", product_id: null };
+  const opts = ['<option value="">（不关联 / 清空）</option>']
+    .concat((PRODUCTS || []).map((p) => `<option value="${p.id}" ${m.product_id === p.id ? "selected" : ""}>${esc(p.name)}（${p.product_type === "order" ? "订单" : "库存"} · ${esc(p.category || "—")}）</option>`))
+    .join("");
+  openModal(`
+    <h3>${id ? "编辑" : "新增"}聚水潭关联 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="form-grid">
+      <div class="field" style="grid-column:1/-1;"><label>聚水潭商品名（外部编码）*</label><input id="mpEditCode" value="${esc(m.external_code || "")}" placeholder="如：新鲜香蕈菌250g" /></div>
+      <div class="field" style="grid-column:1/-1;"><label>关联系统商品</label><select id="mpEditProduct" class="searchable">${opts}</select>
+        <div class="field-hint">导入出库单时，聚水潭商品名将按此映射结算；选「不关联」可清空</div></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="mappingSave()">保存</button>
+    </div>`);
+}
+async function mappingSave() {
+  const external_code = ($("mpEditCode").value || "").trim();
+  const pv = $("mpEditProduct").value;
+  const product_id = pv ? +pv : null;
+  if (!external_code) { toast("请填写聚水潭商品名"); return; }
+  try {
+    await api("/api/mappings", "POST", { source: "jushuitan", external_code, product_id });
+    toast("已保存"); closeModal();
+    MAPPINGS = await api("/api/mappings");
+    renderMappings();
+  } catch (e) { toast("保存失败：" + e.message); }
+}
+async function mappingDelete(id) {
+  const m = (MAPPINGS?.items || []).find((x) => x.id === id);
+  if (!confirm(`确认删除关联「${m ? m.external_code : id}」？`)) return;
+  try {
+    await api("/api/mappings/" + id, "DELETE");
+    toast("已删除");
+    MAPPINGS = await api("/api/mappings");
+    renderMappings();
+  } catch (e) { toast("删除失败：" + e.message); }
 }
 async function parseJushuitan() {
   const file = $("mpFile").files[0];

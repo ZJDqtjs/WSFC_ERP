@@ -1494,16 +1494,52 @@ def parse_jushuitan(file: UploadFile, db: Session = Depends(get_db), user: User 
 
 @router.get("/mappings")
 def list_mappings(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    rows = db.execute(select(CodeMapping).order_by(CodeMapping.id)).scalars()
-    return [
-        {
-            "id": m.id, "source": m.source, "external_code": m.external_code,
-            "external_name": m.external_name, "product_id": m.product_id,
-            "product_name": m.product.name if m.product else "",
+    rows = list(db.execute(select(CodeMapping).order_by(CodeMapping.id.desc())).scalars())
+    # 预取关联商品，避免逐条查询（史山遗留：原实现直接 m.product.name 触发 N+1）
+    pids = {m.product_id for m in rows if m.product_id}
+    prods = {
+        p.id: p
+        for p in db.execute(select(Product).where(Product.id.in_(pids))).scalars()
+    } if pids else {}
+    sp_ids = {p.stock_product_id for p in prods.values() if p.stock_product_id}
+    sp_names = {
+        p.id: p.name
+        for p in db.execute(select(Product).where(Product.id.in_(sp_ids))).scalars()
+    } if sp_ids else {}
+
+    items, linked, linked_order, linked_stock = [], 0, 0, 0
+    for m in rows:
+        p = prods.get(m.product_id) if m.product_id else None
+        items.append({
+            "id": m.id,
+            "source": m.source,
+            "external_code": m.external_code,
+            "external_name": m.external_name or m.external_code,
+            "product_id": m.product_id,
+            "product_name": p.name if p else "",
+            "product_type": p.product_type if p else "",
+            "product_category": p.category if p else "",
+            "stock_product_id": p.stock_product_id if p else None,
+            "stock_product_name": sp_names.get(p.stock_product_id, "") if p and p.stock_product_id else "",
             "auto_score": m.auto_score,
-        }
-        for m in rows
-    ]
+        })
+        if p:
+            linked += 1
+            if p.product_type == "order":
+                linked_order += 1
+            else:
+                linked_stock += 1
+
+    return {
+        "summary": {
+            "total": len(items),
+            "linked": linked,
+            "unlinked": len(items) - linked,
+            "linked_order": linked_order,
+            "linked_stock": linked_stock,
+        },
+        "items": items,
+    }
 
 
 class MappingIn(BaseModel):
