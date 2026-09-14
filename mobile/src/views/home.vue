@@ -148,8 +148,8 @@
     </div>
 
     <!-- AI 识别确认弹层 -->
-    <van-popup v-model:show="confirmShow" position="bottom" round :style="{ height: '90%' }">
-      <div class="sheet-body">
+    <van-popup v-model:show="confirmShow" position="bottom" round :style="{ height: '94%' }">
+      <div class="sheet-body ai-sheet">
         <div class="sheet-title">确认{{ aiForm.type === 'inbound' ? '入库' : '出库' }}</div>
 
         <div class="seg" style="margin-bottom:10px;">
@@ -180,10 +180,17 @@
             </span>
             <van-icon name="delete-o" color="#ee0a24" @click="aiForm.lines.splice(i, 1)" />
           </div>
+          <van-field
+            v-if="ln.new_product"
+            v-model="ln.new_name"
+            label="新商品名"
+            placeholder="可修改后提交"
+            style="margin-top:6px;background:#fff7e6;border-radius:6px;"
+          />
           <div class="row mt8">
             <van-field v-model="ln.quantity" type="number" label="数量" />
             <van-field v-model="ln.unit" label="单位" style="max-width:86px;" />
-            <van-field v-model="ln.unit_price" type="number" label="单价" />
+            <van-field v-model="ln.unit_price" type="number" label="单价" placeholder="可留空" />
           </div>
           <div v-if="ln.price_defaulted" class="muted" style="margin-top:4px;">单价未识别，已按该商品最近一次录入价回填，请核对</div>
           <div v-if="ln.hint" class="muted" style="margin-top:4px;">{{ ln.hint }}</div>
@@ -351,6 +358,7 @@ function openConfirm(r) {
       unit_price,
       auto_created: !!ln.auto_created,
       new_product: ln.new_product || null,   // 待新增商品：提交时才建档
+      new_name: (ln.new_product && ln.new_product.name) || '',   // 新商品名字（可改）
       price_defaulted,
       hint: ln.hint || '',
     }
@@ -391,7 +399,7 @@ async function submitAI() {
     if (pend.length) {
       const d = await api('/api/ai/products', 'POST', {
         items: pend.map((l) => ({
-          name: l.new_product.name,
+          name: (l.new_name || '').trim() || l.new_product.name,
           category: l.new_product.category || 'stock',
           unit: l.unit || l.new_product.unit || '个',
         })),
@@ -449,6 +457,9 @@ async function submitAI() {
 .ai-img { width: 100%; max-height: 200px; object-fit: contain; border-radius: 8px; margin-bottom: 10px; background: #f7f8fa; }
 .ai-line { padding: 10px 0; border-bottom: 1px solid #f5f5f5; }
 .ai-line-name { font-weight: 600; font-size: 14px; }
+/* AI 确认弹层：撑满可用高度 + 底部按钮吸底，明细多时也不会被挤没 */
+.ai-sheet { display: flex; flex-direction: column; max-height: 88vh; }
+.ai-sheet .sheet-foot { position: sticky; bottom: 0; background: #fff; padding: 10px 0 4px; }
 :deep(.van-grid-item__content) { padding: 10px 4px; }
 :deep(.van-grid-item__text) { font-size: 12px; }
 </style>

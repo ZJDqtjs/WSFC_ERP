@@ -1151,15 +1151,18 @@ function aiCatChanged(i) {
     line.category = cat;
     if (line.new_product) line.new_product.category = cat;
   }
-  // 相似候选下拉不随分类重建（候选本身已按识别分类过滤）
-  if (line && line.ambiguous && line.candidates && line.candidates.length) return;
-  const cur = +sel.value;
-  const np = line && line.new_product;
-  const keepCur = !np && aiProductsByCat(cat).some((p) => p.id === cur);
-  const head = np
-    ? `<option value="0" ${keepCur ? "" : "selected"}>🆕 新建：${esc(np.name)}</option>`
+  const cur = +sel.value || 0;
+  // 当前选着相似候选且分类没换：保留候选列表不动
+  if (line && line.ambiguous && line.candidates && line.candidates.length
+      && line.candidates.some((c) => c.product_id === cur)) return;
+  const canNew = !!(line && (line.new_product || line.ambiguous));
+  const keepCur = !canNew && aiProductsByCat(cat).some((p) => p.id === cur);
+  const newName = (line && (line.recognized_name || line.product_name)) || "";
+  const head = canNew
+    ? `<option value="0" ${keepCur || cur ? "" : "selected"}>🆕 新建：${esc(newName)}</option>`
     : (keepCur ? "" : `<option value="0" selected>— 请选择商品 —</option>`);
   sel.innerHTML = aiProductOptions(keepCur ? cur : 0, cat, head);
+  aiProdChanged(i);   // 重建后同步「新建名字框」显隐与单位
 }
 // 价格徽标：标记该行单价是否为「按最近价自动填入」
 function aiPriceBadge(tr, line) {
@@ -1185,6 +1188,15 @@ async function aiProdChanged(i) {
   const pid = +sel.value || 0;
   const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[i] : null;
   if (line) line.product_id = pid;
+  // 选中「🆕 新建」：露出名字输入框，并把单位还原成票据上的原始单位（如 瓶）
+  const nameEl = tr.querySelector(".ai-newname");
+  if (nameEl) {
+    nameEl.style.display = pid ? "none" : "";
+    if (!pid && !nameEl.value) nameEl.value = (line && (line.recognized_name || line.product_name)) || "";
+  }
+  if (!pid && line && line.recognized_unit) {
+    tr.querySelector(".ai-unit").value = line.recognized_unit;
+  }
   const priceEl = tr.querySelector(".ai-price");
   if (!pid || !priceEl) { aiPriceBadge(tr, line); return; }   // 待新增商品：暂无历史价
   // 用户手填的价格不动；自动填入的价格在换商品后要跟着换成新商品的价格
@@ -1239,12 +1251,12 @@ function openAiConfirm(r) {
       ? '<span class="badge" style="background:#fde2e0;color:#b3261e;margin-left:6px;" title="' + esc(ln.unit_conflict_msg || "") + '">⚠ 单位不一致</span>' : "";
     return `<tr data-idx="${i}">
       <td><select class="ai-cat" onchange="aiCatChanged(${i})" style="width:92px;">${aiCatOptions(cat)}</select></td>
-      <td style="min-width:220px;">${prodSel}${ambiBadge}
-        ${np ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 提交后新增</span>' : ""}</td>
+      <td style="min-width:250px;">${prodSel}${aiNewNameHtml(ln)}<div style="margin-top:4px;">${ambiBadge}${np ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 提交后新增</span>' : ""}</div></td>
       <td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.quantity)}" style="width:90px;" /></td>
       <td><input class="ai-unit" value="${esc(ln.unit || "")}" style="width:70px;" />${unitBadge}</td>
-      <td class="ai-price-cell"><input type="number" step="any" class="ai-price" value="${ln.unit_price}" style="width:100px;" />${ln.price_defaulted ? '<span class="ai-price-badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按最近价</span>' : ""}</td>
-      <td class="muted" style="font-size:12px;">${esc(ln.hint || "")}</td>
+      <td class="ai-price-cell"><input type="number" step="any" class="ai-price" value="${ln.unit_price ? ln.unit_price : ""}" placeholder="可留空" style="width:100px;" />${ln.price_defaulted ? '<span class="ai-price-badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按最近价</span>' : ""}</td>
+      <td class="muted" style="font-size:12px;min-width:200px;">${esc(ln.hint || "")}</td>
+      <td style="white-space:nowrap;"><button class="btn secondary" style="padding:4px 8px;" title="删除这一行" onclick="aiDelLine(${i})">🗑 删除</button></td>
     </tr>`;
   }).join("");
   const invImg = r.image_url
@@ -1253,7 +1265,7 @@ function openAiConfirm(r) {
   openModal(`
     <h3>确认录入（${isIn ? "入库" : "出库"}） <button class="close" onclick="closeModal()">✕</button></h3>
     ${invImg}
-    <p class="hint" style="margin-bottom:12px;">已自动识别以下内容，请核对（可修改）后提交；🆕 标记的商品为新物品，点「确认提交」后才会新增商品档案（取消不会创建）。</p>
+    <p class="hint" style="margin-bottom:12px;">已自动识别以下内容，请核对（可修改/可删除行）后提交；🆕 标记的商品为新物品，点「确认提交」后才会新增商品档案（取消不会创建）。单价可留空，提交后在单据里补也行。</p>
     <div class="form-grid">
       <div class="field"><label>业务类型</label><select id="aiType" onchange="aiTypeChanged()">
         <option value="inbound" ${isIn ? "selected" : ""}>入库（进货）</option>
@@ -1264,13 +1276,24 @@ function openAiConfirm(r) {
       <div class="field"><label>备注</label><input id="aiRemark" value="${esc(r.remark)}" /></div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>分类</th><th>商品</th><th>数量</th><th>单位</th><th>${isIn ? "单价" : "售价"}</th><th>说明</th></tr></thead>
-      <tbody id="aiLines">${linesHtml || '<tr><td colspan="6" class="empty">未识别到明细</td></tr>'}</tbody>
+      <thead><tr><th>分类</th><th>商品</th><th>数量</th><th>单位</th><th>${isIn ? "单价" : "售价"}</th><th>说明</th><th>操作</th></tr></thead>
+      <tbody id="aiLines">${linesHtml || '<tr><td colspan="7" class="empty">未识别到明细</td></tr>'}</tbody>
     </table></div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
       <button class="btn green" onclick="aiSubmit()">✓ 确认提交</button>
     </div>`);
+  $("modalBox").classList.add("wide");   // 明细列多，弹窗放宽，避免信息被挤没
+}
+// 待新增商品的名字输入框：选中「🆕 新建」时出现，可自己改名字
+function aiNewNameHtml(ln) {
+  const show = !ln.product_id;
+  return `<input class="ai-newname" placeholder="新商品名称（可修改）" value="${esc(ln.recognized_name || ln.product_name || "")}" style="${show ? "" : "display:none;"}margin-top:4px;width:100%;" />`;
+}
+// 删除明细行
+function aiDelLine(i) {
+  const tr = document.querySelector(`#aiLines tr[data-idx="${i}"]`);
+  if (tr) tr.remove();
 }
 function aiTypeChanged() {
   // 切换类型时，未显式归类的行按业务类型重设默认分类（入库库存优先，出库订单优先）
@@ -1289,27 +1312,33 @@ async function aiSubmit() {
   const remark = $("aiRemark").value.trim();
   const inv = (AI_CONFIRM && AI_CONFIRM.image_url) ? `[票据] ${AI_CONFIRM.image_url}` : "";
   const autoFlags = (AI_CONFIRM && AI_CONFIRM.lines) || [];
-  let rows = [...document.querySelectorAll("#aiLines tr[data-idx]")].map((tr, i) => {
-    const line = autoFlags[i] || {};
+  let rows = [...document.querySelectorAll("#aiLines tr[data-idx]")].map((tr) => {
+    const idx = +tr.dataset.idx;                      // 按行号取回识别结果，删行后也不会串位
+    const line = autoFlags[idx] || {};
     const pid = +tr.querySelector(".ai-pid").value || 0;
-    // 歧义行里用户选了「🆕 新建」：按票据上的原名建档
-    const spec = line.new_product || (line.ambiguous ? {
-      name: line.recognized_name || line.product_name,
+    const nameEl = tr.querySelector(".ai-newname");
+    const typedName = nameEl ? nameEl.value.trim() : "";
+    // 选中「🆕 新建」（或原本就是新物品）：按输入的名字建档，名字可自行修改
+    const wantNew = !pid && (!!line.new_product || !!line.ambiguous || !!typedName);
+    const spec = wantNew ? {
+      name: typedName || line.recognized_name || line.product_name || "",
       category: line.category || "stock",
-      unit: line.unit,
-    } : null);
+      unit: tr.querySelector(".ai-unit").value.trim() || line.recognized_unit || "个",
+    } : null;
+    const priceRaw = tr.querySelector(".ai-price").value.trim();
     return {
       product_id: pid,
       // 待新增商品：提交时才建档，避免用户取消也污染商品资料（含商品类型/包材）
-      new_product: (!pid && spec) ? spec : null,
+      new_product: (spec && spec.name) ? spec : null,
       quantity: parseFloat(tr.querySelector(".ai-qty").value),
       unit: tr.querySelector(".ai-unit").value.trim(),
-      unit_price: parseFloat(tr.querySelector(".ai-price").value),
+      unit_price: priceRaw === "" ? 0 : parseFloat(priceRaw),   // 单价允许留空，提交后可在单据里补
       auto_created: !!line.auto_created,
     };
   }).filter((r) => r.product_id || r.new_product);
   if (!rows.length) { toast("请至少填写一条商品"); return; }
-  if (rows.some((r) => !(r.quantity > 0) || isNaN(r.unit_price) || !r.unit)) { toast("请完整填写数量、单位与金额"); return; }
+  if (rows.some((r) => !(r.quantity > 0) || !r.unit)) { toast("请填写数量与单位（单价可留空，提交后在单据里补）"); return; }
+  if (rows.some((r) => isNaN(r.unit_price))) { toast("单价填的不是数字，请检查"); return; }
   const op = (CURRENT_USER && (CURRENT_USER.name || CURRENT_USER.username)) || "";
   try {
     // 1) 先创建确认为新物品的商品档案（同名已存在则复用）

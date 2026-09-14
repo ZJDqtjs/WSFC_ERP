@@ -572,12 +572,41 @@ def _resolve_line(db: Session, name: str, op_type: str, cat: str) -> Product | N
 _UNIT_EQUIVALENTS = {"千克": "公斤", "kg": "公斤", "KG": "公斤", "公斤": "公斤"}
 
 
+def _canonical_unit(unit: str) -> str:
+    """把识别到的单位统一成系统里的写法：千克/kg 一律记「公斤」，免得新建出同义单位。"""
+    s = (unit or "").strip()
+    return _UNIT_EQUIVALENTS.get(s, s)
+
+
 def _same_unit(a: str, b: str) -> bool:
     """两个单位是否等价（如「千克」与「公斤」都是 1000 克）。"""
     if not a or not b:
         return False
-    a, b = str(a).strip(), str(b).strip()
-    return a == b or _UNIT_EQUIVALENTS.get(a, a) == _UNIT_EQUIVALENTS.get(b, b)
+    a, b = _canonical_unit(a), _canonical_unit(b)
+    return a == b
+
+
+def _unit_incompatible(p: Product, unit: str) -> bool:
+    """票据单位与商品单位体系是否完全对不上（如票据按「瓶」、商品按「公斤」管）。
+
+    用途：名称只是「包含」关系（如「冻干黑花生」↔「黑花生」）且单位体系还不同时，
+    基本可断定不是同一个货品，应走「新增品类」而不是硬塞给相似商品。
+    """
+    unit = (unit or "").strip()
+    if not unit:
+        return False
+    conv = p.conversions or {}
+    du = p.default_unit or p.base_unit
+    u = _norm_unit(unit, conv) or unit
+    if _same_unit(u, du) or _same_unit(u, p.base_unit):
+        return False
+    if u in conv and conv.get(u):
+        return False                        # 换算表里有，可换算
+    if u == "斤" and "公斤" in conv:
+        return False
+    if _canonical_unit(u) == "公斤" and "公斤" in conv:
+        return False
+    return True
 
 
 def _norm_unit(unit: str, conv: dict) -> str | None:
@@ -694,13 +723,14 @@ def _normalize_line(db: Session, p: Product | None, line: dict, op_type: str, au
     """
     name = (line.get("product") or "").strip()
     qty = float(line.get("quantity") or 0)
-    unit = str(line.get("unit") or "").strip()
+    unit = _canonical_unit(str(line.get("unit") or "").strip())   # 千克→公斤，统一单位写法
     price = float(line.get("unit_price") or 0)
 
     out = {
         "product_id": 0,
         "product_name": name,
-        "recognized_name": name,         # 票据/文本里的原始名称（供前端「新建议」使用）
+        "recognized_name": name,         # 票据/文本里的原始名称（供前端「新建」使用）
+        "recognized_unit": unit,         # 票据/文本里的原始单位（切到「新建」时用它）
         "category": category,
         "quantity": qty,
         "unit": unit,
@@ -747,6 +777,11 @@ def _normalize_line(db: Session, p: Product | None, line: dict, op_type: str, au
         else:
             out["unit"] = du if du else unit
             out["hint"] += "；未能换算单位，请核对"
+
+    # 商品档案若把默认单位写成「千克」，展示与提交统一改用「公斤」（同义单位不再重复引入）
+    tgt = _canonical_unit(out["unit"])
+    if tgt != out["unit"] and (not conv or tgt in conv):
+        out["unit"] = tgt
 
     # 单位冲突检测：识别原始单位 与 商品库存/展示单位 不一致时，提示用户确认换算
     # 注意：千克/公斤 是同一单位，不可当冲突报（否则票据里的「千克」会全行刷告警）。
@@ -832,6 +867,14 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
                 p = None       # 没有/有多个等价 → 交由用户选择
         else:
             name_t = _tight(name)
+            # 只是「包含」关系、且计量单位体系也对不上（票据「瓶」vs 商品「公斤」）的候选直接剔除：
+            # 那不是同一个货品，应该按新品类处理（如「冻干黑花生 464 瓶」不该塞进「黑花生」）。
+            raw_unit = ln.get("unit", "")
+            cands = [
+                c for c in cands
+                if _tight(c.name) == name_t or _tight(c.name).startswith(name_t)
+                or not _unit_incompatible(c, raw_unit)
+            ]
             exact_name = [c for c in cands if _tight(c.name) == name_t]
             # 「票据名是商品名的前缀」算可靠命中：如「香菇」→「香菇干货」、「七彩花生米」→「七彩花生米（去壳）」。
             # 反之（票据「冻干黑花生」落到商品「黑花生」）只是「包含」命中，商品可能不是同一个，
@@ -852,6 +895,9 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
                 exact_hit = True          # 分类内没命中但全局命中了前缀同名（罕见）
             else:
                 exact_hit = False         # 仅「包含」命中 → 交给用户确认
+            # p 是被剔除的模糊候选（或单位对不上）时，不再沿用
+            if p is not None and all(c.id != p.id for c in cands):
+                p = None
         similar = [c for c in cands if c.id != (p.id if p else None)]
         # 非完全命中（含仅「包含」命中）或存在其他候选 => 歧义：不自动新增，交由用户确认
         ambiguous = (not exact_hit) and (p is not None or bool(similar))
@@ -881,7 +927,7 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
         )
         if pending_new:
             ln_out["product_name"] = pending_new["name"]     # 用归一后的名称（去掉模型多余空格）
-            ln_out["new_product"] = {**pending_new, "unit": (ln.get("unit") or "").strip() or "个"}
+            ln_out["new_product"] = {**pending_new, "unit": _canonical_unit(ln.get("unit")) or "个"}
             ln_out["hint"] = (
                 f"🆕 系统暂无此商品，确认提交后将新增到「{pending_new['category_label']}」，"
                 f"新商品没有历史价，请填写单价（取消不会创建）"
@@ -1089,7 +1135,9 @@ def materialize_products(
         p = db.query(Product).filter(Product.name == name).first()
         created = False
         if not p:
-            p = _auto_create_product(db, name, (it.unit or "").strip() or "个", it.category or "stock")
+            # 单位统一：千克/kg → 公斤，避免新建出与「公斤」同义的计量单位
+            unit = _canonical_unit(it.unit) or "个"
+            p = _auto_create_product(db, name, unit, it.category or "stock")
             created = True
         results.append({
             "name": name,
