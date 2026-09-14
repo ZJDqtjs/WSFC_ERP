@@ -71,7 +71,9 @@ IMAGE_SYSTEM_PROMPT = """你是「企业台账系统」的采购票据识别助�
 
 处理要求：
 1. 业务类型一律为入库（inbound）：这些票据代表公司采购了货物进入仓库。
-2. 逐条提取每条采购商品的：商品名称（product，按票据原文，简洁）、数量（quantity）、单位（unit，如 张/个/斤/公斤/袋/箱）、单价（unit_price，每单位的金额，保留小数）。
+2. 逐条提取每条采购商品的：商品名称（product）、数量（quantity）、单位（unit，如 张/个/斤/公斤/袋/箱）、单价（unit_price，每单位的金额，保留小数）。
+   - product 必须逐字照抄票据上的名称（保留括号、规格、编号等），不要改写、缩写、纠错，也不要自行补「干货」等字样；名称中不要插入空格。
+   - quantity 取票据上直接列出的数量（如「数额」列）为准，不要用「计算明细」里的算式自行重算；票据上没有单价的，unit_price 一律填 0，禁止拿明细里的数字当单价。
 3. category 商品分类：逐条判断属于"库存商品"（货品/蔬菜/干货）、"包材"（纸箱/泡沫箱/胶带/包装袋等包装材料）、还是"人工"（打包劳务）；销售小规格的"订单商品"一般不出现，出现也按"库存商品"处理。无法判断时不输出该字段（省略）。
 4. supplier：票据上的销方（卖方）公司名称；customer 留空。
 5. 日期 date：票据上若有日期就用它（格式 YYYY-MM-DD），没有就用"今天"（今天的日期见用户消息）。
@@ -614,7 +616,8 @@ def _last_price_default(db: Session, p: Product | None, op_type: str) -> float:
         row = db.query(Inbound).filter(Inbound.product_id == p.id).order_by(Inbound.id.desc()).first()
         if row and row.unit_price:
             return to_du(row.unit_price, row.unit)
-        return to_du(p.unit_cost, p.base_unit)
+        # 参考采购价没维护时，退回商品资料里的「均价」（库存均价），再没有才是 0
+        return to_du(p.unit_cost, p.base_unit) or to_du(p.avg_cost, p.base_unit)
     row = db.query(OutboundLine).filter(OutboundLine.product_id == p.id).order_by(OutboundLine.id.desc()).first()
     if row and row.unit_price:
         return to_du(row.unit_price, row.unit)
@@ -770,7 +773,7 @@ def _normalize_line(db: Session, p: Product | None, line: dict, op_type: str, au
         if last:
             out["unit_price"] = round(last, 4)
             out["price_defaulted"] = True
-            out["hint"] += "；价格未识别，已按上次录入单价默认填入，请核对"
+            out["hint"] += "；价格未识别，已按该商品最近价 / 均价默认填入，请核对"
     return out
 
 
