@@ -581,25 +581,28 @@ async function loadWarehouses() {
         <b>${esc(w.name)}</b><span class="muted" style="font-size:12px;">${esc(w.key)}</span>
         <div class="grow"></div>
         ${w.is_current ? '<span class="badge" style="background:var(--primary,#2563eb);color:#fff;">当前</span>'
-          : `<button class="btn sm" onclick="switchWarehouse('${esc(w.key)}')">切换</button>`}
+          : `<button class="btn sm" onclick="switchWarehouse('${esc(w.key)}','${esc(w.name)}')">切换</button>`}
       </div>`).join("") : '<div class="empty">暂无分仓</div>');
   } catch (e) { whErr(e.message); }
 }
-async function switchWarehouse(key) {
-  if (!confirm("切换分仓后当前登录会失效，需重新登录，确定切换？")) return;
+async function switchWarehouse(key, name) {
+  const label = `「${name || key}」`;
+  // 分仓只作用于当前登录会话：不登出、不影响其他在线用户，因此切换后直接刷新即可
+  if (!confirm(`切换到${label}？仅你的登录会切到该分仓，其他在线用户不受影响，也无需重新登录。`)) return;
   try {
-    await api("/api/warehouses/switch", "POST", { key });
-    try { await api("/api/auth/logout", "POST"); } catch (e) {}
-    location.reload();
+    const r = await api("/api/warehouses/switch", "POST", { key });
+    toast(`已切换到 ${(r && r.warehouse && r.warehouse.name) || label}`);
+    setTimeout(() => location.reload(), 400);  // 重新加载各页面数据
   } catch (e) { whErr(e.message); }
 }
 async function createWarehouse() {
   const name = ($("whName").value || "").trim();
   if (!name) { whErr("请输入分仓名称"); return; }
+  if (!confirm(`新建「${name}」并把你的登录切过去？无需重新登录，也不影响其他在线用户。`)) return;
   try {
     await api("/api/warehouses", "POST", { name });
-    try { await api("/api/auth/logout", "POST"); } catch (e) {}
-    location.reload();
+    toast(`已创建并切换到 ${name}`);
+    setTimeout(() => location.reload(), 400);
   } catch (e) { whErr(e.message); }
 }
 function whErr(msg) { const el = $("whErr"); if (!el) return; el.textContent = msg; el.style.display = "block"; }

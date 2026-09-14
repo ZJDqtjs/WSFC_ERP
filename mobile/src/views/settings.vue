@@ -12,7 +12,7 @@
         <div class="card">
           <div class="card-title">切换分仓</div>
           <div class="muted" style="margin-bottom:8px;">
-            切换或新建分仓后，当前登录会失效，需用私钥重新登录。仅管理员可操作。
+            分仓只作用于你自己的登录：切换后立即生效、无需重新登录，也不会影响其他在线用户。仅管理员可操作。
           </div>
           <div v-for="w in warehouses" :key="w.key" class="list-item">
             <div class="row">
@@ -293,30 +293,25 @@ async function loadWarehouses() {
   } catch (e) { showToast(e.message || '加载分仓失败') }
 }
 
-async function relogin() {
-  try { await api('/api/auth/logout', 'POST') } catch (e) {}
-  localStorage.removeItem('erp_authed')
-  location.href = import.meta.env.BASE_URL.replace(/\/$/, '') + '/login'
-}
-
 async function switchWh(w) {
-  try { await showConfirmDialog({ title: '切换分仓', message: `切换后当前登录会失效，需重新登录。确认切换到「${w.name}」？` }) } catch (e) { return }
+  try { await showConfirmDialog({ title: '切换分仓', message: `仅把你的登录切到「${w.name}」，其他在线用户不受影响，也无需重新登录。确认切换？` }) } catch (e) { return }
   try {
     await api('/api/warehouses/switch', 'POST', { key: w.key })
-    showToast('已切换，请重新登录')
-    setTimeout(relogin, 600)
+    showToast(`已切换到 ${w.name}`)
+    // 分仓只随本会话生效：直接刷新页面重新加载数据，登录状态保持
+    setTimeout(() => location.reload(), 600)
   } catch (e) { showToast(e.message || '切换失败') }
 }
 
 async function createWh() {
   const name = newWhName.value.trim()
   if (!name) { showToast('请输入分仓名称'); return }
-  try { await showConfirmDialog({ title: '新建分仓', message: `将新建「${name}」并切换过去（会复制当前仓用户），随后需重新登录。确认？` }) } catch (e) { return }
+  try { await showConfirmDialog({ title: '新建分仓', message: `将新建「${name}」并把你的登录切过去（会复制你当前所在仓的用户）。无需重新登录，也不影响其他在线用户。确认？` }) } catch (e) { return }
   whSaving.value = true
   try {
     await api('/api/warehouses', 'POST', { name })
-    showToast('已创建并切换，请重新登录')
-    setTimeout(relogin, 600)
+    showToast(`已创建并切换到 ${name}`)
+    setTimeout(() => location.reload(), 600)
   } catch (e) { showToast(e.message || '创建失败') }
   whSaving.value = false
 }

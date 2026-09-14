@@ -54,16 +54,16 @@ const fileInput = ref(null)
 const errMsg = ref('')
 const busy = ref(false)
 
-// 记住上次登录的用户名，省得每次重敲（仓库切换后需要重新登录）
+// 记住上次登录的用户名，省得每次重敲
 const LAST_USER_KEY = 'erp_last_user'
 
 onMounted(() => {
   const last = localStorage.getItem(LAST_USER_KEY)
   if (last) username.value = last
-  // 从"登录失效被踢回来"进入时，给个明确提示
+  // 从"登录失效被踢回来"进入时，给个明确提示（切仓已不再导致掉线，故只可能是会话过期/账号被停用）
   if (sessionStorage.getItem('erp_kicked')) {
     sessionStorage.removeItem('erp_kicked')
-    errMsg.value = '登录状态已失效（可能切换了分仓或会话过期），请重新登录。'
+    errMsg.value = '登录状态已失效（会话已过期或账号被停用），请重新登录。'
   }
 })
 

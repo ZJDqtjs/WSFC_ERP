@@ -17,7 +17,7 @@ export function assetUrl(path) {
 
 function onUnauthorized() {
   localStorage.removeItem('erp_authed')
-  // 打标记，登录页据此解释"为什么被踢回来"（换分仓 / 会话过期）
+  // 打标记，登录页据此解释"为什么被踢回来"（会话过期 / 账号被停用）
   try { sessionStorage.setItem('erp_kicked', '1') } catch (e) {}
   // 已经在登录页时不要再整页跳转一次，否则登录失败会被刷成"没反应"，
   // 而且会把刚填的用户名/已选私钥一起清空。

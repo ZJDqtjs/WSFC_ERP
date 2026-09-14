@@ -1,18 +1,21 @@
-"""分仓管理：列表 / 新建（初始化 + 复制用户 + 切换）/ 切换。
+"""分仓管理：列表 / 新建（初始化 + 复制用户 + 切到新仓）/ 切换。
 
-切仓/新建成功后前端会重新登录（旧 token 绑定原仓，切仓后失效），本模块不签发新 token。
+分仓是**会话级**的：切换/新建只重签调用者自己的令牌（payload.wh），不写全局状态、
+不签发他人令牌，因此：
+- 其他在线用户完全不受影响（历史上"一人切仓，全员被登出"的根因已消除）；
+- 切仓的人自己也不需要重新登录，前端刷新页面即可看到新仓数据。
 """
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
-from ..auth import get_current_user
+from ..auth import COOKIE_NAME, TOKEN_MAX_AGE, get_current_user, make_token
 from ..database import (
+    current_warehouse_name,
     get_current_key,
     get_warehouses,
     register_warehouse,
-    set_current_key,
     warehouse_db_path,
 )
 from ..initdb import init_warehouse
@@ -37,9 +40,21 @@ def _require_admin(user: User) -> None:
         raise HTTPException(403, "仅管理员可操作分仓")
 
 
+def _issue_warehouse_cookie(response: Response, user_id: int, key: str) -> None:
+    """把「本会话的分仓」重签到令牌里（同 cookie、同有效期，故不会掉线）。"""
+    response.set_cookie(
+        COOKIE_NAME,
+        make_token(user_id, key),
+        max_age=TOKEN_MAX_AGE,
+        httponly=True,
+        path="/",
+        samesite="lax",
+    )
+
+
 @router.get("")
 def list_warehouses(user: User = Depends(get_current_user)):
-    """分仓列表（全员可见，用于切换选择）。"""
+    """分仓列表（全员可见，用于切换选择）；current 为**本登录会话**所在分仓。"""
     current = get_current_key()
     return {
         "current": current,
@@ -50,8 +65,10 @@ def list_warehouses(user: User = Depends(get_current_user)):
 
 
 @router.post("")
-def create_warehouse(data: CreateIn, user: User = Depends(get_current_user)):
-    """新建分仓：初始化独立库（含复制当前仓用户）并切换。仅管理员。"""
+def create_warehouse(
+    data: CreateIn, response: Response, user: User = Depends(get_current_user)
+):
+    """新建分仓：初始化独立库（含复制本会话所在仓的用户）并把**本会话**切过去。仅管理员。"""
     _require_admin(user)
     name = (data.name or "").strip()
     if not name:
@@ -74,9 +91,9 @@ def create_warehouse(data: CreateIn, user: User = Depends(get_current_user)):
     try:
         init_warehouse(key, copy_users_from=get_current_key())
         register_warehouse(key, name)
-        set_current_key(key)
     except Exception as e:
         raise HTTPException(500, f"分仓创建失败: {e}")
+    _issue_warehouse_cookie(response, user.id, key)
     return {
         "ok": True,
         "current": key,
@@ -85,12 +102,17 @@ def create_warehouse(data: CreateIn, user: User = Depends(get_current_user)):
 
 
 @router.post("/switch")
-def switch_warehouse(data: SwitchIn, user: User = Depends(get_current_user)):
-    """切换当前分仓。仅管理员。"""
+def switch_warehouse(
+    data: SwitchIn, response: Response, user: User = Depends(get_current_user)
+):
+    """切换**本登录会话**的分仓（重签令牌，立即生效，无需重新登录）。仅管理员。"""
     _require_admin(user)
     keys = {w["key"] for w in get_warehouses()}
     if data.key not in keys:
         raise HTTPException(404, "分仓不存在")
-    if data.key != get_current_key():
-        set_current_key(data.key)
-    return {"ok": True, "current": data.key}
+    _issue_warehouse_cookie(response, user.id, data.key)
+    return {
+        "ok": True,
+        "current": data.key,
+        "warehouse": {"key": data.key, "name": current_warehouse_name(data.key)},
+    }
