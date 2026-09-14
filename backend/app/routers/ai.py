@@ -353,9 +353,21 @@ def _extract_json(content: str) -> dict:
     return _repair_truncated_json(content)
 
 
+# 快速解析时误并入商品名开头的动作词/时间词（「入库苹果10箱」→「苹果」）
+_QUICK_LEAD_RE = re.compile(
+    r"^(?:今天|昨天|前天|今早|上午|下午|晚上|早上|刚才|刚刚)?"
+    r"(?:入库|进货|采购|进仓|收货|出库|销售|卖出|发货|出货)+了*"
+)
+
+
 def _normalize_quick_product_name(name: str) -> str:
     name = (name or "").strip().strip("，,。;；")
     name = re.sub(r"^(?:的|约|大约|约为)\s*", "", name)
+    # 名称写在数量之前时（如「入库苹果10箱」），正则会把开头的动作词一起吃进名称，这里去掉；
+    # 只有去掉后仍剩 ≥2 个字才替换，避免误伤「出库费」这类真实商品名。
+    stripped = _QUICK_LEAD_RE.sub("", name)
+    if stripped != name and len(stripped) >= 2:
+        name = stripped
     return name
 
 
@@ -379,8 +391,12 @@ def _quick_parse_text(text: str) -> dict | None:
     )
     matches = list(line_pattern.finditer(s))
     if not matches:
+        # 名称在数量之前（如「入库6号纸箱100个」）。
+        # 注意：f-string 里正则量词的花括号必须写成 {{0,20}}，写成 {0,20} 会被当成格式字段，
+        # 编译出的正则变成「[^...]0?」，商品名只能匹配到 2 个字（「6号纸箱」被截成「纸箱」），
+        # 结果匹配不到具体商品（只能匹配到一堆相似商品），价格也就无从回填。
         alt_pattern = re.compile(
-            rf"(?P<product>[A-Za-z0-9\u4e00-\u9fa5][^\d，,。!！?？;；\n]{0,20}?)\s*(?P<qty>\d+(?:\.\d+)?)\s*(?P<unit>{unit_pattern})",
+            rf"(?P<product>[A-Za-z0-9\u4e00-\u9fa5][^\d，,。!！?？;；\n]{{0,20}}?)\s*(?P<qty>\d+(?:\.\d+)?)\s*(?P<unit>{unit_pattern})",
             re.S,
         )
         matches = list(alt_pattern.finditer(s))
@@ -391,7 +407,12 @@ def _quick_parse_text(text: str) -> dict | None:
     for idx, m in enumerate(matches):
         qty = float(m.group("qty") or 0)
         unit = m.group("unit") or "个"
-        product = _normalize_quick_product_name(m.group("product"))
+        raw_product = m.group("product") or ""
+        # 名称里含数字且写在数量之前的写法（如「入库20*30*10纸箱100个」），可能只截到后半段（「0纸箱」）：
+        # 若商品名以数字开头且紧邻的前一个字符也是数字，说明只是更长词条的一截，丢弃该行交给大模型。
+        if raw_product[:1].isdigit() and m.start("product") > 0 and s[m.start("product") - 1].isdigit():
+            continue
+        product = _normalize_quick_product_name(raw_product)
         if not product:
             continue
         tail = s[m.end():]
@@ -408,8 +429,15 @@ def _quick_parse_text(text: str) -> dict | None:
                 price = float(pm.group("price") or 0)
                 break
         if idx == 0 and price == 0:
-            # 例如：今天入库了100斤木耳，25一斤 -> 取尾部的数字价格
-            pm = re.search(r"(?:￥|¥)?(?P<price>\d+(?:\.\d+)?)\s*(?:一|两)?(?P<u>斤|公斤|千克|个|件|袋|包|盒|箱|份|单)", s, re.S)
+            # 兜底：价格写在本行数量之前时（如「25元一斤的木耳100斤」）。
+            # 只在本行数量之外查找，且必须带价格特征（元/¥ 或「一/两+单位」），
+            # 否则会把数量本身（如「100个」）误当成单价（旧实现就因此把 100 当成价格）。
+            others = s[: m.start()] + tail
+            pm = re.search(
+                rf"(?:￥|¥)?(?P<price>\d+(?:\.\d+)?)\s*(?:元|￥|¥|(?:一|两)(?:{unit_pattern}))",
+                others,
+                re.S,
+            )
             if pm:
                 price = float(pm.group("price") or 0)
 

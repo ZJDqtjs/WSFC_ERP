@@ -1187,7 +1187,9 @@ async function aiProdChanged(i) {
   if (line) line.product_id = pid;
   const priceEl = tr.querySelector(".ai-price");
   if (!pid || !priceEl) { aiPriceBadge(tr, line); return; }   // 待新增商品：暂无历史价
-  if (priceEl.value !== "" && +priceEl.value !== 0) { aiPriceBadge(tr, line); return; }
+  // 用户手填的价格不动；自动填入的价格在换商品后要跟着换成新商品的价格
+  const autoFilled = !!(line && line.price_defaulted);
+  if (!autoFilled && priceEl.value !== "" && +priceEl.value !== 0) { aiPriceBadge(tr, line); return; }
   let price = 0;
   const opt = sel.options[sel.selectedIndex];
   if (opt && opt.dataset && opt.dataset.price) price = +opt.dataset.price || 0;
@@ -1200,6 +1202,9 @@ async function aiProdChanged(i) {
   if (price > 0) {
     priceEl.value = price;
     if (line) line.price_defaulted = true;
+  } else if (autoFilled) {
+    priceEl.value = "";              // 新商品没有参考价：清掉上一条的自动价，避免带错价格
+    if (line) line.price_defaulted = false;
   }
   aiPriceBadge(tr, line);
 }

@@ -370,11 +370,12 @@ async function onReplaceProduct(p) {
   ln.product_name = p.name
   ln.new_product = null                     // 已改选为系统已有商品，不再新增
   if (!ln.unit) ln.unit = p.default_unit || p.base_unit
-  // 选了别的商品：单价为空时回填该商品最近一次的录入价
-  if (!(+ln.unit_price)) {
+  // 单价为空、或上一版价格是自动回填的：按新商品最近一次的录入价刷新
+  if (!(+ln.unit_price) || ln.price_defaulted) {
     try {
       const d = await api(`/api/ai/last-price?product_id=${p.id}&op_type=${aiForm.type}`)
       if (d && d.price) { ln.unit_price = d.price; ln.price_defaulted = true }
+      else if (ln.price_defaulted) { ln.unit_price = ''; ln.price_defaulted = false }
     } catch (e) { /* 忽略 */ }
   }
 }
