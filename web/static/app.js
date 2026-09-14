@@ -1042,7 +1042,7 @@ async function aiCollectStream(res) {
 }
 async function aiFinishOk(result) {
   aiHideThinking();
-  // 可能自动新增了商品/单位，刷新后确认框才能选到新商品
+  // 刷新商品列表，保证确认框里的候选/分类下拉是最新的
   PRODUCTS = await api("/api/products");
   openAiConfirm(result);
   aiResetBtn();
@@ -1134,10 +1134,10 @@ function aiProductsByCat(cat) {
     return p.product_type === "stock" && c !== "人工" && c !== "包材" && c !== "耗材" && c !== "包装";
   });
 }
-function aiProductOptions(selectedId, cat) {
+function aiProductOptions(selectedId, cat, prependHtml = "") {
   const catLabel = { stock: "库存", order: "订单", pack: "包材", labor: "人工" }[cat || "stock"] || "库存";
   const list = aiProductsByCat(cat || "stock").slice().sort((a, b) => a.name.localeCompare(b.name, "zh"));
-  return list.map((p) =>
+  return prependHtml + list.map((p) =>
     `<option value="${p.id}" ${p.id === selectedId ? "selected" : ""}>〔${catLabel}〕${esc(p.name)}</option>`
   ).join("");
 }
@@ -1146,8 +1146,62 @@ function aiCatChanged(i) {
   if (!tr) return;
   const cat = tr.querySelector(".ai-cat").value;
   const sel = tr.querySelector(".ai-pid");
+  const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[i] : null;
+  if (line) {
+    line.category = cat;
+    if (line.new_product) line.new_product.category = cat;
+  }
+  // 相似候选下拉不随分类重建（候选本身已按识别分类过滤）
+  if (line && line.ambiguous && line.candidates && line.candidates.length) return;
   const cur = +sel.value;
-  sel.innerHTML = aiProductOptions(aiProductsByCat(cat).some((p) => p.id === cur) ? cur : 0, cat);
+  const np = line && line.new_product;
+  const keepCur = !np && aiProductsByCat(cat).some((p) => p.id === cur);
+  const head = np
+    ? `<option value="0" ${keepCur ? "" : "selected"}>🆕 新建：${esc(np.name)}</option>`
+    : (keepCur ? "" : `<option value="0" selected>— 请选择商品 —</option>`);
+  sel.innerHTML = aiProductOptions(keepCur ? cur : 0, cat, head);
+}
+// 价格徽标：标记该行单价是否为「按最近价自动填入」
+function aiPriceBadge(tr, line) {
+  const cell = tr.querySelector(".ai-price-cell");
+  if (!cell) return;
+  let badge = cell.querySelector(".ai-price-badge");
+  const on = !!(line && line.price_defaulted);
+  if (on && !badge) {
+    badge = document.createElement("span");
+    badge.className = "ai-price-badge";
+    badge.setAttribute("style", "background:var(--amber-light);color:#8a6d00;margin-left:4px;");
+    badge.textContent = "已按最近价";
+    cell.appendChild(badge);
+  } else if (!on && badge) {
+    badge.remove();
+  }
+}
+// 切换商品（分类下拉/相似候选/新商品占位）后：若单价为空，回填该商品最近一次录入价
+async function aiProdChanged(i) {
+  const tr = document.querySelector(`#aiLines tr[data-idx="${i}"]`);
+  if (!tr) return;
+  const sel = tr.querySelector(".ai-pid");
+  const pid = +sel.value || 0;
+  const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[i] : null;
+  if (line) line.product_id = pid;
+  const priceEl = tr.querySelector(".ai-price");
+  if (!pid || !priceEl) { aiPriceBadge(tr, line); return; }   // 待新增商品：暂无历史价
+  if (priceEl.value !== "" && +priceEl.value !== 0) { aiPriceBadge(tr, line); return; }
+  let price = 0;
+  const opt = sel.options[sel.selectedIndex];
+  if (opt && opt.dataset && opt.dataset.price) price = +opt.dataset.price || 0;
+  if (!price) {
+    try {
+      const d = await api(`/api/ai/last-price?product_id=${pid}&op_type=${$("aiType").value}`);
+      price = (d && d.price) || 0;
+    } catch (e) { price = 0; }
+  }
+  if (price > 0) {
+    priceEl.value = price;
+    if (line) line.price_defaulted = true;
+  }
+  aiPriceBadge(tr, line);
 }
 let AI_CONFIRM = null;   // 当前确认框对应的识别结果（供提交时标注）
 function openAiConfirm(r) {
@@ -1155,11 +1209,24 @@ function openAiConfirm(r) {
   const isIn = r.type === "inbound";
   const linesHtml = (r.lines || []).map((ln, i) => {
     const cat = (["stock", "order", "pack", "labor"].includes(ln.category) ? ln.category : (isIn ? "stock" : "order"));
-    const prodSel = ln.ambiguous && ln.candidates && ln.candidates.length
-      ? `<select class="ai-pid" style="border-color:var(--amber);">
-          ${ln.candidates.map((c) => `<option value="${c.product_id}" ${c.product_id === ln.product_id ? "selected" : ""}>〔${({ stock: "库存", order: "订单", pack: "包材", labor: "人工" }[c.category] || "库存")}〕${esc(c.name)}</option>`).join("")}
-        </select>`
-      : `<select class="searchable ai-pid">${aiProductOptions(ln.product_id, cat)}</select>`;
+    const np = ln.new_product || null;
+    let prodSel;
+    if (ln.ambiguous && ln.candidates && ln.candidates.length) {
+      // 相似商品：默认选中第一个候选，并在未识别到价格时回填该商品最近一次的录入价
+      if (!ln.candidates.some((c) => c.product_id === ln.product_id)) ln.product_id = ln.candidates[0].product_id;
+      const cur = ln.candidates.find((c) => c.product_id === ln.product_id) || ln.candidates[0];
+      if (!(+ln.unit_price) && cur.last_price) { ln.unit_price = cur.last_price; ln.price_defaulted = true; }
+      prodSel = `<select class="ai-pid" style="border-color:var(--amber);" onchange="aiProdChanged(${i})">
+          ${ln.candidates.map((c) => `<option value="${c.product_id}" ${c.product_id === ln.product_id ? "selected" : ""} data-price="${c.last_price || 0}">〔${({ stock: "库存", order: "订单", pack: "包材", labor: "人工" }[c.category] || "库存")}〕${esc(c.name)}${c.last_price ? `（最近 ${c.last_price}）` : ""}</option>`).join("")}
+        </select>`;
+    } else if (np) {
+      // 待新增商品：仅在「确认提交」后才建档，取消不会污染商品资料
+      ln.product_id = 0;
+      prodSel = `<select class="ai-pid" onchange="aiProdChanged(${i})">${aiProductOptions(0, cat, `<option value="0" selected>🆕 新建：${esc(np.name)}</option>`)}</select>`;
+    } else {
+      const head = ln.product_id ? "" : `<option value="0" selected>— 请选择商品 —</option>`;
+      prodSel = `<select class="searchable ai-pid" onchange="aiProdChanged(${i})">${aiProductOptions(ln.product_id, cat, head)}</select>`;
+    }
     const ambiBadge = ln.ambiguous
       ? '<span class="badge" style="background:#fff3cd;color:#8a6d00;margin-left:6px;">⚠ 相似商品待确认</span>' : "";
     const unitBadge = ln.unit_conflict
@@ -1167,10 +1234,10 @@ function openAiConfirm(r) {
     return `<tr data-idx="${i}">
       <td><select class="ai-cat" onchange="aiCatChanged(${i})" style="width:92px;">${aiCatOptions(cat)}</select></td>
       <td style="min-width:220px;">${prodSel}${ambiBadge}
-        ${ln.auto_created ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 自动新增</span>' : ""}</td>
+        ${np ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 提交后新增</span>' : ""}</td>
       <td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.quantity)}" style="width:90px;" /></td>
       <td><input class="ai-unit" value="${esc(ln.unit || "")}" style="width:70px;" />${unitBadge}</td>
-      <td><input type="number" step="any" class="ai-price" value="${ln.unit_price}" style="width:100px;" />${ln.price_defaulted ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按上次价</span>' : ""}</td>
+      <td class="ai-price-cell"><input type="number" step="any" class="ai-price" value="${ln.unit_price}" style="width:100px;" />${ln.price_defaulted ? '<span class="ai-price-badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按最近价</span>' : ""}</td>
       <td class="muted" style="font-size:12px;">${esc(ln.hint || "")}</td>
     </tr>`;
   }).join("");
@@ -1180,7 +1247,7 @@ function openAiConfirm(r) {
   openModal(`
     <h3>确认录入（${isIn ? "入库" : "出库"}） <button class="close" onclick="closeModal()">✕</button></h3>
     ${invImg}
-    <p class="hint" style="margin-bottom:12px;">已自动识别以下内容，请核对（可修改）后提交；🆕 标记的商品为新物品（系统已自动新增档案）。</p>
+    <p class="hint" style="margin-bottom:12px;">已自动识别以下内容，请核对（可修改）后提交；🆕 标记的商品为新物品，点「确认提交」后才会新增商品档案（取消不会创建）。</p>
     <div class="form-grid">
       <div class="field"><label>业务类型</label><select id="aiType" onchange="aiTypeChanged()">
         <option value="inbound" ${isIn ? "selected" : ""}>入库（进货）</option>
@@ -1216,17 +1283,39 @@ async function aiSubmit() {
   const remark = $("aiRemark").value.trim();
   const inv = (AI_CONFIRM && AI_CONFIRM.image_url) ? `[票据] ${AI_CONFIRM.image_url}` : "";
   const autoFlags = (AI_CONFIRM && AI_CONFIRM.lines) || [];
-  const rows = [...document.querySelectorAll("#aiLines tr[data-idx]")].map((tr, i) => ({
-    product_id: +tr.querySelector(".ai-pid").value,
-    quantity: parseFloat(tr.querySelector(".ai-qty").value),
-    unit: tr.querySelector(".ai-unit").value.trim(),
-    unit_price: parseFloat(tr.querySelector(".ai-price").value),
-    auto_created: !!(autoFlags[i] && autoFlags[i].auto_created),
-  })).filter((r) => r.product_id);
+  let rows = [...document.querySelectorAll("#aiLines tr[data-idx]")].map((tr, i) => {
+    const line = autoFlags[i] || {};
+    const pid = +tr.querySelector(".ai-pid").value || 0;
+    return {
+      product_id: pid,
+      // 待新增商品：提交时才建档，避免用户取消也污染商品资料（含商品类型/包材）
+      new_product: (!pid && line.new_product) ? line.new_product : null,
+      quantity: parseFloat(tr.querySelector(".ai-qty").value),
+      unit: tr.querySelector(".ai-unit").value.trim(),
+      unit_price: parseFloat(tr.querySelector(".ai-price").value),
+      auto_created: !!line.auto_created,
+    };
+  }).filter((r) => r.product_id || r.new_product);
   if (!rows.length) { toast("请至少填写一条商品"); return; }
   if (rows.some((r) => !(r.quantity > 0) || isNaN(r.unit_price) || !r.unit)) { toast("请完整填写数量、单位与金额"); return; }
   const op = (CURRENT_USER && (CURRENT_USER.name || CURRENT_USER.username)) || "";
   try {
+    // 1) 先创建确认为新物品的商品档案（同名已存在则复用）
+    const pend = rows.filter((r) => !r.product_id && r.new_product);
+    if (pend.length) {
+      const d = await api("/api/ai/products", "POST", {
+        items: pend.map((r) => ({
+          name: r.new_product.name,
+          category: r.new_product.category || "stock",
+          unit: r.unit || r.new_product.unit || "个",
+        })),
+      });
+      (d.items || []).forEach((it, k) => { if (pend[k]) pend[k].product_id = it.product_id; });
+      PRODUCTS = await api("/api/products");
+    }
+    rows = rows.filter((r) => r.product_id);
+    if (!rows.length) { toast("商品创建失败，请稍后重试"); return; }
+    // 2) 再写入单据
     if (type === "inbound") {
       for (const r of rows) {
         const rmk = [inv, r.auto_created ? "[AI自动新增]" : "", remark].filter(Boolean).join(" ");

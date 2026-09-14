@@ -281,6 +281,29 @@ def _auto_create_product(db: Session, name: str, unit: str, cat: str) -> Product
     return p
 
 
+def _new_product_meta(name: str, cat: str) -> dict:
+    """计算「待新增商品」的档案信息（纯计算，不写库）。
+
+    识别阶段只返回该预览信息，用户点「确认提交」时才由 _auto_create_product 真正建档，
+    避免用户取消/关闭确认框也在商品资料里留下新的商品类型与包材。
+    """
+    cat = cat if cat in AI_CATEGORIES else "stock"
+    if cat == "labor":
+        category, ptype = "人工", "stock"
+    elif cat == "pack":
+        category, ptype = "包材", "stock"
+    elif cat == "order":
+        category, ptype = "商品", "order"
+    else:
+        category, ptype = "商品", "stock"
+    return {
+        "name": (name or "").strip(),
+        "category": cat,
+        "category_label": category,
+        "product_type": ptype,
+    }
+
+
 def _repair_truncated_json(content: str) -> dict:
     """模型输出被 max_tokens 截断时，按括号配平补上缺失的闭合括号，尽量恢复为合法 JSON。
 
@@ -735,23 +758,37 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
         similar = [c for c in cands if c.id != (p.id if p else None)]
         # 存在近似候选且无完全同名 => 歧义：不自动新增，交由用户在候选里挑选
         ambiguous = bool(similar) and not exact_hit
+        pending_new = None
         if p is None and not ambiguous and op_type == "inbound":
-            # 入库的新物品（无任何相似商品）：按分类自动新增商品档案，并标记 auto_created
-            p = _auto_create_product(db, name, ln.get("unit", ""), cat or "stock")
+            # 入库的新物品（无任何相似商品）：识别阶段只生成「待新增档案」预览，绝不写库。
+            # 用户点「确认提交」时才真正建档（见 materialize_products），取消则不产生任何商品/包材数据。
+            pending_new = _new_product_meta(name, cat or "stock")
             auto = True
         category = _product_category(p) if p else (cat or "")
         ln_out = _normalize_line(db, p, ln, op_type, auto_created=auto, category=category)
         ln_out["ambiguous"] = ambiguous
         ln_out["candidates"] = (
-            [{"product_id": c.id, "name": c.name, "category": _product_category(c)} for c in cands]
+            [
+                {
+                    "product_id": c.id,
+                    "name": c.name,
+                    "category": _product_category(c),
+                    "unit": c.default_unit or c.base_unit,
+                    "last_price": _last_price_default(db, c, op_type),  # 供前端选中候选后回填价格
+                }
+                for c in cands
+            ]
             if ambiguous else []
         )
+        if pending_new:
+            ln_out["new_product"] = {**pending_new, "unit": (ln.get("unit") or "").strip() or "个"}
+            ln_out["hint"] = (
+                f"🆕 系统暂无此商品，确认提交后将新增到「{pending_new['category_label']}」（取消不会创建）"
+            )
         if ambiguous:
             names = "、".join(c["name"] for c in ln_out["candidates"])
             ln_out["hint"] = f"⚠ 识别到多个相似商品（{names}），请确认选哪一个"
         lines.append(ln_out)
-    if any(ln.get("auto_created") for ln in lines):
-        db.commit()  # 持久化自动新增的商品与单位，否则会话结束即回滚
 
     # 日期校验：格式非法/为空时回退为今天，避免模型幻觉日期
     try:
@@ -903,3 +940,63 @@ async def parse_image_stream(
         yield event({"done": True})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+class NewProductIn(BaseModel):
+    name: str
+    category: str = "stock"
+    unit: str = ""
+
+
+class MaterializeIn(BaseModel):
+    items: list[NewProductIn]
+
+
+@router.post("/products")
+def materialize_products(
+    data: MaterializeIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """确认提交时，把识别出的「新物品」真正写入商品档案。
+
+    识别阶段（/parse、/parse/stream、/parse-image/stream）不写库；
+    只有用户点「确认提交」调用本接口后才创建商品（含商品类型/包材/单位）；
+    同名商品已存在则直接复用，不重复创建。
+    """
+    results = []
+    created_any = False
+    for it in data.items:
+        name = (it.name or "").strip()
+        if not name:
+            continue
+        p = db.query(Product).filter(Product.name == name).first()
+        created = False
+        if not p:
+            p = _auto_create_product(db, name, (it.unit or "").strip() or "个", it.category or "stock")
+            created = True
+        results.append({
+            "name": name,
+            "product_id": p.id,
+            "category": _product_category(p),
+            "created": created,
+        })
+        created_any = created_any or created
+    if created_any:
+        db.commit()
+    return {"items": results}
+
+
+@router.get("/last-price")
+def last_price(
+    product_id: int,
+    op_type: str = "inbound",
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """返回某商品最近一次的录入单价（折算到默认展示单位），供确认框切换商品后回填价格。"""
+    p = db.get(Product, product_id)
+    if not p:
+        raise HTTPException(404, "商品不存在")
+    price = _last_price_default(db, p, "outbound" if op_type == "outbound" else "inbound")
+    return {"product_id": p.id, "price": price, "unit": p.default_unit or p.base_unit, "op_type": op_type}

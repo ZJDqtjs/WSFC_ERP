@@ -469,7 +469,9 @@ Outbound 字段：`id, code, customer, operator, date, remark, total_amount, tot
 }
 ```
 
-> 入库时若商品不存在会自动新增并标记 `auto_created: true`；`quantity/unit_price` 已折算到默认展示单位。
+> 入库时若商品不存在，**不会**在识别阶段新增商品档案，只返回 `new_product` 预览信息并标记 `auto_created: true`（`hint` 会提示"确认提交后新增"）；用户点「确认提交」时前端才调用 `POST /api/ai/products` 真正建档，点「取消」不会产生任何商品/包材/单位数据。
+>
+> 相似商品（如「6号箱」可能匹配到「6号纸箱」「6号拖箱」）会置 `ambiguous: true` 并返回 `candidates`（每项含 `last_price` 最近录入价），由用户在确认框中选择；`quantity/unit_price` 已折算到默认展示单位。
 
 ### 9.2 文字解析（流式，推荐）
 
@@ -495,6 +497,22 @@ data: {"done": true}
 
 * 字段：`file`（图片文件，必填）、`text`（补充说明，可选）
   响应 SSE 事件同上，`result` 额外含 `image_url`（如 `/uploads/invoice_xxx.jpg`，用于确认框预览与入库/出库备注挂图）。
+
+### 9.4 新商品建档（确认提交时调用）
+
+`POST /api/ai/products`
+请求：`{ "items": [ { "name": "6号纸箱", "category": "pack", "unit": "个" } ] }`
+（`category`：`stock`/`order`/`pack`/`labor`）
+响应：`{ "items": [ { "name": "6号纸箱", "product_id": 123, "category": "pack", "created": true } ] }`
+
+> 识别接口只返回 `new_product` 预览，不写库；用户点「确认提交」时前端调用本接口真正创建商品（含商品类型/包材/单位）。同名商品已存在则复用（`created: false`），用户点「取消」不会调用本接口，因此不会污染商品资料。
+
+### 9.5 商品最近价格查询
+
+`GET /api/ai/last-price?product_id=123&op_type=inbound`
+响应：`{ "product_id": 123, "price": 4.5, "unit": "个", "op_type": "inbound" }`
+
+> 入库取该商品最近一条入库单价（无则回退参考采购单价 `unit_cost`），出库取最近一条出库单价（无则回退默认售价 `sale_price`）；已折算到默认展示单位。用于确认框切换商品时回填单价。
 
 ***
 

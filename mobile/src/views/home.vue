@@ -176,7 +176,7 @@
           <div class="row" style="justify-content:space-between;">
             <span class="grow ai-line-name" @click="replaceLine(i)">
               {{ ln.product_name || '未识别' }}
-              <van-tag v-if="ln.auto_created" type="warning" plain style="margin-left:4px;">新增</van-tag>
+              <van-tag v-if="ln.new_product" type="warning" plain style="margin-left:4px;">提交后新增</van-tag>
             </span>
             <van-icon name="delete-o" color="#ee0a24" @click="aiForm.lines.splice(i, 1)" />
           </div>
@@ -185,6 +185,7 @@
             <van-field v-model="ln.unit" label="单位" style="max-width:86px;" />
             <van-field v-model="ln.unit_price" type="number" label="单价" />
           </div>
+          <div v-if="ln.price_defaulted" class="muted" style="margin-top:4px;">单价未识别，已按该商品最近一次录入价回填，请核对</div>
           <div v-if="ln.hint" class="muted" style="margin-top:4px;">{{ ln.hint }}</div>
         </div>
         <div v-if="!aiForm.lines.length" class="empty">无明细，请重新识别</div>
@@ -332,15 +333,28 @@ function openConfirm(r) {
   aiForm.customer = r.customer || ''
   aiForm.remark = r.remark || ''
   aiForm.image_url = r.image_url || ''
-  aiForm.lines = (r.lines || []).map((ln) => ({
-    product_id: ln.product_id,
-    product_name: ln.product_name,
-    quantity: ln.quantity,
-    unit: ln.unit,
-    unit_price: ln.unit_price,
-    auto_created: !!ln.auto_created,
-    hint: ln.hint || '',
-  }))
+  aiForm.lines = (r.lines || []).map((ln) => {
+    let product_id = ln.product_id
+    let unit_price = ln.unit_price
+    let price_defaulted = !!ln.price_defaulted
+    // 相似商品：默认选中第一个候选，并在未识别到价格时回填它最近一次的录入价
+    if (ln.ambiguous && ln.candidates && ln.candidates.length) {
+      if (!ln.candidates.some((c) => c.product_id === product_id)) product_id = ln.candidates[0].product_id
+      const c = ln.candidates.find((c) => c.product_id === product_id)
+      if (!(+unit_price) && c && c.last_price) { unit_price = c.last_price; price_defaulted = true }
+    }
+    return {
+      product_id,
+      product_name: ln.product_name,
+      quantity: ln.quantity,
+      unit: ln.unit,
+      unit_price,
+      auto_created: !!ln.auto_created,
+      new_product: ln.new_product || null,   // 待新增商品：提交时才建档
+      price_defaulted,
+      hint: ln.hint || '',
+    }
+  })
   confirmShow.value = true
 }
 
@@ -349,22 +363,45 @@ async function replaceLine(i) {
   await ensureProducts()
   pickerShow.value = true
 }
-function onReplaceProduct(p) {
+async function onReplaceProduct(p) {
   const ln = aiForm.lines[replaceIndex]
   if (!ln) return
   ln.product_id = p.id
   ln.product_name = p.name
+  ln.new_product = null                     // 已改选为系统已有商品，不再新增
   if (!ln.unit) ln.unit = p.default_unit || p.base_unit
+  // 选了别的商品：单价为空时回填该商品最近一次的录入价
+  if (!(+ln.unit_price)) {
+    try {
+      const d = await api(`/api/ai/last-price?product_id=${p.id}&op_type=${aiForm.type}`)
+      if (d && d.price) { ln.unit_price = d.price; ln.price_defaulted = true }
+    } catch (e) { /* 忽略 */ }
+  }
 }
 
 async function submitAI() {
-  const lines = aiForm.lines.filter((l) => l.product_id && +l.quantity > 0)
+  const lines = aiForm.lines.filter((l) => (l.product_id || l.new_product) && +l.quantity > 0)
   if (!lines.length) { showToast('没有有效的明细行'); return }
   submitting.value = true
   const inv = aiForm.image_url ? `[票据] ${aiForm.image_url}` : ''
   try {
+    // 1) 先创建确认为新物品的商品档案（取消则不会创建，避免污染商品资料）
+    const pend = lines.filter((l) => !l.product_id && l.new_product)
+    if (pend.length) {
+      const d = await api('/api/ai/products', 'POST', {
+        items: pend.map((l) => ({
+          name: l.new_product.name,
+          category: l.new_product.category || 'stock',
+          unit: l.unit || l.new_product.unit || '个',
+        })),
+      })
+      ;(d.items || []).forEach((it, k) => { if (pend[k]) pend[k].product_id = it.product_id })
+    }
+    const ok = lines.filter((l) => l.product_id)
+    if (!ok.length) { showToast('商品创建失败，请稍后重试'); submitting.value = false; return }
+    // 2) 再写入单据
     if (aiForm.type === 'inbound') {
-      for (const ln of lines) {
+      for (const ln of ok) {
         await api('/api/inbounds', 'POST', {
           product_id: +ln.product_id,
           unit: ln.unit || '个',
@@ -380,7 +417,7 @@ async function submitAI() {
         customer: aiForm.customer,
         date: aiForm.date,
         remark: [inv, aiForm.remark].filter(Boolean).join(' '),
-        lines: lines.map((ln) => ({
+        lines: ok.map((ln) => ({
           product_id: +ln.product_id,
           unit: ln.unit || '个',
           quantity: +ln.quantity,
