@@ -63,7 +63,8 @@ def create_inbound_api(data: InboundIn, db: Session = Depends(get_db), user: Use
     try:
         rec = create_inbound(
             db,
-            data.model_dump(),
+            # 操作员固定为当前登录账号：忽略前端传入的 operator，避免被改成别人
+            {**data.model_dump(), "operator": user.name},
             operator=user.name,
         )
     except ValueError as e:

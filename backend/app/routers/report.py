@@ -365,7 +365,7 @@ def create_finance(data: FinanceIn, db: Session = Depends(get_db), user: User = 
         category=data.category.strip() or ("销售收入" if data.type == "income" else "其他支出"),
         amount=data.amount,
         date=data.date,
-        operator=data.operator.strip() or user.name,
+        operator=user.name,  # 操作员固定为当前登录账号（不接受前端指定）
         remark=data.remark.strip(),
         ref_type="manual",
     )

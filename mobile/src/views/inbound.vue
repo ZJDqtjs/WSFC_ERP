@@ -15,7 +15,7 @@
         <van-cell-group inset>
           <van-field v-model="form.date" label="日期" type="date" />
           <van-field v-model="form.supplier" label="供应商" placeholder="可留空" />
-          <van-field v-model="form.operator" label="操作员" placeholder="谁操作的" />
+          <OperatorField v-model="form.operator" />
           <AttachmentField v-model="form.remark" />
         </van-cell-group>
 
@@ -172,6 +172,8 @@ import api, { upload, downloadFile } from '../api'
 import ProductPicker from '../components/ProductPicker.vue'
 import AttachmentField from '../components/AttachmentField.vue'
 import RemarkView from '../components/RemarkView.vue'
+import OperatorField from '../components/OperatorField.vue'
+import { ensureUserName } from '../utils/user'
 import { fmtMoney, fmtNum, num, defaultUnit, unitFactor, todayStr } from '../utils/format'
 
 const tab = ref('new')
@@ -409,7 +411,10 @@ async function confirmBatch() {
   batchSaving.value = false
 }
 
-onMounted(loadList)
+onMounted(async () => {
+  form.operator = await ensureUserName()   // 操作员固定为当前登录账号
+  loadList()
+})
 onActivated(() => { if (tab.value === 'list') loadList() })
 </script>
 

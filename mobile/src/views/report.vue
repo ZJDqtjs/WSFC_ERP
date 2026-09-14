@@ -145,7 +145,7 @@
           <van-field v-model="fin.category" label="分类" placeholder="如 人工费 / 房租 / 其他支出" />
           <van-field v-model="fin.amount" type="number" label="金额" placeholder="0.00" />
           <van-field v-model="fin.date" label="日期" type="date" />
-          <van-field v-model="fin.operator" label="操作员" placeholder="可留空" />
+          <OperatorField v-model="fin.operator" />
           <van-field v-model="fin.remark" label="备注" placeholder="可留空" />
         </van-cell-group>
         <div class="sheet-foot">
@@ -162,7 +162,9 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api from '../api'
+import OperatorField from '../components/OperatorField.vue'
 import { fmtMoney, fmtNum, num, todayStr } from '../utils/format'
+import { userName, ensureUserName } from '../utils/user'
 
 const router = useRouter()
 function goBack() {
@@ -237,12 +239,12 @@ const finShow = ref(false)
 const finSaving = ref(false)
 const fin = reactive({ type: 'expense', category: '其他支出', amount: '', date: todayStr(), operator: '', remark: '' })
 
-function openFinance() {
+async function openFinance() {
   fin.type = 'expense'
   fin.category = '其他支出'
   fin.amount = ''
   fin.date = dt.value || todayStr()
-  fin.operator = ''
+  fin.operator = await ensureUserName()   // 操作员固定为当前登录账号
   fin.remark = ''
   finShow.value = true
 }
@@ -256,7 +258,7 @@ async function submitFinance() {
       category: fin.category.trim() || (fin.type === 'income' ? '销售收入' : '其他支出'),
       amount: num(fin.amount),
       date: fin.date,
-      operator: fin.operator,
+      operator: fin.operator || userName.value,
       remark: fin.remark,
     })
     showToast('已记账')

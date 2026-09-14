@@ -633,10 +633,18 @@ function setUser(u) {
   $("userAvatar").textContent = disp.slice(0, 1);
   const wt = $("warehouseTag");
   if (wt) wt.textContent = u.warehouse ? `当前分仓：${u.warehouse.name}` : "";
+  // 操作员 = 当前登录账号：始终回填并锁定只读（服务端同样以登录账号为准，不信前端值）
   ["inOperator", "outOperator", "adjOperator", "fOperator"].forEach((id) => {
     const el = $(id);
-    if (el && !el.value) el.value = disp;
+    if (!el) return;
+    el.value = disp;
+    el.readOnly = true;
+    el.title = "默认当前登录账号，不可修改";
   });
+}
+/** 当前登录账号显示名（弹层里新建的操作员输入框用） */
+function operatorName() {
+  return (CURRENT_USER && (CURRENT_USER.name || CURRENT_USER.username)) || "";
 }
 function onKeyFileChange(inputId, nameId) {
   const f = $(inputId).files[0];
@@ -769,7 +777,7 @@ function openAdjust(pid = 0) {
       <div class="field"><label>平均成本（相对现均价，必带 +/-）</label><input id="adjAvgCost" oninput="adjPreview()" placeholder="如 +2 / -1；留空则不调整" /></div>
       <div class="field"><label>成本单价（相对现参考成本，必带 +/-）</label><input id="adjUnitCost" oninput="adjPreview()" placeholder="如 +2 / -1；留空则不调整" /></div>
       <div class="field"><label>日期</label><input id="adjDate" type="date" value="${today()}" /></div>
-      <div class="field"><label>操作员</label><input id="adjOperator" placeholder="谁操作的" /></div>
+      <div class="field"><label>操作员</label><input id="adjOperator" value="${esc(operatorName())}" readonly title="默认当前登录账号，不可修改" /></div>
     </div>
     <div class="field" style="grid-column:1/-1;"><span class="muted">当前均价：<b id="adjNowAvg" style="color:var(--danger)">—</b></span>　→　<span class="muted">均价调整后：<b id="adjAfterAvg" style="color:var(--primary)">—</b></span></div>
     <div class="field" style="grid-column:1/-1;"><span class="muted">当前成本单价：<b id="adjNowUc" style="color:var(--danger)">—</b></span>　→　<span class="muted">成本单价调整后：<b id="adjAfterUc" style="color:var(--primary)">—</b></span></div>
@@ -3883,7 +3891,7 @@ function openFinanceModal() {
       </select></div>
       <div class="field"><label>金额 *</label><input id="fAmount" type="number" step="any" /></div>
       <div class="field"><label>日期</label><input id="fDate" type="date" value="${today()}" /></div>
-      <div class="field"><label>操作员</label><input id="fOperator" /></div>
+      <div class="field"><label>操作员</label><input id="fOperator" value="${esc(operatorName())}" readonly title="默认当前登录账号，不可修改" /></div>
     </div>
     <div class="field" style="margin-top:10px;"><label>备注</label><input id="fRemark" /></div>
     <div class="modal-foot">

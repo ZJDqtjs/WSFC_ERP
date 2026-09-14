@@ -162,7 +162,7 @@
           <van-field v-model="adjForm.avg_cost_adj" label="平均成本±" placeholder="如 +2 / -1，留空不调整" />
           <van-field v-model="adjForm.unit_cost_adj" label="成本单价±" placeholder="如 +2 / -1，留空不调整" />
           <van-field v-model="adjForm.date" label="日期" type="date" />
-          <van-field v-model="adjForm.operator" label="操作员" placeholder="谁操作的" />
+          <OperatorField v-model="adjForm.operator" />
           <van-field v-model="adjForm.remark" label="原因" placeholder="如：盘点差异 / 损耗" />
         </van-cell-group>
         <div class="muted" style="padding:8px 4px;">
@@ -192,7 +192,9 @@ import { useRoute } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api from '../api'
 import ProductPicker from '../components/ProductPicker.vue'
+import OperatorField from '../components/OperatorField.vue'
 import { fmtMoney, fmtNum, fmtSign, fmtStock, num, unitFactor, defaultUnit, moveTypeLabel, todayStr } from '../utils/format'
+import { userName, ensureUserName } from '../utils/user'
 
 const route = useRoute()
 
@@ -288,7 +290,7 @@ async function openAdjust(pid = 0) {
   adjForm.avg_cost_adj = ''
   adjForm.unit_cost_adj = ''
   adjForm.date = todayStr()
-  adjForm.operator = ''
+  adjForm.operator = await ensureUserName()   // 操作员固定为当前登录账号
   adjForm.remark = ''
   const p = pid ? PRODUCTS.value.find((x) => x.id === +pid) : null
   adjPicked.value = p || null
@@ -374,7 +376,7 @@ async function submitAdjust() {
       avg_cost_adj: araw,
       unit_cost_adj: uraw,
       date: adjForm.date,
-      operator: adjForm.operator,
+      operator: adjForm.operator || userName.value,
       remark: adjForm.remark,
     })
     adjShow.value = false
