@@ -3768,6 +3768,8 @@ async function loadReport() {
     api(`/api/report/summary?date_from=${from || ""}&date_to=${to || ""}`),
     api(`/api/finance?date_from=${from || ""}&date_to=${to || ""}`),
   ]);
+  const rh = $("repRangeHint");
+  if (rh) rh.textContent = `统计区间 ${from || "最早"} ~ ${to || "最新"}`;
   const packTotal = rep.pack_cost_total || 0;
   $("repStats").innerHTML = `
     <div class="stat blue"><div class="label">销售收入</div><div class="value">${fmtMoney(rep.revenue)}</div><div class="sub">${rep.order_count} 单</div></div>
@@ -3776,10 +3778,13 @@ async function loadReport() {
     <div class="stat red"><div class="label">期间费用</div><div class="value">${fmtMoney(rep.expense)}</div><div class="sub">其他开支 ${fmtMoney(rep.other_expense)} · 手工记账 ${fmtMoney(rep.manual_expense)}</div></div>
     <div class="stat ${rep.net_profit >= 0 ? "green" : "red"}"><div class="label">净利润</div><div class="value">${fmtMoney(rep.net_profit)}</div></div>
     <div class="stat"><div class="label">本期进货</div><div class="value">${fmtMoney(rep.purchase)}</div></div>
+    <div class="stat red"><div class="label">本期总支出</div><div class="value">${fmtMoney(rep.total_expense)}</div><div class="sub">含采购 ${fmtMoney(rep.purchase)} · 期间费用 ${fmtMoney(rep.expense)}</div></div>
     <div class="stat blue"><div class="label">当前库存总值</div><div class="value">${fmtMoney(rep.stock_value)}</div></div>`;
 
   renderCostBreakdown(rep);
+  renderExpenseSummary(rep);
   renderFeeBreakdown(rep);
+  renderExpenseTables(rep);
 
   const pt = $("repProductTable");
   let prodRows = applyTableSort(pt, rep.by_product || []);
@@ -3888,7 +3893,145 @@ function renderCostBreakdown(rep) {
     </table></div>
     ${packTotal ? "" : `<div class="alert warn" style="margin-top:10px;">本期没有包材 / 人工 / 快递等关联结算成本。若商品已配置包装清单，请确认出库时是否生成了关联结算行。</div>`}`;
 }
-/* 期间费用明细：其他开支（网线费/安装费/机器费/样品费…）+ 手工记账，均从毛利中扣减得到净利 */
+/* 报表分区 tab：汇总 / 支出 / 商品 / 流水（日期条件常驻，作用于所有分区） */
+const REP_PANELS = ["rep-panel-summary", "rep-panel-expense", "rep-panel-goods", "rep-panel-flow"];
+function repTab(btn) {
+  btn.closest(".seg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
+  const p = btn.dataset.panel;
+  REP_PANELS.forEach((id) => { const el = $(id); if (el) el.style.display = id === p ? "" : "none"; });
+}
+/* 支出统计（按日 / 按月）：其他开支 + 手工记账支出，合计即「期间费用」；不含采购支出 */
+function repExpSwitch(btn) {
+  $("repExpSeg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
+  const p = btn.dataset.panel;
+  ["rep-exp-day", "rep-exp-month"].forEach((id) => { $(id).style.display = id === p ? "" : "none"; });
+}
+function renderExpenseTables(rep) {
+  const days = rep.expense_by_day || [];
+  const months = rep.expense_by_month || [];
+  const purchase = rep.purchase || 0;                                  // 采购 / 进货
+  const other = rep.other_expense || 0;                                // 其他开支
+  const manual = rep.manual_expense || 0;                              // 手工记账
+  const period = rep.expense || 0;                                     // 期间费用（从毛利中扣减）
+  const total = rep.total_expense != null ? rep.total_expense : purchase + period;  // 全部支出（含采购）
+  const MAX_DAYS = 90;
+  const sumCount = (rows) => rows.reduce((a, r) => a + (r.count || 0), 0);
+
+  const hint = $("repExpHint");
+  if (hint) {
+    hint.textContent = total
+      ? `按日 / 按月列出各项支出，合计 ${fmtMoney(total)} ＝ 采购 ＋ 其他开支 ＋ 手工记账`
+      : "本期无支出";
+    if (days.length > MAX_DAYS) hint.textContent += ` · 按日仅列最近 ${MAX_DAYS} 天`;
+  }
+
+  // 自诊断：接口没返回逐日/逐月明细，或行内缺少采购字段 → 后端还是旧版
+  const staleApi = !Array.isArray(rep.expense_by_day) || !Array.isArray(rep.expense_by_month)
+    || days.some((r) => r.purchase == null);
+  const warn = $("repExpWarn");
+  if (warn) {
+    warn.style.display = staleApi ? "block" : "none";
+    if (staleApi) {
+      warn.innerHTML = "明细数据缺失：后端未返回「按日 / 按月支出明细」或缺少采购字段，说明<b>后端服务还是旧版本</b>。"
+        + "请更新并重启后端后刷新本页（服务器：bash /home/azureuser/WSFC_ERP/deploy/service.sh restart；"
+        + "本机：重启 backend/run.py）。";
+    }
+  }
+  const emptyText = staleApi
+    ? "明细为空：后端未返回明细数据（请更新并重启后端服务）"
+    : "本期无支出";
+
+  const pctOf = (v) => (total ? (v / total) * 100 : 0);
+  const bar = (v) => `<span class="exp-bar"><i style="width:${Math.min(100, pctOf(v)).toFixed(1)}%"></i></span>`;
+  const amountCells = (r) =>
+    `<td class="num mono" style="color:#1989fa">${r.purchase ? fmtMoney(r.purchase) : "—"}</td>` +
+    `<td class="num mono" style="color:#f97316">${r.other_expense ? fmtMoney(r.other_expense) : "—"}</td>` +
+    `<td class="num mono" style="color:#6366f1">${r.manual_expense ? fmtMoney(r.manual_expense) : "—"}</td>` +
+    `<td class="num mono"><b>${fmtMoney(r.total)}</b></td>`;
+  const totalCells = (label, rows) =>
+    `<tr><td><b>${label}</b></td>` +
+    `<td class="num mono" style="color:#1989fa"><b>${fmtMoney(purchase)}</b></td>` +
+    `<td class="num mono" style="color:#f97316"><b>${fmtMoney(other)}</b></td>` +
+    `<td class="num mono" style="color:#6366f1"><b>${fmtMoney(manual)}</b></td>` +
+    `<td class="num mono"><b>${fmtMoney(total)}</b></td>` +
+    `<td></td><td class="num mono"><b>${sumCount(rows)}</b></td></tr>`;
+
+  // 按日
+  const dt = $("repExpDayTable");
+  const dayRows = days.slice(0, MAX_DAYS);
+  dt.innerHTML = `<thead><tr>
+    <th>日期</th><th class="num">采购支出</th><th class="num">其他开支</th><th class="num">手工记账</th>
+    <th class="num">支出合计</th><th class="num">占比</th><th class="num">笔数</th></tr></thead><tbody>` +
+    (dayRows.length
+      ? dayRows.map((r) => `<tr>
+          <td class="mono">${esc(r.date)}</td>${amountCells(r)}
+          <td class="num">${bar(r.total)}<span class="muted">${pctOf(r.total).toFixed(1)}%</span></td>
+          <td class="num mono">${r.count}</td></tr>`).join("")
+      : `<tr><td colspan="7" class="empty">${emptyText}</td></tr>`) +
+    `</tbody>` +
+    (days.length ? `<tfoot>${totalCells(`合计（${days.length} 天）`, days)}</tfoot>` : "");
+
+  // 按月（多一列环比：与上个月比）
+  const mt = $("repExpMonthTable");
+  mt.innerHTML = `<thead><tr>
+    <th>月份</th><th class="num">采购支出</th><th class="num">其他开支</th><th class="num">手工记账</th>
+    <th class="num">支出合计</th><th class="num">环比</th><th class="num">笔数</th></tr></thead><tbody>` +
+    (months.length
+      ? months.map((m, i) => {
+        const prev = months[i + 1];  // 倒序排列，下一项即上一个月
+        const delta = prev && prev.total ? ((m.total - prev.total) / prev.total) * 100 : null;
+        const txt = delta == null ? "—" : `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}%`;
+        const color = delta == null ? "var(--muted)" : delta >= 0 ? "var(--red)" : "var(--green)";
+        return `<tr>
+          <td class="mono">${esc(m.month)}</td>${amountCells(m)}
+          <td class="num mono" style="color:${color}">${txt}</td>
+          <td class="num mono">${m.count}</td></tr>`;
+      }).join("")
+      : `<tr><td colspan="7" class="empty">${emptyText}</td></tr>`) +
+    `</tbody>` +
+    (months.length ? `<tfoot>${totalCells("合计", months)}</tfoot>` : "");
+}
+
+/* 支出汇总：采购（进货）+ 其他开支 + 手工记账 = 全部支出；期间费用才是从毛利中扣减的部分 */
+function renderExpenseSummary(rep) {
+  const box = $("repExpSummary");
+  if (!box) return;
+  const purchase = rep.purchase || 0;
+  const other = rep.other_expense || 0;
+  const manual = rep.manual_expense || 0;
+  const period = rep.expense || 0;
+  const total = rep.total_expense != null ? rep.total_expense : purchase + period;
+  const pctOf = (v) => (total ? (v / total) * 100 : 0);
+  const hint = $("repFeeHint");
+  if (hint) hint.textContent = `统计区间 ${rep.date_from || "最早"} ~ ${rep.date_to || "最新"} · 支出合计 ${fmtMoney(total)}`;
+
+  const rows = [
+    { name: "采购支出（进货）", value: purchase, color: "#1989fa", desc: "入库 / 进货金额（与「本期进货」同源），已计入结转成本" },
+    { name: "其他开支", value: other, color: "#f97316", desc: "网线费 / 安装费 / 机器费 / 样品费等（构成见下表）" },
+    { name: "手工记账", value: manual, color: "#6366f1", desc: "财务流水里登记的支出（构成见下表）" },
+  ];
+  box.innerHTML = `<thead><tr>
+      <th>支出项</th><th class="num">金额</th><th class="num">占全部支出</th><th>说明</th></tr></thead><tbody>` +
+    rows.map((r) => `<tr>
+      <td><span class="cost-dot" style="background:${r.color};"></span>${r.name}</td>
+      <td class="num mono">${fmtMoney(r.value)}</td>
+      <td class="num mono">${pctOf(r.value).toFixed(1)}%</td>
+      <td class="muted">${r.desc}</td></tr>`).join("") +
+    `</tbody><tfoot>
+      <tr>
+        <td><b>支出合计</b></td>
+        <td class="num mono"><b>${fmtMoney(total)}</b></td>
+        <td class="num mono"><b>100.0%</b></td>
+        <td class="muted">＝ 采购 ＋ 其他开支 ＋ 手工记账</td></tr>
+      <tr>
+        <td>其中：期间费用</td>
+        <td class="num mono">${fmtMoney(period)}</td>
+        <td class="num mono">${pctOf(period).toFixed(1)}%</td>
+        <td class="muted">其他开支 ＋ 手工记账；<b>毛利 − 期间费用 = 净利</b>（采购已计入结转成本，不重复扣）</td></tr>
+    </tfoot>`;
+}
+
+/* 期间费用构成明细：其他开支（按类型）+ 手工记账（按类别） */
 function renderFeeBreakdown(rep) {
   const box = $("repFeeBreak");
   if (!box) return;
@@ -3899,8 +4042,6 @@ function renderFeeBreakdown(rep) {
     ? rep.manual_expense
     : Object.values(manuals).reduce((a, b) => a + (Number(b) || 0), 0);
   const total = rep.expense != null ? rep.expense : otherTotal + manualTotal;
-  const hint = $("repFeeHint");
-  if (hint) hint.textContent = total ? `合计 ${fmtMoney(total)}（毛利 − 期间费用 = 净利）` : "";
 
   const rows = [
     ...Object.entries(others).map(([name, v]) => ({ name, value: Number(v) || 0, src: "其他开支" })),
@@ -3908,12 +4049,14 @@ function renderFeeBreakdown(rep) {
   ].sort((a, b) => b.value - a.value);
 
   if (!rows.length) {
-    box.innerHTML = `<div class="empty">本期无期间费用。其他开支请到「经营分析 → 其他开支」登记；手工记账见下方财务流水的「＋ 手动记账」</div>`;
+    box.innerHTML = `<div class="block-title">期间费用构成（从毛利中扣减）</div>
+      <div class="empty">本期无期间费用。其他开支请到「经营分析 → 其他开支」登记；手工记账见「流水」tab 的「＋ 手动记账」</div>`;
     return;
   }
   const pctOf = (v) => (total ? (v / total) * 100 : 0);
   const COLORS = { "其他开支": "#f97316", "手工记账": "#6366f1" };
   box.innerHTML = `
+    <div class="block-title">期间费用构成（其他开支 ＋ 手工记账，从毛利中扣减）</div>
     <div class="cost-stack">
       ${rows.filter((r) => r.value > 0).map((r) =>
         `<span title="${esc(r.name)} ${fmtMoney(r.value)}" style="width:${pctOf(r.value)}%;background:${COLORS[r.src]};"></span>`).join("")}

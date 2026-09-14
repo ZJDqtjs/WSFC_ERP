@@ -22,7 +22,14 @@
         <div class="stat accent"><div class="label">区间天数</div><div class="value">{{ stats.range_days || 0 }}</div><div class="sub">最大类型：{{ topCatText }}</div></div>
       </div>
 
-      <!-- 按日 / 按月 / 按类型 -->
+      <!-- 分区 tab：统计 / 明细（避免统计与长列表堆在同一页里） -->
+      <div class="seg">
+        <div class="seg-item" :class="{ active: oeTab === 'stat' }" @click="oeTab = 'stat'">统计</div>
+        <div class="seg-item" :class="{ active: oeTab === 'list' }" @click="oeTab = 'list'">明细</div>
+      </div>
+
+      <!-- 统计 -->
+      <template v-if="oeTab === 'stat'">
       <div class="card">
         <div class="seg" style="margin-bottom:8px;">
           <div v-for="p in PANELS" :key="p.key" class="seg-item" :class="{ active: panel === p.key }" @click="panel = p.key">{{ p.label }}</div>
@@ -77,7 +84,10 @@
         </template>
       </div>
 
+      </template>
+
       <!-- 明细 -->
+      <template v-else>
       <div class="card">
         <div class="card-title">
           <span class="grow">开支明细</span>
@@ -103,6 +113,7 @@
           <span class="bold up">合计 {{ fmtMoney(filteredSum) }}</span>
         </div>
       </div>
+      </template>
     </div>
 
     <!-- 登记 / 编辑 -->
@@ -172,6 +183,7 @@ const PANELS = [
 const df = ref(monthStartStr())
 const dt = ref(todayStr())
 const quickKey = ref('month')
+const oeTab = ref('stat')    // stat 统计 / list 明细
 const panel = ref('day')
 const stats = ref({})
 const rows = ref([])

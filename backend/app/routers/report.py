@@ -322,6 +322,48 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
     for e in others:
         other_fees[e.category] = round(other_fees.get(e.category, 0.0) + (e.amount or 0.0), 2)
 
+    # 逐日 / 逐月支出：三类合计——采购进货 + 其他开支 + 手工记账。
+    # 注意口径：total 是"全部支出"（含采购），period_expense 才是从毛利中扣减的「期间费用」；
+    # 采购已计入结转成本（COGS），不重复扣减，因此净利仍按期间费用计算。
+    exp_day: dict[str, dict] = {}
+    exp_month: dict[str, dict] = {}
+
+    def _add_expense(bucket: dict, key: str, kind: str, amount: float) -> None:
+        if not key:
+            return
+        b = bucket.setdefault(key, {"purchase": 0.0, "other": 0.0, "manual": 0.0, "count": 0})
+        b[kind] += amount or 0.0
+        b["count"] += 1
+
+    for i in inbounds:  # 采购/进货（与顶部「本期进货」同源）
+        _add_expense(exp_day, i.date, "purchase", i.total_amount)
+        _add_expense(exp_month, (i.date or "")[:7], "purchase", i.total_amount)
+    for e in others:
+        _add_expense(exp_day, e.date, "other", e.amount)
+        _add_expense(exp_month, (e.date or "")[:7], "other", e.amount)
+    for f in finances:
+        if f.type != "expense" or f.category == "采购支出":
+            continue
+        _add_expense(exp_day, f.date, "manual", f.amount)
+        _add_expense(exp_month, (f.date or "")[:7], "manual", f.amount)
+
+    def _expense_rows(bucket: dict, label: str) -> list[dict]:
+        """按日期/月份倒序的支出明细：采购 / 其他开支 / 手工记账 / 合计 / 笔数。"""
+        return [
+            {
+                label: k,
+                "purchase": round(v["purchase"], 2),
+                "other_expense": round(v["other"], 2),
+                "manual_expense": round(v["manual"], 2),
+                # 期间费用＝其他开支＋手工记账（真正从毛利中扣减的部分）
+                "period_expense": round(v["other"] + v["manual"], 2),
+                # 全部支出＝采购＋其他开支＋手工记账
+                "total": round(v["purchase"] + v["other"] + v["manual"], 2),
+                "count": v["count"],
+            }
+            for k, v in sorted(bucket.items(), reverse=True)
+        ]
+
     return {
         "date_from": date_from,
         "date_to": date_to,
@@ -335,6 +377,8 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
         "other_expense": other_total,
         "net_profit": net,
         "purchase": round(purchase_db, 2),
+        # 全部支出 = 采购（进货）+ 其他开支 + 手工记账；仅用于"支出"展示口径
+        "total_expense": round(purchase_db + expense, 2),
         "stock_value": stock_value,
         "order_count": len(outbounds),
         "inbound_count": len(inbounds),
@@ -346,6 +390,9 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
         "manual_fees": manual_fees,
         # 其他开支明细（按费用类型），同样计入期间费用
         "other_expenses": other_fees,
+        # 逐日 / 逐月支出明细（采购 + 其他开支 + 手工记账）
+        "expense_by_day": _expense_rows(exp_day, "date"),
+        "expense_by_month": _expense_rows(exp_month, "month"),
         "fee_breakdown": {
             **pack_costs,
             **{k: v for k, v in manual_fees.items() if k not in pack_costs},

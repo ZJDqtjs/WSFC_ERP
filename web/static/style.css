@@ -1502,6 +1502,25 @@ tr.draft-off {
   opacity: 0.45; 
 }
 
+/* 报表·支出统计：每行占比横向条 */
+.exp-bar {
+  display: inline-block;
+  width: 60px;
+  height: 8px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 4px;
+  overflow: hidden;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+.exp-bar > i {
+  display: block;
+  height: 100%;
+  background: #f97316;
+  border-radius: 4px;
+}
+
 /* 销售成本构成：堆叠占比条 + 图例圆点 */
 .cost-stack {
   display: flex;

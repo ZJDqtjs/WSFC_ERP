@@ -466,40 +466,86 @@
         </div>
       </section>
 
-      <!-- 财务报表 -->
+      <!-- 财务报表（查询常驻 + 分区 tab：汇总 / 支出 / 商品 / 流水） -->
       <section id="page-report" class="page">
         <div class="card">
-          <div class="card-head"><h3>财务利润报表</h3></div>
+          <div class="card-head"><h3>财务利润报表</h3><span class="hint" id="repRangeHint"></span></div>
           <div class="toolbar">
             <input id="repDateFrom" type="date" /><span>-</span><input id="repDateTo" type="date" />
-            <input id="repSearch" placeholder="🔍 筛选财务流水..." oninput="loadReport()" />
             <button class="btn" onclick="loadReport()">查询</button>
             <button class="btn secondary" onclick="quickRange('today')">今天</button>
             <button class="btn secondary" onclick="quickRange('month')">本月</button>
             <button class="btn secondary" onclick="quickRange('all')">全部</button>
-          </div>
-          <div class="stat-grid" id="repStats"></div>
-        </div>
-        <div class="card">
-          <div class="card-head"><h3>销售成本构成</h3><span class="muted" id="repCostHint"></span></div>
-          <div id="repCostBreak"></div>
-        </div>
-        <div class="card">
-          <div class="card-head">
-            <h3>期间费用明细</h3>
-            <span class="muted" id="repFeeHint"></span>
             <div class="grow"></div>
-            <button class="btn secondary" onclick="goPage('otherexp')">去登记其他开支 →</button>
+            <div class="seg" id="repSeg" style="margin-bottom:0;">
+              <button class="seg-item active" data-panel="rep-panel-summary" onclick="repTab(this)">汇总</button>
+              <button class="seg-item" data-panel="rep-panel-expense" onclick="repTab(this)">支出</button>
+              <button class="seg-item" data-panel="rep-panel-goods" onclick="repTab(this)">商品</button>
+              <button class="seg-item" data-panel="rep-panel-flow" onclick="repTab(this)">流水</button>
+            </div>
           </div>
-          <div id="repFeeBreak"></div>
         </div>
-        <div class="card">
-          <div class="card-head"><h3>商品销售明细</h3></div>
-          <div class="table-wrap"><table id="repProductTable"></table></div>
+
+        <!-- 汇总 -->
+        <div id="rep-panel-summary">
+          <div class="stat-grid" id="repStats"></div>
+          <div class="card">
+            <div class="card-head"><h3>销售成本构成</h3><span class="muted" id="repCostHint"></span></div>
+            <div id="repCostBreak"></div>
+          </div>
         </div>
-        <div class="card">
-          <div class="card-head"><h3>财务流水</h3><button class="btn secondary" onclick="openFinanceModal()">＋ 手动记账</button></div>
-          <div class="table-wrap"><table id="financeTable"></table></div>
+
+        <!-- 支出（采购 + 其他开支 + 手工记账） -->
+        <div id="rep-panel-expense" style="display:none;">
+          <div class="card">
+            <div class="card-head">
+              <h3>支出汇总</h3>
+              <span class="muted" id="repFeeHint"></span>
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="goPage('otherexp')">去登记其他开支 →</button>
+            </div>
+            <div class="table-wrap"><table id="repExpSummary"></table></div>
+            <div id="repFeeBreak" style="margin-top:14px;"></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h3>支出统计</h3>
+              <span class="muted" id="repExpHint"></span>
+              <div class="grow"></div>
+              <div class="seg" id="repExpSeg" style="margin-bottom:0;">
+                <button class="seg-item active" data-panel="rep-exp-day" onclick="repExpSwitch(this)">按日</button>
+                <button class="seg-item" data-panel="rep-exp-month" onclick="repExpSwitch(this)">按月</button>
+              </div>
+            </div>
+            <div id="repExpWarn" class="alert warn" style="display:none;"></div>
+            <div id="rep-exp-day">
+              <div class="table-wrap"><table id="repExpDayTable"></table></div>
+            </div>
+            <div id="rep-exp-month" style="display:none;">
+              <div class="table-wrap"><table id="repExpMonthTable"></table></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 商品 -->
+        <div id="rep-panel-goods" style="display:none;">
+          <div class="card">
+            <div class="card-head"><h3>商品销售明细</h3></div>
+            <div class="table-wrap"><table id="repProductTable"></table></div>
+          </div>
+        </div>
+
+        <!-- 财务流水 -->
+        <div id="rep-panel-flow" style="display:none;">
+          <div class="card">
+            <div class="card-head">
+              <h3>财务流水</h3>
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="openFinanceModal()">＋ 手动记账</button>
+            </div>
+            <div class="toolbar"><input id="repSearch" placeholder="🔍 筛选分类/商品/备注/操作员..." oninput="loadReport()" /></div>
+            <div class="table-wrap"><table id="financeTable"></table></div>
+          </div>
         </div>
       </section>
 

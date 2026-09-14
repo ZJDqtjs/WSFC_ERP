@@ -16,7 +16,16 @@
         </div>
       </div>
 
+      <!-- 分区 tab：一次只看一类，避免把多天/多月的记录竖向堆在一页 -->
+      <div class="seg">
+        <div class="seg-item" :class="{ active: tab === 'summary' }" @click="tab = 'summary'">汇总</div>
+        <div class="seg-item" :class="{ active: tab === 'expense' }" @click="tab = 'expense'">支出</div>
+        <div class="seg-item" :class="{ active: tab === 'goods' }" @click="tab = 'goods'">商品</div>
+        <div class="seg-item" :class="{ active: tab === 'flow' }" @click="tab = 'flow'">流水</div>
+      </div>
+
       <!-- 汇总 -->
+      <template v-if="tab === 'summary'">
       <div class="stat-grid" style="margin-bottom:12px;">
         <div class="stat accent"><div class="label">销售收入</div><div class="value">{{ fmtMoney(rep.revenue) }}</div><div class="sub">{{ rep.order_count || 0 }} 单</div></div>
         <div class="stat warn"><div class="label">结转成本</div><div class="value">{{ fmtMoney(rep.cogs) }}</div><div class="sub">含关联结算 {{ fmtMoney(rep.pack_cost_total) }}</div></div>
@@ -24,6 +33,7 @@
         <div class="stat danger"><div class="label">期间费用</div><div class="value">{{ fmtMoney(rep.expense) }}</div><div class="sub">其他开支 {{ fmtMoney(rep.other_expense) }} · 手工 {{ fmtMoney(rep.manual_expense) }}</div></div>
         <div class="stat" :class="rep.net_profit >= 0 ? 'success' : 'danger'"><div class="label">净利润</div><div class="value">{{ fmtMoney(rep.net_profit) }}</div></div>
         <div class="stat"><div class="label">本期进货</div><div class="value">{{ fmtMoney(rep.purchase) }}</div></div>
+        <div class="stat danger"><div class="label">本期总支出</div><div class="value">{{ fmtMoney(rep.total_expense) }}</div><div class="sub">含采购 {{ fmtMoney(rep.purchase) }}</div></div>
       </div>
       <div class="stat-grid cols2" style="margin-bottom:12px;">
         <div class="stat accent"><div class="label">当前库存总值</div><div class="value">{{ fmtMoney(rep.stock_value) }}</div></div>
@@ -66,37 +76,106 @@
         </template>
       </div>
 
-      <!-- 其他开支（网线费 / 安装费 / 机器费 / 样品费…） -->
-      <div v-if="Object.keys(rep.other_expenses || {}).length" class="card">
+      </template>
+
+      <!-- 支出（期间费用 = 其他开支 + 手工记账） -->
+      <template v-else-if="tab === 'expense'">
+      <div class="card">
         <div class="card-title">
-          <span class="grow">其他开支</span>
-          <span class="muted">{{ fmtMoney(rep.other_expense) }}</span>
+          <span class="grow">支出</span>
+          <span class="bold up">{{ fmtMoney(rep.total_expense) }}</span>
         </div>
-        <div v-for="(v, k) in rep.other_expenses" :key="k" class="list-item">
-          <div class="row">
-            <span class="grow">{{ k }}</span>
-            <span class="bold up">{{ fmtMoney(v) }}</span>
+        <div class="muted" style="margin-bottom:8px;">
+          采购 {{ fmtMoney(rep.purchase) }} + 其他开支 {{ fmtMoney(rep.other_expense) }} + 手工记账 {{ fmtMoney(rep.manual_expense) }}；
+          其中期间费用 {{ fmtMoney(rep.expense) }} 从毛利中扣减（采购已计入结转成本，不重复扣）
+        </div>
+        <div v-if="staleApi" class="alert warn" style="margin-bottom:8px;">
+          明细数据缺失：后端未返回「按日 / 按月支出明细」或缺少采购字段，说明后端服务还是旧版本，请更新并重启后端后刷新。
+        </div>
+        <div class="seg" style="margin-bottom:8px;">
+          <div class="seg-item" :class="{ active: expTab === 'cat' }" @click="expTab = 'cat'">按类型</div>
+          <div class="seg-item" :class="{ active: expTab === 'day' }" @click="expTab = 'day'">按日</div>
+          <div class="seg-item" :class="{ active: expTab === 'month' }" @click="expTab = 'month'">按月</div>
+        </div>
+
+        <!-- 按类型：其他开支 + 手工记账 -->
+        <template v-if="expTab === 'cat'">
+          <div v-if="!rep.purchase && !Object.keys(rep.other_expenses || {}).length && !Object.keys(rep.manual_fees || {}).length" class="empty">本期无支出</div>
+          <div v-if="rep.purchase" class="muted" style="margin:4px 0;">采购支出（进货）</div>
+          <div v-if="rep.purchase" class="list-item">
+            <div class="row">
+              <van-tag type="primary" plain>采购支出</van-tag>
+              <span class="grow"></span>
+              <span class="bold up">{{ fmtMoney(rep.purchase) }}</span>
+            </div>
           </div>
+          <div v-if="Object.keys(rep.other_expenses || {}).length" class="muted" style="margin:8px 0 4px;">其他开支（网线费 / 安装费 / 机器费 / 样品费…）</div>
+          <div v-for="(v, k) in rep.other_expenses || {}" :key="'o' + k" class="list-item">
+            <div class="row">
+              <van-tag type="danger" plain>{{ k }}</van-tag>
+              <span class="grow"></span>
+              <span class="bold up">{{ fmtMoney(v) }}</span>
+            </div>
+          </div>
+          <div v-if="Object.keys(rep.manual_fees || {}).length" class="muted" style="margin:8px 0 4px;">手工记账（财务流水中的支出）</div>
+          <div v-for="(v, k) in rep.manual_fees || {}" :key="'m' + k" class="list-item">
+            <div class="row">
+              <van-tag plain>{{ k }}</van-tag>
+              <span class="grow"></span>
+              <span class="bold up">{{ fmtMoney(v) }}</span>
+            </div>
+          </div>
+        </template>
+
+        <!-- 按日 -->
+        <template v-else-if="expTab === 'day'">
+          <div v-if="!expDays.length" class="empty">本期无支出</div>
+          <div v-for="d in expDays" :key="d.date" class="list-item">
+            <div class="row">
+              <span class="grow item-title">{{ d.date }}</span>
+              <span class="bold up">{{ fmtMoney(d.total) }}</span>
+            </div>
+            <div class="item-meta">
+              采购 {{ fmtMoney(d.purchase) }} · 其他开支 {{ fmtMoney(d.other_expense) }} · 手工记账 {{ fmtMoney(d.manual_expense) }} · {{ d.count }} 笔
+            </div>
+            <div class="exp-track" style="margin-top:6px;"><span class="exp-fill" :style="{ width: pctOfExp(d.total) + '%' }" /></div>
+          </div>
+          <div v-if="expDayTruncated" class="muted">共有 {{ (rep.expense_by_day || []).length }} 天支出，仅显示最近 {{ MAX_EXP_DAYS }} 天</div>
+        </template>
+
+        <!-- 按月 -->
+        <template v-else>
+          <div v-if="!(rep.expense_by_month || []).length" class="empty">本期无支出</div>
+          <div v-for="(m, i) in rep.expense_by_month || []" :key="m.month" class="list-item">
+            <div class="row">
+              <span class="grow item-title">{{ m.month }}</span>
+              <span class="bold up">{{ fmtMoney(m.total) }}</span>
+            </div>
+            <div class="item-meta">
+              采购 {{ fmtMoney(m.purchase) }} · 其他开支 {{ fmtMoney(m.other_expense) }} · 手工记账 {{ fmtMoney(m.manual_expense) }} · {{ m.count }} 笔
+              <template v-if="expMomText(i) !== '—'"> · 环比 <b :class="expMom(i) >= 0 ? 'up' : 'down'">{{ expMomText(i) }}</b></template>
+            </div>
+          </div>
+        </template>
+
+        <div class="divider"></div>
+        <div class="row">
+          <span class="grow bold">支出合计（采购＋其他＋手工）</span>
+          <span class="bold up">{{ fmtMoney(rep.total_expense) }}</span>
+        </div>
+        <div class="row" style="margin-top:2px;">
+          <span class="grow muted">其中期间费用（从毛利中扣减，采购已计入结转成本）</span>
+          <span class="muted">{{ fmtMoney(rep.expense) }}</span>
         </div>
         <div class="row" style="margin-top:8px;">
-          <span class="grow muted">已计入期间费用，从毛利中扣减得到净利</span>
-          <van-button size="mini" plain type="primary" @click="$router.push('/otherexp')">去登记</van-button>
+          <span class="grow"></span>
+          <van-button size="mini" plain type="primary" @click="$router.push('/otherexp')">去登记其他开支</van-button>
         </div>
       </div>
+      </template>
 
-      <!-- 账外费用 -->
-      <div v-if="Object.keys(rep.manual_fees || {}).length" class="card">
-        <div class="card-title">账外费用（手工记账）</div>
-        <div v-for="(v, k) in rep.manual_fees" :key="k" class="list-item">
-          <div class="row">
-            <span class="grow">{{ k }}</span>
-            <span class="bold">{{ fmtMoney(v) }}</span>
-          </div>
-        </div>
-        <div class="muted" style="margin-top:6px;">这些费用从毛利中额外扣减得到净利，不含采购支出。</div>
-      </div>
-
-      <!-- 商品销售明细 -->
+      <!-- 商品 -->
+      <template v-else-if="tab === 'goods'">
       <div class="card">
         <div class="card-title">
           <span class="grow">商品销售明细</span>
@@ -120,8 +199,10 @@
           </div>
         </div>
       </div>
+      </template>
 
-      <!-- 财务流水 -->
+      <!-- 流水 -->
+      <template v-else>
       <div class="card">
         <div class="card-title">
           <span class="grow">财务流水</span>
@@ -145,6 +226,7 @@
           </div>
         </div>
       </div>
+      </template>
     </div>
 
     <!-- 手动记账 -->
@@ -223,6 +305,38 @@ const costRows = computed(() => {
     .forEach(([k, v]) => rows.push({ name: k, value: v, color: COST_COLORS[k] || '#969799', tag: '自动结算' }))
   return rows
 })
+
+/* ---------- 报表分区 tab（汇总 / 支出 / 商品 / 流水）与支出子页签 ---------- */
+const tab = ref('summary')
+const expTab = ref('cat')   // cat 按类型 / day 按日 / month 按月
+const MAX_EXP_DAYS = 90
+const expDays = computed(() => (rep.value.expense_by_day || []).slice(0, MAX_EXP_DAYS))
+const expDayTruncated = computed(() => (rep.value.expense_by_day || []).length > MAX_EXP_DAYS)
+
+/** 后端未更新时（没返回逐日/逐月明细，或行内缺少采购字段）给出明确提示 */
+const staleApi = computed(() =>
+  !Array.isArray(rep.value.expense_by_day) || !Array.isArray(rep.value.expense_by_month)
+  || (rep.value.expense_by_day || []).some((r) => r.purchase == null)
+)
+
+/** 单日/单月支出占本期「全部支出（含采购）」的百分比（用于占比条） */
+function pctOfExp(v) {
+  const t = num(rep.value.total_expense)
+  return t ? Math.min(100, (num(v) / t) * 100).toFixed(1) : '0.0'
+}
+
+/** 环比：expense_by_month 为倒序，下一项即上一个月 */
+function expMom(i) {
+  const list = rep.value.expense_by_month || []
+  const cur = list[i]
+  const prev = list[i + 1]
+  if (!cur || !prev || !num(prev.total)) return null
+  return ((num(cur.total) - num(prev.total)) / num(prev.total)) * 100
+}
+function expMomText(i) {
+  const d = expMom(i)
+  return d == null ? '—' : `${d >= 0 ? '+' : ''}${d.toFixed(1)}%`
+}
 
 const financeFiltered = computed(() => {
   const s = (fkw.value || '').trim().toLowerCase()
@@ -303,6 +417,8 @@ onMounted(() => { if (!inited) load() })
 .cost-stack { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: #f2f3f5; margin-bottom: 10px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; flex-shrink: 0; }
 .cost-split { color: #969799; font-size: 11px; }
+.exp-track { height: 6px; background: #f2f3f5; border-radius: 3px; overflow: hidden; display: block; }
+.exp-fill { display: block; height: 100%; background: #f97316; border-radius: 3px; min-width: 2px; }
 .alert { border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-top: 8px; }
 .alert.warn { background: #fffbe8; color: #ed6a0c; }
 </style>
