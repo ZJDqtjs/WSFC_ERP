@@ -566,6 +566,18 @@ def _resolve_line(db: Session, name: str, op_type: str, cat: str) -> Product | N
     return _resolve_outbound_product(db, name)
 
 
+# 等价单位（写法不同、含义相同）：用于消除「千克 vs 公斤」这类假告警
+_UNIT_EQUIVALENTS = {"千克": "公斤", "kg": "公斤", "KG": "公斤", "公斤": "公斤"}
+
+
+def _same_unit(a: str, b: str) -> bool:
+    """两个单位是否等价（如「千克」与「公斤」都是 1000 克）。"""
+    if not a or not b:
+        return False
+    a, b = str(a).strip(), str(b).strip()
+    return a == b or _UNIT_EQUIVALENTS.get(a, a) == _UNIT_EQUIVALENTS.get(b, b)
+
+
 def _norm_unit(unit: str, conv: dict) -> str | None:
     """把单位别名归一到商品换算表中的标准名。"""
     if not unit:
@@ -685,6 +697,7 @@ def _normalize_line(db: Session, p: Product | None, line: dict, op_type: str, au
     out = {
         "product_id": 0,
         "product_name": name,
+        "recognized_name": name,         # 票据/文本里的原始名称（供前端「新建议」使用）
         "category": category,
         "quantity": qty,
         "unit": unit,
@@ -733,14 +746,15 @@ def _normalize_line(db: Session, p: Product | None, line: dict, op_type: str, au
             out["hint"] += "；未能换算单位，请核对"
 
     # 单位冲突检测：识别原始单位 与 商品库存/展示单位 不一致时，提示用户确认换算
+    # 注意：千克/公斤 是同一单位，不可当冲突报（否则票据里的「千克」会全行刷告警）。
     raw_unit = _norm_unit(unit, conv) or (unit or "")  # 归一化后的识别单位
     stored_unit = du or p.base_unit
     if (
         out["unit"]                       # 已换算出的目标单位
         and raw_unit
         and stored_unit
-        and raw_unit != stored_unit
-        and raw_unit != out["unit"]
+        and not _same_unit(raw_unit, stored_unit)
+        and not _same_unit(raw_unit, out["unit"])
         and not (auto_created)            # 自动新增不冲突
     ):
         out["unit_conflict"] = True
@@ -814,16 +828,30 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
                 exact_hit = False
                 p = None       # 没有/有多个等价 → 交由用户选择
         else:
-            exact_hit = any(c.name == name for c in cands)
-            if p is None and exact_hit:
-                # 有精确同名但被分类过滤漏掉（罕见），直接采用精确同名
-                for c in cands:
-                    if c.name == name:
-                        p = c
-                        break
+            name_t = _tight(name)
+            exact_name = [c for c in cands if _tight(c.name) == name_t]
+            # 「票据名是商品名的前缀」算可靠命中：如「香菇」→「香菇干货」、「七彩花生米」→「七彩花生米（去壳）」。
+            # 反之（票据「冻干黑花生」落到商品「黑花生」）只是「包含」命中，商品可能不是同一个，
+            # 不能静默采信，必须标成待确认让用户核对（否则会把 A 商品的数量记到 B 商品上）。
+            prefix = [c for c in cands if c not in exact_name and _tight(c.name).startswith(name_t)]
+            rest = [c for c in cands if c not in exact_name and c not in prefix]
+            cands = exact_name + prefix + rest
+            if exact_name:
+                exact_hit = True
+                p = exact_name[0]
+            elif len(prefix) == 1:
+                exact_hit = True
+                p = prefix[0]
+            elif prefix:
+                exact_hit = False
+                p = None                  # 多个前缀候选（如「黑花生」对上「黑花生米（去壳）」等）→ 用户挑
+            elif p is not None and _tight(p.name).startswith(name_t):
+                exact_hit = True          # 分类内没命中但全局命中了前缀同名（罕见）
+            else:
+                exact_hit = False         # 仅「包含」命中 → 交给用户确认
         similar = [c for c in cands if c.id != (p.id if p else None)]
-        # 存在近似候选且无完全同名 => 歧义：不自动新增，交由用户在候选里挑选
-        ambiguous = bool(similar) and not exact_hit
+        # 非完全命中（含仅「包含」命中）或存在其他候选 => 歧义：不自动新增，交由用户确认
+        ambiguous = (not exact_hit) and (p is not None or bool(similar))
         pending_new = None
         if p is None and not ambiguous and op_type == "inbound":
             # 入库的新物品（无任何相似商品）：识别阶段只生成「待新增档案」预览，绝不写库。
@@ -833,6 +861,8 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
         category = _product_category(p) if p else (cat or "")
         ln_out = _normalize_line(db, p, ln, op_type, auto_created=auto, category=category)
         ln_out["ambiguous"] = ambiguous
+        if ambiguous and p is not None and all(c.id != p.id for c in cands):
+            cands = [p] + cands      # 保证默认选中的那一个一定在候选列表里
         ln_out["candidates"] = (
             [
                 {
@@ -855,7 +885,15 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
             )
         if ambiguous:
             names = "、".join(c["name"] for c in ln_out["candidates"])
-            ln_out["hint"] = f"⚠ 识别到多个相似商品（{names}），请确认选哪一个"
+            rec = ln_out.get("recognized_name") or name
+            only_approx = not any(_tight(c["name"]) == _tight(rec) for c in ln_out["candidates"])
+            if only_approx:
+                ln_out["hint"] = (
+                    f"⚠ 没有与「{rec}」完全同名的商品，最接近的是（{names}），"
+                    f"请确认识别对没有（不是同一商品时，可在下拉里选「🆕 新建」）"
+                )
+            else:
+                ln_out["hint"] = f"⚠ 识别到多个相似商品（{names}），请确认选哪一个"
             # 歧义行也先按默认候选（列表第一个，即前端默认选中的那个）的最近价填入，
             # 免得用户看到空单价；用户改选其他候选时前端会跟着刷新。
             if not ln_out["unit_price"] and ln_out["candidates"] and ln_out["candidates"][0]["last_price"]:

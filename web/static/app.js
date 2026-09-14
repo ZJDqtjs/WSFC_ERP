@@ -1222,6 +1222,7 @@ function openAiConfirm(r) {
       const cur = ln.candidates.find((c) => c.product_id === ln.product_id) || ln.candidates[0];
       if (!(+ln.unit_price) && cur.last_price) { ln.unit_price = cur.last_price; ln.price_defaulted = true; }
       prodSel = `<select class="ai-pid" style="border-color:var(--amber);" onchange="aiProdChanged(${i})">
+          <option value="0">🆕 新建：${esc(ln.recognized_name || ln.product_name || "")}</option>
           ${ln.candidates.map((c) => `<option value="${c.product_id}" ${c.product_id === ln.product_id ? "selected" : ""} data-price="${c.last_price || 0}">〔${({ stock: "库存", order: "订单", pack: "包材", labor: "人工" }[c.category] || "库存")}〕${esc(c.name)}${c.last_price ? `（最近 ${c.last_price}）` : ""}</option>`).join("")}
         </select>`;
     } else if (np) {
@@ -1291,10 +1292,16 @@ async function aiSubmit() {
   let rows = [...document.querySelectorAll("#aiLines tr[data-idx]")].map((tr, i) => {
     const line = autoFlags[i] || {};
     const pid = +tr.querySelector(".ai-pid").value || 0;
+    // 歧义行里用户选了「🆕 新建」：按票据上的原名建档
+    const spec = line.new_product || (line.ambiguous ? {
+      name: line.recognized_name || line.product_name,
+      category: line.category || "stock",
+      unit: line.unit,
+    } : null);
     return {
       product_id: pid,
       // 待新增商品：提交时才建档，避免用户取消也污染商品资料（含商品类型/包材）
-      new_product: (!pid && line.new_product) ? line.new_product : null,
+      new_product: (!pid && spec) ? spec : null,
       quantity: parseFloat(tr.querySelector(".ai-qty").value),
       unit: tr.querySelector(".ai-unit").value.trim(),
       unit_price: parseFloat(tr.querySelector(".ai-price").value),
