@@ -210,6 +210,9 @@ PACK_KEYWORDS = (
     "纸箱", "拖箱", "果箱", "泡沫箱", "保温箱", "周转箱", "编织袋", "保鲜袋",
     "包装袋", "胶带", "气泡膜", "珍珠棉", "冰袋", "内膜袋", "牛皮纸", "封箱",
     "气柱", "吸塑", "拉链袋", "自封袋", "网兜", "彩盒", "礼盒盒",
+    # 「号箱」「箱子」：票据里常只写「6号箱」「冰糖橙箱子」，缺这些关键字会被判成非包材，
+    # 从而走不到包材的等价匹配（「6号箱」↔「6号纸箱」）。
+    "号箱", "箱子",
 )
 
 
@@ -461,10 +464,11 @@ def _quick_parse_text(text: str) -> dict | None:
 
 
 def _match_product(db: Session, name: str, want: str | None) -> Product | None:
-    """按名称匹配商品：先精确，再子串包含（取匹配更长的）。want: stock/order/None=不限。"""
+    """按名称匹配商品：先精确（忽略空白），再子串包含（取匹配更长的）。want: stock/order/None=不限。"""
     name = (name or "").strip()
     if not name:
         return None
+    qkey = _tight(name)
     q = db.query(Product).filter(Product.is_active.is_(True))
     if want == "stock":
         q = q.filter(Product.product_type == "stock")
@@ -473,10 +477,15 @@ def _match_product(db: Session, name: str, want: str | None) -> Product | None:
     p = q.filter(Product.name == name).first()
     if p:
         return p
+    rows = q.all()
+    for p in rows:  # 忽略空白的同名（模型常把「8号拖箱」写成「8 号拖箱」）
+        if _tight(p.name) == qkey:
+            return p
     cands = []
-    for p in q.all():
-        if name in p.name or p.name in name:
-            cands.append((min(len(p.name), len(name)), p))
+    for p in rows:
+        pn = _tight(p.name)
+        if qkey in pn or pn in qkey:
+            cands.append((min(len(pn), len(qkey)), p))
     if cands:
         cands.sort(key=lambda x: -x[0])
         return cands[0][1]
@@ -522,10 +531,16 @@ def _match_by_category(db: Session, name: str, cat: str) -> Product | None:
     p = q.filter(Product.name == name).first()
     if p:
         return p
+    qkey = _tight(name)
+    rows = q.all()
+    for c in rows:
+        if _tight(c.name) == qkey:      # 忽略空白的同名（如票据「8 号拖箱」↔ 档案「8号拖箱」）
+            return c
     best, blen = None, -1
-    for c in q.all():
-        if name in c.name or c.name in name:
-            m = min(len(c.name), len(name))
+    for c in rows:
+        cn = _tight(c.name)
+        if qkey in cn or cn in qkey:
+            m = min(len(cn), len(qkey))
             if m > blen:
                 blen, best = m, c
     return best
@@ -594,10 +609,14 @@ def _last_price_default(db: Session, p: Product | None, op_type: str) -> float:
     return to_du(p.sale_price, p.base_unit)
 
 
+def _tight(s: str) -> str:
+    """名称归一：去掉所有空白，便于与商品档案名比较（模型常输出「8 号拖箱」）。"""
+    return re.sub(r"\s+", "", s or "")
+
+
 def _pack_key(s: str) -> str:
     """包材宽松名：去空白、去“纸/拖”等箱型限定词，用于「9号箱」↔「9号纸箱」的等价判断。"""
-    s = re.sub(r"\s+", "", s or "")
-    return s.replace("纸", "").replace("拖", "")
+    return _tight(s).replace("纸", "").replace("拖", "")
 
 
 def _line_candidates(db: Session, name: str, op_type: str, cat: str) -> list[Product]:
@@ -627,12 +646,13 @@ def _line_candidates(db: Session, name: str, op_type: str, cat: str) -> list[Pro
         rows = q.all()
     else:
         rows = db.query(Product).filter(Product.is_active.is_(True)).all()
-    qkey = _pack_key(name) if cat == "pack" else name
+    qname = _tight(name)
+    qkey = _pack_key(name) if cat == "pack" else qname
     exact = []
     for p in rows:
-        if p.name == name:
+        if _tight(p.name) == qname:          # 同名（忽略空白）
             exact.append(p)
-        elif cat == "pack" and _pack_key(p.name) == qkey and p.name != name:
+        elif cat == "pack" and _pack_key(p.name) == qkey and _tight(p.name) != qname:
             exact.append(p)
     # 去重（按 id）
     seen = {p.id for p in exact}
@@ -640,13 +660,14 @@ def _line_candidates(db: Session, name: str, op_type: str, cat: str) -> list[Pro
     for p in rows:
         if p.id in seen:
             continue
-        hit = (name in p.name or p.name in name)
+        pn = _tight(p.name)
+        hit = (qname in pn or pn in qname)
         if not hit and cat == "pack":
             pkey = _pack_key(p.name)
             hit = (qkey in pkey or pkey in qkey)
         if hit:
             sub.append(p)
-    sub.sort(key=lambda p: -min(len(p.name), len(name)))
+    sub.sort(key=lambda p: -min(len(_tight(p.name)), len(qname)))
     return exact + sub
 
 
@@ -763,15 +784,32 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
         auto = False
         cands = _line_candidates(db, name, op_type, cat)
         if cat == "pack":
-            # 包材做宽松判定：以「去空白/纸/拖」后的名称为准。
-            # 存在≥2个宽松等价候选（如票据“9 号箱” vs 已有“9号纸箱”）→ 视为歧义，让用户挑选，绝不抢先自动新增。
+            # 包材判定分三级，优先级从高到低：
+            #   ① 同名（忽略空白）：票据「8号拖箱」必须命中档案里的「8号拖箱」，绝不串到「8号纸箱」
+            #   ② 去「纸/拖」等限定词后等价且唯一：「3号箱」→「3号纸箱」
+            #   ③ 前缀近似且唯一：「松茸6号」→「松茸6号箱」
+            # 仍剩多个候选（如「8号箱」同时对上 8号纸箱 / 8号拖箱）才算歧义，交给用户挑选。
+            qname = _tight(name)
             qkey = _pack_key(name)
-            loose = [c for c in cands if _pack_key(c.name) == qkey]
-            sub = [c for c in cands if c not in loose and (qkey in _pack_key(c.name) or _pack_key(c.name) in qkey)]
-            cands = loose + sub
-            if len(loose) == 1:
+            exact_name = [c for c in cands if _tight(c.name) == qname]
+            loose = [c for c in cands if c not in exact_name and _pack_key(c.name) == qkey]
+            sub = [
+                c for c in cands
+                if c not in exact_name and c not in loose
+                and (
+                    _pack_key(c.name).startswith(qkey) or qkey.startswith(_pack_key(c.name))
+                )
+            ]
+            cands = exact_name + loose + sub
+            if exact_name:
                 exact_hit = True
-                p = loose[0]  # 唯一的宽松等价：直接采用该包材
+                p = exact_name[0]
+            elif len(loose) == 1:
+                exact_hit = True
+                p = loose[0]
+            elif not loose and len(sub) == 1:
+                exact_hit = True
+                p = sub[0]
             else:
                 exact_hit = False
                 p = None       # 没有/有多个等价 → 交由用户选择
@@ -790,7 +828,7 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
         if p is None and not ambiguous and op_type == "inbound":
             # 入库的新物品（无任何相似商品）：识别阶段只生成「待新增档案」预览，绝不写库。
             # 用户点「确认提交」时才真正建档（见 materialize_products），取消则不产生任何商品/包材数据。
-            pending_new = _new_product_meta(name, cat or "stock")
+            pending_new = _new_product_meta(_tight(name), cat or "stock")
             auto = True
         category = _product_category(p) if p else (cat or "")
         ln_out = _normalize_line(db, p, ln, op_type, auto_created=auto, category=category)
@@ -809,13 +847,22 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
             if ambiguous else []
         )
         if pending_new:
+            ln_out["product_name"] = pending_new["name"]     # 用归一后的名称（去掉模型多余空格）
             ln_out["new_product"] = {**pending_new, "unit": (ln.get("unit") or "").strip() or "个"}
             ln_out["hint"] = (
-                f"🆕 系统暂无此商品，确认提交后将新增到「{pending_new['category_label']}」（取消不会创建）"
+                f"🆕 系统暂无此商品，确认提交后将新增到「{pending_new['category_label']}」，"
+                f"新商品没有历史价，请填写单价（取消不会创建）"
             )
         if ambiguous:
             names = "、".join(c["name"] for c in ln_out["candidates"])
             ln_out["hint"] = f"⚠ 识别到多个相似商品（{names}），请确认选哪一个"
+            # 歧义行也先按默认候选（列表第一个，即前端默认选中的那个）的最近价填入，
+            # 免得用户看到空单价；用户改选其他候选时前端会跟着刷新。
+            if not ln_out["unit_price"] and ln_out["candidates"] and ln_out["candidates"][0]["last_price"]:
+                first = ln_out["candidates"][0]
+                ln_out["unit_price"] = first["last_price"]
+                ln_out["price_defaulted"] = True
+                ln_out["hint"] += f"；已按默认候选「{first['name']}」最近价 {first['last_price']} 填入，请核对"
         lines.append(ln_out)
 
     # 日期校验：格式非法/为空时回退为今天，避免模型幻觉日期
