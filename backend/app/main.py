@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .database import DEFAULT_WAREHOUSE_KEY, get_current_key
 from .initdb import init_warehouse
-from .routers import ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, outbound, pack_rules, product_data, products, report, warehouse_in, warehouses
+from .routers import ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, outbound, pack_rules, product_data, products, report, uploads, warehouse_in, warehouses
 from .routers.backup import create_backup_file, load_config
 
 # 桌面 Web 前端目录（WSFC_ERP/web/static，前后端分离；SERVE_STATIC=1 时后端顺带托管）
@@ -98,6 +98,7 @@ app.include_router(report.router)
 app.include_router(imports.router)
 app.include_router(backup.router)
 app.include_router(ai.router)
+app.include_router(uploads.router)
 app.include_router(fresh.router)
 app.include_router(warehouse_in.router)
 app.include_router(warehouses.router)

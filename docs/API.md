@@ -640,6 +640,19 @@ data: {"done": true}
 
 * `GET /uploads/{filename}`：AI 票据识别时保存的票据图片，可直接用做 `<img src>` 预览，也可写入备注（形如 `/uploads/invoice_20260831_xxx.jpg`）。
 
+### 12.1 备注附件上传（手动入库 / 出库）
+
+`POST /api/uploads`（multipart：`file`，需登录）→ 上传任意格式附件（单文件 ≤ 20MB）。
+
+响应：
+
+```json
+{ "url": "/uploads/attach_20260914_153000_123456_送货单.pdf", "name": "送货单.pdf", "size": 20480, "is_image": false }
+```
+
+* 把返回的 `url` 追加到入库 / 出库的 `remark` 即可（多个附件用换行分隔），记录列表会自动渲染：图片显示缩略图，其他格式显示下载链接。
+* 前端新增接口只负责上传，落盘文件名会做字符净化（保留中英文、数字、下划线、短横线与点），因此 `remark` 里的附件路径格式稳定可解析。
+
 ***
 
 ## 13. Flutter 对接速查

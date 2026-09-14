@@ -1526,3 +1526,65 @@ tr.draft-off {
   margin-right: 7px;
   vertical-align: middle;
 }
+
+/* ============ 备注附件（手动入库/出库） ============ */
+.attach-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.attach-bar .btn { flex: none; }
+
+.attach-tip {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.attach-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.attach-list:empty { display: none; }
+
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--primary-50);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.attach-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attach-chip > b {
+  flex: none;
+  cursor: pointer;
+  font-weight: 400;
+  color: var(--red);
+}
+
+.attach-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 6px;
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.attach-link:hover { text-decoration: underline; }

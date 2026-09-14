@@ -1374,11 +1374,81 @@ async function aiSubmit() {
   } catch (e) { toast("提交失败：" + e.message); }
 }
 
-/* 备注渲染：把 /uploads/xxx.jpg 票据引用转成缩略图（可点击放大） */
+/* =============== 备注附件 =============== */
+/* 备注里以 /uploads/xxx 形式保存附件（AI 票据与手动上传的图片/文件共用同一格式）。
+   字符集与后端落盘文件名一致（见 backend/app/routers/uploads.py）。 */
+const REMARK_UPLOAD_RE = () => new RegExp(escRe(ROUTES.uploads) + "\\/[A-Za-z0-9_.\\-\\u4e00-\\u9fff]+", "g");
+
+function escRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+/** 是否图片附件（决定渲染成缩略图还是下载链接） */
+function isImageUrl(url) { return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(url || ""); }
+
+/** 附件展示名：去掉 attach_<时间戳>_ 前缀，还原可读文件名 */
+function attachName(url) {
+  const n = String(url || "").split("/").pop() || "附件";
+  return n.replace(/^attach_\d{8}_\d{6}_\d+_/, "") || n;
+}
+
+/** 备注 → 有序段落：[{text}] 或 [{url, name, isImage}] */
+function splitRemark(rmk) {
+  const text = String(rmk || "");
+  const re = REMARK_UPLOAD_RE();
+  const segs = [];
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) segs.push({ text: text.slice(last, m.index) });
+    segs.push({ url: m[0], name: attachName(m[0]), isImage: isImageUrl(m[0]) });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) segs.push({ text: text.slice(last) });
+  return segs.filter((s) => s.url || s.text.trim());
+}
+
+/* 备注渲染：文本原样（换行转 <br>），图片附件显示缩略图，其他文件显示下载链接 */
 function renderRemarkHtml(rmk) {
   if (!rmk) return "—";
-  return esc(rmk).replace(new RegExp(ROUTES.uploads.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\/[\\w.\\-]+", "g"), (u) =>
-    `<a href="${u}" target="_blank"><img src="${u}" alt="票据" style="height:34px;vertical-align:middle;border-radius:4px;margin-right:4px;border:1px solid var(--border-light);" /></a>`);
+  return splitRemark(rmk).map((s) => {
+    if (s.text !== undefined) return esc(s.text).replace(/\n/g, "<br />");
+    const u = routePath(s.url);
+    if (s.isImage) {
+      return `<a href="${u}" target="_blank" title="${esc(s.name)}"><img src="${u}" alt="${esc(s.name)}" style="height:34px;vertical-align:middle;border-radius:4px;margin-right:4px;border:1px solid var(--border-light);" /></a>`;
+    }
+    return `<a class="attach-link" href="${u}" target="_blank" title="${esc(s.name)}">📎 ${esc(s.name)}</a>`;
+  }).join("");
+}
+
+/** 上传备注附件：成功后把 /uploads/xxx 追加进备注文本框，随表单一起保存 */
+async function uploadRemarkFiles(textareaId, inputEl) {
+  const files = Array.from(inputEl.files || []);
+  inputEl.value = "";  // 允许重复选择同一个文件
+  if (!files.length) return;
+  try {
+    for (const f of files) {
+      const r = await apiUpload("/api/uploads", f);
+      const ta = $(textareaId);
+      ta.value = (ta.value.trim() ? ta.value.replace(/\s+$/, "") + "\n" : "") + r.url;
+    }
+    renderRemarkAttachments(textareaId);
+    toast(`已添加 ${files.length} 个附件`);
+  } catch (e) { toast("附件上传失败：" + e.message); }
+}
+
+/** 渲染已选附件的小标签（可单个删除），仅作用于新增表单 */
+function renderRemarkAttachments(textareaId) {
+  const box = $(textareaId + "Files");
+  if (!box) return;
+  const files = splitRemark($(textareaId).value).filter((s) => s.url);
+  box.innerHTML = files.map((s) =>
+    `<span class="attach-chip"><span>${s.isImage ? "🖼" : "📎"} ${esc(s.name)}</span><b onclick="removeRemarkAttachment('${textareaId}','${s.url}')">✕</b></span>`
+  ).join("");
+}
+
+/** 从备注里移除某个附件 */
+function removeRemarkAttachment(textareaId, url) {
+  const ta = $(textareaId);
+  ta.value = ta.value.split(url).join("").replace(/[ \t]+$/gm, "").replace(/\n{2,}/g, "\n").trim();
+  renderRemarkAttachments(textareaId);
 }
 
 /* =============== 鲜货现采 =============== */
@@ -2970,6 +3040,7 @@ async function submitInbound() {
     });
     toast(`已入库 ${fmtNum(qty)}${unit} ${p.name}`);
     $("inQty").value = ""; $("inPrice").value = ""; $("inAmount").value = ""; $("inRemark").value = "";
+    renderRemarkAttachments("inRemark");
     loadInbounds(); loadStock();
   } catch (e) { toast("入库失败：" + e.message); }
 }
@@ -3237,6 +3308,7 @@ async function submitOutbound() {
     $("outSaleBody").innerHTML = ""; outSaleRowId = 0; addSaleRow();
     clearPreview();
     $("outCustomer").value = ""; $("outRemark").value = "";
+    renderRemarkAttachments("outRemark");
     loadOutbounds(); loadStock();
   } catch (e) { toast("出库失败：" + e.message); }
 }

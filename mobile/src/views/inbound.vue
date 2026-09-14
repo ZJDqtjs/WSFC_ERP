@@ -16,7 +16,7 @@
           <van-field v-model="form.date" label="日期" type="date" />
           <van-field v-model="form.supplier" label="供应商" placeholder="可留空" />
           <van-field v-model="form.operator" label="操作员" placeholder="谁操作的" />
-          <van-field v-model="form.remark" label="备注" placeholder="可留空" />
+          <AttachmentField v-model="form.remark" />
         </van-cell-group>
 
         <div class="divider"></div>
@@ -99,6 +99,7 @@
                 <van-button size="mini" plain type="danger" @click="del(r)">删除</van-button>
               </span>
             </div>
+            <RemarkView v-if="r.remark" :remark="r.remark" />
           </div>
         </van-pull-refresh>
       </div>
@@ -169,6 +170,8 @@ import { ref, reactive, computed, onMounted, onActivated } from 'vue'
 import { showToast, showConfirmDialog } from 'vant'
 import api, { upload, downloadFile } from '../api'
 import ProductPicker from '../components/ProductPicker.vue'
+import AttachmentField from '../components/AttachmentField.vue'
+import RemarkView from '../components/RemarkView.vue'
 import { fmtMoney, fmtNum, num, defaultUnit, unitFactor, todayStr } from '../utils/format'
 
 const tab = ref('new')

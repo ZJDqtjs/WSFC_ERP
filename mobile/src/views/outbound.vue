@@ -17,7 +17,7 @@
           <van-field v-model="form.date" label="日期" type="date" />
           <van-field v-model="form.customer" label="客户" placeholder="可留空" />
           <van-field v-model="form.operator" label="操作员" placeholder="谁操作的" />
-          <van-field v-model="form.remark" label="备注" placeholder="可留空" />
+          <AttachmentField v-model="form.remark" />
         </van-cell-group>
 
         <div class="divider"></div>
@@ -146,7 +146,7 @@
               {{ e.records.length }} 单 · {{ e.products }} 种商品
               {{ e.multiRule ? ' · 规则：' + e.multiRule : '' }}
             </div>
-            <div v-else-if="e.rec.remark" class="item-meta">{{ e.rec.remark }}</div>
+            <RemarkView v-else-if="e.rec.remark" :remark="e.rec.remark" />
             <div class="row" style="gap:8px;margin-top:6px;">
               <van-button v-if="e.isGroup" size="mini" plain type="primary" @click="openGroup(e)">查看批次明细</van-button>
               <van-button v-else size="mini" plain @click="toggleDetail(e)">{{ detailId === e.rec.id ? '收起明细' : '查看明细' }}</van-button>
@@ -250,6 +250,8 @@ import { useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api, { upload, downloadFile } from '../api'
 import ProductPicker from '../components/ProductPicker.vue'
+import AttachmentField from '../components/AttachmentField.vue'
+import RemarkView from '../components/RemarkView.vue'
 import { fmtMoney, fmtNum, num, defaultUnit, unitFactor, priceOf, todayStr } from '../utils/format'
 
 const router = useRouter()

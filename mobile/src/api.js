@@ -10,7 +10,9 @@ export function apiPath(path) {
 export function assetUrl(path) {
   if (!path) return ''
   if (/^https?:\/\//i.test(path)) return path
-  return path.startsWith('/uploads') ? API_BASE + path.slice(1) : path
+  // /uploads 与 /api 同源（nginx 统一反代），去掉 API_BASE 的 /api 尾巴再拼前缀
+  const uploadsBase = API_BASE.replace(/\/api\/?$/, '')
+  return path.startsWith('/uploads') ? uploadsBase + path : path
 }
 
 function onUnauthorized() {

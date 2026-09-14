@@ -230,7 +230,16 @@
             <div class="field"><label>日期 *</label><input id="inDate" type="date" /></div>
             <div class="field"><label>操作员</label><input id="inOperator" placeholder="谁操作的" /></div>
           </div>
-          <div class="field" style="margin-top:12px;"><label>备注</label><textarea id="inRemark" rows="1" placeholder="可选"></textarea></div>
+          <div class="field" style="margin-top:12px;">
+            <label>备注</label>
+            <textarea id="inRemark" rows="1" placeholder="可选"></textarea>
+            <div class="attach-bar">
+              <button type="button" class="btn sm secondary" onclick="$('inRemarkFile').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 图片 / 附件</button>
+              <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），附件随备注显示在记录里</span>
+              <input type="file" id="inRemarkFile" multiple style="display:none;" onchange="uploadRemarkFiles('inRemark', this)" />
+            </div>
+            <div class="attach-list" id="inRemarkFiles"></div>
+          </div>
           <div id="inAlert" class="alert" style="display:none;"></div>
           <div class="form-actions"><button class="btn green" onclick="submitInbound()">✓ 确认入库</button></div>
         </div>
@@ -263,7 +272,16 @@
             <div class="field"><label>日期 *</label><input id="outDate" type="date" /></div>
             <div class="field"><label>客户</label><input id="outCustomer" placeholder="客户名称" /></div>
             <div class="field"><label>操作员</label><input id="outOperator" placeholder="谁操作的" /></div>
-            <div class="field"><label>备注</label><input id="outRemark" placeholder="可选" /></div>
+            <div class="field" style="grid-column:1/-1;">
+              <label>备注</label>
+              <textarea id="outRemark" rows="1" placeholder="可选"></textarea>
+              <div class="attach-bar">
+                <button type="button" class="btn sm secondary" onclick="$('outRemarkFile').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 图片 / 附件</button>
+                <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），附件随备注显示在记录里</span>
+                <input type="file" id="outRemarkFile" multiple style="display:none;" onchange="uploadRemarkFiles('outRemark', this)" />
+              </div>
+              <div class="attach-list" id="outRemarkFiles"></div>
+            </div>
           </div>
 
           <h4 class="block-title">销售商品行</h4>
