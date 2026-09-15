@@ -96,6 +96,7 @@
           <div class="seg-item" :class="{ active: expTab === 'cat' }" @click="expTab = 'cat'">按类型</div>
           <div class="seg-item" :class="{ active: expTab === 'day' }" @click="expTab = 'day'">按日</div>
           <div class="seg-item" :class="{ active: expTab === 'month' }" @click="expTab = 'month'">按月</div>
+          <div class="seg-item" :class="{ active: expTab === 'item' }" @click="expTab = 'item'">逐笔</div>
         </div>
 
         <!-- 按类型：其他开支 + 手工记账 -->
@@ -130,13 +131,13 @@
         <!-- 按日 -->
         <template v-else-if="expTab === 'day'">
           <div v-if="!expDays.length" class="empty">本期无支出</div>
-          <div v-for="d in expDays" :key="d.date" class="list-item">
+          <div v-for="d in expDays" :key="d.date" class="list-item" @click="openExpDrill(d.date, '')">
             <div class="row">
               <span class="grow item-title">{{ d.date }}</span>
               <span class="bold up">{{ fmtMoney(d.total) }}</span>
             </div>
             <div class="item-meta">
-              采购 {{ fmtMoney(d.purchase) }} · 其他开支 {{ fmtMoney(d.other_expense) }} · 手工记账 {{ fmtMoney(d.manual_expense) }} · {{ d.count }} 笔
+              采购 {{ fmtMoney(d.purchase) }} · 其他开支 {{ fmtMoney(d.other_expense) }} · 手工记账 {{ fmtMoney(d.manual_expense) }} · {{ d.count }} 笔 · <span class="muted">明细 ›</span>
             </div>
             <div class="exp-track" style="margin-top:6px;"><span class="exp-fill" :style="{ width: pctOfExp(d.total) + '%' }" /></div>
           </div>
@@ -144,17 +145,36 @@
         </template>
 
         <!-- 按月 -->
-        <template v-else>
+        <template v-else-if="expTab === 'month'">
           <div v-if="!(rep.expense_by_month || []).length" class="empty">本期无支出</div>
-          <div v-for="(m, i) in rep.expense_by_month || []" :key="m.month" class="list-item">
+          <div v-for="(m, i) in rep.expense_by_month || []" :key="m.month" class="list-item" @click="openExpDrill(m.month, '')">
             <div class="row">
               <span class="grow item-title">{{ m.month }}</span>
               <span class="bold up">{{ fmtMoney(m.total) }}</span>
             </div>
             <div class="item-meta">
-              采购 {{ fmtMoney(m.purchase) }} · 其他开支 {{ fmtMoney(m.other_expense) }} · 手工记账 {{ fmtMoney(m.manual_expense) }} · {{ m.count }} 笔
+              采购 {{ fmtMoney(m.purchase) }} · 其他开支 {{ fmtMoney(m.other_expense) }} · 手工记账 {{ fmtMoney(m.manual_expense) }} · {{ m.count }} 笔 · <span class="muted">明细 ›</span>
               <template v-if="expMomText(i) !== '—'"> · 环比 <b :class="expMom(i) >= 0 ? 'up' : 'down'">{{ expMomText(i) }}</b></template>
             </div>
+          </div>
+        </template>
+
+        <!-- 逐笔明细：每一条支出（采购 / 其他开支 / 手工记账），与「支出合计」同口径 -->
+        <template v-else>
+          <div v-if="!expItems.length" class="empty">本期无支出</div>
+          <div v-for="(r, i) in expItems" :key="i" class="list-item">
+            <div class="row">
+              <van-tag :type="r.source === '采购' ? 'primary' : (r.source === '其他开支' ? 'warning' : 'default')" plain>{{ r.source }}</van-tag>
+              <span class="grow item-title ellipsis" style="margin-left:6px;">{{ r.item || r.category }}</span>
+              <span class="bold up">{{ fmtMoney(r.amount) }}</span>
+            </div>
+            <div class="item-meta">
+              {{ r.date }}{{ r.operator ? ' · ' + r.operator : '' }}{{ r.auto ? ' · 单据自动生成' : '' }}{{ r.ref ? ' · ' + r.ref : '' }}
+            </div>
+            <div v-if="r.remark" class="item-meta">{{ r.remark }}</div>
+          </div>
+          <div v-if="expItems.length" class="muted" style="margin-top:6px;">
+            共 {{ (rep.expense_items || []).length }} 笔{{ expItemsTruncated ? '，仅显示最近 ' + MAX_EXP_ITEMS + ' 笔' : '' }}
           </div>
         </template>
 
@@ -254,6 +274,37 @@
         </div>
       </div>
     </van-popup>
+
+    <!-- 支出下钻：点某天/某月看该时段构成明细（采购 / 其他开支 / 手工记账） -->
+    <van-popup v-model:show="drillShow" position="bottom" round :style="{ height: '86%' }">
+      <div class="sheet-body">
+        <div class="sheet-title">
+          {{ drillTitle }}
+          <span class="muted" style="font-size:12px;">共 {{ drillRows.length }} 笔 · {{ fmtMoney(drillSum) }}</span>
+        </div>
+        <div class="seg" style="margin-bottom:8px;">
+          <div v-for="t in DRILL_TABS" :key="t.v" class="seg-item" :class="{ active: drillSrc === t.v }" @click="drillSrc = t.v">{{ t.label }}</div>
+        </div>
+        <div v-if="!drillRows.length" class="empty">
+          {{ Array.isArray(rep.expense_items) ? '该时段没有此类支出' : '后端未返回逐笔明细字段（expense_items）：请更新并重启后端服务' }}
+        </div>
+        <div v-for="(r, i) in drillRows" :key="i" class="list-item">
+          <div class="row">
+            <van-tag :type="r.source === '采购' ? 'primary' : (r.source === '其他开支' ? 'warning' : 'default')" plain>{{ r.source }}</van-tag>
+            <span class="grow item-title ellipsis" style="margin-left:6px;">{{ r.item || r.category }}</span>
+            <span class="bold up">{{ fmtMoney(r.amount) }}</span>
+          </div>
+          <div class="item-meta">
+            {{ r.date }}{{ r.operator ? ' · ' + r.operator : '' }}{{ r.auto ? ' · 单据自动生成' : '' }}{{ r.ref ? ' · ' + r.ref : '' }}
+          </div>
+          <div v-if="r.remark" class="item-meta">{{ r.remark }}</div>
+        </div>
+        <div v-if="drillRows.length" class="row" style="margin-top:10px;">
+          <span class="grow bold">合计（{{ drillRows.length }} 笔）</span>
+          <span class="bold up">{{ fmtMoney(drillSum) }}</span>
+        </div>
+      </div>
+    </van-popup>
   </div>
 </template>
 
@@ -308,10 +359,44 @@ const costRows = computed(() => {
 
 /* ---------- 报表分区 tab（汇总 / 支出 / 商品 / 流水）与支出子页签 ---------- */
 const tab = ref('summary')
-const expTab = ref('cat')   // cat 按类型 / day 按日 / month 按月
+const expTab = ref('cat')   // cat 按类型 / day 按日 / month 按月 / item 逐笔
 const MAX_EXP_DAYS = 90
 const expDays = computed(() => (rep.value.expense_by_day || []).slice(0, MAX_EXP_DAYS))
 const expDayTruncated = computed(() => (rep.value.expense_by_day || []).length > MAX_EXP_DAYS)
+
+/* 逐笔支出明细：采购 / 其他开支 / 手工记账（与「支出合计」同口径） */
+const MAX_EXP_ITEMS = 100
+const expItems = computed(() => (rep.value.expense_items || []).slice(0, MAX_EXP_ITEMS))
+const expItemsTruncated = computed(() => (rep.value.expense_items || []).length > MAX_EXP_ITEMS)
+
+/* 支出下钻：点按日/按月的某条，弹层看该时段构成（二级页面） */
+const DRILL_TABS = [
+  { v: '', label: '全部' },
+  { v: '采购', label: '采购' },
+  { v: '其他开支', label: '其他' },
+  { v: '手工记账', label: '手工' },
+]
+const drillShow = ref(false)
+const drillKey = ref('')
+const drillSrc = ref('')
+function openExpDrill(key, src = '') {
+  drillKey.value = key
+  drillSrc.value = src
+  drillShow.value = true
+}
+const drillItems = computed(() => {
+  const k = drillKey.value
+  if (!k) return rep.value.expense_items || []
+  const isMonth = /^\d{4}-\d{2}$/.test(k)
+  return (rep.value.expense_items || []).filter((r) => (isMonth ? (r.date || '').slice(0, 7) === k : r.date === k))
+})
+const drillRows = computed(() => (drillSrc.value ? drillItems.value.filter((r) => r.source === drillSrc.value) : drillItems.value))
+const drillSum = computed(() => drillRows.value.reduce((a, r) => a + (r.amount || 0), 0))
+const drillTitle = computed(() => {
+  const k = drillKey.value
+  if (!k) return '支出明细'
+  return `${k}${/^\d{4}-\d{2}$/.test(k) ? '（整月）' : '（当天）'}支出明细`
+})
 
 /** 后端未更新时（没返回逐日/逐月明细，或行内缺少采购字段）给出明确提示 */
 const staleApi = computed(() =>

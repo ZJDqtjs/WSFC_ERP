@@ -199,7 +199,8 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
 
     # 后续遍历 o.lines / l.product，selectinload 一次预载避免 N+1（by_product 与包材拆分两处复用）
     outbounds = list(db.execute(scope(Outbound).options(selectinload(Outbound.lines).selectinload(OutboundLine.product))).scalars())
-    inbounds = list(db.execute(scope(Inbound)).scalars())
+    # 采购明细要显示商品名，预载 product 避免逐条懒加载
+    inbounds = list(db.execute(scope(Inbound).options(selectinload(Inbound.product))).scalars())
     finances = list(db.execute(scope(FinanceRecord)).scalars())
     others = list(db.execute(scope(OtherExpense)).scalars())
 
@@ -364,6 +365,45 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
             for k, v in sorted(bucket.items(), reverse=True)
         ]
 
+    # 逐笔支出明细：与「支出合计」完全同口径（采购进货 + 其他开支 + 手工记账），
+    # 供报表「支出」分区逐条核对。「流水」分区只列财务流水，不含其他开支与采购，故这里单独拆出。
+    def _fmt_qty(v: float) -> str:
+        s = f"{float(v or 0):.4f}".rstrip("0").rstrip(".")
+        return s or "0"
+
+    def _inbound_label(i) -> str:
+        name = i.product.name if i.product else ""
+        if not name:
+            return i.code or "入库"
+        return f"{name} × {_fmt_qty(i.quantity)}{i.unit or ''}"
+
+    expense_items: list[dict] = []
+    for i in inbounds:
+        expense_items.append({
+            "date": i.date, "source": "采购", "category": "采购支出",
+            "item": _inbound_label(i), "amount": round(i.total_amount or 0.0, 2),
+            "operator": i.operator or "", "remark": i.supplier or i.remark or "",
+            "ref": i.code or "", "auto": False,
+        })
+    for e in others:
+        expense_items.append({
+            "date": e.date, "source": "其他开支", "category": e.category,
+            "item": e.category, "amount": round(e.amount or 0.0, 2),
+            "operator": e.operator or "", "remark": e.remark or "",
+            "ref": "", "auto": False,
+        })
+    for f in finances:
+        if f.type != "expense" or f.category == "采购支出":
+            continue
+        expense_items.append({
+            "date": f.date, "source": "手工记账", "category": f.category,
+            "item": f.category, "amount": round(f.amount or 0.0, 2),
+            "operator": f.operator or "", "remark": f.remark or "",
+            "ref": "", "auto": f.ref_type not in ("", "manual"),
+        })
+    # 日期倒序；同一天保持「采购 → 其他开支 → 手工记账」顺序（稳定排序）
+    expense_items.sort(key=lambda r: r["date"], reverse=True)
+
     return {
         "date_from": date_from,
         "date_to": date_to,
@@ -393,6 +433,8 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
         # 逐日 / 逐月支出明细（采购 + 其他开支 + 手工记账）
         "expense_by_day": _expense_rows(exp_day, "date"),
         "expense_by_month": _expense_rows(exp_month, "month"),
+        # 逐笔支出明细（同上口径，逐条列出：日期/来源/项目/金额/操作员/备注）
+        "expense_items": expense_items,
         "fee_breakdown": {
             **pack_costs,
             **{k: v for k, v in manual_fees.items() if k not in pack_costs},

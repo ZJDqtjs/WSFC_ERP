@@ -3785,6 +3785,7 @@ async function loadReport() {
   renderExpenseSummary(rep);
   renderFeeBreakdown(rep);
   renderExpenseTables(rep);
+  renderExpenseItems(rep);
 
   const pt = $("repProductTable");
   let prodRows = applyTableSort(pt, rep.by_product || []);
@@ -3900,6 +3901,86 @@ function repTab(btn) {
   const p = btn.dataset.panel;
   REP_PANELS.forEach((id) => { const el = $(id); if (el) el.style.display = id === p ? "" : "none"; });
 }
+/* 支出下钻（二级页面）：点「按日/按月」表里的日期或金额，展开该时段该来源的逐笔构成。
+   数据直接用当前区间已加载的 REP_EXP_ITEMS，不再请求接口；key 为空表示整个查询区间（合计行）。 */
+const REP_DRILL_SRC = { purchase: "采购", other: "其他开支", manual: "手工记账" };
+const REP_SRC_TABS = [["", "全部来源"], ["采购", "采购（进货）"], ["其他开支", "其他开支"], ["手工记账", "手工记账"]];
+let REP_DRILL = null;
+
+function openExpDrill(key, kind) {
+  key = key || "";
+  const keyName = /^\d{4}-\d{2}$/.test(key) ? "month" : "date";
+  const items = REP_EXP_ITEMS.filter((r) => {
+    if (!key) return true;   // 合计行：整个查询区间
+    const v = keyName === "month" ? (r.date || "").slice(0, 7) : r.date;
+    return v === key;
+  });
+  REP_DRILL = { key, keyName, source: REP_DRILL_SRC[kind] || "", items };
+  renderExpDrill();
+}
+
+function repDrillSource(src) {
+  if (!REP_DRILL) return;
+  REP_DRILL.source = src;
+  renderExpDrill();
+}
+
+function renderExpDrill() {
+  const d = REP_DRILL;
+  if (!d) return;
+  const title = d.key ? `${d.key}${d.keyName === "month" ? "（整月）" : ""} 支出明细` : "本期（查询区间）支出明细";
+  const rows = d.source ? d.items.filter((r) => r.source === d.source) : d.items;
+  const sum = rows.reduce((a, r) => a + (r.amount || 0), 0);
+  const chips = REP_SRC_TABS
+    .map(([v, label]) => `<button class="btn sm ${d.source === v ? "" : "secondary"}" onclick="repDrillSource('${v}')">${label}</button>`)
+    .join("");
+  const body = rows.length
+    ? rows.map((r) => `<tr>
+        <td class="mono">${esc(r.date)}</td>
+        <td><span class="cost-dot" style="background:${REP_EXP_SRC_COLORS[r.source] || "var(--muted)"};"></span>${esc(r.source)}${r.auto ? '<span class="muted"> 自动</span>' : ""}</td>
+        <td>${esc(r.item || r.category)}${r.ref ? ` <span class="muted">${esc(r.ref)}</span>` : ""}</td>
+        <td class="num mono"><b>${fmtMoney(r.amount)}</b></td>
+        <td>${esc(r.operator) || "—"}</td>
+        <td class="muted">${esc(r.remark)}</td></tr>`).join("")
+    : `<tr><td colspan="6" class="empty">${REP_EXP_API_OK
+        ? "该时段没有此类支出"
+        : "后端未返回逐笔明细字段（expense_items）：请更新并重启后端服务后刷新"}</td></tr>`;
+
+  openModal(`
+    <div class="card-head" style="margin-bottom:8px;">
+      <h3>${esc(title)}</h3>
+      <div class="grow"></div>
+      <span class="muted">共 ${rows.length} 笔 · 合计 <b>${fmtMoney(sum)}</b></span>
+    </div>
+    <div class="toolbar" style="margin-bottom:8px;">${chips}</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>日期</th><th>来源</th><th>项目</th><th class="num">金额</th><th>操作员</th><th>备注</th></tr></thead>
+      <tbody>${body}</tbody>
+      ${rows.length ? `<tfoot><tr><td><b>合计</b></td>
+        <td class="muted" colspan="2">${esc(d.source || "全部来源")} · ${rows.length} 笔</td>
+        <td class="num mono"><b>${fmtMoney(sum)}</b></td><td colspan="2"></td></tr></tfoot>` : ""}
+    </table></div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="repDrillToItems()">在「支出明细（逐笔）」中查看</button>
+      <button class="btn" onclick="closeModal()">关闭</button>
+    </div>`);
+  $("modalBox").classList.add("wide");   // 明细列较多，弹窗放宽
+}
+
+function repDrillToItems() {
+  const d = REP_DRILL;
+  if (d) {
+    const sel = $("repExpItemSrc");
+    if (sel) sel.value = d.source;
+    const kw = $("repExpItemSearch");
+    if (kw) kw.value = d.key;   // 日期/月份前缀即关键词，逐笔表会筛出同一批记录
+    renderExpenseItemRows();
+  }
+  closeModal();
+  const t = $("repExpItemTable");
+  if (t) t.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
 /* 支出统计（按日 / 按月）：其他开支 + 手工记账支出，合计即「期间费用」；不含采购支出 */
 function repExpSwitch(btn) {
   $("repExpSeg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
@@ -3921,6 +4002,7 @@ function renderExpenseTables(rep) {
   if (hint) {
     hint.textContent = total
       ? `按日 / 按月列出各项支出，合计 ${fmtMoney(total)} ＝ 采购 ＋ 其他开支 ＋ 手工记账`
+        + " · 点日期或金额可展开该日/该月的构成明细"
       : "本期无支出";
     if (days.length > MAX_DAYS) hint.textContent += ` · 按日仅列最近 ${MAX_DAYS} 天`;
   }
@@ -3943,17 +4025,26 @@ function renderExpenseTables(rep) {
 
   const pctOf = (v) => (total ? (v / total) * 100 : 0);
   const bar = (v) => `<span class="exp-bar"><i style="width:${Math.min(100, pctOf(v)).toFixed(1)}%"></i></span>`;
+  // 金额/日期可点：下钻到该时段该来源的构成明细（二级页面）。0 元不给点，避免弹出空表。
+  const jsKey = (s) => String(s || "").replace(/[^0-9A-Za-z-]/g, "");   // 只留日期/月份字符，避免注入 onclick
+  const keyOf = (r) => jsKey(r.date || r.month);
+  const drill = (key, kind, text, title) =>
+    `<span class="exp-link" onclick="openExpDrill('${key}','${kind}')" title="${title}">${text}</span>`;
+  const cell = (v, color, key, kind, title) => (v
+    ? `<td class="num mono" style="color:${color}">${drill(key, kind, fmtMoney(v), title)}</td>`
+    : `<td class="num mono" style="color:${color}">—</td>`);
   const amountCells = (r) =>
-    `<td class="num mono" style="color:#1989fa">${r.purchase ? fmtMoney(r.purchase) : "—"}</td>` +
-    `<td class="num mono" style="color:#f97316">${r.other_expense ? fmtMoney(r.other_expense) : "—"}</td>` +
-    `<td class="num mono" style="color:#6366f1">${r.manual_expense ? fmtMoney(r.manual_expense) : "—"}</td>` +
-    `<td class="num mono"><b>${fmtMoney(r.total)}</b></td>`;
+    cell(r.purchase, "#1989fa", keyOf(r), "purchase", "展开采购支出构成") +
+    cell(r.other_expense, "#f97316", keyOf(r), "other", "展开其他开支构成") +
+    cell(r.manual_expense, "#6366f1", keyOf(r), "manual", "展开手工记账构成") +
+    `<td class="num mono"><b>${r.total ? drill(keyOf(r), "", fmtMoney(r.total), "展开全部支出明细") : "—"}</b></td>`;
+  // 合计行：key 为空 = 整个查询区间
   const totalCells = (label, rows) =>
     `<tr><td><b>${label}</b></td>` +
-    `<td class="num mono" style="color:#1989fa"><b>${fmtMoney(purchase)}</b></td>` +
-    `<td class="num mono" style="color:#f97316"><b>${fmtMoney(other)}</b></td>` +
-    `<td class="num mono" style="color:#6366f1"><b>${fmtMoney(manual)}</b></td>` +
-    `<td class="num mono"><b>${fmtMoney(total)}</b></td>` +
+    `<td class="num mono" style="color:#1989fa"><b>${drill("", "purchase", fmtMoney(purchase), "展开本期采购构成")}</b></td>` +
+    `<td class="num mono" style="color:#f97316"><b>${drill("", "other", fmtMoney(other), "展开本期其他开支构成")}</b></td>` +
+    `<td class="num mono" style="color:#6366f1"><b>${drill("", "manual", fmtMoney(manual), "展开本期手工记账构成")}</b></td>` +
+    `<td class="num mono"><b>${drill("", "", fmtMoney(total), "展开本期全部支出明细")}</b></td>` +
     `<td></td><td class="num mono"><b>${sumCount(rows)}</b></td></tr>`;
 
   // 按日
@@ -3964,12 +4055,12 @@ function renderExpenseTables(rep) {
     <th class="num">支出合计</th><th class="num">占比</th><th class="num">笔数</th></tr></thead><tbody>` +
     (dayRows.length
       ? dayRows.map((r) => `<tr>
-          <td class="mono">${esc(r.date)}</td>${amountCells(r)}
+          <td class="mono">${drill(jsKey(r.date), "", esc(r.date), "展开当天全部支出明细")}</td>${amountCells(r)}
           <td class="num">${bar(r.total)}<span class="muted">${pctOf(r.total).toFixed(1)}%</span></td>
           <td class="num mono">${r.count}</td></tr>`).join("")
       : `<tr><td colspan="7" class="empty">${emptyText}</td></tr>`) +
     `</tbody>` +
-    (days.length ? `<tfoot>${totalCells(`合计（${days.length} 天）`, days)}</tfoot>` : "");
+    (days.length ? `<tfoot>${totalCells(`合计（${days.length} 天 · ${sumCount(days)} 笔）`, days)}</tfoot>` : "");
 
   // 按月（多一列环比：与上个月比）
   const mt = $("repExpMonthTable");
@@ -3983,13 +4074,73 @@ function renderExpenseTables(rep) {
         const txt = delta == null ? "—" : `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}%`;
         const color = delta == null ? "var(--muted)" : delta >= 0 ? "var(--red)" : "var(--green)";
         return `<tr>
-          <td class="mono">${esc(m.month)}</td>${amountCells(m)}
+          <td class="mono">${drill(jsKey(m.month), "", esc(m.month), "展开当月全部支出明细")}</td>${amountCells(m)}
           <td class="num mono" style="color:${color}">${txt}</td>
           <td class="num mono">${m.count}</td></tr>`;
       }).join("")
       : `<tr><td colspan="7" class="empty">${emptyText}</td></tr>`) +
     `</tbody>` +
-    (months.length ? `<tfoot>${totalCells("合计", months)}</tfoot>` : "");
+    (months.length ? `<tfoot>${totalCells(`合计（${months.length} 个月 · ${sumCount(months)} 笔）`, months)}</tfoot>` : "");
+}
+
+/* 支出逐笔明细：采购 / 其他开支 / 手工记账，逐条列出（与「支出合计」同口径） */
+const REP_EXP_SRC_COLORS = { "采购": "#1989fa", "其他开支": "#f97316", "手工记账": "#6366f1" };
+let REP_EXP_ITEMS = [];
+let REP_EXP_API_OK = true;
+
+function renderExpenseItems(rep) {
+  REP_EXP_ITEMS = rep.expense_items || [];
+  REP_EXP_API_OK = Array.isArray(rep.expense_items);   // 后端未升级时给出明确提示，避免"看着是空的"
+  const sel = $("repExpItemSrc");
+  if (sel) sel.value = "";   // 换区间后重置筛选，避免"看不到数据"的困惑
+  const kw = $("repExpItemSearch");
+  if (kw) kw.value = "";
+  renderExpenseItemRows();
+}
+
+function renderExpenseItemRows() {
+  const t = $("repExpItemTable");
+  if (!t) return;
+  const src = ($("repExpItemSrc") || {}).value || "";
+  const kw = (($("repExpItemSearch") || {}).value || "").trim().toLowerCase();
+  let rows = REP_EXP_ITEMS;
+  if (src) rows = rows.filter((r) => r.source === src);
+  if (kw) {
+    rows = rows.filter((r) =>
+      [r.date, r.source, r.category, r.item, r.remark, r.operator, r.ref].join(" ").toLowerCase().includes(kw));
+  }
+  const MAX = 200;
+  const shown = rows.slice(0, MAX);
+  const sum = rows.reduce((a, r) => a + (r.amount || 0), 0);
+  const sumEl = $("repExpItemSum");
+  const needRestart = "后端未返回逐笔明细字段（expense_items）：请更新并重启后端服务后刷新";
+  if (sumEl) {
+    sumEl.textContent = REP_EXP_API_OK
+      ? `共 ${rows.length} 笔 · 合计 ${fmtMoney(sum)}`
+        + (rows.length > MAX ? `（仅列最近 ${MAX} 笔，可用筛选缩小范围）` : "")
+      : needRestart;
+  }
+
+  t.innerHTML = `<thead><tr>
+    <th>日期</th><th>来源</th><th>项目</th><th class="num">金额</th><th>操作员</th><th>备注</th>
+    </tr></thead><tbody>` +
+    (shown.length
+      ? shown.map((r) => `<tr>
+          <td class="mono">${esc(r.date)}</td>
+          <td><span class="cost-dot" style="background:${REP_EXP_SRC_COLORS[r.source] || "var(--muted)"};"></span>${esc(r.source)}${r.auto ? '<span class="muted"> 自动</span>' : ""}</td>
+          <td>${esc(r.item || r.category)}${r.ref ? ` <span class="muted">${esc(r.ref)}</span>` : ""}</td>
+          <td class="num mono"><b>${fmtMoney(r.amount)}</b></td>
+          <td>${esc(r.operator) || "—"}</td>
+          <td class="muted">${esc(r.remark)}</td></tr>`).join("")
+      : `<tr><td colspan="6" class="empty">${!REP_EXP_API_OK ? needRestart : (REP_EXP_ITEMS.length ? "没有符合筛选条件的支出" : "本期无支出")}</td></tr>`) +
+    `</tbody>` +
+    (rows.length
+      ? `<tfoot><tr>
+          <td><b>合计</b></td>
+          <td class="muted" colspan="2">${esc(src || "全部来源")} · ${rows.length} 笔</td>
+          <td class="num mono"><b>${fmtMoney(sum)}</b></td>
+          <td colspan="2"></td></tr></tfoot>`
+      : "");
 }
 
 /* 支出汇总：采购（进货）+ 其他开支 + 手工记账 = 全部支出；期间费用才是从毛利中扣减的部分 */

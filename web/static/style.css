@@ -1521,6 +1521,17 @@ tr.draft-off {
   border-radius: 4px;
 }
 
+/* 报表·支出统计：金额/日期可点，下钻该时段该来源的构成明细 */
+.exp-link {
+  color: inherit;
+  border-bottom: 1px dashed currentColor;
+  cursor: pointer;
+}
+
+.exp-link:hover {
+  opacity: 0.7;
+}
+
 /* 销售成本构成：堆叠占比条 + 图例圆点 */
 .cost-stack {
   display: flex;
