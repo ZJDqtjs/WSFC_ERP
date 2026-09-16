@@ -27,6 +27,7 @@ class PackLine(BaseModel):
 
 class PreviewIn(BaseModel):
     lines: list[SaleLine]
+    auto_express: bool = True   # False = 不自动结算快递费（手动出库时删掉「快递费」行）
 
 
 class OutboundIn(BaseModel):
@@ -37,6 +38,9 @@ class OutboundIn(BaseModel):
     lines: list[SaleLine]
     pack_lines: list[PackLine] = Field(default=[])
     pack_fee_total: float | None = None
+    # False = 不自动结算快递费（手动出库时用户在预览里删掉了「快递费」行）；
+    # 批量导入/聚水潭等不传，保持按整单毛重自动计快递费的原行为
+    auto_express: bool = True
     pay_status: str = "paid"  # paid 已付款/已回款（默认）/ unpaid 待付款（先进「待付款账单」）
 
 
@@ -101,7 +105,7 @@ def _to_dict(o: Outbound) -> dict:
 @router.post("/preview")
 def preview(data: PreviewIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     try:
-        return build_order(db, data.lines, [], None)
+        return build_order(db, data.lines, [], None, data.auto_express)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

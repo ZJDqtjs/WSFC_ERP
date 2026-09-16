@@ -234,9 +234,12 @@ Inbound 字段：`id, code(单号), product_id, product_name, unit, quantity, qu
 {
   "lines": [
     { "product_id": 1, "unit": "斤", "quantity": 3, "price": 8, "pack_fee": null }
-  ]
+  ],
+  "auto_express": true
 }
 ```
+
+> `auto_express`（默认 `true`）：是否按整单毛重自动结算快递费。手动出库时用户可在预览里删掉「快递费」行（或在出库表单取消勾选「自动计快递费」），前端会以 `auto_express: false` 再预览/提交，后端就不再自动追加快递费行；批量导入 / 聚水潭导入不传该参数，保持自动结算。
 
 响应：
 
@@ -286,9 +289,13 @@ Outbound 字段：`id, code, customer, operator, date, remark, total_amount, tot
   "remark": "",
   "lines": [ { "product_id": 1, "unit": "斤", "quantity": 3, "price": 8, "pack_fee": null } ],
   "pack_lines": [],
-  "pack_fee_total": null
+  "pack_fee_total": null,
+  "auto_express": true
 }
 ```
+
+> `auto_express: false` = 这笔不自动结算快递费（手动出库删掉「快递费」行时前端会传 `false`）；
+> 不传（或 `true`）时按整单毛重自动加速递费，批量导入与聚水潭导入即走此默认。
 
 响应：
 

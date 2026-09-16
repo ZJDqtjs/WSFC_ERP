@@ -3329,11 +3329,13 @@ function collectSaleLines() {
   });
   return lines;
 }
+/* 是否自动结算快递费（手动出库）：关掉后不再按整单毛重自动加「快递费」行 */
+function autoExpressOn() { return $("outAutoExpress") ? $("outAutoExpress").checked : true; }
 async function previewOutbound() {
   const lines = collectSaleLines();
   if (!lines.length) { toast("请至少添加一行销售商品"); return; }
   try {
-    const r = await api("/api/outbounds/preview", "POST", { lines });
+    const r = await api("/api/outbounds/preview", "POST", { lines, auto_express: autoExpressOn() });
     renderPackPreview(r);
   } catch (e) { toast("预览失败：" + e.message); }
 }
@@ -3344,17 +3346,30 @@ function renderPackPreview(r) {
   $("outWarn").innerHTML = (r.warnings || []).map((w) => `<div class="alert warn">⚠ ${esc(w)}（仍可继续，可先补货）</div>`).join("");
   $("outPackBody").innerHTML = r.pack_lines.map((pl, i) => {
     const m = PRODUCTS.find((x) => x.id === pl.product_id);
-    return `<tr data-idx="${i}" data-unit="${esc(pl.unit)}" data-up="${pl.unit_price}">
+    // 快递费行标记出来：删掉它 = 这笔不结算快递费（否则重新预览又会被自动加回来）
+    const isExpress = !!(m && m.category === "快递");
+    return `<tr data-idx="${i}" data-unit="${esc(pl.unit)}" data-up="${pl.unit_price}"${isExpress ? ' data-express="1"' : ""}>
       <td><b>${esc(pl.product_name)}</b></td>
       <td><select class="searchable" onchange="packLineUnitChanged(this)">${m ? unitOptions(m, pl.unit) : `<option>${pl.unit}</option>`}</select></td>
       <td><input type="number" step="any" value="${pl.quantity}" oninput="packLineChanged(this)" style="width:90px;" /></td>
-      <td><span class="badge pack">包装消耗</span></td>
+      <td><span class="badge pack">${isExpress ? "快递费" : "包装消耗"}</span></td>
       <td class="num mono">${fmtMoney(pl.unit_price)}/${pl.unit}</td>
       <td class="num pl-amount">${fmtMoney(pl.amount)}</td>
-      <td><button class="btn sm danger" onclick="this.closest('tr').remove()">✕</button></td></tr>`;
+      <td><button class="btn sm danger" title="删除该结算项" onclick="removePackRow(this)">✕</button></td></tr>`;
   }).join("");
   if (!r.pack_lines.length) $("outPackBody").innerHTML = `<tr><td colspan="7" class="empty">无关联结算项（该商品未配置包装清单）</td></tr>`;
   bindSearchable($("outPackBody"));
+  calcOutboundTotals();
+}
+/* 删掉「快递费」行 → 同步取消「自动计快递费」，避免再次预览/提交时又被算上 */
+function removePackRow(btn) {
+  const tr = btn.closest("tr");
+  if (tr && tr.dataset.express === "1") {
+    const cb = $("outAutoExpress");
+    if (cb) cb.checked = false;
+    toast("已取消「自动计快递费」，这笔出库不再计快递费");
+  }
+  tr.remove();
   calcOutboundTotals();
 }
 function packLineUnitChanged(sel) {
@@ -3432,6 +3447,7 @@ async function submitOutbound() {
       customer: $("outCustomer").value, operator: $("outOperator").value,
       date: $("outDate").value, remark: $("outRemark").value,
       lines, pack_lines: packLines, pack_fee_total: fee,
+      auto_express: autoExpressOn(),   // 与预览一致：关掉就不再自动加快递费
       pay_status: payStatus,
     });
     const warns = (r.warnings || []).length ? "\n⚠ " + r.warnings.join("；") : "";
@@ -3441,6 +3457,7 @@ async function submitOutbound() {
     $("outCustomer").value = ""; $("outRemark").value = "";
     renderRemarkAttachments("outRemark");
     setPay("outPay", "paid");
+    if ($("outAutoExpress")) $("outAutoExpress").checked = true;   // 复位：下一笔仍默认自动计快递费
     loadOutbounds(); loadStock();
   } catch (e) { toast("出库失败：" + e.message); }
 }

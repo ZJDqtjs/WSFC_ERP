@@ -112,13 +112,22 @@ const batchState = {
           <div class="stat success"><div class="label">净利</div><div class="value">{{ fmtMoney(totals.net) }}</div></div>
         </div>
         <div class="muted" style="margin-top:6px;">
-          结转成本含商品成本、包装耗材与快递费；毛利 = 收入 − 成本。合计成本 {{ fmtMoney(totals.cogs) }}。
+          结转成本含商品成本、包装耗材{{ autoExpress ? '与快递费' : '' }}；毛利 = 收入 − 成本。合计成本 {{ fmtMoney(totals.cogs) }}。
+          <template v-if="!autoExpress">已关闭自动计快递费，本单不算快递费。</template>
         </div>
 
         <van-button block round type="success" style="margin-top:12px;" :loading="saving" @click="submit">确认出库</van-button>
       </div>
 
       <div v-else class="card">
+        <div class="form-row">
+          <span class="lbl">自动计快递费</span>
+          <div class="grow"></div>
+          <van-switch v-model="autoExpress" size="20" />
+        </div>
+        <div class="muted" style="margin-bottom:8px;">
+          按整单毛重自动结算快递费；不需要就关掉（在预览里删掉「快递费」行也会自动关掉）。
+        </div>
         <van-button block round type="primary" :loading="previewing" @click="doPreview">预览结算</van-button>
         <div class="muted" style="margin-top:8px;">建议先预览：会带出泡沫箱 / 泡沫垫 / 打包费等关联结算项与库存预警。</div>
       </div>
@@ -349,6 +358,8 @@ const saving = ref(false)
 const previewing = ref(false)
 const preview = ref(null)
 const packFeeTotal = ref('0')
+// 是否按整单毛重自动结算快递费（关掉就不加快递费行；预览里删掉「快递费」行也会自动关掉）
+const autoExpress = ref(true)
 
 function newRow() {
   return { product_id: '', name: '', unit: '', qty: '1', price: '0', _factor: 1, _base_unit: '', _product: null }
@@ -371,7 +382,7 @@ async function doPreview() {
   if (!lines.length) { showToast('请至少添加一行销售商品'); return }
   previewing.value = true
   try {
-    const r = await api('/api/outbounds/preview', 'POST', { lines })
+    const r = await api('/api/outbounds/preview', 'POST', { lines, auto_express: autoExpress.value })
     preview.value = r
     packFeeTotal.value = String(r.total_fee != null ? r.total_fee : 0)
   } catch (e) { showToast('预览失败：' + e.message) }
@@ -401,6 +412,13 @@ function packLineCost(pl) {
   return packLineUnitPrice(pl) * num(pl.quantity)
 }
 function removePackLine(i) {
+  const pl = (preview.value.pack_lines || [])[i]
+  const p = pl && PRODUCTS.value.find((x) => x.id === pl.product_id)
+  // 删掉「快递费」行 → 同步关闭自动计快递费，否则重新预览/提交时又被自动算上
+  if (p && p.category === '快递') {
+    autoExpress.value = false
+    showToast('已关闭自动计快递费，本单不算快递费')
+  }
   preview.value.pack_lines.splice(i, 1)
   calcPreview()
 }
@@ -433,6 +451,7 @@ async function submit() {
       lines,
       pack_lines: packLines,
       pack_fee_total: num(packFeeTotal.value),
+      auto_express: autoExpress.value,   // 与预览一致：关掉就不再自动加快递费
       pay_status: form.pay_status,
     })
     const warns = (r.warnings || []).length ? '\n⚠ ' + r.warnings.join('；') : ''
@@ -441,6 +460,7 @@ async function submit() {
     form.customer = ''
     form.remark = ''
     form.pay_status = 'paid'
+    autoExpress.value = true   // 复位：下一笔仍默认自动计快递费
     loadList()
   } catch (e) { showToast('出库失败：' + e.message) }
   saving.value = false

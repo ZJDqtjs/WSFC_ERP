@@ -472,10 +472,13 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     return rec
 
 
-def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
+def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_express: bool = True) -> dict:
     """构建出库单明细：销售行 + 关联结算行(包装材料) + 费用，并校验库存。不落库。
 
     成本结转按「先进先出(FIFO)」：从商品最早的入库批次依次扣减，成本 = Σ(批次单位成本 × 扣减数量)。
+
+    auto_express=False 时不自动结算快递费（手动出库时用户在预览里删掉「快递费」行即为不结算），
+    其余批量导入/聚水潭等流程不传该参数，保持「按整单毛重自动计快递费」的原行为。
     """
     pack_lines = pack_lines or []
     sale_rows, pack_rows, warnings = [], [], []
@@ -613,7 +616,8 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
         total_cogs += cogs
 
     # 快递费自动结算：整单净重(商品净重累加) + 每单箱体 0.1kg，按「每kg快递费单价」计算，作为一项「快递」分类成本
-    if express_weight > 0:
+    # auto_express=False（手动出库并在预览里删掉了「快递费」行）时不再自动追加
+    if auto_express and express_weight > 0:
         total_weight = round(express_weight + EXPRESS_BOX_WEIGHT_KG, 3)
         express_fee = compute_express_fee(total_weight)
         if express_fee > 0:
@@ -668,7 +672,10 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
     import_group：批量导入批次号，空表示手动单条。
     """
     lines = payload["lines"]
-    order = build_order(db, lines, payload.get("pack_lines"), payload.get("pack_fee_total"))
+    order = build_order(
+        db, lines, payload.get("pack_lines"), payload.get("pack_fee_total"),
+        payload.get("auto_express", True),   # 手动出库可关掉自动快递费；批量导入等默认开
+    )
     op = (payload.get("operator") or "").strip() or operator
     date = payload["date"]
     pay = pay_fields(payload, date)
