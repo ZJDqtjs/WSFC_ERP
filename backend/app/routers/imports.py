@@ -1627,6 +1627,9 @@ def auto_mappings(db: Session = Depends(get_db), user: User = Depends(get_curren
 class AiMappingsIn(BaseModel):
     source: str = "jushuitan"
     codes: list[str] = []
+    # apply=False 时只做「试算」：调用大模型归并库存大类并给出关联方案，但不落库，
+    # 由前端把方案展示给用户，用户确认后再以 apply=True 二次调用真正新增。
+    apply: bool = True
 
 
 # “AI 自动关联”：请大模型为一批未关联的聚水潭出库商品名归并出「库存大类」并分类，
@@ -1717,9 +1720,48 @@ def _apply_ai_mappings(db: Session, names: list[str], products: list[dict]) -> d
     }
 
 
+def _preview_ai_mappings(db: Session, names: list[str], products: list[dict]) -> dict:
+    """只试算不落库：返回 AI 归并出的库存大类（标注是否新建）与每个外部名的关联去向。"""
+    stock_names: list[str] = []
+    items: list[dict] = []
+    seen: set[str] = set()
+    for pr in products:
+        pname = str(pr.get("name") or "").strip()
+        if not pname or pname in seen:
+            continue
+        seen.add(pname)
+        existing = db.scalar(select(Product).where(Product.name == pname))
+        stock_names.append(pname)
+        items.append({
+            "name": pname,
+            "category": _CAT_NORM.get(str(pr.get("category") or "").strip(), "商品"),
+            "is_new": existing is None,
+            "product_id": existing.id if existing else None,
+        })
+    mappings, leftover = [], []
+    for name in names:
+        best = max((n for n in stock_names if n and n in name), key=len, default=None)
+        if best is None:
+            leftover.append(name)
+        else:
+            mappings.append({"code": name, "target": best})
+    new_cnt = sum(1 for it in items if it["is_new"])
+    msg = f"计划新增 {new_cnt} 个库存大类，关联 {len(mappings)}/{len(names)} 个商品名。"
+    if leftover:
+        msg += f"仍有 {len(leftover)} 个无法自动关联：{'、'.join(leftover)}，请手动补充。"
+    return {
+        "ok": True, "dry_run": True, "products": items, "mappings": mappings,
+        "created_products": [], "mapped": len(mappings), "total": len(names),
+        "leftover": leftover, "message": msg,
+    }
+
+
 @router.post("/mappings/ai-suggest")
 def ai_suggest_mappings(data: AiMappingsIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """AI 自动新增库存大类 + 编码关联，供出库解析未关联商品时一键补全。"""
+    """AI 自动新增库存大类 + 编码关联，供出库解析未关联商品时一键补全。
+
+    apply=False（默认由前端传入）：只试算并返回方案，供用户确认；apply=True 时真正落库。
+    """
     names = list(dict.fromkeys(n.strip() for n in (data.codes or []) if n and n.strip()))
     if not names:
         raise HTTPException(400, "没有需要关联的商品名")
@@ -1732,7 +1774,12 @@ def ai_suggest_mappings(data: AiMappingsIn, db: Session = Depends(get_db), user:
         raise
     except Exception as e:
         raise HTTPException(502, f"AI 归并库存大类失败：{type(e).__name__}: {e}")
-    return _apply_ai_mappings(db, names, parsed.get("products") or [])
+    products = parsed.get("products") or []
+    if not data.apply:
+        return _preview_ai_mappings(db, names, products)
+    res = _apply_ai_mappings(db, names, products)
+    res["dry_run"] = False
+    return res
 
 
 @router.delete("/mappings")

@@ -313,6 +313,28 @@ function switchSettingsTab(panel) {
   else if (panel === "jushuitan") loadMappingPage();
 }
 async function loadSettingsPage() { switchSettingsTab("pdata"); }
+/* 支持通过地址栏 hash 深链到二级页（用于「未关联商品」跳转新标签手动新增商品）
+   例：#/products/new?name=新鲜香蕈菌250g */
+function applyHashRoute() {
+  const raw = (location.hash || "").replace(/^#\/?/, "");
+  if (!raw) return;
+  const [path, qs] = raw.split("?");
+  const params = new URLSearchParams(qs || "");
+  const segs = path.split("/").filter(Boolean);
+  const page = segs[0] || "";
+  if (!page) return;
+  if (page === "settings") {
+    goPage("settings");
+    switchSettingsTab(segs[1] || params.get("tab") || "pdata");
+  } else if (page === "products" && segs[1] === "new") {
+    goPage("products");
+    const name = params.get("name") || "";
+    setTimeout(() => openProductModal(0, name), 80);
+  } else {
+    goPage(page);
+  }
+}
+window.addEventListener("hashchange", applyHashRoute);
 /* =============== 快递费规则 =============== */
 function currentExprCfg() {
   return {
@@ -2655,16 +2677,17 @@ function addPackRow() {
     </div>`);
 }
 
-function openProductModal(pid = 0) {
+function openProductModal(pid = 0, prefillName = "") {
   const p = pid ? PRODUCTS.find((x) => x.id === pid) : null;
   const ptype = p ? p.product_type : "stock";
   const curUnit = p ? (p.default_unit || p.base_unit) : "斤";
   const curCat = p ? p.category : (prodForceCat || ""); // 独立分类页新增时自动带上分类
+  const curName = p?.name || prefillName || "";
   openModal(`
     <h3>${pid ? "编辑商品" : "新增商品"} <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="form-grid">
       <div class="field"><label>商品编码</label><input id="pCode" value="${esc(p?.code || "")}" placeholder="如 ydj001，可留空" /></div>
-      <div class="field"><label>商品名称 *</label><input id="pName" value="${esc(p?.name || "")}" placeholder="如：佛手柑大果2个" /></div>
+      <div class="field"><label>商品名称 *</label><input id="pName" value="${esc(curName)}" placeholder="如：佛手柑大果2个" /></div>
       <div class="field"><label>分类</label><input id="pCategory" value="${esc(curCat)}" placeholder="如：蔬菜" /></div>
       <div class="field"><label>商品类型 *</label>
         <select id="pType" onchange="pTypeChanged()">
@@ -5063,6 +5086,7 @@ function esc(s) {
   } catch (e) {}
   try { bindSearchable(document); } catch (e) {}
   loadDashboard();
+  applyHashRoute(); // 支持深链：登录后跳转到指定二级页
 })();
 
 /* =============== 批量导入 =============== */
@@ -5119,7 +5143,7 @@ const BATCH_MODAL = {
     tpl: "",
     preview: "/api/jushuitan/import/preview",
     confirm: "/api/jushuitan/import/confirm",
-    hint: "上传聚水潭导出的「销售出库单_*.xlsx」，自动识别商品并按件数×每件规格结算。先解析预览，确认后才出库。需先在「编码关联」中把商品名关联到系统商品。",
+    hint: "上传聚水潭导出的「销售出库单_*.xlsx」，自动识别商品并按件数×每件规格结算。先解析预览（自动试算 AI 新增方案），确认后才出库。未关联商品可点「去新增商品」在新标签页新建，或一键确认 AI 自动新增。",
   },
 };
 function openBatchModal(kind) {
@@ -5160,27 +5184,6 @@ async function runBatchModal(kind) {
     else renderDraftReview(kind, r);
   } catch (e) { box.innerHTML = `<div class="alert err">解析失败：${esc(e.message)}</div>`; }
 }
-/* AI 自动新增库存大类 + 编码关联：识别未关联商品名 → 建库存大类并关联 → 重新解析出库单 */
-async function aiAutoMap(kind) {
-  const codes = (window.__LAST_UNMAPPED__ || []).filter(Boolean);
-  if (!codes.length) { toast("没有可关联的商品名"); return; }
-  const box = $("bmResult");
-  try {
-    if (box) box.innerHTML = `<div class="alert ok">🤖 AI 正在归并库存大类并建立编码关联…（通常数秒）</div>`;
-    const r = await api("/api/mappings/ai-suggest", "POST", { source: "jushuitan", codes });
-    const add = (r.created_products || []).map((p) => p.name).join("、");
-    toast(r.message || "AI 关联完成");
-    if (box) box.innerHTML = `<div class="alert ok">✅ ${esc(r.message)}${add ? "（新建：" + esc(add) + "）" : ""}</div>`;
-    if ((r.leftover || []).length) {
-      box.innerHTML += `<div class="alert warn">仍无法关联：${r.leftover.map(esc).join("、")}，可到「编码关联」手动补充后重试。</div>`;
-    }
-    // 关联完成，重新解析（含已关联商品），用户可直接确认出库
-    setTimeout(() => { if (window.__BM_FILE__) runBatchModal(kind); }, 300);
-  } catch (e) {
-    toast("AI 关联失败：" + e.message);
-    if (box) box.innerHTML = `<div class="alert err">AI 关联失败：${esc(e.message)}</div>`;
-  }
-}
 function renderDraftReview(kind, r) {
   const orders = r.orders || [];
   // 一单多货规则带出的包材/人工行：按 doc_no 记录，确认出库时一并回传
@@ -5189,19 +5192,30 @@ function renderDraftReview(kind, r) {
   let warn = "";
   if (r.unmapped_codes && r.unmapped_codes.length) {
     window.__LAST_UNMAPPED__ = kind === "jushuitan" ? (r.unmapped_codes || []) : [];
-    warn += `<div class="alert warn">⚠ 未关联商品：${r.unmapped_codes.map(esc).join("、")}` +
-      (kind === "jushuitan"
-        ? `<div style="margin-top:8px;"><button class="btn secondary" onclick="aiAutoMap('${kind}')">🤖 AI 自动新增并关联，重新解析</button>
-           <span class="muted" style="font-size:12px;">用 AI 识别这些商品名，自动建库存大类并关联编码</span></div>`
-        : `<div class="muted" style="font-size:12px;margin-top:6px;">请到「编码关联」关联后重新解析。</div>`) +
-      `</div>`;
+    if (kind === "jushuitan") {
+      // 每个未关联商品名都带「去新增商品」按钮：新标签页打开「商品」页并按该名称预填新增弹窗。
+      // AI 自动新增在页面渲染后自动试算（不落库），把方案展示出来，用户确认后才真正新增。
+      warn += `<div class="alert warn">
+        <div>⚠ 未关联商品 <b>${r.unmapped_codes.length}</b> 个。可点「去新增商品」在新标签页按该名称新建商品（保存后回到本页点「↻ 重新解析」即按名称自动匹配），或等下方 AI 方案出来后一键新增：</div>
+        <div class="unmapped-list">${r.unmapped_codes.map((c) => unmappedChip(c)).join("")}</div>
+        <div id="bmAiBox"></div>
+      </div>`;
+    } else {
+      warn += `<div class="alert warn">⚠ 未关联商品：${r.unmapped_codes.map(esc).join("、")}` +
+        `<div class="muted" style="font-size:12px;margin-top:6px;">请到「编码关联」关联后重新解析。</div></div>`;
+    }
+  } else {
+    window.__LAST_UNMAPPED__ = [];
   }
   if (r.skip && Object.values(r.skip).some((v) => v > 0)) warn += `<div class="alert warn">⚠ 跳过：${Object.entries(r.skip).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}单`).join("、")}</div>`;
   if (r.failed && r.failed.length) warn += `<div class="alert err">解析失败 ${r.failed.length} 条：${r.failed.slice(0, 5).map((f) => esc(f.reason)).join("；")}</div>`;
   if (!orders.length) {
     $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3>
       <div class="alert warn">未解析出可出库的单据。</div>${warn}
-      <div class="modal-foot"><button class="btn secondary" onclick="openBatchModal('${kind}')">返回重新选择</button></div>`;
+      <div class="modal-foot"><button class="btn secondary" onclick="openBatchModal('${kind}')">返回重新选择</button>` +
+      (kind === "jushuitan" ? `<button class="btn" onclick="runBatchModal('jushuitan')">↻ 重新解析（同一文件）</button>` : "") +
+      `</div>`;
+    scheduleAiAutoPreview(kind);
     return;
   }
   const body = orders.map((o, oi) => `
@@ -5232,8 +5246,95 @@ function renderDraftReview(kind, r) {
     <div class="draft-list">${body}</div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="openBatchModal('${kind}')">重新选择文件</button>
+      ${kind === "jushuitan" ? `<button class="btn secondary" onclick="runBatchModal('jushuitan')">↻ 重新解析（同一文件）</button>` : ""}
       <button class="btn green" onclick="confirmDraft('${kind}')">✓ 确认出库（<span id="draftCount">${orders.length}</span> 单）</button>
     </div>`;
+  scheduleAiAutoPreview(kind);
+}
+/* 未关联商品：名称 + 「去新增商品」新标签页跳转按钮（新标签页直接打开新增商品弹窗并预填名称） */
+function openProductTab(name) {
+  const url = location.origin + location.pathname + "#/products/new?name=" + encodeURIComponent(name || "");
+  const w = window.open(url, "_blank");
+  if (!w) toast("浏览器拦截了新标签页，请允许弹出窗口");
+}
+function unmappedChip(code) {
+  return `<span class="unmapped-chip"><span class="unmapped-name">${esc(code)}</span>` +
+    `<button class="btn sm secondary" data-name="${esc(code)}" onclick="openProductTab(this.dataset.name)">` +
+    `<svg class="ic"><use href="#i-plus"/></svg> 去新增商品</button></span>`;
+}
+/* 自动 AI 试算：同一批未关联商品只自动解析一次，避免每次重渲染都请求大模型 */
+let __AI_AUTO_SIG__ = "";
+function scheduleAiAutoPreview(kind) {
+  if (kind !== "jushuitan") return;
+  const codes = (window.__LAST_UNMAPPED__ || []).filter(Boolean);
+  if (!codes.length) return;
+  const sig = codes.slice().sort().join("\u0001");
+  if (sig === __AI_AUTO_SIG__) return;
+  __AI_AUTO_SIG__ = sig;
+  setTimeout(() => aiAutoPreview(kind), 0);
+}
+/* 只试算不落库：调用 AI 归并库存大类，把方案展示给用户确认 */
+async function aiAutoPreview(kind) {
+  const box = $("bmAiBox");
+  if (!box) return;
+  const codes = (window.__LAST_UNMAPPED__ || []).filter(Boolean);
+  if (!codes.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="alert ok">🤖 AI 正在自动归并这些商品并生成新增方案…（通常数秒，请稍候）</div>`;
+  try {
+    const r = await api("/api/mappings/ai-suggest", "POST", { source: "jushuitan", codes, apply: false });
+    renderAiPlan(box, kind, r);
+  } catch (e) {
+    box.innerHTML = `<div class="alert err">AI 自动解析失败：${esc(e.message)}
+      <div style="margin-top:8px;"><button class="btn sm secondary" onclick="aiAutoPreview('${kind}')">重试</button></div></div>`;
+  }
+}
+/* 展示 AI 方案（新增哪些库存大类 / 关联去向 / 仍无法关联的），等用户确认 */
+function renderAiPlan(box, kind, r) {
+  const items = r.products || [];
+  const maps = r.mappings || [];
+  const leftover = r.leftover || [];
+  const news = items.filter((x) => x.is_new);
+  if (!news.length && !maps.length) {
+    box.innerHTML = `<div class="alert warn">🤖 AI 未能自动归并出可新增的库存大类，以下商品请手动新增商品或关联：` +
+      `<div class="unmapped-list">${leftover.map((c) => unmappedChip(c)).join("")}</div></div>`;
+    return;
+  }
+  const mapsTable = maps.map((m) => `<tr><td>${esc(m.code)}</td><td class="muted">→</td><td><b>${esc(m.target)}</b></td></tr>`).join("");
+  box.innerHTML = `<div class="ai-plan">
+    <div class="ai-plan-head">🤖 AI 自动新增方案（尚未写入，确认后才生效）</div>
+    <div class="muted" style="font-size:12.5px;margin-bottom:8px;">${esc(r.message || "")}</div>
+    ${news.length ? `<div class="ai-plan-sec"><b>将新增 ${news.length} 个库存大类</b>（其余匹配到已有大类）
+      <ul class="ai-plan-list">${news.map((x) => `<li>${esc(x.name)} <span class="muted">· ${esc(x.category)}</span></li>`).join("")}</ul></div>` : ""}
+    ${maps.length ? `<div class="ai-plan-sec"><b>将关联 ${maps.length} 个商品名</b>
+      <div class="table-wrap" style="max-height:220px;overflow:auto;"><table class="subtable" style="width:100%;">
+        <thead><tr><th>未关联商品名</th><th></th><th>关联到</th></tr></thead><tbody>${mapsTable}</tbody></table></div></div>` : ""}
+    ${leftover.length ? `<div class="ai-plan-sec"><b>仍无法自动关联 ${leftover.length} 个</b>，请手动补充
+      <div class="unmapped-list">${leftover.map((c) => unmappedChip(c)).join("")}</div></div>` : ""}
+    <div class="modal-foot" style="margin:0;padding-top:10px;">
+      <button class="btn secondary" onclick="aiAutoPreview('${kind}')">重新生成方案</button>
+      <button class="btn green" onclick="aiApplyPlan('${kind}')">✓ 确认新增并重新解析</button>
+    </div>
+  </div>`;
+}
+/* 用户确认后：真正新增库存大类 + 建立编码关联，然后重新解析出库单 */
+async function aiApplyPlan(kind) {
+  const codes = (window.__LAST_UNMAPPED__ || []).filter(Boolean);
+  if (!codes.length) { toast("没有可关联的商品名"); return; }
+  const box = $("bmAiBox");
+  const btn = document.querySelector("#bmAiBox .btn.green");
+  if (btn) { btn.disabled = true; btn.textContent = "⏳ 正在新增…"; }
+  try {
+    const r = await api("/api/mappings/ai-suggest", "POST", { source: "jushuitan", codes, apply: true });
+    const add = (r.created_products || []).map((p) => p.name).join("、");
+    toast(r.message || "AI 关联完成");
+    if (box) box.innerHTML = `<div class="alert ok">✅ ${esc(r.message)}${add ? "（新建：" + esc(add) + "）" : ""}</div>`;
+    __AI_AUTO_SIG__ = ""; // 允许重新解析后按新的未关联集合再自动试算
+    setTimeout(() => { if (window.__BM_FILE__) runBatchModal(kind); }, 400);
+  } catch (e) {
+    toast("AI 关联失败：" + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = "✓ 确认新增并重新解析"; }
+    if (box) box.innerHTML = `<div class="alert err">AI 关联失败：${esc(e.message)}</div>`;
+  }
 }
 function draftLineCalc(inp) {
   const tr = inp.closest("tr");
@@ -5372,14 +5473,23 @@ async function confirmInbound(kind) {
 }
 
 /* =============== 聚水潭编码关联 =============== */
-async function loadMappingPage() {
-  try {
-    MAPPINGS = await api("/api/mappings");
-    renderMappings();
-  } catch (e) {
-    const box = $("mpMappingStats");
-    if (box) box.innerHTML = `<div class="alert err">加载关联明细失败：${esc(e.message)}</div>`;
+let _mappingLoadPromise = null;
+function loadMappingPage() {
+  // 并发调用复用同一请求（深链跳转时 switchSettingsTab 与预填弹窗会同时触发）
+  if (!_mappingLoadPromise) {
+    _mappingLoadPromise = (async () => {
+      try {
+        MAPPINGS = await api("/api/mappings");
+        renderMappings();
+      } catch (e) {
+        const box = $("mpMappingStats");
+        if (box) box.innerHTML = `<div class="alert err">加载关联明细失败：${esc(e.message)}</div>`;
+      } finally {
+        _mappingLoadPromise = null;
+      }
+    })();
   }
+  return _mappingLoadPromise;
 }
 function renderMappings() {
   const d = MAPPINGS || { summary: {}, items: [] };

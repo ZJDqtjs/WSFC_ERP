@@ -1502,6 +1502,69 @@ tr.draft-off {
   opacity: 0.45; 
 }
 
+/* ============ 未关联商品：手动新增跳转 + AI 自动新增方案 ============ */
+.unmapped-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.unmapped-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 10px;
+  border: 1px solid #fde68a;
+  background: var(--card);
+  border-radius: 999px;
+  font-size: 12.5px;
+  max-width: 100%;
+}
+
+.unmapped-chip .unmapped-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+
+.unmapped-chip .btn {
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.ai-plan {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.ai-plan-head {
+  font-weight: 600;
+  color: var(--primary);
+  margin-bottom: 6px;
+}
+
+.ai-plan-sec {
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.ai-plan-list {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+}
+
+.ai-plan-list li {
+  line-height: 1.7;
+}
+
 /* 报表·支出统计：每行占比横向条 */
 .exp-bar {
   display: inline-block;

@@ -632,6 +632,8 @@ data: {"done": true}
 
 * `POST /api/mappings/auto` → 自动为未关联编码推荐匹配：`{ "ok": true, "matched": n, "total": n }`
 
+* `POST /api/mappings/ai-suggest` 请求：`{ "source": "jushuitan", "codes": ["商品名"...], "apply": false }` → AI 归并库存大类并给出编码关联方案。`apply=false` 只试算不落库，返回 `{ "dry_run": true, "products": [{name, category, is_new, product_id}], "mappings": [{code, target}], "mapped": n, "total": n, "leftover": [...], "message": "..." }`；`apply=true`（缺省）真正新增库存大类并写入关联，返回 `{ "dry_run": false, "created_products": [...], "mapped": n, "total": n, "leftover": [...], "message": "..." }`
+
 * `DELETE /api/mappings?source=jushuitan` → 清空该来源全部关联
 
 * `DELETE /api/mappings/{mid}` → 删除单条
