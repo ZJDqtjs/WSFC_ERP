@@ -161,11 +161,11 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
         }
 
     products = list(db.execute(select(Product)).scalars())
-    # 人工/快递 无真实库存，不计入库存统计
+    # 人工/快递 无真实库存，不计入库存统计；已停用的商品不参与工作台统计（如缺货预警）
     NO_STOCK_CATS = ["人工", "快递"]
     stock_products = [
         p for p in products
-        if p.product_type == "stock" and p.category not in NO_STOCK_CATS
+        if p.product_type == "stock" and p.is_active and p.category not in NO_STOCK_CATS
     ]
     stock_value = round(sum(p.stock_value for p in stock_products), 2)
     low_stock = [

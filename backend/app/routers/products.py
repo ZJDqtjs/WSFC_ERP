@@ -93,7 +93,7 @@ def _validate_stock_link(db: Session, data: ProductIn) -> int | None:
 def list_stock_products(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """库存商品（大类）列表，供订单商品关联选择。"""
     rows = db.execute(
-        select(Product).where(Product.product_type == "stock").order_by(Product.category, Product.name)
+        select(Product).where(Product.product_type == "stock", Product.is_active == True).order_by(Product.category, Product.name)
     ).scalars()
     return [
         {

@@ -1738,7 +1738,7 @@ function renderWarehouseProducts() {
   if (!rows.length) t.innerHTML = `<tr><td colspan="11" class="empty">暂无入仓品，可点「新增入仓品」录入</td></tr>`;
 }
 function stockProductOptions(selId) {
-  const list = (PRODUCTS || []).filter((p) => p.product_type === "stock" && !["人工", "快递"].includes(p.category));
+  const list = (PRODUCTS || []).filter((p) => p.is_active && p.product_type === "stock" && !["人工", "快递"].includes(p.category));
   return '<option value="">（不关联库存商品）</option>' +
     list.map((p) => `<option value="${p.id}" ${selId === p.id ? "selected" : ""}>${esc(p.name)}（${esc(p.category || "—")}）</option>`).join("");
 }
