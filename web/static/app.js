@@ -4118,7 +4118,7 @@ function renderExpDrill() {
         <td>${esc(r.item || r.category)}${r.ref ? ` <span class="muted">${esc(r.ref)}</span>` : ""}</td>
         <td class="num mono"><b>${fmtMoney(r.amount)}</b></td>
         <td>${esc(r.operator) || "—"}</td>
-        <td class="muted">${esc(r.remark)}</td></tr>`).join("")
+        <td class="muted" style="max-width:260px;">${renderRemarkHtml(r.remark)}</td></tr>`).join("")
     : `<tr><td colspan="6" class="empty">${REP_EXP_API_OK
         ? "该时段没有此类支出"
         : "后端未返回逐笔明细字段（expense_items）：请更新并重启后端服务后刷新"}</td></tr>`;
@@ -4317,7 +4317,7 @@ function renderExpenseItemRows() {
           <td>${esc(r.item || r.category)}${r.ref ? ` <span class="muted">${esc(r.ref)}</span>` : ""}</td>
           <td class="num mono"><b>${fmtMoney(r.amount)}</b></td>
           <td>${esc(r.operator) || "—"}</td>
-          <td class="muted">${esc(r.remark)}</td></tr>`).join("")
+          <td class="muted" style="max-width:280px;">${renderRemarkHtml(r.remark)}</td></tr>`).join("")
       : `<tr><td colspan="6" class="empty">${!REP_EXP_API_OK ? needRestart : (REP_EXP_ITEMS.length ? "没有符合筛选条件的支出" : "本期无支出")}</td></tr>`) +
     `</tbody>` +
     (rows.length
@@ -4595,7 +4595,7 @@ function renderOtherExpenseList() {
         <td><span class="badge expense">${esc(r.category)}</span>${payTag(r.pay_status)}</td>
         <td class="num mono" style="color:var(--red)">${fmtMoney(r.amount)}</td>
         <td>${esc(r.operator) || "—"}</td>
-        <td class="muted">${esc(r.remark)}</td>
+        <td class="muted" style="max-width:260px;">${renderRemarkHtml(r.remark)}</td>
         <td><button class="btn sm secondary" onclick="oeEdit(${r.id})">改</button>
             <button class="btn sm danger" onclick="oeDelete(${r.id})">删</button></td></tr>`).join("")
       : `<tr><td colspan="6" class="empty">该区间暂无开支，先在上方登记一笔</td></tr>`) + `</tbody>`;
@@ -4617,6 +4617,7 @@ function oeResetForm() {
   $("oeRemark").value = "";
   $("oeDate").value = today();
   setPay("oePay", "paid");
+  renderRemarkAttachments("oeRemark");
   $("oeSaveBtn").textContent = "✓ 保存开支";
   oeAlertMsg("");
 }
@@ -4630,6 +4631,7 @@ function oeEdit(id) {
   $("oeDate").value = r.date;
   $("oeRemark").value = r.remark || "";
   setPay("oePay", r.pay_status);
+  renderRemarkAttachments("oeRemark");   // 已有附件显示成可删除的小标签
   $("oeSaveBtn").textContent = "✓ 保存修改";
   oeAlertMsg(`正在修改 ${r.date}「${r.category}」${fmtMoney(r.amount)}（保存后覆盖原记录）`);
   $("oeCategory").focus();
@@ -4735,7 +4737,7 @@ function renderPayables() {
           <td class="mono">${esc(r.date)}</td>
           <td><span class="badge ${PAY_SRC_BADGE[r.source] || "adjust"}">${esc(r.source)}</span></td>
           <td><b>${esc(r.title)}</b>${r.code ? ` <span class="muted">${esc(r.code)}</span>` : ""}
-            <div class="muted" style="font-size:12px;">${esc(r.sub)}${r.remark ? " · " + esc(r.remark) : ""}</div></td>
+            <div class="muted" style="font-size:12px;">${esc(r.sub)}${r.remark ? " · " + renderRemarkHtml(r.remark) : ""}</div></td>
           <td class="num mono"><b style="color:${color};">${money}</b></td>
           <td>${esc(r.operator) || "—"}</td>
           <td class="num">${paid

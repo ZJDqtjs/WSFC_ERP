@@ -103,7 +103,7 @@
             <span class="bold up">{{ fmtMoney(r.amount) }}</span>
           </div>
           <div class="item-meta">{{ r.date }}{{ r.operator ? ' · ' + r.operator : '' }}</div>
-          <div v-if="r.remark" class="item-meta">{{ r.remark }}</div>
+          <RemarkView v-if="r.remark" :remark="r.remark" />
           <div class="row" style="gap:8px;margin-top:6px;">
             <van-button size="mini" plain type="primary" @click="openForm(r)">编辑</van-button>
             <van-button size="mini" plain type="danger" @click="delRow(r)">删除</van-button>
@@ -129,7 +129,7 @@
           <van-field v-model="form.date" label="日期" type="date" />
           <OperatorField v-model="form.operator" />
           <PayStatusField v-model="form.pay_status" hint="待付款：登记后先进「待付款账单」，点「已支付」才计入期间费用" />
-          <van-field v-model="form.remark" label="备注" placeholder="可留空，如收款方 / 用途" />
+          <AttachmentField v-model="form.remark" placeholder="可留空，如收款方 / 用途（支持图片 / 附件）" />
         </van-cell-group>
         <template v-if="presets.length">
           <div class="muted" style="padding:0 4px 6px;">常用类型（点选填入）</div>
@@ -161,6 +161,8 @@ import { showToast, showConfirmDialog } from 'vant'
 import api from '../api'
 import OperatorField from '../components/OperatorField.vue'
 import PayStatusField from '../components/PayStatusField.vue'
+import AttachmentField from '../components/AttachmentField.vue'
+import RemarkView from '../components/RemarkView.vue'
 import { fmtMoney, num, todayStr, monthStartStr, daysAgoStr } from '../utils/format'
 import { ensureUserName } from '../utils/user'
 
