@@ -3792,6 +3792,126 @@ async function batchDeleteOutbounds() {
 }
 
 /* =============== 报表 =============== */
+/* 报表两级视图：全仓总览（所有分仓合计）/ 单仓总览（默认当前分仓，可切换查看其他分仓） */
+let REP_SCOPE = "one";   // all 全仓总览 / one 单仓总览
+let REP_WH = "";         // 单仓总览查看的分仓 key；"" = 当前分仓
+let repWhLoaded = false;
+
+/** 填充「查看分仓」下拉（默认选中当前分仓） */
+async function repEnsureWhOptions() {
+  if (repWhLoaded) return;
+  const sel = $("repWhSel");
+  if (!sel) return;
+  try {
+    const d = await api("/api/warehouses");
+    const list = d.warehouses || [];
+    REP_WH = REP_WH || d.current || "";
+    sel.innerHTML = list.map((w) =>
+      `<option value="${esc(w.key)}"${w.key === REP_WH ? " selected" : ""}>${esc(w.name)}${w.is_current ? "（当前分仓）" : ""}</option>`
+    ).join("");
+    repWhLoaded = true;
+  } catch (e) { /* 拿不到分仓列表时按"当前分仓"看，不影响报表 */ }
+}
+
+/** 顶层切换：全仓总览 / 单仓总览 */
+function repScope(btn) {
+  btn.closest(".seg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
+  REP_SCOPE = btn.dataset.scope === "all" ? "all" : "one";
+  const one = REP_SCOPE === "one";
+  $("rep-one").style.display = one ? "" : "none";
+  $("rep-panel-all").style.display = one ? "none" : "";
+  $("repWhBar").style.display = one ? "" : "none";
+  $("repSeg").style.display = one ? "" : "none";   // 汇总/支出/商品/流水 只属于单仓总览
+  loadReport();
+}
+
+function repWhChange() {
+  REP_WH = $("repWhSel").value || "";
+  loadReport();
+}
+
+/** 从全仓总览点某分仓 → 回到单仓总览看它的明细 */
+function repViewWarehouse(key) {
+  REP_WH = key || "";
+  const sel = $("repWhSel");
+  if (sel) sel.value = REP_WH;
+  const btn = document.querySelector('#repScopeSeg .seg-item[data-scope="one"]');
+  if (btn) repScope(btn);
+  else loadReport();
+}
+
+/** 全仓总览：各分仓收入 / 支出 / 利润 */
+async function loadAllWarehouses(from, to) {
+  const t = $("repAllTable");
+  try {
+    const d = await api(`/api/report/all-warehouses?date_from=${from || ""}&date_to=${to || ""}`);
+    const items = d.items || [];
+    const tot = d.total || {};
+    const rate = (v, base) => (base ? ((v / base) * 100).toFixed(1) + "%" : "—");
+    $("repRangeHint").textContent = `统计区间 ${from || "最早"} ~ ${to || "最新"} · 全仓合计`;
+    $("repAllStats").innerHTML = `
+      <div class="stat blue"><div class="label">全仓销售收入</div><div class="value">${fmtMoney(tot.revenue)}</div><div class="sub">${tot.orders || 0} 单 · ${tot.warehouse_count || 0} 个分仓</div></div>
+      <div class="stat amber"><div class="label">全仓结转成本</div><div class="value">${fmtMoney(tot.cogs)}</div><div class="sub">全仓毛利 ${fmtMoney(tot.gross)}（${rate(tot.gross, tot.revenue)}）</div></div>
+      <div class="stat red"><div class="label">全仓支出</div><div class="value">${fmtMoney(tot.total_expense)}</div><div class="sub">采购 ${fmtMoney(tot.purchase)} ＋ 期间费用 ${fmtMoney(tot.expense)}</div></div>
+      <div class="stat ${(tot.net_profit || 0) >= 0 ? "green" : "red"}"><div class="label">全仓净利润</div><div class="value">${fmtMoney(tot.net_profit)}</div><div class="sub">净利率 ${rate(tot.net_profit, tot.revenue)}</div></div>
+      <div class="stat"><div class="label">全仓库存总值</div><div class="value">${fmtMoney(tot.stock_value)}</div><div class="sub">本期进货 ${fmtMoney(tot.purchase)}</div></div>`;
+    const pend = tot.pending || {};
+    $("repAllHint").textContent = `共 ${items.length} 个分仓 · 每个分仓独立账套，只统计「已付款」单据`
+      + ((pend.payables_amount || pend.receivables_amount)
+        ? `；另有 ${pend.payables_count || 0} 笔待付款 ${fmtMoney(pend.payables_amount)} / ${pend.receivables_count || 0} 笔待收款 ${fmtMoney(pend.receivables_amount)} 未计入`
+        : "");
+    const warn = $("repAllWarn");
+    const bad = items.filter((x) => x.error);
+    if (warn) {
+      warn.style.display = bad.length ? "block" : "none";
+      warn.textContent = bad.map((x) => `${x.name}：${x.error}`).join("；");
+    }
+    const rows = items.filter((x) => !x.error);
+    const totalRow = `<tr>
+      <td><b>全仓合计</b></td>
+      <td class="num mono"><b>${fmtMoney(tot.revenue)}</b></td>
+      <td class="num mono"><b>${fmtMoney(tot.cogs)}</b></td>
+      <td class="num mono"><b>${fmtMoney(tot.gross)}</b></td>
+      <td class="num mono">${rate(tot.gross, tot.revenue)}</td>
+      <td class="num mono"><b>${fmtMoney(tot.expense)}</b></td>
+      <td class="num mono"><b>${fmtMoney(tot.purchase)}</b></td>
+      <td class="num mono" style="color:${(tot.net_profit || 0) >= 0 ? "var(--green)" : "var(--red)"}"><b>${fmtMoney(tot.net_profit)}</b></td>
+      <td class="num mono">${tot.orders || 0}</td>
+      <td class="num mono">${fmtMoney(tot.stock_value)}</td>
+      <td></td></tr>`;
+    t.innerHTML = `<thead><tr>
+        <th>分仓</th>
+        <th class="num">销售收入</th><th class="num">结转成本</th><th class="num">毛利</th><th class="num">毛利率</th>
+        <th class="num">期间费用</th><th class="num">本期进货</th><th class="num">净利润</th>
+        <th class="num">订单数</th><th class="num">库存总值</th><th></th>
+      </tr></thead><tbody>` +
+      (rows.length
+        ? rows.map((w) => {
+          const cur = w.key === d.current;
+          const p = w.pending || {};
+          const pendTip = (p.payables_amount || p.receivables_amount)
+            ? `<div class="muted" style="font-size:11px;">待付款 ${fmtMoney(p.payables_amount)} · 待收款 ${fmtMoney(p.receivables_amount)}（未计入）</div>`
+            : "";
+          return `<tr${cur ? ' style="background:var(--primary-50,#eff6ff);"' : ""}>
+            <td><b>${esc(w.name)}</b>${cur ? ' <span class="badge" style="background:var(--primary,#2563eb);color:#fff;">当前</span>' : ""}${pendTip}</td>
+            <td class="num mono">${fmtMoney(w.revenue)}</td>
+            <td class="num mono">${fmtMoney(w.cogs)}</td>
+            <td class="num mono">${fmtMoney(w.gross)}</td>
+            <td class="num mono">${rate(w.gross, w.revenue)}</td>
+            <td class="num mono">${fmtMoney(w.expense)}</td>
+            <td class="num mono">${fmtMoney(w.purchase)}</td>
+            <td class="num mono" style="color:${(w.net_profit || 0) >= 0 ? "var(--green)" : "var(--red)"}"><b>${fmtMoney(w.net_profit)}</b></td>
+            <td class="num mono">${w.orders || 0}</td>
+            <td class="num mono">${fmtMoney(w.stock_value)}</td>
+            <td><button class="btn sm secondary" onclick="repViewWarehouse('${esc(w.key)}')">看单仓明细</button></td></tr>`;
+        }).join("")
+        : `<tr><td colspan="11" class="empty">暂无分仓数据</td></tr>`) +
+      `</tbody>` + (rows.length ? `<tfoot>${totalRow}</tfoot>` : "");
+  } catch (e) {
+    t.innerHTML = `<tbody><tr><td class="empty">加载失败：${esc(e.message)}</td></tr></tbody>`;
+  }
+}
+
 function quickRange(kind) {
   if (kind === "today") { $("repDateFrom").value = today(); $("repDateTo").value = today(); }
   else if (kind === "month") { $("repDateFrom").value = monthStart(); $("repDateTo").value = today(); }
@@ -3805,14 +3925,28 @@ async function loadReport() {
     reportInited = true;
     if (!$("repDateFrom").value) $("repDateFrom").value = today();
     if (!$("repDateTo").value) $("repDateTo").value = today();
+    await repEnsureWhOptions();
   }
   const from = $("repDateFrom").value, to = $("repDateTo").value;
+  // 全仓总览：只看各分仓合计，不需要单仓明细
+  if (REP_SCOPE === "all") { await loadAllWarehouses(from, to); return; }
+
+  const whQs = REP_WH ? `&wh=${encodeURIComponent(REP_WH)}` : "";
   const [rep, finance] = await Promise.all([
-    api(`/api/report/summary?date_from=${from || ""}&date_to=${to || ""}`),
-    api(`/api/finance?date_from=${from || ""}&date_to=${to || ""}`),
+    api(`/api/report/summary?date_from=${from || ""}&date_to=${to || ""}${whQs}`),
+    api(`/api/finance?date_from=${from || ""}&date_to=${to || ""}${whQs}`),
   ]);
   const rh = $("repRangeHint");
-  if (rh) rh.textContent = `统计区间 ${from || "最早"} ~ ${to || "最新"}`;
+  if (rh) {
+    rh.textContent = `统计区间 ${from || "最早"} ~ ${to || "最新"}`
+      + (rep.warehouse ? ` · ${rep.warehouse.name}${rep.is_current ? "（当前分仓）" : ""}` : "");
+  }
+  const whHint = $("repWhHint");
+  if (whHint) {
+    whHint.textContent = rep.warehouse && !rep.is_current
+      ? `正在查看「${rep.warehouse.name}」的数据（仅查看，不会改变你的工作分仓）`
+      : "默认是你当前所在分仓；换一个只是换看谁的数据，不会改变你的工作分仓";
+  }
   const packTotal = rep.pack_cost_total || 0;
   $("repStats").innerHTML = `
     <div class="stat blue"><div class="label">销售收入</div><div class="value">${fmtMoney(rep.revenue)}</div><div class="sub">${rep.order_count} 单</div></div>

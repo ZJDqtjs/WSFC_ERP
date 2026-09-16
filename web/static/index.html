@@ -486,7 +486,15 @@
       <!-- 财务报表（查询常驻 + 分区 tab：汇总 / 支出 / 商品 / 流水） -->
       <section id="page-report" class="page">
         <div class="card">
-          <div class="card-head"><h3>财务利润报表</h3><span class="hint" id="repRangeHint"></span></div>
+          <div class="card-head">
+            <h3>财务利润报表</h3>
+            <span class="hint" id="repRangeHint"></span>
+            <div class="grow"></div>
+            <div class="seg" id="repScopeSeg" style="margin-bottom:0;">
+              <button class="seg-item" data-scope="all" onclick="repScope(this)">全仓总览</button>
+              <button class="seg-item active" data-scope="one" onclick="repScope(this)">单仓总览</button>
+            </div>
+          </div>
           <div class="toolbar">
             <input id="repDateFrom" type="date" /><span>-</span><input id="repDateTo" type="date" />
             <button class="btn" onclick="loadReport()">查询</button>
@@ -501,7 +509,30 @@
               <button class="seg-item" data-panel="rep-panel-flow" onclick="repTab(this)">流水</button>
             </div>
           </div>
+          <div class="toolbar" id="repWhBar">
+            <label class="muted">查看分仓</label>
+            <select id="repWhSel" onchange="repWhChange()"></select>
+            <span class="muted" id="repWhHint">默认是你当前所在分仓；换一个只是换看谁的数据，不会改变你的工作分仓</span>
+          </div>
         </div>
+
+        <!-- 全仓总览：所有分仓的收入 / 支出 / 利润 -->
+        <div id="rep-panel-all" style="display:none;">
+          <div class="stat-grid" id="repAllStats"></div>
+          <div class="card">
+            <div class="card-head">
+              <h3>各分仓收入 / 支出 / 利润</h3>
+              <span class="muted" id="repAllHint"></span>
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="loadReport()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+            </div>
+            <div id="repAllWarn" class="alert warn" style="display:none;"></div>
+            <div class="table-wrap"><table id="repAllTable"></table></div>
+          </div>
+        </div>
+
+        <!-- 单仓总览：以下为原有内容（汇总 / 支出 / 商品 / 流水） -->
+        <div id="rep-one">
 
         <!-- 汇总 -->
         <div id="rep-panel-summary">
@@ -582,6 +613,7 @@
             <div class="table-wrap"><table id="financeTable"></table></div>
           </div>
         </div>
+        </div>  <!-- /#rep-one 单仓总览 -->
       </section>
 
       <!-- 其他开支 -->

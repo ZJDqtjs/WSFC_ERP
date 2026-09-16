@@ -4,7 +4,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_user
-from ..database import get_db
+from ..database import (
+    current_warehouse_name,
+    get_db,
+    get_db_wh,
+    get_sessionmaker,
+    get_warehouses,
+    resolve_key,
+)
 from ..models import FinanceRecord, Inbound, OtherExpense, Outbound, OutboundLine, Product, User
 
 router = APIRouter(prefix="/api", tags=["report"])
@@ -225,7 +232,13 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
 
 
 @router.get("/report/summary")
-def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def summary(
+    date_from: str = "",
+    date_to: str = "",
+    wh: str = "",   # 可选：指定查看哪个分仓（单仓总览手动切换用），缺省=本登录会话的分仓
+    db: Session = Depends(get_db_wh),
+    user: User = Depends(get_current_user),
+):
     def scope(model):
         q = select(model)
         if date_from:
@@ -446,9 +459,13 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
     # 日期倒序；同一天保持「采购 → 其他开支 → 手工记账」顺序（稳定排序）
     expense_items.sort(key=lambda r: r["date"], reverse=True)
 
+    key = resolve_key(wh)
     return {
         "date_from": date_from,
         "date_to": date_to,
+        # 本报表是哪个分仓的（单仓总览可切换分仓查看）
+        "warehouse": {"key": key, "name": current_warehouse_name(key)},
+        "is_current": key == resolve_key(""),
         # 以下金额一律只含「已付款」单据（待付款的在 pending 里，点「已支付」后自动转入）
         "pending": _pending_stats(unpaid_inbounds, unpaid_outbounds, unpaid_others, unpaid_finances),
         "revenue": round(revenue, 2),
@@ -486,8 +503,113 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
     }
 
 
+def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str) -> dict:
+    """单个分仓的「收入 / 支出 / 利润」总览（口径与 /report/summary 完全一致：只含已付款单据）。"""
+    def scope(model):
+        q = select(model)
+        if date_from:
+            q = q.where(model.date >= date_from)
+        if date_to:
+            q = q.where(model.date <= date_to)
+        return q
+
+    outbounds, unpaid_outbounds = _split_paid(list(db.execute(scope(Outbound)).scalars()))
+    inbounds, unpaid_inbounds = _split_paid(list(db.execute(scope(Inbound)).scalars()))
+    finances, unpaid_finances = _split_paid(list(db.execute(scope(FinanceRecord)).scalars()))
+    others, unpaid_others = _split_paid(list(db.execute(scope(OtherExpense)).scalars()))
+
+    revenue = round(sum(o.total_amount or 0 for o in outbounds), 2)
+    cogs = round(sum(o.total_cogs or 0 for o in outbounds), 2)
+    manual_expense = sum(f.amount or 0 for f in finances if f.type == "expense" and f.category != "采购支出")
+    other_expense = round(sum(e.amount or 0 for e in others), 2)
+    expense = round(manual_expense + other_expense, 2)
+    purchase = round(sum(i.total_amount or 0 for i in inbounds), 2)
+    return {
+        "key": key,
+        "name": name,
+        "revenue": revenue,
+        "cogs": cogs,
+        "gross": round(revenue - cogs, 2),
+        "expense": expense,
+        "other_expense": other_expense,
+        "manual_expense": round(manual_expense, 2),
+        "purchase": purchase,
+        "total_expense": round(purchase + expense, 2),
+        "net_profit": round(revenue - cogs - expense, 2),
+        "orders": len(outbounds),
+        "inbounds": len(inbounds),
+        "stock_value": round(sum(p.stock_value or 0 for p in db.execute(select(Product)).scalars()), 2),
+        "pending": _pending_stats(unpaid_inbounds, unpaid_outbounds, unpaid_others, unpaid_finances),
+    }
+
+
+@router.get("/report/all-warehouses")
+def all_warehouses(date_from: str = "", date_to: str = "", user: User = Depends(get_current_user)):
+    """全仓总览：把所有分仓的收入 / 支出 / 利润汇总成一张表 + 合计。
+
+    每个分仓是**独立账套**（独立 db 文件），因此逐个分仓查询后累加；某个仓读不出来只标记该行，
+    不影响其他仓（例如刚建仓、文件缺失）。
+    """
+    items: list[dict] = []
+    for w in get_warehouses():
+        key, name = w["key"], w.get("name", w["key"])
+        db = None
+        try:
+            db = get_sessionmaker(key)()
+            items.append(_overview_of(db, key, name, date_from, date_to))
+        except Exception as e:  # 单个仓失败不拖累整体
+            print(f"[全仓总览] {key} 读取失败:", e)
+            items.append({"key": key, "name": name, "error": f"读取失败：{e}"})
+        finally:
+            if db is not None:
+                db.close()
+
+    ok = [x for x in items if "error" not in x]
+
+    def s(field: str) -> float:
+        return round(sum(float(x.get(field) or 0) for x in ok), 2)
+
+    def p(field: str) -> float:
+        return round(sum(float((x.get("pending") or {}).get(field) or 0) for x in ok), 2)
+
+    total = {
+        "revenue": s("revenue"),
+        "cogs": s("cogs"),
+        "gross": s("gross"),
+        "expense": s("expense"),
+        "other_expense": s("other_expense"),
+        "manual_expense": s("manual_expense"),
+        "purchase": s("purchase"),
+        "total_expense": s("total_expense"),
+        "net_profit": s("net_profit"),
+        "orders": int(sum(int(x.get("orders") or 0) for x in ok)),
+        "inbounds": int(sum(int(x.get("inbounds") or 0) for x in ok)),
+        "stock_value": s("stock_value"),
+        "warehouse_count": len(ok),
+        "pending": {
+            "payables_count": int(p("payables_count")),
+            "payables_amount": p("payables_amount"),
+            "receivables_count": int(p("receivables_count")),
+            "receivables_amount": p("receivables_amount"),
+        },
+    }
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "current": resolve_key(""),   # 本登录会话所在分仓（前端默认选中）
+        "items": items,
+        "total": total,
+    }
+
+
 @router.get("/finance")
-def list_finance(date_from: str = "", date_to: str = "", db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def list_finance(
+    date_from: str = "",
+    date_to: str = "",
+    wh: str = "",   # 可选：查看指定分仓（与 /report/summary 的 wh 保持一致）
+    db: Session = Depends(get_db_wh),
+    user: User = Depends(get_current_user),
+):
     q = _date_filter(select(FinanceRecord), date_from, date_to).options(selectinload(FinanceRecord.product)).order_by(FinanceRecord.id.desc())
     return [
         {

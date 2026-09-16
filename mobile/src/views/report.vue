@@ -16,6 +16,56 @@
         </div>
       </div>
 
+      <!-- 顶层：全仓总览 / 单仓总览 -->
+      <div class="seg">
+        <div class="seg-item" :class="{ active: scope === 'all' }" @click="setScope('all')">全仓总览</div>
+        <div class="seg-item" :class="{ active: scope === 'one' }" @click="setScope('one')">单仓总览</div>
+      </div>
+
+      <!-- ============ 全仓总览：所有分仓的收入 / 支出 / 利润 ============ -->
+      <template v-if="scope === 'all'">
+        <div class="stat-grid" style="margin-bottom:12px;">
+          <div class="stat accent"><div class="label">全仓销售收入</div><div class="value">{{ fmtMoney(allTot.revenue) }}</div><div class="sub">{{ allTot.orders || 0 }} 单 · {{ allTot.warehouse_count || 0 }} 个分仓</div></div>
+          <div class="stat warn"><div class="label">全仓结转成本</div><div class="value">{{ fmtMoney(allTot.cogs) }}</div><div class="sub">毛利 {{ fmtMoney(allTot.gross) }}（{{ pct(allTot.gross, allTot.revenue) }}）</div></div>
+          <div class="stat danger"><div class="label">全仓支出</div><div class="value">{{ fmtMoney(allTot.total_expense) }}</div><div class="sub">采购 {{ fmtMoney(allTot.purchase) }} ＋ 期间费用 {{ fmtMoney(allTot.expense) }}</div></div>
+          <div class="stat" :class="num(allTot.net_profit) >= 0 ? 'success' : 'danger'"><div class="label">全仓净利润</div><div class="value">{{ fmtMoney(allTot.net_profit) }}</div><div class="sub">净利率 {{ pct(allTot.net_profit, allTot.revenue) }}</div></div>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="grow">各分仓收入 / 支出 / 利润</span></div>
+          <div v-if="!allItems.length" class="empty">暂无分仓数据</div>
+          <div v-for="w in allItems" :key="w.key" class="list-item" @click="viewWarehouse(w.key)">
+            <div class="row">
+              <span class="grow item-title">
+                {{ w.name }}
+                <van-tag v-if="w.key === allCurrent" type="primary" plain style="margin-left:6px;">当前</van-tag>
+              </span>
+              <span class="bold" :class="num(w.net_profit) >= 0 ? 'up' : 'down'">{{ fmtMoney(w.net_profit) }}</span>
+            </div>
+            <div class="item-meta">收入 {{ fmtMoney(w.revenue) }} · 成本 {{ fmtMoney(w.cogs) }} · 毛利 {{ fmtMoney(w.gross) }}（{{ pct(w.gross, w.revenue) }}）</div>
+            <div class="item-meta">期间费用 {{ fmtMoney(w.expense) }} · 采购 {{ fmtMoney(w.purchase) }} · 订单 {{ w.orders || 0 }} · 库存 {{ fmtMoney(w.stock_value) }}</div>
+            <div v-if="w.error" class="item-meta down">{{ w.error }}</div>
+          </div>
+          <div v-if="allItems.length" class="row" style="margin-top:8px;">
+            <span class="grow bold">全仓合计</span>
+            <span class="bold" :class="num(allTot.net_profit) >= 0 ? 'up' : 'down'">{{ fmtMoney(allTot.net_profit) }}</span>
+          </div>
+        </div>
+        <div class="muted" style="font-size:12px;padding:2px;">
+          每个分仓独立账套，只统计「已付款」单据{{ allPendingText }}。点任一分仓可看它的单仓明细。
+        </div>
+      </template>
+
+      <!-- ============ 单仓总览（默认当前分仓，可切换查看其他分仓） ============ -->
+      <template v-else>
+      <!-- 查看分仓 -->
+      <div class="card" style="padding:10px 12px;" @click="whShow = true">
+        <div class="row">
+          <span class="grow">查看分仓：<b>{{ whName }}</b>{{ isCurrent ? '（当前分仓）' : '' }}</span>
+          <van-icon name="arrow" color="#969799" />
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:2px;">换一个只是换看谁的数据，不会改变你的工作分仓</div>
+      </div>
+
       <!-- 分区 tab：一次只看一类，避免把多天/多月的记录竖向堆在一页 -->
       <div class="seg">
         <div class="seg-item" :class="{ active: tab === 'summary' }" @click="tab = 'summary'">汇总</div>
@@ -247,6 +297,10 @@
         </div>
       </div>
       </template>
+      </template>
+
+      <!-- 查看分仓选择 -->
+      <van-action-sheet v-model:show="whShow" :actions="whActions" title="查看哪个分仓" cancel-text="取消" @select="pickWh" />
     </div>
 
     <!-- 手动记账 -->
@@ -357,6 +411,40 @@ const costRows = computed(() => {
   return rows
 })
 
+/* ---------- 顶层：全仓总览 / 单仓总览（单仓可切换查看其他分仓，仅查看不改工作分仓） ---------- */
+const scope = ref('one')      // all 全仓总览 / one 单仓总览
+const whKey = ref('')         // 单仓总览查看的分仓 key；'' = 当前分仓
+const whList = ref([])
+const whCurrent = ref('')
+const whShow = ref(false)
+const allItems = ref([])
+const allTot = ref({})
+const allCurrent = ref('')
+const allPendingText = ref('')
+
+const whName = computed(() => {
+  const w = whList.value.find((x) => x.key === whKey.value) || whList.value.find((x) => x.is_current)
+  return w ? w.name : '当前分仓'
+})
+const isCurrent = computed(() => !whKey.value || whKey.value === whCurrent.value)
+const whActions = computed(() =>
+  whList.value.map((w) => ({ name: `${w.name}${w.is_current ? '（当前分仓）' : ''}`, key: w.key }))
+)
+const pct = (v, base) => (num(base) ? ((num(v) / num(base)) * 100).toFixed(1) + '%' : '—')
+
+async function ensureWh() {
+  if (whList.value.length) return
+  try {
+    const d = await api('/api/warehouses')
+    whList.value = d.warehouses || []
+    whCurrent.value = d.current || ''
+  } catch (e) { /* 拿不到就用当前分仓 */ }
+}
+function setScope(v) { scope.value = v; load() }
+function pickWh(a) { whKey.value = a.key; whShow.value = false; load() }
+/** 全仓总览点某个分仓 → 回到单仓总览看它的明细 */
+function viewWarehouse(key) { whKey.value = key; scope.value = 'one'; load() }
+
 /* ---------- 报表分区 tab（汇总 / 支出 / 商品 / 流水）与支出子页签 ---------- */
 const tab = ref('summary')
 const expTab = ref('cat')   // cat 按类型 / day 按日 / month 按月 / item 逐笔
@@ -432,10 +520,27 @@ const financeFiltered = computed(() => {
 })
 
 async function load() {
+  await ensureWh()
+  // 全仓总览：所有分仓的收入 / 支出 / 利润合计
+  if (scope.value === 'all') {
+    try {
+      const d = await api(`/api/report/all-warehouses?date_from=${df.value}&date_to=${dt.value}`)
+      allItems.value = d.items || []
+      allTot.value = d.total || {}
+      allCurrent.value = d.current || ''
+      const p = allTot.value.pending || {}
+      allPendingText.value = (p.payables_amount || p.receivables_amount)
+        ? `；另有 ${p.payables_count || 0} 笔待付款 ${fmtMoney(p.payables_amount)} / ${p.receivables_count || 0} 笔待收款 ${fmtMoney(p.receivables_amount)} 未计入`
+        : ''
+      inited = true
+    } catch (e) { showToast(e.message || '加载失败') }
+    return
+  }
   try {
+    const whqs = whKey.value ? `&wh=${encodeURIComponent(whKey.value)}` : ''
     const [r1, r2] = await Promise.all([
-      api(`/api/report/summary?date_from=${df.value}&date_to=${dt.value}`),
-      api(`/api/finance?date_from=${df.value}&date_to=${dt.value}`),
+      api(`/api/report/summary?date_from=${df.value}&date_to=${dt.value}${whqs}`),
+      api(`/api/finance?date_from=${df.value}&date_to=${dt.value}${whqs}`),
     ])
     rep.value = r1
     finance.value = r2

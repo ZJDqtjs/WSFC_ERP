@@ -192,6 +192,11 @@ def current_warehouse_name(key: str | None = None) -> str:
     return k
 
 
+def resolve_key(wh: str = "") -> str:
+    """把请求里的 ?wh= 参数解析成分仓 key：有效则用它，否则用本登录会话的分仓。"""
+    return wh if (wh and key_exists(wh)) else get_current_key()
+
+
 # ---------------- Session 依赖 ----------------
 def get_db():
     """当前分仓的会话（每次请求创建；按登录会话的分仓，切仓后新请求自动走新仓）。"""
@@ -205,6 +210,18 @@ def get_db():
 def get_db_default():
     """钉死在默认仓（奥斯迪）的会话，供 keyadmin 等独立入口使用。"""
     db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def get_db_wh(wh: str = ""):
+    """带 ?wh= 的分仓会话：用于报表「单仓总览」手动切换查看其他分仓。
+
+    只影响本次查询的**数据来源**，不改变你的工作分仓（不改令牌），因此看完不用切回来。
+    """
+    db = get_sessionmaker(resolve_key(wh))()
     try:
         yield db
     finally:
