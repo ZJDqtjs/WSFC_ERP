@@ -961,7 +961,7 @@ td.num, th.num {
   display: none;
   align-items: flex-start; 
   justify-content: center; 
-  padding: 60px 20px; 
+  padding: 24px 20px; 
   z-index: 100; 
   overflow: auto;
   transition: var(--transition);
@@ -976,6 +976,10 @@ td.num, th.num {
   border-radius: var(--radius-lg); 
   width: 100%; 
   max-width: 720px;
+  /* 弹窗自身滚动 + 底部按钮栏吸底，内容再长也不用翻到底才能点按钮 */
+  max-height: calc(100vh - 54px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   box-shadow: var(--shadow-lg); 
   padding: 28px 28px; 
   animation: pop 0.25s cubic-bezier(0.1, 0, 0.2, 0);
@@ -1026,6 +1030,16 @@ td.num, th.num {
   gap: 12px; 
   justify-content: flex-end; 
   margin-top: 24px; 
+}
+
+/* 底部按钮栏吸底：弹窗内容滚动时始终可见（仅作用于弹窗的直接子元素） */
+.modal > .modal-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  padding: 14px 0 22px;
+  background: var(--card);
+  box-shadow: 0 -10px 12px -12px rgba(0, 0, 0, 0.35);
 }
 
 .modal .modal-foot .btn.danger { 
@@ -1496,6 +1510,27 @@ th[data-key] .sort-arrow {
 .draft-order .subtable td, .draft-order .subtable th { 
   padding: 8px 12px; 
   font-size: 13.5px; 
+}
+
+/* ============ 聚水潭导入：按商品名汇总预览 ============ */
+.agg-table th, .agg-table td {
+  padding: 8px 10px;
+  font-size: 13.5px;
+}
+
+.agg-table th {
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.agg-table tfoot td {
+  background: rgba(0, 0, 0, 0.03);
+  border-top: 1px solid var(--border);
+}
+
+@media (prefers-color-scheme: dark) {
+  .agg-table tfoot td { background: rgba(255, 255, 255, 0.05); }
 }
 
 tr.draft-off { 

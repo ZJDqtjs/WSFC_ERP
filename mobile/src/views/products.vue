@@ -240,13 +240,14 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api, { downloadFile } from '../api'
 import ProductPicker from '../components/ProductPicker.vue'
 import { fmtMoney, fmtNum, num, defaultUnit, unitFactor, fmtStock, shrink } from '../utils/format'
 
 const router = useRouter()
+const route = useRoute()
 function goBack() {
   if (window.history.length > 1) router.back()
   else router.replace('/mine')
@@ -341,10 +342,10 @@ function deriveUnitPayload(pt, unit) {
   return { base_unit: '个', default_unit: unit, conversions: { 个: 1, [unit]: 1 } }
 }
 
-function openProduct(p) {
+function openProduct(p, prefillName = '') {
   if (!p) {
     Object.assign(form, {
-      id: 0, code: '', name: '', category: pcat.value || '', product_type: 'stock', unit: '斤',
+      id: 0, code: '', name: prefillName || '', category: pcat.value || '', product_type: 'stock', unit: '斤',
       sale_price: 0, unit_cost: 0, weight_kg: 0, spec: '', pack_items: [], pack_fee: 0,
       stock_product_id: null, multiplier: 1, is_active: true,
     })
@@ -551,7 +552,12 @@ async function delUnit(u) {
   } catch (e) { showToast(e.message || '删除失败') }
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  // 批量导入未关联商品时跳转过来：?new=商品名，直接打开新增弹窗并预填名称
+  const nm = route.query.new
+  if (nm) openProduct(null, Array.isArray(nm) ? nm[0] : String(nm))
+})
 </script>
 
 <style scoped>

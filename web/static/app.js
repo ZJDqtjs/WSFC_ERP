@@ -2683,6 +2683,8 @@ function openProductModal(pid = 0, prefillName = "") {
   const curUnit = p ? (p.default_unit || p.base_unit) : "斤";
   const curCat = p ? p.category : (prodForceCat || ""); // 独立分类页新增时自动带上分类
   const curName = p?.name || prefillName || "";
+  // 商品表单字段多，用加宽弹窗（字段自动多列排布）减少上下滚动
+  $("modalBox").classList.add("wide");
   openModal(`
     <h3>${pid ? "编辑商品" : "新增商品"} <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="form-grid">
@@ -5149,6 +5151,7 @@ const BATCH_MODAL = {
 function openBatchModal(kind) {
   const cfg = BATCH_MODAL[kind];
   if (!cfg) return;
+  $("modalBox").classList.remove("wide"); // 汇总预览会加宽弹窗，回到选文件界面时还原
   openModal(`
     <h3>${cfg.title} <button class="close" onclick="closeModal()">✕</button></h3>
     <p class="hint" style="margin-bottom:12px;">${cfg.hint}</p>
@@ -5218,6 +5221,12 @@ function renderDraftReview(kind, r) {
     scheduleAiAutoPreview(kind);
     return;
   }
+  // 聚水潭：不逐单展示，改为汇总相同商品名的总体预览
+  if (kind === "jushuitan") {
+    renderAggregateReview(kind, orders, warn);
+    scheduleAiAutoPreview(kind);
+    return;
+  }
   const body = orders.map((o, oi) => `
     <div class="draft-order" data-doc="${esc(o.doc_no)}" data-date="${esc(o.date)}" data-customer="${esc(o.customer || "")}"
          data-operator="${esc(o.operator || "")}" data-remark="${esc(o.remark || "")}" data-packfee="${o.pack_fee || 0}"
@@ -5250,6 +5259,78 @@ function renderDraftReview(kind, r) {
       <button class="btn green" onclick="confirmDraft('${kind}')">✓ 确认出库（<span id="draftCount">${orders.length}</span> 单）</button>
     </div>`;
   scheduleAiAutoPreview(kind);
+}
+/* 汇总相同商品名（同单位）的明细：订单数 / 总数量 / 均价 / 每单金额 / 总金额 */
+function aggregateDraftLines(orders) {
+  const map = new Map();
+  orders.forEach((o) => {
+    (o.lines || []).forEach((l) => {
+      const key = (l.product_name || "") + "\u0000" + (l.unit || "");
+      let g = map.get(key);
+      if (!g) {
+        g = { name: l.product_name, unit: l.unit, deduct: "", docs: new Set(), qty: 0, amount: 0 };
+        map.set(key, g);
+      }
+      g.docs.add(o.doc_no || "");
+      g.qty += +l.quantity || 0;
+      g.amount += +l.amount || 0;
+      if (!g.deduct && l.deduct) g.deduct = l.deduct;
+    });
+  });
+  return [...map.values()].map((g) => {
+    const n = g.docs.size;
+    return {
+      name: g.name, unit: g.unit, deduct: g.deduct, orders: n, qty: g.qty, amount: g.amount,
+      price: g.qty ? g.amount / g.qty : 0, perOrder: n ? g.amount / n : 0,
+    };
+  }).sort((a, b) => b.amount - a.amount);
+}
+function renderAggregateReview(kind, orders, warn) {
+  window.__DRAFT_ORDERS__ = orders; // 汇总视图不再逐单编辑，确认时按原单据整批出库
+  const rows = aggregateDraftLines(orders);
+  const sumQty = rows.reduce((s, x) => s + x.qty, 0);
+  const sumAmt = rows.reduce((s, x) => s + x.amount, 0);
+  const packFee = orders.reduce((s, o) => s + (+o.pack_fee || 0), 0);
+  const dates = orders.map((o) => o.date).filter(Boolean).sort();
+  const range = dates.length ? (dates[0] === dates[dates.length - 1] ? dates[0] : `${dates[0]} ~ ${dates[dates.length - 1]}`) : "";
+  const body = rows.map((x) => `<tr>
+      <td>${esc(x.name)}${x.deduct ? `<div class="muted" style="font-size:12px;">${esc(x.deduct)}</div>` : ""}</td>
+      <td>${esc(x.unit || "—")}</td>
+      <td class="num">${x.orders}</td>
+      <td class="num">${fmtNum(x.qty)}</td>
+      <td class="num">${fmtMoney(x.price)}</td>
+      <td class="num">${fmtMoney(x.perOrder)}</td>
+      <td class="num"><b>${fmtMoney(x.amount)}</b></td>
+    </tr>`).join("");
+  $("modalBox").classList.add("wide");
+  $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} — 商品汇总预览 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="alert ok">共 <b>${orders.length}</b> 单${range ? `（${esc(range)}）` : ""}，商品 <b>${rows.length}</b> 种，合计金额 <b>${fmtMoney(sumAmt)}</b>${packFee ? `（另有打包费 ${fmtMoney(packFee)}）` : ""}。确认后按原单据整批出库。</div>
+    ${warn}
+    <div class="draft-list">
+      <table class="subtable agg-table" style="width:100%;">
+        <thead><tr>
+          <th>商品</th><th style="width:64px;">单位</th>
+          <th class="num" style="width:74px;">订单数</th>
+          <th class="num" style="width:100px;">总数量</th>
+          <th class="num" style="width:96px;">均价</th>
+          <th class="num" style="width:100px;">每单金额</th>
+          <th class="num" style="width:110px;">总金额</th>
+        </tr></thead>
+        <tbody>${body}</tbody>
+        <tfoot><tr>
+          <td colspan="3" class="muted">合计 ${rows.length} 种商品 · ${orders.length} 单</td>
+          <td class="num"><b>${fmtNum(sumQty)}</b></td>
+          <td class="num muted">—</td>
+          <td class="num muted">—</td>
+          <td class="num"><b>${fmtMoney(sumAmt)}</b></td>
+        </tr></tfoot>
+      </table>
+    </div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="openBatchModal('${kind}')">重新选择文件</button>
+      <button class="btn secondary" onclick="runBatchModal('jushuitan')">↻ 重新解析（同一文件）</button>
+      <button class="btn green" onclick="confirmAggregate('${kind}')">✓ 确认出库（${orders.length} 单）</button>
+    </div>`;
 }
 /* 未关联商品：名称 + 「去新增商品」新标签页跳转按钮（新标签页直接打开新增商品弹窗并预填名称） */
 function openProductTab(name) {
@@ -5374,6 +5455,30 @@ async function confirmDraft(kind) {
     });
   });
   if (!orders.length) { toast("没有勾选任何单据"); return; }
+  submitDraftOrders(kind, orders);
+}
+/* 汇总视图确认：按解析出的原单据整批出库（不逐单编辑） */
+async function confirmAggregate(kind) {
+  if (window.__CONFIRMING__) return; // 防止重复提交
+  const packMap = window.__DRAFT_PACK__ || {};
+  const orders = (window.__DRAFT_ORDERS__ || []).map((o) => ({
+    doc_no: o.doc_no, date: o.date, customer: o.customer || "",
+    operator: o.operator || "", remark: o.remark || "",
+    pack_fee: +o.pack_fee || 0,
+    pack_rule_id: o.pack_rule_id || null,
+    pack_rule_name: o.pack_rule_name || "",
+    pack_lines: packMap[o.doc_no] || [],
+    lines: (o.lines || [])
+      .filter((l) => l.product_id && l.unit && +l.quantity > 0)
+      .map((l) => ({
+        product_id: +l.product_id, unit: l.unit, quantity: +l.quantity,
+        price: +l.price || 0, gross_sales: +l.gross_sales || 0,
+      })),
+  })).filter((o) => o.lines.length);
+  if (!orders.length) { toast("没有可出库的单据"); return; }
+  submitDraftOrders(kind, orders);
+}
+async function submitDraftOrders(kind, orders) {
   // 提交中等待提示：替换确认区为运行提示，防止用户反复点击
   window.__CONFIRMING__ = true;
   $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3>

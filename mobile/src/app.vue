@@ -136,9 +136,21 @@ body {
 .seg-item.active { background: #1989fa; color: #fff; font-weight: 600; }
 
 /* ---------- 弹层 / 选择器 ---------- */
-.sheet-body { padding: 14px 16px 24px; max-height: 74vh; overflow-y: auto; }
+/* 弹层主体自身滚动 + 底部按钮栏吸底：内容再长也不用滑到底才能点按钮 */
+.sheet-body {
+  padding: 14px 16px 10px;
+  height: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .sheet-title { font-weight: 600; font-size: 16px; text-align: center; margin-bottom: 12px; }
-.sheet-foot { display: flex; gap: 10px; padding: 12px 0 4px; }
+.sheet-foot {
+  display: flex; gap: 10px; padding: 12px 0 6px;
+  position: sticky; bottom: 0; z-index: 2;
+  background: #fff;
+  box-shadow: 0 -10px 12px -12px rgba(0, 0, 0, 0.35);
+}
 .sheet-foot .van-button { flex: 1; }
 .picker-item { display: flex; align-items: center; gap: 10px; padding: 11px 4px; border-bottom: 1px solid #f5f5f5; }
 .picker-item:active { background: #f5f6f7; }
