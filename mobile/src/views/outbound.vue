@@ -17,6 +17,7 @@
           <van-field v-model="form.date" label="日期" type="date" />
           <van-field v-model="form.customer" label="客户" placeholder="可留空" />
           <OperatorField v-model="form.operator" />
+          <PayStatusField v-model="form.pay_status" hint="待付款（未回款）：整单先进「待付款账单」，收款后才计入财务报表" />
           <AttachmentField v-model="form.remark" />
         </van-cell-group>
 
@@ -253,6 +254,7 @@ import ProductPicker from '../components/ProductPicker.vue'
 import AttachmentField from '../components/AttachmentField.vue'
 import RemarkView from '../components/RemarkView.vue'
 import OperatorField from '../components/OperatorField.vue'
+import PayStatusField from '../components/PayStatusField.vue'
 import { ensureUserName } from '../utils/user'
 import { fmtMoney, fmtNum, num, defaultUnit, unitFactor, priceOf, todayStr } from '../utils/format'
 
@@ -261,7 +263,7 @@ const tab = ref('new')
 const refreshing = ref(false)
 
 /* ---------- 新增 ---------- */
-const form = reactive({ date: todayStr(), customer: '', operator: '', remark: '' })
+const form = reactive({ date: todayStr(), customer: '', operator: '', remark: '', pay_status: 'paid' })
 const rows = ref([newRow()])
 const saving = ref(false)
 const previewing = ref(false)
@@ -351,12 +353,14 @@ async function submit() {
       lines,
       pack_lines: packLines,
       pack_fee_total: num(packFeeTotal.value),
+      pay_status: form.pay_status,
     })
     const warns = (r.warnings || []).length ? '\n⚠ ' + r.warnings.join('；') : ''
-    showToast('出库成功' + warns)
+    showToast('出库成功' + (form.pay_status === 'unpaid' ? '（待付款，已进待付款账单）' : '') + warns)
     clearRows()
     form.customer = ''
     form.remark = ''
+    form.pay_status = 'paid'
     loadList()
   } catch (e) { showToast('出库失败：' + e.message) }
   saving.value = false

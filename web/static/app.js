@@ -275,7 +275,8 @@ function daysAgo(n) {
 const PAGE_TITLES = {
   home: "工作台", stock: "库存管理", inbound: "入库", outbound: "出库 / 销售",
   "warehouse-in": "入仓", "wingroup": "入仓批次明细",
-  products: "商品", report: "财务报表", otherexp: "其他开支", import: "批量导入", jushuitan: "聚水潭关联",
+  products: "商品", report: "财务报表", otherexp: "其他开支", payables: "待付款账单",
+  import: "批量导入", jushuitan: "聚水潭关联",
   backup: "备份与恢复",
 };
 let prodForceCat = "";  // 包材 / 人工 / 快递 等独立入口强制筛选的商品分类
@@ -299,7 +300,7 @@ function goPage(name) {
     products: renderProducts, report: loadReport, import: loadImportPage, jushuitan: loadMappingPage,
     backup: loadBackupPage, fresh: loadFresh, packrules: loadPackRules, pdata: loadPdataPage,
     deduction: loadDeductionPage, express: loadExpressPage, settings: loadSettingsPage,
-    otherexp: loadOtherExpensePage,
+    otherexp: loadOtherExpensePage, payables: loadPayablesPage,
   };
   (loaders[name] || (() => {}))();
 }
@@ -709,6 +710,36 @@ function openModal(html) {
 function closeModal() { $("modalMask").classList.remove("show"); $("modalBox").classList.remove("wide"); const r = _aiDoneResolve; _aiDoneResolve = null; if (r) r(); }
 $("modalMask").addEventListener("click", (e) => { if (e.target.id === "modalMask") closeModal(); });
 
+/* ---------- 付款状态（已付款 / 待付款，默认已付款）---------- */
+/** 一组单选：用于弹窗表单（入库/入仓/出库/其他开支/手动记账统一用它） */
+function payRadios(name, current, hint) {
+  const cur = current === "unpaid" ? "unpaid" : "paid";
+  return `<div class="pay-radios">` + [["paid", "已付款"], ["unpaid", "待付款"]].map(([v, label]) =>
+    `<label class="pay-radio${cur === v ? " on" : ""}"><input type="radio" name="${name}" value="${v}"${cur === v ? " checked" : ""} onchange="payRadioSync(this)" /> ${label}</label>`
+  ).join("") + `</div>` + (hint ? `<div class="field-hint">${hint}</div>` : "");
+}
+function payRadioSync(el) {
+  const box = el.closest(".pay-radios");
+  if (box) box.querySelectorAll(".pay-radio").forEach((l) => l.classList.toggle("on", l.querySelector("input").checked));
+}
+/** 读当前选中的付款状态（默认已付款） */
+function payOf(name) {
+  const el = document.querySelector(`input[name="${name}"]:checked`);
+  return el ? el.value : "paid";
+}
+/** 回填付款状态（编辑时） */
+function setPay(name, value) {
+  const v = value === "unpaid" ? "unpaid" : "paid";
+  document.querySelectorAll(`input[name="${name}"]`).forEach((b) => {
+    b.checked = b.value === v;
+    if (b.checked) payRadioSync(b);
+  });
+}
+/** 待付款标记（列表里提示该笔还没结清） */
+function payTag(status) {
+  return (status || "paid") === "unpaid" ? '<span class="pay-tag">待付款</span>' : "";
+}
+
 /* =============== 库存 =============== */
 let STOCK_OVERVIEW = [];
 async function loadStock() {
@@ -927,6 +958,7 @@ function viewProductMv(pid) {
 
 /* =============== 工作台 =============== */
 async function loadDashboard() {
+  refreshPayBadge();   // 侧边栏「待付款账单」角标
   try {
     const d = await api("/api/dashboard");
     const now = new Date();
@@ -1965,6 +1997,10 @@ function wInFormModal(rec) {
       <div class="field"><label>运费合计</label><input id="wiFreightTotal" readonly /></div>
       <div class="field"><label>毛利</label><input id="wiProfit" readonly /></div>
       <div class="field" style="grid-column:1/-1;"><label>备注</label><input id="wiRemark" value="${esc(rec.remark || "")}" /></div>
+      <div class="field" style="grid-column:1/-1;">
+        <label>付款状态</label>
+        ${payRadios("winPay", rec.pay_status, "待付款：先进「待付款账单」，点「已支付」后纳入财务报表")}
+      </div>
     </div>
     <p class="hint" id="wiCostHint" style="margin-top:8px;"></p>
     <div class="modal-foot">
@@ -2039,6 +2075,7 @@ async function wInSave(id) {
     bag_weight: parseFloat($("wiBagWeight").value) || 0,
     date: $("wiDate").value || today(),
     remark: $("wiRemark").value.trim(),
+    pay_status: payOf("winPay"),
   };
   try {
     if (id) await api("/api/warehouse-in/" + id, "PUT", body);
@@ -3047,14 +3084,17 @@ async function submitInbound() {
   if (!unit || !qty || qty <= 0) { toast("请填写有效的数量与单位"); return; }
   if (isNaN(price)) { toast("请填写单价"); return; }
   try {
+    const payStatus = payOf("inPay");
     await api("/api/inbounds", "POST", {
       product_id: pid, unit, quantity: qty, unit_price: price,
       supplier: $("inSupplier").value, operator: $("inOperator").value,
       date: $("inDate").value, remark: $("inRemark").value,
+      pay_status: payStatus,
     });
-    toast(`已入库 ${fmtNum(qty)}${unit} ${p.name}`);
+    toast(`已入库 ${fmtNum(qty)}${unit} ${p.name}${payStatus === "unpaid" ? "（待付款，已进待付款账单）" : ""}`);
     $("inQty").value = ""; $("inPrice").value = ""; $("inAmount").value = ""; $("inRemark").value = "";
     renderRemarkAttachments("inRemark");
+    setPay("inPay", "paid");   // 回到默认「已付款」
     loadInbounds(); loadStock();
   } catch (e) { toast("入库失败：" + e.message); }
 }
@@ -3081,7 +3121,7 @@ async function loadInbounds() {
     <th></th></tr></thead><tbody>` +
     rows.map((r) => `<tr>
       <td class="cb-col"><input type="checkbox" value="${r.id}" ${inSel.has(r.id) ? "checked" : ""} onchange="toggleSel('in',${r.id},this.checked)" /></td>
-      <td class="mono">${r.code}</td>
+      <td class="mono">${r.code}${payTag(r.pay_status)}</td>
       <td><b>${esc(r.product_name)}</b></td>
       <td>${fmtNum(r.quantity)} ${r.unit}</td>
       <td class="muted">= ${fmtNum(r.quantity_base)} 基础单位</td>
@@ -3312,17 +3352,20 @@ async function submitOutbound() {
   const packLines = collectPackLines();
   const fee = parseFloat($("outFee").value) || 0;
   try {
+    const payStatus = payOf("outPay");
     const r = await api("/api/outbounds", "POST", {
       customer: $("outCustomer").value, operator: $("outOperator").value,
       date: $("outDate").value, remark: $("outRemark").value,
       lines, pack_lines: packLines, pack_fee_total: fee,
+      pay_status: payStatus,
     });
     const warns = (r.warnings || []).length ? "\n⚠ " + r.warnings.join("；") : "";
-    toast("出库成功" + warns, 3800);
+    toast("出库成功" + (payStatus === "unpaid" ? "（待付款，已进待付款账单）" : "") + warns, 3800);
     $("outSaleBody").innerHTML = ""; outSaleRowId = 0; addSaleRow();
     clearPreview();
     $("outCustomer").value = ""; $("outRemark").value = "";
     renderRemarkAttachments("outRemark");
+    setPay("outPay", "paid");
     loadOutbounds(); loadStock();
   } catch (e) { toast("出库失败：" + e.message); }
 }
@@ -3383,7 +3426,7 @@ function renderOutRow(o) {
   const checked = outSel.has(o.id) ? "checked" : "";
   return `<tr>
       <td class="cb-col"><input type="checkbox" value="${o.id}" ${checked} onchange="toggleSel('out',${o.id},this.checked)" /></td>
-      <td class="mono">${o.code}</td>
+      <td class="mono">${o.code}${payTag(o.pay_status)}</td>
       <td>${esc(o.customer) || "—"}</td>
       <td><button class="detail-toggle" onclick="toggleOutDetail(${o.id})">▸ 查看明细</button></td>
       <td class="num mono">${fmtMoney(o.total_amount)}</td>
@@ -4005,6 +4048,15 @@ function renderExpenseTables(rep) {
         + " · 点日期或金额可展开该日/该月的构成明细"
       : "本期无支出";
     if (days.length > MAX_DAYS) hint.textContent += ` · 按日仅列最近 ${MAX_DAYS} 天`;
+    // 待付款不在报表里：明确提示，避免"钱去哪了"
+    const pend = rep.pending || {};
+    const pAmt = pend.payables_amount || 0;
+    const rAmt = pend.receivables_amount || 0;
+    if (pAmt || rAmt) {
+      hint.textContent += ` · 另有 ${pend.payables_count || 0} 笔待付款 ${fmtMoney(pAmt)}`
+        + (rAmt ? ` / ${pend.receivables_count || 0} 笔待收款 ${fmtMoney(rAmt)}` : "")
+        + " 未计入（到「待付款账单」点「已支付」后按原日期计入）";
+    }
   }
 
   // 自诊断：接口没返回逐日/逐月明细，或行内缺少采购字段 → 后端还是旧版
@@ -4239,6 +4291,10 @@ function openFinanceModal() {
       <div class="field"><label>金额 *</label><input id="fAmount" type="number" step="any" /></div>
       <div class="field"><label>日期</label><input id="fDate" type="date" value="${today()}" /></div>
       <div class="field"><label>操作员</label><input id="fOperator" value="${esc(operatorName())}" readonly title="默认当前登录账号，不可修改" /></div>
+      <div class="field">
+        <label>付款状态</label>
+        ${payRadios("finPay", "paid", "待付款：先进「待付款账单」，点「已支付」后才计入财务报表")}
+      </div>
     </div>
     <div class="field" style="margin-top:10px;"><label>备注</label><input id="fRemark" /></div>
     <div class="modal-foot">
@@ -4248,12 +4304,14 @@ function openFinanceModal() {
 }
 async function submitFinance() {
   try {
+    const payStatus = payOf("finPay");
     await api("/api/finance", "POST", {
       type: $("fType").value, category: $("fCategory").value,
       amount: +$("fAmount").value, date: $("fDate").value,
       operator: $("fOperator").value, remark: $("fRemark").value,
+      pay_status: payStatus,
     });
-    closeModal(); toast("记账成功"); loadReport();
+    closeModal(); toast(payStatus === "unpaid" ? "已记入待付款账单" : "记账成功"); loadReport();
   } catch (e) { toast("失败：" + e.message); }
 }
 async function deleteFinance(id) {
@@ -4399,8 +4457,8 @@ function renderOtherExpenseList() {
     <th>日期</th><th>费用类型</th><th class="num">金额</th><th>操作员</th><th>备注</th><th style="width:120px;"></th></tr></thead><tbody>` +
     (rows.length
       ? rows.map((r) => `<tr>
-        <td class="mono">${r.date}</td>
-        <td><span class="badge expense">${esc(r.category)}</span></td>
+        <td class="mono">${esc(r.date)}</td>
+        <td><span class="badge expense">${esc(r.category)}</span>${payTag(r.pay_status)}</td>
         <td class="num mono" style="color:var(--red)">${fmtMoney(r.amount)}</td>
         <td>${esc(r.operator) || "—"}</td>
         <td class="muted">${esc(r.remark)}</td>
@@ -4424,6 +4482,7 @@ function oeResetForm() {
   $("oeAmount").value = "";
   $("oeRemark").value = "";
   $("oeDate").value = today();
+  setPay("oePay", "paid");
   $("oeSaveBtn").textContent = "✓ 保存开支";
   oeAlertMsg("");
 }
@@ -4436,6 +4495,7 @@ function oeEdit(id) {
   $("oeAmount").value = r.amount;
   $("oeDate").value = r.date;
   $("oeRemark").value = r.remark || "";
+  setPay("oePay", r.pay_status);
   $("oeSaveBtn").textContent = "✓ 保存修改";
   oeAlertMsg(`正在修改 ${r.date}「${r.category}」${fmtMoney(r.amount)}（保存后覆盖原记录）`);
   $("oeCategory").focus();
@@ -4448,7 +4508,8 @@ async function oeSubmit() {
   if (!category) { oeAlertMsg("请填写费用类型（如 网线费 / 安装费 / 机器费 / 样品费）"); return; }
   if (!(amount > 0)) { oeAlertMsg("金额必须大于 0"); return; }
   if (!date) { oeAlertMsg("请选择日期"); return; }
-  const body = { category, amount, date, remark: ($("oeRemark").value || "").trim() };
+  const payStatus = payOf("oePay");
+  const body = { category, amount, date, remark: ($("oeRemark").value || "").trim(), pay_status: payStatus };
   const editing = !!OE_EDIT_ID;
   try {
     if (editing) await api("/api/other-expenses/" + OE_EDIT_ID, "PUT", body);
@@ -4456,7 +4517,8 @@ async function oeSubmit() {
     // 若该日期不在当前统计区间内，自动把区间扩到能看见它（避免"保存了却看不到"）
     if ($("oeDateFrom").value && date < $("oeDateFrom").value) $("oeDateFrom").value = date;
     if ($("oeDateTo").value && date > $("oeDateTo").value) $("oeDateTo").value = date;
-    toast(editing ? "已保存修改" : `已登记 ${category} ${fmtMoney(amount)}`);
+    const tail = payStatus === "unpaid" ? "（待付款，已进待付款账单）" : "";
+    toast((editing ? "已保存修改" : `已登记 ${category} ${fmtMoney(amount)}`) + tail);
     oeResetForm();
     await loadOtherExpensePage();
   } catch (e) { oeAlertMsg("保存失败：" + e.message); }
@@ -4471,6 +4533,123 @@ async function oeDelete(id) {
     toast("已删除");
     await loadOtherExpensePage();
   } catch (e) { toast("删除失败：" + e.message); }
+}
+
+/* =============== 待付款账单（各处勾了「待付款」的单据汇总） =============== */
+let PAY_ROWS = [];       // 当前列表（待结清 ± 最近已结清）
+let PAY_VIEW = "unpaid"; // unpaid 只看待结清 / all 含最近已结清
+const PAY_SRC_BADGE = { "入库": "in", "入仓": "income", "出库": "out", "其他开支": "expense", "手动记账": "adjust" };
+
+async function loadPayablesPage() {
+  try {
+    const d = await api(`/api/payables?include_paid=${PAY_VIEW === "all" ? 1 : 0}`);
+    PAY_ROWS = d.items || [];
+    renderPayStats(d.total || {});
+    renderPayables();
+    renderPayBadge(d.total || {});
+    payAlertMsg("");
+  } catch (e) {
+    payAlertMsg("加载待付款账单失败：" + e.message);
+    $("payTable").innerHTML = `<tbody><tr><td class="empty">加载失败：${esc(e.message)}</td></tr></tbody>`;
+  }
+}
+
+function paySwitchView(btn) {
+  $("paySeg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
+  PAY_VIEW = btn.dataset.view === "all" ? "all" : "unpaid";
+  loadPayablesPage();
+}
+
+function payAlertMsg(msg) {
+  const el = $("payAlert");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.style.display = msg ? "block" : "none";
+}
+
+function renderPayStats(t) {
+  const box = $("payStats");
+  if (!box) return;
+  const payable = t.payables_amount || 0;
+  const recv = t.receivables_amount || 0;
+  box.innerHTML = `
+    <div class="stat red"><div class="label">待付款（应付）</div><div class="value">${fmtMoney(payable)}</div><div class="sub">要付出去的钱</div></div>
+    <div class="stat"><div class="label">待收款（应收）</div><div class="value">${fmtMoney(recv)}</div><div class="sub">要收进来的钱</div></div>
+    <div class="stat amber"><div class="label">待结清笔数</div><div class="value">${t.unpaid_count || 0}</div><div class="sub">合计 ${fmtMoney(payable + recv)}</div></div>
+    <div class="stat"><div class="label">最近已结清</div><div class="value">${t.paid_count || 0}</div><div class="sub">最近 30 天内（可撤销）</div></div>`;
+}
+
+function renderPayables() {
+  const t = $("payTable");
+  if (!t) return;
+  const kw = ($("paySearch") ? $("paySearch").value : "").trim().toLowerCase();
+  let rows = PAY_ROWS;
+  if (kw) {
+    rows = rows.filter((r) =>
+      [r.date, r.source, r.title, r.sub, r.code, r.remark, r.operator].join(" ").toLowerCase().includes(kw));
+  }
+  t.innerHTML = `<thead><tr>
+      <th style="width:102px;">日期</th><th style="width:96px;">来源</th><th>具体事物 / 款项</th>
+      <th class="num" style="width:150px;">金额</th><th style="width:88px;">操作员</th><th style="width:180px;"></th>
+    </tr></thead><tbody>` +
+    (rows.length
+      ? rows.map((r) => {
+        const paid = r.pay_status !== "unpaid";
+        const color = r.direction === "in" ? "var(--green, #16a34a)" : "var(--danger, #dc2626)";
+        const money = `${r.direction === "in" ? "应收" : "应付"} ${fmtMoney(r.amount)}`;
+        return `<tr${paid ? ' style="opacity:.55;"' : ""}>
+          <td class="mono">${esc(r.date)}</td>
+          <td><span class="badge ${PAY_SRC_BADGE[r.source] || "adjust"}">${esc(r.source)}</span></td>
+          <td><b>${esc(r.title)}</b>${r.code ? ` <span class="muted">${esc(r.code)}</span>` : ""}
+            <div class="muted" style="font-size:12px;">${esc(r.sub)}${r.remark ? " · " + esc(r.remark) : ""}</div></td>
+          <td class="num mono"><b style="color:${color};">${money}</b></td>
+          <td>${esc(r.operator) || "—"}</td>
+          <td class="num">${paid
+            ? `<span class="muted">已结清 ${esc(r.paid_at)}</span>
+               <button class="btn sm secondary" onclick="payBill('${r.kind}',${r.id},false)">撤销</button>`
+            : `<span class="pay-actions">
+                 <button class="btn sm secondary" onclick="goPage('${r.page}')">查看</button>
+                 <button class="btn sm green" onclick="payBill('${r.kind}',${r.id},true)">已支付</button>
+               </span>`}</td>
+        </tr>`;
+      }).join("")
+      : `<tr><td colspan="6" class="empty">${PAY_VIEW === "all" ? "没有账单" : "没有待结清的账单"}</td></tr>`) +
+    `</tbody>` +
+    (rows.length
+      ? `<tfoot><tr>
+          <td><b>列出合计</b></td>
+          <td class="muted" colspan="2">${rows.length} 笔${PAY_VIEW === "all" ? "（含已结清）" : ""}</td>
+          <td class="num mono"><b>应付 ${fmtMoney(rows.filter((r) => r.direction !== "in").reduce((a, r) => a + r.amount, 0))}
+            ／ 应收 ${fmtMoney(rows.filter((r) => r.direction === "in").reduce((a, r) => a + r.amount, 0))}</b></td>
+          <td colspan="2"></td></tr></tfoot>`
+      : "");
+  const sumEl = $("paySum");
+  if (sumEl) sumEl.textContent = `共 ${rows.length} 笔`;
+}
+
+/** 标记已支付/撤销：支付后按原日期纳入财务报表，撤销则移出 */
+async function payBill(kind, id, paid) {
+  const r = PAY_ROWS.find((x) => x.kind === kind && x.id === id);
+  const label = r ? `${r.source}「${r.title}」${fmtMoney(r.amount)}` : "";
+  if (paid && !confirm(`确认已支付？\n${label}\n确认后这笔将按原日期计入财务报表。`)) return;
+  if (!paid && !confirm(`确认撤销？\n${label}\n撤销后它会移出财务报表，回到待付款账单。`)) return;
+  try {
+    await api("/api/payables/pay", "POST", { kind, id, paid });
+    toast(paid ? "已标记已支付，已按原日期计入财务报表" : "已撤销，已移出财务报表");
+    await loadPayablesPage();
+  } catch (e) { toast("操作失败：" + e.message); }
+}
+
+/** 侧边栏角标：待结清笔数 */
+function renderPayBadge(t) {
+  const el = $("payNavBadge");
+  if (!el) return;
+  const n = (t && t.unpaid_count) || 0;
+  el.textContent = n ? String(n) : "";
+  el.style.display = n ? "" : "none";
+}
+async function refreshPayBadge() {
+  try { const d = await api("/api/payables"); renderPayBadge(d.total || {}); } catch (e) { /* 忽略：不影响主流程 */ }
 }
 
 /* =============== 库存流水 =============== */

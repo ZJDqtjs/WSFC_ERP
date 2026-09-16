@@ -1532,6 +1532,56 @@ tr.draft-off {
   opacity: 0.7;
 }
 
+/* 付款状态（已付款 / 待付款）：录入表单里的一组单选，默认已付款 */
+.pay-radios {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pay-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  user-select: none;
+  background: #fff;
+}
+
+.pay-radio.on {
+  border-color: var(--primary, #2563eb);
+  background: var(--primary-50, #eff6ff);
+  color: var(--primary, #2563eb);
+  font-weight: 600;
+}
+
+.pay-radio input {
+  margin: 0;
+}
+
+/* 待付款标记（列表里提示该笔还没结清） */
+.pay-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: #fff7ed;
+  color: #f97316;
+  border: 1px solid #fed7aa;
+  margin-left: 6px;
+}
+
+/* 待付款账单：金额左、按钮右 */
+.pay-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
 /* 销售成本构成：堆叠占比条 + 图例圆点 */
 .cost-stack {
   display: flex;

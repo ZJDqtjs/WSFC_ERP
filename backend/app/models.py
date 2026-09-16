@@ -84,6 +84,9 @@ class Inbound(Base):
     operator: Mapped[str] = mapped_column(String(32), default="")
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
     remark: Mapped[str] = mapped_column(String(255), default="")
+    # 付款状态：paid 已付款（默认，直接进报表）/ unpaid 待付款（先进「待付款账单」，点「已支付」后才进报表）
+    pay_status: Mapped[str] = mapped_column(String(8), default="paid")
+    paid_at: Mapped[str] = mapped_column(String(10), default="")  # 标记已支付那天（YYYY-MM-DD）
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     product: Mapped[Product] = relationship()
@@ -106,6 +109,9 @@ class Outbound(Base):
     total_amount: Mapped[float] = mapped_column(Float, default=0.0)  # 销售收入
     total_cogs: Mapped[float] = mapped_column(Float, default=0.0)  # 商品成本+包装材料成本
     total_fee: Mapped[float] = mapped_column(Float, default=0.0)  # 人工/打包等固定费用
+    # 付款状态：paid 已付款/已回款（默认，整单进报表）/ unpaid 待付款（未回款，整单先进待付款账单，不进报表）
+    pay_status: Mapped[str] = mapped_column(String(8), default="paid")
+    paid_at: Mapped[str] = mapped_column(String(10), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     lines: Mapped[list["OutboundLine"]] = relationship(
@@ -173,6 +179,9 @@ class FinanceRecord(Base):
     remark: Mapped[str] = mapped_column(String(255), default="")
     ref_type: Mapped[str] = mapped_column(String(16), default="")
     ref_id: Mapped[int] = mapped_column(Integer, nullable=True)
+    # 付款状态：由来源单据（入库/出库/其他开支）带过来，或有手动记账时自己设
+    pay_status: Mapped[str] = mapped_column(String(8), default="paid")
+    paid_at: Mapped[str] = mapped_column(String(10), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     product: Mapped[Product | None] = relationship()
@@ -193,6 +202,9 @@ class OtherExpense(Base):
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
     remark: Mapped[str] = mapped_column(String(255), default="")
     operator: Mapped[str] = mapped_column(String(32), default="")
+    # 付款状态：paid 已付款（默认，直接进报表）/ unpaid 待付款（先进「待付款账单」）
+    pay_status: Mapped[str] = mapped_column(String(8), default="paid")
+    paid_at: Mapped[str] = mapped_column(String(10), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
@@ -337,6 +349,9 @@ class WarehouseIn(Base):
     operator: Mapped[str] = mapped_column(String(32), default="")
     remark: Mapped[str] = mapped_column(String(255), default="")
     import_group: Mapped[str] = mapped_column(String(32), default="")  # 导入批次号，空=手动
+    # 付款状态：paid 已付款（默认）/ unpaid 待付款（先进「待付款账单」）
+    pay_status: Mapped[str] = mapped_column(String(8), default="paid")
+    paid_at: Mapped[str] = mapped_column(String(10), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     product: Mapped[WarehouseProduct | None] = relationship()

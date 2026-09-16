@@ -9,6 +9,7 @@ import Products from './views/products.vue'
 import PackRules from './views/packrules.vue'
 import Report from './views/report.vue'
 import OtherExp from './views/otherexp.vue'
+import Payables from './views/payables.vue'
 import Deduction from './views/deduction.vue'
 import Express from './views/express.vue'
 import Settings from './views/settings.vue'
@@ -32,6 +33,7 @@ const routes = [
   { path: '/packrules', component: PackRules, meta: { title: '一单多货' } },
   { path: '/report', component: Report, meta: { title: '财务报表' } },
   { path: '/otherexp', component: OtherExp, meta: { title: '其他开支' } },
+  { path: '/payables', component: Payables, meta: { title: '待付款账单' } },
   { path: '/deduction', component: Deduction, meta: { title: '扣点设置' } },
   { path: '/express', component: Express, meta: { title: '快递费规则' } },
   { path: '/settings', component: Settings, meta: { title: '设置' } },

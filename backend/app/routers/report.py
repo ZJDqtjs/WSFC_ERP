@@ -17,6 +17,7 @@ class FinanceIn(BaseModel):
     date: str
     operator: str = ""
     remark: str = ""
+    pay_status: str = "paid"  # paid 已付款（默认）/ unpaid 待付款（先进「待付款账单」）
 
 
 def _date_filter(q, date_from, date_to):
@@ -25,6 +26,38 @@ def _date_filter(q, date_from, date_to):
     if date_to:
         q = q.where(FinanceRecord.date <= date_to)
     return q
+
+
+# ---------------- 付款状态口径 ----------------
+# 规则：单据/流水为「待付款」时**不进财务报表**，先出现在「待付款账单」，点「已支付」后才计入。
+# 默认（含历史数据）一律视为「已付款」，因此口径与改造前完全一致，不会凭空改动历史报表。
+PAID = "paid"
+
+
+def _is_paid(row) -> bool:
+    return (getattr(row, "pay_status", PAID) or PAID) != "unpaid"
+
+
+def _split_paid(rows: list) -> tuple[list, list]:
+    """按付款状态拆成 (已付款, 待付款)。"""
+    paid = [r for r in rows if _is_paid(r)]
+    unpaid = [r for r in rows if not _is_paid(r)]
+    return paid, unpaid
+
+
+def _pending_stats(inbounds: list, outbounds: list, others: list, finances: list) -> dict:
+    """未计入本报表的待付款/待收款汇总（按来源单据算，避免自动流水重复计数）。"""
+    payables = [i.total_amount or 0.0 for i in inbounds]                    # 入库（采购）
+    payables += [e.amount or 0.0 for e in others]                           # 其他开支
+    payables += [f.amount or 0.0 for f in finances if f.type == "expense" and f.ref_type == "manual"]
+    receivables = [o.total_amount or 0.0 for o in outbounds]                 # 出库（销售）
+    receivables += [f.amount or 0.0 for f in finances if f.type == "income" and f.ref_type == "manual"]
+    return {
+        "payables_count": len(payables),
+        "payables_amount": round(sum(payables), 2),
+        "receivables_count": len(receivables),
+        "receivables_amount": round(sum(receivables), 2),
+    }
 
 
 # 关联结算行（line_type='pack'）的费用归类：出库时自动结算的包材/人工/快递
@@ -75,19 +108,23 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
 
     def range_summary(f, t):
         # 需遍历 o.lines 统计包材/人工/快递，务必 selectinload 一次预载，避免每单一条懒加载 SELECT（N+1）
-        outbounds = list(
-            db.execute(
+        # 只统计「已付款」单据，与财务报表口径保持一致（待付款的先到「待付款账单」）
+        outbounds = [
+            o for o in db.execute(
                 select(Outbound)
                 .options(selectinload(Outbound.lines).selectinload(OutboundLine.product))
                 .where(Outbound.date >= f, Outbound.date <= t)
             ).scalars()
-        )
-        finances = list(
-            db.execute(select(FinanceRecord).where(FinanceRecord.date >= f, FinanceRecord.date <= t)).scalars()
-        )
-        others = list(
-            db.execute(select(OtherExpense).where(OtherExpense.date >= f, OtherExpense.date <= t)).scalars()
-        )
+            if _is_paid(o)
+        ]
+        finances = [
+            x for x in db.execute(select(FinanceRecord).where(FinanceRecord.date >= f, FinanceRecord.date <= t)).scalars()
+            if _is_paid(x)
+        ]
+        others = [
+            x for x in db.execute(select(OtherExpense).where(OtherExpense.date >= f, OtherExpense.date <= t)).scalars()
+            if _is_paid(x)
+        ]
         revenue = sum(o.total_amount for o in outbounds)
         cogs = sum(o.total_cogs for o in outbounds)
         fee = sum(x.amount for x in finances if x.type == "expense" and x.category != "采购支出")
@@ -198,11 +235,16 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
         return q
 
     # 后续遍历 o.lines / l.product，selectinload 一次预载避免 N+1（by_product 与包材拆分两处复用）
-    outbounds = list(db.execute(scope(Outbound).options(selectinload(Outbound.lines).selectinload(OutboundLine.product))).scalars())
+    # 「待付款」的单据不进报表：先拆出来，单独汇总给报表页提示（在「待付款账单」点「已支付」后转入报表）
+    outbounds, unpaid_outbounds = _split_paid(
+        list(db.execute(scope(Outbound).options(selectinload(Outbound.lines).selectinload(OutboundLine.product))).scalars())
+    )
     # 采购明细要显示商品名，预载 product 避免逐条懒加载
-    inbounds = list(db.execute(scope(Inbound).options(selectinload(Inbound.product))).scalars())
-    finances = list(db.execute(scope(FinanceRecord)).scalars())
-    others = list(db.execute(scope(OtherExpense)).scalars())
+    inbounds, unpaid_inbounds = _split_paid(
+        list(db.execute(scope(Inbound).options(selectinload(Inbound.product))).scalars())
+    )
+    finances, unpaid_finances = _split_paid(list(db.execute(scope(FinanceRecord)).scalars()))
+    others, unpaid_others = _split_paid(list(db.execute(scope(OtherExpense)).scalars()))
 
     revenue = sum(o.total_amount for o in outbounds)
     cogs = sum(o.total_cogs for o in outbounds)
@@ -407,6 +449,8 @@ def summary(date_from: str = "", date_to: str = "", db: Session = Depends(get_db
     return {
         "date_from": date_from,
         "date_to": date_to,
+        # 以下金额一律只含「已付款」单据（待付款的在 pending 里，点「已支付」后自动转入）
+        "pending": _pending_stats(unpaid_inbounds, unpaid_outbounds, unpaid_others, unpaid_finances),
         "revenue": round(revenue, 2),
         "cogs": round(cogs, 2),
         "goods_cogs": goods_cogs,
@@ -458,6 +502,8 @@ def list_finance(date_from: str = "", date_to: str = "", db: Session = Depends(g
             "remark": f.remark,
             "ref_type": f.ref_type,
             "ref_id": f.ref_id,
+            "pay_status": getattr(f, "pay_status", PAID) or PAID,
+            "paid_at": getattr(f, "paid_at", "") or "",
         }
         for f in db.execute(q).scalars()
     ]
@@ -469,6 +515,7 @@ def create_finance(data: FinanceIn, db: Session = Depends(get_db), user: User = 
         raise HTTPException(400, "类型必须为 income 或 expense")
     if data.amount <= 0:
         raise HTTPException(400, "金额必须大于 0")
+    pay = "unpaid" if (data.pay_status or "").strip() == "unpaid" else "paid"
     f = FinanceRecord(
         type=data.type,
         category=data.category.strip() or ("销售收入" if data.type == "income" else "其他支出"),
@@ -477,6 +524,8 @@ def create_finance(data: FinanceIn, db: Session = Depends(get_db), user: User = 
         operator=user.name,  # 操作员固定为当前登录账号（不接受前端指定）
         remark=data.remark.strip(),
         ref_type="manual",
+        pay_status=pay,
+        paid_at=data.date if pay == "paid" else "",
     )
     db.add(f)
     db.commit()

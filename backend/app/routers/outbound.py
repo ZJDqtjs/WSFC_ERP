@@ -37,6 +37,7 @@ class OutboundIn(BaseModel):
     lines: list[SaleLine]
     pack_lines: list[PackLine] = Field(default=[])
     pack_fee_total: float | None = None
+    pay_status: str = "paid"  # paid 已付款/已回款（默认）/ unpaid 待付款（先进「待付款账单」）
 
 
 class BatchIds(BaseModel):
@@ -66,6 +67,8 @@ def _to_dict(o: Outbound) -> dict:
         "total_amount": o.total_amount,
         "total_cogs": o.total_cogs,
         "total_fee": o.total_fee,
+        "pay_status": getattr(o, "pay_status", "paid") or "paid",
+        "paid_at": getattr(o, "paid_at", "") or "",
         "gross_profit": round(o.total_amount - o.total_cogs, 2),
         "net_profit": round(o.total_amount - o.total_cogs - o.total_fee, 2),
         "lines": [

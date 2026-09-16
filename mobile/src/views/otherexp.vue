@@ -98,6 +98,7 @@
         <div v-for="r in filteredRows" :key="r.id" class="list-item">
           <div class="row">
             <van-tag type="danger" plain>{{ r.category }}</van-tag>
+            <van-tag v-if="r.pay_status === 'unpaid'" type="warning" plain style="margin-left:6px;">待付款</van-tag>
             <span class="grow"></span>
             <span class="bold up">{{ fmtMoney(r.amount) }}</span>
           </div>
@@ -127,6 +128,7 @@
           </van-field>
           <van-field v-model="form.date" label="日期" type="date" />
           <OperatorField v-model="form.operator" />
+          <PayStatusField v-model="form.pay_status" hint="待付款：登记后先进「待付款账单」，点「已支付」才计入期间费用" />
           <van-field v-model="form.remark" label="备注" placeholder="可留空，如收款方 / 用途" />
         </van-cell-group>
         <template v-if="presets.length">
@@ -158,6 +160,7 @@ import { useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api from '../api'
 import OperatorField from '../components/OperatorField.vue'
+import PayStatusField from '../components/PayStatusField.vue'
 import { fmtMoney, num, todayStr, monthStartStr, daysAgoStr } from '../utils/format'
 import { ensureUserName } from '../utils/user'
 
@@ -190,7 +193,7 @@ const rows = ref([])
 const kw = ref('')
 const show = ref(false)
 const saving = ref(false)
-const form = reactive({ id: null, category: '', amount: '', date: todayStr(), operator: '', remark: '' })
+const form = reactive({ id: null, category: '', amount: '', date: todayStr(), operator: '', remark: '', pay_status: 'paid' })
 
 const presets = computed(() => stats.value.presets || [])
 const topCatText = computed(() => {
@@ -255,10 +258,11 @@ async function openForm(r) {
   if (r) {
     Object.assign(form, {
       id: r.id, category: r.category, amount: r.amount, date: r.date, remark: r.remark || '', operator: '',
+      pay_status: r.pay_status === 'unpaid' ? 'unpaid' : 'paid',
     })
   } else {
     Object.assign(form, {
-      id: null, category: '', amount: '', date: dt.value || todayStr(), remark: '', operator: '',
+      id: null, category: '', amount: '', date: dt.value || todayStr(), remark: '', operator: '', pay_status: 'paid',
     })
   }
   form.operator = await ensureUserName()
@@ -273,13 +277,16 @@ async function save() {
   saving.value = true
   const editing = !!form.id
   try {
-    const body = { category, amount: num(form.amount), date: form.date, remark: (form.remark || '').trim() }
+    const body = {
+      category, amount: num(form.amount), date: form.date, remark: (form.remark || '').trim(),
+      pay_status: form.pay_status,   // paid 已付款（默认）/ unpaid 待付款
+    }
     if (editing) await api(`/api/other-expenses/${form.id}`, 'PUT', body)
     else await api('/api/other-expenses', 'POST', body)
     // 该日期若不在当前统计区间内，自动扩区间，避免"登记了却看不到"
     if (df.value && form.date < df.value) df.value = form.date
     if (dt.value && form.date > dt.value) dt.value = form.date
-    showToast(editing ? '已保存修改' : '已登记')
+    showToast((editing ? '已保存修改' : '已登记') + (form.pay_status === 'unpaid' ? '（待付款，已进待付款账单）' : ''))
     show.value = false
     await load()
   } catch (e) { showToast(e.message || '保存失败') }

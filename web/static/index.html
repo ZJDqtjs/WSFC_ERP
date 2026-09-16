@@ -67,6 +67,7 @@
         <div class="nav-group">经营分析</div>
         <button class="nav-item" data-page="report"><span class="nav-ico"><svg class="ic"><use href="#i-chart"/></svg></span>财务报表</button>
         <button class="nav-item" data-page="otherexp"><span class="nav-ico"><svg class="ic"><use href="#i-wallet"/></svg></span>其他开支</button>
+        <button class="nav-item" data-page="payables"><span class="nav-ico"><svg class="ic"><use href="#i-coins"/></svg></span>待付款账单<span class="badge" id="payNavBadge" style="display:none;margin-left:auto;background:#f97316;color:#fff;"></span></button>
         <div class="nav-group">数据工具</div>
         <button class="nav-item" data-page="fresh"><span class="nav-ico"><svg class="ic"><use href="#i-truck"/></svg></span>鲜货现采</button>
         <button class="nav-item" data-page="deduction"><span class="nav-ico"><svg class="ic"><use href="#i-coins"/></svg></span>扣点</button>
@@ -231,6 +232,14 @@
             <div class="field"><label>供应商</label><input id="inSupplier" placeholder="供应商名称" /></div>
             <div class="field"><label>日期 *</label><input id="inDate" type="date" /></div>
             <div class="field"><label>操作员</label><input id="inOperator" readonly title="默认当前登录账号，不可修改" /></div>
+            <div class="field">
+              <label>付款状态</label>
+              <div class="pay-radios">
+                <label class="pay-radio on"><input type="radio" name="inPay" value="paid" checked onchange="payRadioSync(this)" /> 已付款</label>
+                <label class="pay-radio"><input type="radio" name="inPay" value="unpaid" onchange="payRadioSync(this)" /> 待付款</label>
+              </div>
+              <div class="field-hint">待付款：先进「待付款账单」，点「已支付」后才计入财务报表</div>
+            </div>
           </div>
           <div class="field" style="margin-top:12px;">
             <label>备注</label>
@@ -274,6 +283,14 @@
             <div class="field"><label>日期 *</label><input id="outDate" type="date" /></div>
             <div class="field"><label>客户</label><input id="outCustomer" placeholder="客户名称" /></div>
             <div class="field"><label>操作员</label><input id="outOperator" readonly title="默认当前登录账号，不可修改" /></div>
+            <div class="field">
+              <label>付款状态</label>
+              <div class="pay-radios">
+                <label class="pay-radio on"><input type="radio" name="outPay" value="paid" checked onchange="payRadioSync(this)" /> 已付款</label>
+                <label class="pay-radio"><input type="radio" name="outPay" value="unpaid" onchange="payRadioSync(this)" /> 待付款</label>
+              </div>
+              <div class="field-hint">待付款（未回款）：整单先进「待付款账单」，收款后才计入财务报表</div>
+            </div>
             <div class="field" style="grid-column:1/-1;">
               <label>备注</label>
               <textarea id="outRemark" rows="1" placeholder="可选"></textarea>
@@ -583,6 +600,14 @@
             <div class="field"><label>金额（元）*</label><input id="oeAmount" type="number" min="0" step="any" placeholder="0.00" onkeydown="if(event.key==='Enter')oeSubmit()" /></div>
             <div class="field"><label>日期 *</label><input id="oeDate" type="date" /></div>
             <div class="field"><label>操作员</label><input id="oeOperator" readonly title="默认当前登录账号，不可修改" /></div>
+            <div class="field">
+              <label>付款状态</label>
+              <div class="pay-radios">
+                <label class="pay-radio on"><input type="radio" name="oePay" value="paid" checked onchange="payRadioSync(this)" /> 已付款</label>
+                <label class="pay-radio"><input type="radio" name="oePay" value="unpaid" onchange="payRadioSync(this)" /> 待付款</label>
+              </div>
+              <div class="field-hint">待付款：登记后先进「待付款账单」，点「已支付」才计入期间费用</div>
+            </div>
           </div>
           <div class="field" style="margin-top:12px;">
             <label>备注</label>
@@ -638,6 +663,31 @@
             <span class="muted" id="oeListSum"></span>
           </div>
           <div class="table-wrap"><table id="oeTable"></table></div>
+        </div>
+      </section>
+
+      <!-- 待付款账单：各处勾了「待付款」的单据汇总，点「已支付」后纳入财务报表 -->
+      <section id="page-payables" class="page">
+        <div class="stat-grid" id="payStats"></div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3><svg class="ic"><use href="#i-coins"/></svg> 待付款账单</h3>
+            <span class="hint" id="payHint">入库 / 入仓 / 出库 / 其他开支 / 手动记账 里勾了「待付款」的单据都汇总在这里；点「已支付」后按原日期纳入财务报表</span>
+            <div class="grow"></div>
+            <button class="btn secondary" onclick="loadPayablesPage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+          </div>
+          <div class="toolbar">
+            <div class="seg" id="paySeg" style="margin-bottom:0;">
+              <button class="seg-item active" data-view="unpaid" onclick="paySwitchView(this)">待结清</button>
+              <button class="seg-item" data-view="all" onclick="paySwitchView(this)">含最近已结清</button>
+            </div>
+            <input id="paySearch" placeholder="🔍 筛选 款项 / 单据 / 客户 / 操作员..." oninput="renderPayables()" />
+            <div class="grow"></div>
+            <span class="muted" id="paySum"></span>
+          </div>
+          <div id="payAlert" class="alert warn" style="display:none;"></div>
+          <div class="table-wrap"><table id="payTable"></table></div>
         </div>
       </section>
 

@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from ..auth import get_current_user
 from ..database import get_db
 from ..models import Deduction, Product, User, WarehouseIn, WarehouseProduct
+from ..services import pay_fields
 
 router = APIRouter(prefix="/api/warehouse-in", tags=["warehouse-in"])
 
@@ -196,6 +197,8 @@ def _in_dict(db: Session, r: WarehouseIn) -> dict:
         "cogs": r.cogs, "amount": r.amount, "freight_total": r.freight_total, "profit": r.profit,
         "date": r.date, "operator": r.operator, "remark": r.remark,
         "import_group": r.import_group,
+        "pay_status": getattr(r, "pay_status", "paid") or "paid",
+        "paid_at": getattr(r, "paid_at", "") or "",
     }
 
 
@@ -276,6 +279,7 @@ class InboundIn(BaseModel):
     date: str
     operator: str = ""
     remark: str = ""
+    pay_status: str = "paid"  # paid 已付款（默认）/ unpaid 待付款（先进「待付款账单」）
 
 
 class InboundUpdate(BaseModel):
@@ -293,6 +297,7 @@ class InboundUpdate(BaseModel):
     bag_weight: float = 0.0
     date: str
     remark: str = ""
+    pay_status: str = "paid"
 
 
 def _gen_code(db: Session, date: str) -> str:
@@ -350,6 +355,7 @@ def _create_record(db: Session, payload: dict, operator: str, import_group: str 
         operator=(payload.get("operator") or "").strip() or operator,
         remark=(payload.get("remark") or "").strip(),
         import_group=import_group,
+        **pay_fields(payload, date),
     )
     db.add(rec)
     db.flush()
@@ -421,6 +427,8 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
     rec.freight = float(d.get("freight") or 0)
     rec.date = (d.get("date") or rec.date).strip() or rec.date
     rec.remark = (d.get("remark") or "").strip()
+    rec.pay_status = "unpaid" if (d.get("pay_status") or "").strip() == "unpaid" else "paid"
+    rec.paid_at = "" if rec.pay_status == "unpaid" else (rec.paid_at or rec.date)
     # 成本重算：关联库存商品/每袋净重变化时同步成本口径
     stock_product_id = product.stock_product_id if product else rec.stock_product_id
     sp, _base_cost, _factor, unit_cost = _stock_info(db, stock_product_id)

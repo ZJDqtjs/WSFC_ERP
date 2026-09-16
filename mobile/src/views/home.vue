@@ -90,6 +90,7 @@
           <div class="muted">今日 {{ fmtMoney(todayStats.other_expense) }}</div>
         </div>
         <van-button size="small" plain type="primary" @click="$router.push('/otherexp')">其他开支</van-button>
+        <van-button size="small" plain type="warning" @click="$router.push('/payables')">待付款账单</van-button>
       </div>
     </div>
 

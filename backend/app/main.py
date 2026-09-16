@@ -16,7 +16,7 @@ from .database import (
     set_request_key,
 )
 from .initdb import ensure_schema, init_warehouse
-from .routers import ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, others, outbound, pack_rules, product_data, products, report, uploads, warehouse_in, warehouses
+from .routers import ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, others, outbound, pack_rules, payables, product_data, products, report, uploads, warehouse_in, warehouses
 from .routers.backup import create_backup_file, load_config
 
 # 桌面 Web 前端目录（WSFC_ERP/web/static，前后端分离；SERVE_STATIC=1 时后端顺带托管）
@@ -135,6 +135,7 @@ app.include_router(inbound.router)
 app.include_router(outbound.router)
 app.include_router(inventory.router)
 app.include_router(others.router)
+app.include_router(payables.router)   # 待付款账单（入库/入仓/出库/其他开支/手动记账 汇总）
 app.include_router(pack_rules.router)
 app.include_router(deductions.router)
 app.include_router(express.router)

@@ -32,6 +32,7 @@ class OtherExpenseIn(BaseModel):
     amount: float
     date: str
     remark: str = ""
+    pay_status: str = "paid"  # paid 已付款（默认）/ unpaid 待付款（先进「待付款账单」，支付后才计入报表）
 
 
 def _to_dict(e: OtherExpense) -> dict:
@@ -42,11 +43,13 @@ def _to_dict(e: OtherExpense) -> dict:
         "date": e.date,
         "remark": e.remark or "",
         "operator": e.operator or "",
+        "pay_status": getattr(e, "pay_status", "paid") or "paid",
+        "paid_at": getattr(e, "paid_at", "") or "",
         "created_at": e.created_at.isoformat(timespec="seconds") if e.created_at else "",
     }
 
 
-def _clean(data: OtherExpenseIn) -> tuple[str, float, str, str]:
+def _clean(data: OtherExpenseIn) -> tuple[str, float, str, str, str]:
     category = (data.category or "").strip()
     if not category:
         raise HTTPException(400, "请填写费用类型（如 网线费 / 安装费 / 机器费 / 样品费）")
@@ -61,7 +64,8 @@ def _clean(data: OtherExpenseIn) -> tuple[str, float, str, str]:
     day = (data.date or "").strip()
     if not DATE_RE.match(day):
         raise HTTPException(400, "日期格式应为 YYYY-MM-DD")
-    return category, amount, day, (data.remark or "").strip()
+    pay = "unpaid" if (data.pay_status or "").strip() == "unpaid" else "paid"
+    return category, amount, day, (data.remark or "").strip(), pay
 
 
 @router.get("/other-expenses")
@@ -170,9 +174,15 @@ def other_expense_stats(
 def create_other_expense(
     data: OtherExpenseIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    """登记一笔其他开支（操作员固定为当前登录账号）。"""
-    category, amount, day, remark = _clean(data)
-    e = OtherExpense(category=category, amount=amount, date=day, remark=remark, operator=user.name)
+    """登记一笔其他开支（操作员固定为当前登录账号）。
+
+    待付款的开支先进「待付款账单」，点「已支付」后才计入财务报表的期间费用。
+    """
+    category, amount, day, remark, pay = _clean(data)
+    e = OtherExpense(
+        category=category, amount=amount, date=day, remark=remark, operator=user.name,
+        pay_status=pay, paid_at=day if pay == "paid" else "",
+    )
     db.add(e)
     db.commit()
     db.refresh(e)
@@ -186,8 +196,11 @@ def update_other_expense(
     e = db.get(OtherExpense, eid)
     if not e:
         raise HTTPException(404, "开支记录不存在")
-    category, amount, day, remark = _clean(data)
+    category, amount, day, remark, pay = _clean(data)
     e.category, e.amount, e.date, e.remark = category, amount, day, remark
+    if pay != (e.pay_status or "paid"):
+        e.pay_status = pay
+        e.paid_at = day if pay == "paid" else ""
     db.commit()
     db.refresh(e)
     return {"ok": True, "item": _to_dict(e)}

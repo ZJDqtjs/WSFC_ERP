@@ -24,6 +24,7 @@ class InboundIn(BaseModel):
     operator: str = ""
     date: str
     remark: str = ""
+    pay_status: str = "paid"  # paid 已付款（默认）/ unpaid 待付款（先进「待付款账单」）
 
 
 def _to_dict(r: Inbound) -> dict:
@@ -41,6 +42,8 @@ def _to_dict(r: Inbound) -> dict:
         "operator": r.operator,
         "date": r.date,
         "remark": r.remark,
+        "pay_status": getattr(r, "pay_status", "paid") or "paid",
+        "paid_at": getattr(r, "paid_at", "") or "",
     }
 
 

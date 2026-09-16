@@ -392,6 +392,18 @@ def gen_outbound_code(db: Session, date: str) -> str:
     return f"CK{date}-{count + 1:03d}"
 
 
+def pay_fields(payload: dict, date: str = "") -> dict:
+    """付款状态：paid 已付款（默认）/ unpaid 待付款。
+
+    待付款的单据先进「待付款账单」，点「已支付」后才纳入财务报表；已付款时记下支付日期（默认=单据日期）。
+    """
+    status = "unpaid" if (payload.get("pay_status") or "").strip() == "unpaid" else "paid"
+    paid_at = (payload.get("paid_at") or "").strip()
+    if status == "paid" and not paid_at:
+        paid_at = (date or payload.get("date") or "").strip()
+    return {"pay_status": status, "paid_at": paid_at if status == "paid" else ""}
+
+
 def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     """创建入库单（含库存流水 + 财务记录 + 成本重算）。"""
     product = db.get(Product, payload["product_id"])
@@ -407,6 +419,7 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     amount = round(quantity * unit_price, 2)
     op = (payload.get("operator") or "").strip() or operator
 
+    pay = pay_fields(payload, date)
     rec = Inbound(
         code=gen_inbound_code(db, date),
         product_id=product.id,
@@ -419,6 +432,7 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
         operator=op,
         date=date,
         remark=(payload.get("remark") or "").strip(),
+        **pay,
     )
     db.add(rec)
     db.flush()
@@ -446,6 +460,7 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
             remark=f"采购入库 {rec.code}",
             ref_type="inbound",
             ref_id=rec.id,
+            **pay,   # 挂账状态随入库单：待付款时这笔采购支出也不进报表
         )
     )
     recompute_product(db, product.id)
@@ -636,6 +651,7 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
     order = build_order(db, lines, payload.get("pack_lines"), payload.get("pack_fee_total"))
     op = (payload.get("operator") or "").strip() or operator
     date = payload["date"]
+    pay = pay_fields(payload, date)
     rec = Outbound(
         code=gen_outbound_code(db, date),
         import_group=import_group,
@@ -648,6 +664,7 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
         total_amount=order["total_amount"],
         total_cogs=order["total_cogs"],
         total_fee=order["total_fee"],
+        **pay,
     )
     db.add(rec)
     db.flush()
@@ -703,6 +720,7 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
                     type="income", category="销售收入", product_id=r["product_id"],
                     amount=r["amount"], date=date, operator=op,
                     remark=f"销售 {rec.code}", ref_type="outbound", ref_id=rec.id,
+                    **pay,   # 挂账状态随出库单
                 )
             )
     if order["total_fee"] > 0:
@@ -711,6 +729,7 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
                 type="expense", category="人工打包费", product_id=None,
                 amount=order["total_fee"], date=date, operator=op,
                 remark=f"打包费 {rec.code}", ref_type="outbound", ref_id=rec.id,
+                **pay,   # 挂账状态随出库单
             )
         )
     for pid in affected:
