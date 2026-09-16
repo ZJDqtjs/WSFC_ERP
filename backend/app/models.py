@@ -139,6 +139,8 @@ class OutboundLine(Base):
     cogs: Mapped[float] = mapped_column(Float, default=0.0)  # 该行成本
     gross_sales: Mapped[float] = mapped_column(Float, default=0.0)  # 扣点前销售金额（原始金额，未扣店铺扣点）
     pack_fee: Mapped[float] = mapped_column(Float, default=0.0)  # 该行固定费用(sale 行)
+    # 代发（订单商品未关联库存大类）：不扣任何库存，只记代发数量与代发成本
+    is_dropship: Mapped[bool] = mapped_column(Boolean, default=False)
 
     outbound: Mapped[Outbound] = relationship(back_populates="lines")
     product: Mapped[Product] = relationship()

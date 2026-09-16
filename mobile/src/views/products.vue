@@ -59,7 +59,8 @@
             · {{ p.is_active ? '启用' : '停用' }}
           </div>
           <div v-if="p.product_type === 'order'" class="item-meta">
-            关联库存：{{ p.stock_product_name || '未关联' }} × {{ fmtNum(p.multiplier) }}
+            <template v-if="p.stock_product_id">关联库存：{{ p.stock_product_name || '?' }} × {{ fmtNum(p.multiplier) }}</template>
+            <template v-else><van-tag type="warning" plain>代发</van-tag> 不扣库存，只统计代发数量/成本</template>
           </div>
           <div v-if="(p.pack_items || []).length || p.pack_fee" class="item-meta">
             关联结算：{{ (p.pack_items || []).map((it) => `${it.quantity}${it.unit} ${nameOf(it.product_id)}`).join('、') || '无' }}
@@ -112,12 +113,20 @@
               :model-value="stockLinkName"
               readonly
               label="库存大类"
-              placeholder="点击选择"
+              placeholder="点击选择（不选 = 代发）"
               @click="stockLinkPickShow = true"
             />
             <van-field v-model="form.multiplier" type="number" label="倍数" placeholder="1单订单 = ? 库存单位" />
+            <van-cell title="不关联（代发：不扣库存）" is-link @click="form.stock_product_id = null">
+              <template #value>
+                <van-tag v-if="!form.stock_product_id" type="warning" plain>当前为代发</van-tag>
+              </template>
+            </van-cell>
           </van-cell-group>
-          <div class="muted" style="padding:0 4px 8px;">如 佛手柑大果2个 → 倍数 2：卖 1 单扣 2 个 佛手柑大果。</div>
+          <div class="muted" style="padding:0 4px 8px;">
+            如 佛手柑大果2个 → 倍数 2：卖 1 单扣 2 个 佛手柑大果；
+            不关联库存大类 = <b>代发</b>：本仓不扣库存，只统计代发数量与代发成本（按「参考成本」计）。
+          </div>
         </template>
 
         <div class="divider"></div>
@@ -353,9 +362,12 @@ function onTypeChange(v) {
 async function save() {
   if (!form.name.trim()) { showToast('请填写商品名称'); return }
   const payload = deriveUnitPayload(form.product_type, form.unit)
-  if (form.product_type === 'order' && !form.stock_product_id) {
-    showToast('订单商品请选择关联的库存商品（大类）')
-    return
+  // 订单商品不关联库存大类 = 代发（本仓不扣库存，只统计代发数量与代发成本）；
+  // 代发成本按「参考成本」计，没填会按 0 计，这里提醒但不拦保存。
+  if (form.product_type === 'order' && !form.stock_product_id && !num(form.unit_cost)) {
+    try {
+      await showConfirmDialog({ title: '代发商品', message: '未关联库存大类（= 代发）且「参考成本」为 0，代发成本会按 0 计。仍要保存吗？' })
+    } catch (e) { return }
   }
   if (form.pack_items.some((it) => !it.product_id || !(num(it.quantity) > 0) || !it.unit)) {
     showToast('关联结算清单存在无效行（商品/单位/数量需完整）')

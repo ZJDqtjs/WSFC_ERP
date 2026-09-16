@@ -281,10 +281,14 @@ def summary(
     #      单内只有一条 sale 行时全部归它，与该单口径一致，不会丢账。
     by_product: dict = {}
 
-    def _bucket(pid, name):
+    def _bucket(pid, spec, dropship, name=""):
+        """按「商品 + 规格 + 是否代发」分桶：出库明细里代发与库存商品不混在一起，也按规格区分。"""
         return by_product.setdefault(
-            pid,
+            (pid, spec, dropship),
             {
+                "product_id": pid,
+                "spec": spec,
+                "is_dropship": dropship,
                 "name": name,
                 "qty": 0.0,
                 "amount": 0.0,
@@ -298,7 +302,24 @@ def summary(
 
     for o in outbounds:
         sale_lines = [l for l in o.lines if l.line_type == "sale"]
-        sale_pids = {l.product_id for l in sale_lines}
+        # 先把销售行归到各自桶（商品+规格+代发），并记住每个商品对应的桶，供关联结算就近归属
+        line_buckets: list[tuple] = []
+        bucket_of_pid: dict[int, dict] = {}
+        for l in sale_lines:
+            spec = (l.spec or "").strip()
+            dropship = bool(getattr(l, "is_dropship", False))
+            d = _bucket(l.product_id, spec, dropship, l.product.name if l.product else "")
+            # 名称以销售行自身的商品为准（pack 行只累加金额，不参与命名）
+            if l.product and l.product.name:
+                d["name"] = l.product.name
+            d["qty"] += l.quantity_base or 0.0
+            d["amount"] += l.amount or 0.0
+            d["gross_sales"] += l.gross_sales if l.gross_sales is not None else (l.amount or 0.0)
+            d["goods_cogs"] += l.cogs or 0.0
+            d["cogs"] += l.cogs or 0.0
+            line_buckets.append((l, d))
+            bucket_of_pid.setdefault(l.product_id, d)
+
         # 本单待分摊的关联成本：{费用类别: 金额}
         unowned: dict[str, float] = {}
         for l in o.lines:
@@ -309,30 +330,22 @@ def summary(
             field = "express_cogs" if cat == "快递运费" else "pack_cogs"
             # 仅当归属对象确实是本单的销售商品时才直接归属，避免历史脏数据把费用挂到
             # 不存在的商品上（并确保 _bucket 不会用「未归属」覆盖真实商品名）
-            if l.sale_product_id and l.sale_product_id in sale_pids:
-                _bucket(l.sale_product_id, "")[field] += amount
+            target = bucket_of_pid.get(l.sale_product_id) if l.sale_product_id else None
+            if target is not None:
+                target[field] += amount
             else:
                 unowned[field] = unowned.get(field, 0.0) + amount
 
-        total_sale_amount = sum(l.amount or 0.0 for l in sale_lines)
-        for l in sale_lines:
-            d = _bucket(l.product_id, l.product.name if l.product else "")
-            # 名称以销售行自身的商品为准（pack 行只累加金额，不参与命名）
-            if l.product and l.product.name:
-                d["name"] = l.product.name
-            d["qty"] += l.quantity_base or 0.0
-            d["amount"] += l.amount or 0.0
-            d["gross_sales"] += l.gross_sales if l.gross_sales is not None else (l.amount or 0.0)
-            d["goods_cogs"] += l.cogs or 0.0
-            d["cogs"] += l.cogs or 0.0
-            # 分摊无归属的关联成本（按销售金额占比；金额为 0 时平均分摊）
-            if unowned:
-                share = (l.amount or 0.0) / total_sale_amount if total_sale_amount else 1.0 / max(len(sale_lines), 1)
+        if unowned:
+            total_sale_amount = sum(l.amount or 0.0 for l in sale_lines)
+            for l, d in line_buckets:
+                # 分摊无归属的关联成本（按销售金额占比；金额为 0 时平均分摊）
+                share = (l.amount or 0.0) / total_sale_amount if total_sale_amount else 1.0 / max(len(line_buckets), 1)
                 for field, amt in unowned.items():
                     d[field] += amt * share
 
     product_rows = []
-    for pid, d in sorted(by_product.items(), key=lambda kv: -kv[1]["amount"]):
+    for _key, d in sorted(by_product.items(), key=lambda kv: -kv[1]["amount"]):
         goods = round(d["goods_cogs"], 2)
         pack = round(d["pack_cogs"], 2)
         express = round(d["express_cogs"], 2)
@@ -344,7 +357,10 @@ def summary(
         denom = gross_sales or amount
         product_rows.append(
             {
-                "product_id": pid,
+                "product_id": d["product_id"],
+                # 规格 + 是否代发：前端据此把「代发」单独标出、并按规格区分
+                "spec": d["spec"],
+                "is_dropship": d["is_dropship"],
                 "name": d["name"],
                 "qty": round(d["qty"], 4),
                 "amount": amount,
@@ -499,6 +515,111 @@ def summary(
         "fee_breakdown": {
             **pack_costs,
             **{k: v for k, v in manual_fees.items() if k not in pack_costs},
+        },
+    }
+
+
+@router.get("/report/sales-by-spec")
+def sales_by_spec(
+    date_from: str = "",
+    date_to: str = "",
+    wh: str = "",
+    db: Session = Depends(get_db_wh),
+    user: User = Depends(get_current_user),
+):
+    """出库明细（按天 × 规格）：每天每种规格卖了多少单 / 多少数量 / 多少金额，并单独给出代发数量与代发成本。
+
+    口径与财务不同：这里**不区分是否已收款**（只看实际发出的货），
+    「代发」行（订单商品未关联库存大类，本仓不出货）也一并列出，方便统计代发量。
+    """
+    q = select(Outbound).options(selectinload(Outbound.lines).selectinload(OutboundLine.product))
+    if date_from:
+        q = q.where(Outbound.date >= date_from)
+    if date_to:
+        q = q.where(Outbound.date <= date_to)
+    q = q.order_by(Outbound.date, Outbound.id)
+
+    days: dict[str, dict] = {}
+    specs: dict[str, dict] = {}
+    all_orders: set[int] = set()
+
+    def _bump(bucket: dict, l, o) -> None:
+        bucket["orders"].add(o.id)
+        bucket["qty"] += l.quantity or 0.0
+        bucket["amount"] += l.amount or 0.0
+        u = l.unit or ""
+        bucket["units"][u] = bucket["units"].get(u, 0) + 1
+        if getattr(l, "is_dropship", False):
+            bucket["dropship_qty"] += l.quantity or 0.0
+            bucket["dropship_cogs"] += l.cogs or 0.0
+
+    def _new() -> dict:
+        return {"orders": set(), "qty": 0.0, "amount": 0.0, "units": {}, "dropship_qty": 0.0, "dropship_cogs": 0.0}
+
+    for o in db.execute(q).scalars():
+        day = days.setdefault(o.date, {"date": o.date, "cells": {}, **_new()})
+        day["orders"].add(o.id)
+        all_orders.add(o.id)
+        for l in o.lines:
+            if l.line_type != "sale":
+                continue
+            name = (l.spec or "").strip() or "未标规格"
+            _bump(day["cells"].setdefault(name, _new()), l, o)
+            s = specs.setdefault(name, {"name": name, "days": set(), **_new()})
+            s["days"].add(o.date)
+            _bump(s, l, o)
+    # 日合计按行累加（上面已通过 cells 累加到 day）
+    for day in days.values():
+        day["qty"] = round(sum(c["qty"] for c in day["cells"].values()), 2)
+        day["amount"] = round(sum(c["amount"] for c in day["cells"].values()), 2)
+        day["dropship_qty"] = round(sum(c["dropship_qty"] for c in day["cells"].values()), 2)
+        day["dropship_cogs"] = round(sum(c["dropship_cogs"] for c in day["cells"].values()), 2)
+
+    def _unit(units: dict) -> str:
+        return max(units, key=units.get) if units else ""
+
+    spec_cols = sorted(specs.values(), key=lambda x: (-len(x["orders"]), -x["qty"]))
+    out_rows = []
+    for day in sorted(days.values(), key=lambda x: x["date"], reverse=True):
+        out_rows.append({
+            "date": day["date"],
+            "orders": len(day["orders"]),
+            "qty": day["qty"],
+            "amount": day["amount"],
+            "dropship_qty": day["dropship_qty"],
+            "dropship_cogs": day["dropship_cogs"],
+            "cells": {
+                name: {
+                    "orders": len(c["orders"]), "qty": round(c["qty"], 2), "unit": _unit(c["units"]),
+                    "amount": round(c["amount"], 2),
+                    "dropship_qty": round(c["dropship_qty"], 2), "dropship_cogs": round(c["dropship_cogs"], 2),
+                }
+                for name, c in day["cells"].items()
+            },
+        })
+
+    key = resolve_key(wh)
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "warehouse": {"key": key, "name": current_warehouse_name(key)},
+        "specs": [
+            {
+                "name": s["name"], "orders": len(s["orders"]), "days": len(s["days"]),
+                "qty": round(s["qty"], 2), "unit": _unit(s["units"]), "amount": round(s["amount"], 2),
+                "dropship_qty": round(s["dropship_qty"], 2), "dropship_cogs": round(s["dropship_cogs"], 2),
+            }
+            for s in spec_cols
+        ],
+        "rows": out_rows,
+        "totals": {
+            "orders": len(all_orders),
+            "days": len(days),
+            "spec_count": len(specs),
+            "qty": round(sum(x["qty"] for x in days.values()), 2),
+            "amount": round(sum(x["amount"] for x in days.values()), 2),
+            "dropship_qty": round(sum(x["dropship_qty"] for x in days.values()), 2),
+            "dropship_cogs": round(sum(x["dropship_cogs"] for x in days.values()), 2),
         },
     }
 

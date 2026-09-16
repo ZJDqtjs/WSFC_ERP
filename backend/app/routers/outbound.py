@@ -71,6 +71,8 @@ def _to_dict(o: Outbound) -> dict:
         "paid_at": getattr(o, "paid_at", "") or "",
         "gross_profit": round(o.total_amount - o.total_cogs, 2),
         "net_profit": round(o.total_amount - o.total_cogs - o.total_fee, 2),
+        # 是否含代发行（订单商品未关联库存大类：不扣库存，只记代发数量/成本）
+        "has_dropship": any(bool(getattr(l, "is_dropship", False)) for l in o.lines),
         "lines": [
             {
                 "product_id": l.product_id,
@@ -79,6 +81,7 @@ def _to_dict(o: Outbound) -> dict:
                 "sale_product_id": l.sale_product_id,
                 "sale_product_name": sale_names.get(l.sale_product_id, ""),
                 "spec": l.spec or "",
+                "is_dropship": bool(getattr(l, "is_dropship", False)),
                 "unit": l.unit,
                 "quantity": l.quantity,
                 "quantity_base": l.quantity_base,

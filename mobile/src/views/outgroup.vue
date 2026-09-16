@@ -37,6 +37,12 @@
             </div>
             <div class="item-meta">
               {{ fmtNum(a.qty) }} {{ a.unit }} · 金额 {{ fmtMoney(a.amount) }}
+              <template v-if="a.dropship_qty"> · <van-tag type="warning" plain>代发 {{ fmtNum(a.dropship_qty) }}</van-tag></template>
+            </div>
+            <div v-if="(a.specs || []).length" class="item-meta faint">规格 {{ a.specs.join(' / ') }}</div>
+            <!-- 成本构成：代发行也要列出来（代发成本 ＋ 打包人工/耗材 ＋ 快递费） -->
+            <div v-if="a.is_dropship || a.pack_cogs || a.express_cogs" class="item-meta faint">
+              {{ a.is_dropship ? '代发成本' : '商品成本' }} {{ fmtMoney(a.base_cogs != null ? a.base_cogs : a.cogs) }}<template v-if="a.pack_cogs"> ＋ 打包人工+耗材 {{ fmtMoney(a.pack_cogs) }}</template><template v-if="a.express_cogs"> ＋ 快递费 {{ fmtMoney(a.express_cogs) }}</template>
             </div>
             <div class="item-meta">
               成本 {{ fmtMoney(a.cogs) }} · 毛利
@@ -153,7 +159,7 @@ function outAggBy(list, pool) {
         k = own.key; name = own.name; sub = own.sub; unit = l.unit
       }
       if (!map.has(k)) {
-        map.set(k, { pid: l.product_id, name, sub, unit, orders: new Set(), qty: 0, amount: 0, cogs: 0, gross_sales: 0, boxes: new Set(), hasBox: false })
+        map.set(k, { pid: l.product_id, name, sub, unit, orders: new Set(), qty: 0, amount: 0, cogs: 0, gross_sales: 0, boxes: new Set(), hasBox: false, specs: new Set(), dropship_qty: 0, is_dropship: false })
       }
       const a = map.get(k)
       a.orders.add(o.id)
@@ -161,6 +167,13 @@ function outAggBy(list, pool) {
       a.amount += num(l.amount)
       a.cogs += num(l.cogs)
       a.gross_sales += num(l.gross_sales) || num(l.amount)
+      if (pool === 'sale') {
+        if (l.spec) a.specs.add(l.spec)
+        if (l.is_dropship) {
+          a.is_dropship = true
+          a.dropship_qty += num(l.quantity)   // 代发：不扣库存，只记代发数量
+        }
+      }
       if (!a.sub && sub) a.sub = sub
       if (pool === 'laborpack' && l.line_type === 'pack' && !isLabor) {
         a.hasBox = true
@@ -175,7 +188,7 @@ function outAggBy(list, pool) {
       const bx = boxes.join(' + ')
       subSub = a.sub ? `${a.sub} · 纸箱:${bx}` : `纸箱:${bx}`
     }
-    return { ...a, boxes, order_count: a.orders.size, subSub }
+    return { ...a, boxes, specs: [...(a.specs || [])], order_count: a.orders.size, subSub }
   })
 }
 

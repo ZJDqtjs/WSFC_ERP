@@ -41,27 +41,31 @@ def unit_to_base(product: Product, unit: str, quantity: float) -> float:
     return quantity * float(factor)
 
 
-def stock_deduction(db: Session, order_product: Product, qty_base_in_order: float) -> tuple[Product, float]:
-    """计算出库时实际扣减的库存商品与扣减数量（库存基础单位）。
+def stock_deduction(db: Session, order_product: Product, qty_base_in_order: float) -> tuple[Product, float, bool]:
+    """计算出库时实际扣减的库存商品、扣减数量（库存基础单位）以及是否「代发」。
 
-    - 订单商品关联了库存商品：扣减库存商品，扣减数 = 订单基础数量 × 倍数 × 库存默认单位折算
-    - 未关联：回退为扣减订单商品自身
+    - 订单商品关联了库存商品：扣减库存商品，扣减数 = 订单基础数量 × 倍数 × 库存默认单位折算；
+    - **订单商品未关联库存商品**：视为**代发**（别人代发，自己不出货），
+      不扣任何库存（扣减数 0），只在出库明细里记代发数量与代发成本；
+    - 库存商品（大类）直接销售：未关联时扣减自身库存（原有行为不变）。
     """
     if order_product.stock_product_id:
         sp = db.get(Product, order_product.stock_product_id)
         if sp:
             du = sp.default_unit or sp.base_unit
             factor = (sp.conversions or {}).get(du, 1.0)
-            return sp, qty_base_in_order * (order_product.multiplier or 1.0) * float(factor)
-    return order_product, qty_base_in_order
+            return sp, qty_base_in_order * (order_product.multiplier or 1.0) * float(factor), False
+    if (order_product.product_type or "stock") == "order":
+        return order_product, 0.0, True   # 代发：不扣库存
+    return order_product, qty_base_in_order, False
 
 
 def _deduct_with_override(db: Session, order_product: Product, qty_base_in_order: float,
-                          stock_product_id: int | None, multiplier: float = 1.0) -> tuple[Product, float]:
-    """计算一次出库的扣减目标库存商品与扣减数量。
+                          stock_product_id: int | None, multiplier: float = 1.0) -> tuple[Product, float, bool]:
+    """计算一次出库的扣减目标库存商品、扣减数量与是否代发。
 
     一单多货规则若显式指定了关联库存商品（大类）与倍数，则优先按其扣减；
-    否则回退为按订单商品自身关联扣减（stock_deduction）。
+    否则回退为按订单商品自身关联扣减（stock_deduction；订单商品未关联即代发，不扣库存）。
     扣减数 = 订单基础数量 × 倍数 × 库存商品默认单位系数。
     """
     if stock_product_id:
@@ -69,7 +73,7 @@ def _deduct_with_override(db: Session, order_product: Product, qty_base_in_order
         if sp and sp.product_type == "stock":
             du = sp.default_unit or sp.base_unit
             factor = (sp.conversions or {}).get(du, 1.0)
-            return sp, qty_base_in_order * float(multiplier or 1.0) * float(factor)
+            return sp, qty_base_in_order * float(multiplier or 1.0) * float(factor), False
     return stock_deduction(db, order_product, qty_base_in_order)
 
 
@@ -508,21 +512,35 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
             raise ValueError("商品不存在")
         if quantity <= 0:
             raise ValueError(f"「{p.name}」数量必须大于 0")
+        # 规格：导入单（聚水潭）会带「每件2斤」这类规格，手动单没有 → 回退用商品维护的「规格说明」，
+        # 这样「出库明细（每天×每种规格）」对手动单也能按规格归类。
+        if not spec:
+            spec = (p.spec or "").strip()
         qty_base = unit_to_base(p, unit, quantity)
         amount = round(quantity * price, 2)
         # 扣点前销售金额（原始金额）：导入扣点单传入；否则等于实际销售金额
         gross_sales = round(float(gross), 2) if gross and float(gross) > 0 else amount
-        # 扣减目标：一单多货规则如指定库存大类则按其扣减；否则按订单商品关联的库存商品（大类），未关联则扣减自身
-        target, deduction_base = _deduct_with_override(db, p, qty_base, ov_sp, ov_mult)
-        # 订单/库存商品净重优先由「扣减库存量」推导（如 七彩花生2斤 → 扣 1kg 库存 → 净重 1kg）；
-        # 推导不出（0）时按序回退：扣减目标库存商品自身的净重 → 当前销售商品自身填的净重；都没有算 0。
-        line_net_kg = deduction_net_weight_kg(target, deduction_base)
-        if line_net_kg <= 0:
-            line_net_kg = line_weight_kg(target, deduction_base)
+        # 扣减目标：一单多货规则如指定库存大类则按其扣减；否则按订单商品关联的库存商品（大类）；
+        # 订单商品未关联库存大类 = 代发：不扣任何库存，只记代发数量与代发成本。
+        target, deduction_base, is_dropship = _deduct_with_override(db, p, qty_base, ov_sp, ov_mult)
+        if is_dropship:
+            # 代发：商品由别人发出，本仓不扣库存；代发成本按商品「参考成本（每基础单位）」计（未填则 0，并给出提示）。
+            # 快递费：代发商品若填了「单件净重」（weight_kg），仍按净重结算快递费（有的代发只包货不包邮）；
+            # 没填净重就不计（视为代发方包邮）。
+            express_weight += line_weight_kg(p, qty_base)
+            cogs = round(qty_base * (p.unit_cost or 0.0), 2)
+            if not (p.unit_cost or 0.0):
+                warnings.append(f"「{p.name}」是代发商品（未关联库存大类）但没填「参考成本」，代发成本按 0 计")
+        else:
+            # 订单/库存商品净重优先由「扣减库存量」推导（如 七彩花生2斤 → 扣 1kg 库存 → 净重 1kg）；
+            # 推导不出（0）时按序回退：扣减目标库存商品自身的净重 → 当前销售商品自身填的净重；都没有算 0。
+            line_net_kg = deduction_net_weight_kg(target, deduction_base)
             if line_net_kg <= 0:
-                line_net_kg = line_weight_kg(p, qty_base)
-        express_weight += line_net_kg
-        cogs = round(_fifo_cogs(target, deduction_base), 2)
+                line_net_kg = line_weight_kg(target, deduction_base)
+                if line_net_kg <= 0:
+                    line_net_kg = line_weight_kg(p, qty_base)
+            express_weight += line_net_kg
+            cogs = round(_fifo_cogs(target, deduction_base), 2)
         if fee is None:
             fee = p.pack_fee
         sale_rows.append(
@@ -530,7 +548,7 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
                 "product_id": p.id, "product_name": p.name, "base_unit": p.base_unit,
                 "unit": unit, "quantity": quantity, "quantity_base": qty_base,
                 "stock_product_id": target.id, "stock_product_name": target.name,
-                "deduction_base": deduction_base,
+                "deduction_base": deduction_base, "is_dropship": is_dropship,
                 "unit_price": price, "amount": amount, "cogs": cogs, "pack_fee": fee, "gross_sales": gross_sales,
                 "line_type": "sale", "spec": spec,
             }
@@ -620,6 +638,8 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
     # 库存预警（允许继续，仅提示；服务型商品如 人工/快递 不校验库存）
     for r in sale_rows + pack_rows:
         if r["line_type"] == "sale":
+            if r.get("is_dropship"):
+                continue   # 代发不扣库存，无需预警
             pid, need = r["stock_product_id"], r["deduction_base"]
             label = f"{r['product_name']}（扣{fmt_qty(need)} {r['stock_product_name']}）"
         else:
@@ -672,7 +692,8 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
     affected = set()
     for r in order["sale_lines"] + order["pack_lines"]:
         is_sale = r["line_type"] == "sale"
-        # 库存流水扣在库存商品上（订单商品扣减其关联大类）
+        dropship = bool(is_sale and r.get("is_dropship"))
+        # 库存流水扣在库存商品上（订单商品扣减其关联大类）；代发行不扣任何库存
         move_pid = r["stock_product_id"] if is_sale else r["product_id"]
         if is_sale:
             move_qty, move_type = -r["deduction_base"], "out"
@@ -697,22 +718,24 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
                 cogs=r["cogs"],
                 gross_sales=r.get("gross_sales", 0) or 0,
                 pack_fee=r["pack_fee"],
+                is_dropship=dropship,
             )
         )
-        db.add(
-            StockMovement(
-                product_id=move_pid,
-                move_type=move_type,
-                quantity_base=move_qty,
-                amount=r["cogs"],
-                ref_type="outbound",
-                ref_id=rec.id,
-                date=date,
-                operator=op,
-                remark=f"{'销售' if is_sale else '包装消耗'} {rec.code}",
+        if not dropship:   # 代发：本仓不出货，不产生库存流水（否则会把库存扣成负数）
+            db.add(
+                StockMovement(
+                    product_id=move_pid,
+                    move_type=move_type,
+                    quantity_base=move_qty,
+                    amount=r["cogs"],
+                    ref_type="outbound",
+                    ref_id=rec.id,
+                    date=date,
+                    operator=op,
+                    remark=f"{'销售' if is_sale else '包装消耗'} {rec.code}",
+                )
             )
-        )
-        affected.add(move_pid)
+            affected.add(move_pid)
         affected.add(r["product_id"])
         if is_sale and r["amount"] > 0:
             db.add(

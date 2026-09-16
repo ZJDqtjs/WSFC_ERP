@@ -415,15 +415,26 @@ _PAY_COLUMNS = (
     ("paid_at", "VARCHAR(10) DEFAULT ''"),
 )
 
+# 各表需要补齐的新增列（幂等）：{表名: ((列, DDL), ...)}
+_EXTRA_COLUMNS = {
+    "inbounds": _PAY_COLUMNS,
+    "outbounds": _PAY_COLUMNS,
+    "other_expenses": _PAY_COLUMNS,
+    "finance_records": _PAY_COLUMNS,
+    "warehouse_ins": _PAY_COLUMNS,
+    # 出库行：代发标记（订单商品未关联库存大类 → 不扣库存，只记代发数量/成本）
+    "outbound_lines": (("is_dropship", "BOOLEAN DEFAULT 0"),),
+}
+
 
 def ensure_columns(engine: Engine) -> None:
-    """为已有表补充新增列（幂等）。老库默认视为「已付款」，历史数据口径不变。"""
+    """为已有表补充新增列（幂等）。老库默认视为「已付款」「非代发」，历史数据口径不变。"""
     with engine.connect() as conn:
-        for table in ("inbounds", "outbounds", "other_expenses", "finance_records", "warehouse_ins"):
+        for table, columns in _EXTRA_COLUMNS.items():
             cols = [r[1] for r in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()]
             if not cols:  # 表还不存在（create_all 会建，无需补列）
                 continue
-            for col, ddl in _PAY_COLUMNS:
+            for col, ddl in columns:
                 if col not in cols:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
         conn.commit()

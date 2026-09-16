@@ -252,12 +252,16 @@
           <span class="muted">成本为总成本</span>
         </div>
         <div v-if="!(rep.by_product || []).length" class="empty">本期无销售</div>
-        <div v-for="p in rep.by_product || []" :key="p.product_id" class="list-item">
+        <div v-for="(p, i) in rep.by_product || []" :key="i" class="list-item">
           <div class="row">
             <span class="grow item-title">{{ p.name }}</span>
-            <span class="bold">{{ fmtMoney(p.amount) }}</span>
+            <van-tag v-if="p.is_dropship" type="warning" plain>代发</van-tag>
+            <van-tag v-else type="primary" plain style="margin-left:4px;">库存出库</van-tag>
+            <span class="bold" style="margin-left:6px;">{{ fmtMoney(p.amount) }}</span>
           </div>
-          <div class="item-meta">销量 {{ fmtNum(p.qty) }}</div>
+          <div class="item-meta">
+            <template v-if="p.spec">规格 {{ p.spec }} · </template>销量 {{ fmtNum(p.qty) }}
+          </div>
           <div class="item-meta">
             总成本 {{ fmtMoney(totalCogsOf(p)) }} · 毛利
             <b :class="grossProfitOf(p) >= 0 ? 'up' : 'down'">{{ fmtMoney(grossProfitOf(p)) }}</b>

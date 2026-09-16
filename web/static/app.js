@@ -2513,7 +2513,9 @@ async function renderProducts() {
         ? '<span class="badge income">订单</span>'
         : '<span class="badge adjust">库存</span>';
       const linkInfo = p.product_type === "order"
-        ? (p.stock_product_id ? `扣减：${esc(p.stock_product_name || "?")} ×${fmtNum(p.multiplier)}` : '<span style="color:var(--red)">未关联库存商品</span>')
+        ? (p.stock_product_id
+          ? `扣减：${esc(p.stock_product_name || "?")} ×${fmtNum(p.multiplier)}`
+          : '<span class="badge income">代发</span> <span class="muted">不扣库存，只统计代发数量/成本</span>')
         : (p.spec || "");
       const isLabor = p.category === "人工";
       const stockShown = p.product_type === "order" && p.stock_product_name
@@ -2657,11 +2659,11 @@ function openProductModal(pid = 0) {
       <div class="field"><label>单位</label><select id="pUnit" class="searchable"></select><div class="field-hint">重量类按克记账（1斤=500克），计数类按个记账；订单商品固定为「单」</div></div>
       <div class="field"><label>默认售价（每基础单位）</label><input id="pSalePrice" type="number" step="any" value="${p?.sale_price || 0}" /></div>
       <div class="field"><label>参考成本（每基础单位）</label><input id="pUnitCost" type="number" step="any" value="${p?.unit_cost || 0}" /><div class="field-hint">包材/人工等无入库时按此成本结算，如纸箱0.9元/个</div></div>
-      <div class="field" id="pWeightBox"><label>单件净重（kg）</label><input id="pWeightKg" type="number" step="any" value="${p?.weight_kg || 0}" /><div class="field-hint">用于计算快递费。重量类库存自动按「扣减库存量」推导；按袋/按件等计数库存推不出重量时，就用这里手填的净重兜底（如 四神汤200g 填 0.2）</div></div>
+      <div class="field" id="pWeightBox"><label>单件净重（kg）</label><input id="pWeightKg" type="number" step="any" value="${p?.weight_kg || 0}" /><div class="field-hint">用于计算快递费。重量类库存自动按「扣减库存量」推导；按袋/按件等计数库存推不出重量时，就用这里手填的净重兜底（如 四神汤200g 填 0.2）。<b>代发商品填了净重也会按净重结算快递费</b>（不填=代发方包邮，不计快递费）</div></div>
     </div>
     <div id="pStockBox" class="form-grid" style="margin-top:10px;display:${ptype === "order" ? "grid" : "none"};">
-      <div class="field"><label>关联库存商品（大类）*</label><select id="pStockLink" class="searchable"><option value="">— 加载中… —</option></select><div class="field-hint">出库时从该大类扣减库存，可输入名称快速筛选</div></div>
-      <div class="field"><label>倍数（1单订单 = ? 库存单位）*</label><input id="pMultiplier" type="number" step="any" value="${p?.multiplier || 1}" /><div class="field-hint">如 佛手柑大果2个 → 倍数2：卖1单扣 2个 佛手柑大果</div></div>
+      <div class="field"><label>关联库存商品（大类）</label><select id="pStockLink" class="searchable"><option value="">— 加载中… —</option></select><div class="field-hint">出库时从该大类扣减库存（可输入名称快速筛选）；<b>留空 = 代发</b>：本仓不扣任何库存，只统计代发数量与代发成本（按下面「参考成本」计）</div></div>
+      <div class="field"><label>倍数（1单订单 = ? 库存单位）</label><input id="pMultiplier" type="number" step="any" value="${p?.multiplier || 1}" /><div class="field-hint">如 佛手柑大果2个 → 倍数2：卖1单扣 2个 佛手柑大果（代发时不用填）</div></div>
     </div>
     <div class="field" style="margin-top:10px;"><label>规格说明</label><input id="pSpec" value="${esc(p?.spec || "")}" placeholder="如：每个约150克；或每袋5斤" /></div>
     <hr />
@@ -2682,7 +2684,7 @@ function openProductModal(pid = 0) {
   if (ptype === "order") {
     api("/api/stocks").then((stocks) => {
       const sel = $("pStockLink");
-      sel.innerHTML = '<option value="">— 不关联（扣减自身）—</option>' +
+      sel.innerHTML = '<option value="">— 不关联（代发：不扣库存）—</option>' +
         stocks.map((s) => `<option value="${s.id}" ${s.id === p?.stock_product_id ? "selected" : ""}>${esc(s.name)}（${esc(s.category) || "—"}·单位${esc(s.default_unit || s.base_unit)}）</option>`).join("");
       sel.dispatchEvent(new Event("change", { bubbles: true })); // 让可搜索下拉同步显示
     }).catch(() => { $("pStockLink").innerHTML = '<option value="">— 加载失败 —</option>'; });
@@ -2710,7 +2712,7 @@ function pTypeChanged() {
   if (t === "order" && $("pStockLink").options.length <= 1) {
     api("/api/stocks").then((stocks) => {
       const sel = $("pStockLink");
-      sel.innerHTML = '<option value="">— 不关联（扣减自身）—</option>' +
+      sel.innerHTML = '<option value="">— 不关联（代发：不扣库存）—</option>' +
         stocks.map((s) => `<option value="${s.id}">${esc(s.name)}（${esc(s.category) || "—"}·单位${esc(s.default_unit || s.base_unit)}）</option>`).join("");
     });
   }
@@ -2758,7 +2760,11 @@ async function saveProduct(pid) {
     is_active: $("pActive") ? $("pActive").checked : true,
   };
   if (!payload.name.trim()) { toast("请填写商品名称"); return; }
-  if (payload.product_type === "order" && payload.stock_product_id == null) { toast("订单商品请选择关联的库存商品（大类），或改为库存商品"); return; }
+  // 订单商品可以不关联库存大类 = 代发（本仓不扣库存，只统计代发数量与代发成本）；
+  // 但代发成本按「参考成本」计，没填就会算成 0，这里给个提醒（不拦保存）。
+  if (payload.product_type === "order" && payload.stock_product_id == null && !payload.unit_cost) {
+    if (!confirm("该订单商品未关联库存商品（= 代发），但「参考成本」为 0，代发成本会按 0 计。仍要保存吗？")) return;
+  }
   try {
     if (pid) await api("/api/products/" + pid, "PUT", payload);
     else await api("/api/products", "POST", payload);
@@ -3236,6 +3242,9 @@ function saleCalcRow(inp) {
     const qb = qty * factor;
     if (p.product_type === "order" && p.stock_product_id) {
       tr.querySelector(".sale-conv").textContent = `扣 ${esc(p.stock_product_name || "?")} ×${fmtNum(qb * p.multiplier)}`;
+    } else if (p.product_type === "order") {
+      // 未关联库存大类 = 代发：不扣任何库存，成本按参考成本计
+      tr.querySelector(".sale-conv").textContent = `代发（不扣库存）· 成本 ${fmtMoney(qb * (p.unit_cost || 0))}`;
     } else {
       tr.querySelector(".sale-conv").textContent = `= ${fmtNum(qb)} ${p.base_unit}`;
     }
@@ -3426,7 +3435,7 @@ function renderOutRow(o) {
   const checked = outSel.has(o.id) ? "checked" : "";
   return `<tr>
       <td class="cb-col"><input type="checkbox" value="${o.id}" ${checked} onchange="toggleSel('out',${o.id},this.checked)" /></td>
-      <td class="mono">${o.code}${payTag(o.pay_status)}</td>
+      <td class="mono">${o.code}${payTag(o.pay_status)}${o.has_dropship ? ' <span class="badge income">含代发</span>' : ""}</td>
       <td>${esc(o.customer) || "—"}</td>
       <td><button class="detail-toggle" onclick="toggleOutDetail(${o.id})">▸ 查看明细</button></td>
       <td class="num mono">${fmtMoney(o.total_amount)}</td>
@@ -3438,7 +3447,7 @@ function renderOutRow(o) {
       <td><button class="btn sm danger" onclick="deleteOutbound(${o.id})">删</button></td></tr>
       <tr id="od-${o.id}" style="display:none;"><td colspan="11"><div class="subtable"><table>` +
       o.lines.map((l) => `<tr>
-        <td>${esc(l.product_name)}</td>
+        <td>${esc(l.product_name)}${l.is_dropship ? ' <span class="badge income">代发</span>' : ""}${l.spec ? `<div class="muted" style="font-size:11px;">规格 ${esc(l.spec)}</div>` : ""}</td>
         <td>${l.line_type === "sale" ? '<span class="badge out">销售</span>' : '<span class="badge pack">包装消耗</span>'}</td>
         <td>${fmtNum(l.quantity)} ${l.unit}</td>
         <td>= ${fmtNum(l.quantity_base)} ${l.base_unit || ""}</td>
@@ -3549,6 +3558,7 @@ function outAggBy(rows, pool) {
         map.set(k, {
           product_id: k, pid: l.product_id, name, sub, unit,
           orders: new Set(), qty: 0, qty_base: 0, amount: 0, cogs: 0, gross_sales: 0, boxes: new Set(), hasBox: false,
+          dropship_qty: 0, is_dropship: false,
         });
       }
       const a = map.get(k);
@@ -3559,6 +3569,11 @@ function outAggBy(rows, pool) {
       a.cogs += l.cogs || 0;
       a.gross_sales += (l.gross_sales || l.amount || 0);
       if (!a.sub && sub) a.sub = sub;
+      // 代发：不扣本仓库存（成本为代发成本），标记出来供明细页区分与单独展示成本构成
+      if (pool === "sale" && l.is_dropship) {
+        a.is_dropship = true;
+        a.dropship_qty += l.quantity || 0;
+      }
       // 「打包人工+耗材」等池：收集该销售商品/规则组合命中的纸箱/耗材型号
       if (pool === "laborpack" && l.line_type === "pack" && !isLabor) {
         a.hasBox = true;
@@ -3665,7 +3680,7 @@ function renderOutGroup() {
     ${isSale ? `<th data-key="gp_rate" class="num">毛利率${sortArrow("ogTable", "gp_rate")}</th>` : ""}
   </tr></thead><tbody>` +
     (data.length ? data.map((a) => `<tr>
-      <td>${esc(a.name)}${(a.subSub || a.sub) ? `<div class="muted" style="font-size:12px;font-weight:normal;">${esc(a.subSub || a.sub)}</div>` : ""}${isSale && (a.pack_cogs || a.express_cogs) ? `<div class="muted" style="font-size:11px;color:var(--danger);">商品成本 ${fmtMoney(a.base_cogs ?? a.cogs)}${a.pack_cogs ? ` ＋ 打包人工+耗材 ${fmtMoney(a.pack_cogs)}` : ""}${a.express_cogs ? ` ＋ 快递费 ${fmtMoney(a.express_cogs)}` : ""}</div>` : ""}</td>
+      <td>${esc(a.name)}${(a.subSub || a.sub) ? `<div class="muted" style="font-size:12px;font-weight:normal;">${esc(a.subSub || a.sub)}</div>` : ""}${isSale && (a.is_dropship || a.pack_cogs || a.express_cogs) ? `<div class="muted" style="font-size:11px;color:var(--danger);">${a.is_dropship ? "代发成本" : "商品成本"} ${fmtMoney(a.base_cogs ?? a.cogs)}${a.pack_cogs ? ` ＋ 打包人工+耗材 ${fmtMoney(a.pack_cogs)}` : ""}${a.express_cogs ? ` ＋ 快递费 ${fmtMoney(a.express_cogs)}` : ""}</div>` : ""}</td>
       <td class="num">${a.order_count} 单</td>
       ${isLaborPack ? "" : `<td>${esc(a.unit)}</td>`}
       ${isLaborPack ? "" : `<td class="num mono">${fmtNum(a.qty)}</td>`}
@@ -3975,9 +3990,11 @@ async function loadReport() {
     const rate = p.gp_rate != null ? Number(p.gp_rate) : ((Number(p.amount) - total) / denom) * 100;
     return rate.toFixed(1) + "%";
   };
-  if (!prodRows.length) pt.innerHTML = `<tr><td class="empty" colspan="6">本期无销售</td></tr>`;
+  if (!prodRows.length) pt.innerHTML = `<tr><td class="empty" colspan="8">本期无销售</td></tr>`;
   else pt.innerHTML = `<thead><tr>
     <th data-key="name">商品${sortArrow("repProductTable", "name")}</th>
+    <th data-key="spec">规格${sortArrow("repProductTable", "spec")}</th>
+    <th data-key="is_dropship">出库方式${sortArrow("repProductTable", "is_dropship")}</th>
     <th data-key="qty" class="num">销量${sortArrow("repProductTable", "qty")}</th>
     <th data-key="amount" class="num">收入${sortArrow("repProductTable", "amount")}</th>
     <th data-key="cogs" class="num">总成本${sortArrow("repProductTable", "cogs")}</th>
@@ -3987,17 +4004,26 @@ async function loadReport() {
       const total = Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
       const gp = (Number(p.amount) || 0) - total;
       const color = gp >= 0 ? "var(--green)" : "var(--red)";
-      const split = (p.pack_cogs || p.express_cogs)
-        ? `<div class="muted" style="font-size:11px;">商品成本 ${fmtMoney(p.goods_cogs != null ? p.goods_cogs : p.cogs)}${p.pack_cogs ? ` ＋ 打包人工+耗材 ${fmtMoney(p.pack_cogs)}` : ""}${p.express_cogs ? ` ＋ 快递费 ${fmtMoney(p.express_cogs)}` : ""}</div>`
+      // 成本构成：代发行也要列出来（代发成本 ＋ 打包人工/耗材 ＋ 快递费），不要因为后两项为 0 就不显示
+      const split = (p.is_dropship || p.pack_cogs || p.express_cogs)
+        ? `<div class="muted" style="font-size:11px;">${p.is_dropship ? "代发成本" : "商品成本"} ${fmtMoney(p.goods_cogs != null ? p.goods_cogs : p.cogs)}${p.pack_cogs ? ` ＋ 打包人工+耗材 ${fmtMoney(p.pack_cogs)}` : ""}${p.express_cogs ? ` ＋ 快递费 ${fmtMoney(p.express_cogs)}` : ""}</div>`
         : "";
+      // 出库方式：代发（别人发货，不扣本仓库存）单独标出，不和库存商品混在一起
+      const way = p.is_dropship
+        ? '<span class="badge income">代发</span>'
+        : '<span class="badge adjust">库存出库</span>';
       return `<tr>
-      <td>${esc(p.name)}${split}</td><td class="num mono">${fmtNum(p.qty)}</td>
+      <td>${esc(p.name)}${split}</td>
+      <td class="muted">${esc(p.spec) || "—"}</td>
+      <td>${way}</td>
+      <td class="num mono">${fmtNum(p.qty)}</td>
       <td class="num mono">${fmtMoney(p.amount)}</td><td class="num mono">${fmtMoney(total)}</td>
       <td class="num mono" style="color:${color}">${fmtMoney(gp)}</td>
       <td class="num mono" style="color:${color}">${gpRateOf(p)}</td></tr>`;
     }).join("") + `</tbody>`;
   pt._rows = prodRows;
   pt._render = loadReport;
+  renderSalesBySpec(from, to);   // 出库明细：每天 × 每种规格卖了多少单（含代发数量/代发成本）
 
   const ft = $("financeTable");
   let finRows = finance;
@@ -4071,6 +4097,49 @@ function renderCostBreakdown(rep) {
     </table></div>
     ${packTotal ? "" : `<div class="alert warn" style="margin-top:10px;">本期没有包材 / 人工 / 快递等关联结算成本。若商品已配置包装清单，请确认出库时是否生成了关联结算行。</div>`}`;
 }
+/** 出库明细：每天 × 每种规格卖了多少单（含代发行的代发数量/代发成本） */
+async function renderSalesBySpec(from, to) {
+  const t = $("repSpecTable");
+  if (!t) return;
+  const whQs = REP_WH ? `&wh=${encodeURIComponent(REP_WH)}` : "";
+  try {
+    const d = await api(`/api/report/sales-by-spec?date_from=${from || ""}&date_to=${to || ""}${whQs}`);
+    const specs = d.specs || [];
+    const rows = d.rows || [];
+    const tot = d.totals || {};
+    const hint = $("repSpecHint");
+    if (hint) {
+      const drop = (tot.dropship_qty || tot.dropship_cogs)
+        ? ` · 其中代发 ${fmtNum(tot.dropship_qty)} / 代发成本 ${fmtMoney(tot.dropship_cogs)}`
+        : "";
+      hint.textContent = `共 ${tot.days || 0} 天 · ${tot.orders || 0} 单 · ${specs.length} 种规格${drop}`
+        + " · 含全部出库单（不区分是否已收款）";
+    }
+    if (!rows.length) {
+      t.innerHTML = `<tr><td class="empty">本期无出库</td></tr>`;
+      return;
+    }
+    const cellTd = (c) => (c
+      ? `<td class="num mono">${c.orders} 单<div class="muted" style="font-size:11px;">${fmtNum(c.qty)}${esc(c.unit)}${c.dropship_qty ? ` · 代发${fmtNum(c.dropship_qty)}` : ""}</div></td>`
+      : `<td class="num mono">—</td>`);
+    t.innerHTML = `<thead><tr><th>日期</th>` +
+      specs.map((s) => `<th class="num">${esc(s.name)}${s.dropship_qty ? ' <span class="badge income">代发</span>' : ""}<div class="muted" style="font-size:11px;font-weight:400;">${s.orders} 单 · ${fmtNum(s.qty)}${esc(s.unit)}${s.dropship_qty ? ` · 代发${fmtNum(s.dropship_qty)}` : ""}</div></th>`).join("") +
+      `<th class="num">当天单数</th><th class="num">当天数量</th><th class="num">当天金额</th><th class="num">代发数量</th><th class="num">代发成本</th></tr></thead><tbody>` +
+      rows.map((r) => `<tr><td class="mono">${esc(r.date)}</td>` +
+        specs.map((s) => cellTd(r.cells[s.name])).join("") +
+        `<td class="num mono"><b>${r.orders}</b></td><td class="num mono">${fmtNum(r.qty)}</td><td class="num mono">${fmtMoney(r.amount)}</td>
+         <td class="num mono" style="color:var(--danger)">${r.dropship_qty ? fmtNum(r.dropship_qty) : "—"}</td>
+         <td class="num mono" style="color:var(--danger)">${r.dropship_cogs ? fmtMoney(r.dropship_cogs) : "—"}</td></tr>`).join("") +
+      `</tbody><tfoot><tr><td><b>合计</b></td>` +
+      specs.map((s) => `<td class="num mono"><b>${s.orders} 单</b><div class="muted" style="font-size:11px;font-weight:400;">${fmtNum(s.qty)}${esc(s.unit)}</div></td>`).join("") +
+      `<td class="num mono"><b>${tot.orders || 0}</b></td><td class="num mono"><b>${fmtNum(tot.qty)}</b></td><td class="num mono"><b>${fmtMoney(tot.amount)}</b></td>
+       <td class="num mono"><b>${tot.dropship_qty ? fmtNum(tot.dropship_qty) : "—"}</b></td>
+       <td class="num mono"><b>${tot.dropship_cogs ? fmtMoney(tot.dropship_cogs) : "—"}</b></td></tr></tfoot>`;
+  } catch (e) {
+    t.innerHTML = `<tr><td class="empty">加载失败：${esc(e.message)}</td></tr>`;
+  }
+}
+
 /* 报表分区 tab：汇总 / 支出 / 商品 / 流水（日期条件常驻，作用于所有分区） */
 const REP_PANELS = ["rep-panel-summary", "rep-panel-expense", "rep-panel-goods", "rep-panel-flow"];
 function repTab(btn) {
