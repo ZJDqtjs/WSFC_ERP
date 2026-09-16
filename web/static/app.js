@@ -3528,6 +3528,29 @@ function packOwner(o, l, saleLines, ruleName) {
   }
   return { key: `p${l.product_id}`, name: l.product_name, sub: "" };
 }
+/* 逐行成本构成小字：商品成本/代发成本 ＋ 打包人工 ＋ 耗材 ＋ 其他关联结算 ＋ 快递费（有哪项列哪项）。
+   后端把关联结算拆成 labor_cogs / material_cogs / other_cogs / express_cogs；
+   拿不到拆分字段时（旧接口）退回「打包人工+耗材」合并展示。 */
+function costSplitText(r) {
+  const goods = Number(r.goods_cogs != null ? r.goods_cogs : (r.base_cogs != null ? r.base_cogs : r.cogs)) || 0;
+  const express = Number(r.express_cogs) || 0;
+  const oldPack = Number(r.pack_cogs) || 0;
+  const split = r.labor_cogs != null || r.material_cogs != null || r.other_cogs != null;
+  const labor = split ? (Number(r.labor_cogs) || 0) : 0;
+  const material = split ? (Number(r.material_cogs) || 0) : 0;
+  const other = split ? (Number(r.other_cogs) || 0) : 0;
+  if (!(r.is_dropship || oldPack || express || labor || material || other)) return "";
+  const parts = [`${r.is_dropship ? "代发成本" : "商品成本"} ${fmtMoney(goods)}`];
+  if (split) {
+    if (labor) parts.push(`打包人工 ${fmtMoney(labor)}`);
+    if (material) parts.push(`耗材 ${fmtMoney(material)}`);
+    if (other) parts.push(`其他关联结算 ${fmtMoney(other)}`);
+  } else if (oldPack) {
+    parts.push(`打包人工+耗材 ${fmtMoney(oldPack)}`);
+  }
+  if (express) parts.push(`快递费 ${fmtMoney(express)}`);
+  return parts.join(" ＋ ");
+}
 function outAggBy(rows, pool) {
   // pool='sale' 汇总销售商品；pool='pack' 汇总耗材/包装(不含人工)；pool='labor' 仅人工；
   // pool='laborpack' 人工+耗材，按「销售商品 / 规则组合」溯源展示。
@@ -3606,7 +3629,10 @@ function renderOutGroup() {
     const byPid = new Map();
     aggSale.forEach((a) => {
       a.pack_cogs = a.pack_cogs || 0;
-      a.express_cogs = a.express_cogs || 0;
+      a.labor_cogs = a.labor_cogs || 0;      // 打包人工
+      a.material_cogs = a.material_cogs || 0; // 包材/耗材
+      a.other_cogs = a.other_cogs || 0;      // 其他关联结算
+      a.express_cogs = a.express_cogs || 0;  // 快递费
       let arr = byPid.get(a.pid);
       if (!arr) { arr = []; byPid.set(a.pid, arr); }
       arr.push(a);
@@ -3617,6 +3643,13 @@ function renderOutGroup() {
       const each = amt / arr.length;
       arr.forEach((a) => { a[field] += each; });
     };
+    // 关联结算行归类：快递 / 人工 / 耗材 / 其他（与后端 report.py 的 PACK_FIELD_OF_CAT 对齐）
+    const packField = (l) => {
+      if (l.category === "快递") return "express_cogs";
+      if (l.is_labor) return "labor_cogs";
+      if (["包材", "耗材", "包装"].includes(l.category)) return "material_cogs";
+      return "other_cogs";
+    };
     for (const o of rows) {
       const saleLines = (o.lines || []).filter((l) => l.line_type === "sale");
       const totalAmt = saleLines.reduce((s, l) => s + (l.amount || 0), 0);
@@ -3624,18 +3657,22 @@ function renderOutGroup() {
       for (const l of o.lines || []) {
         if (l.line_type !== "pack") continue;
         if (l.sale_product_id == null) { unowned.push(l); continue; }
-        spread(l.sale_product_id, l.cogs || 0, l.category === "快递" ? "express_cogs" : "pack_cogs");
+        spread(l.sale_product_id, l.cogs || 0, packField(l));
       }
       if (unowned.length && saleLines.length) {
         for (const l of unowned) {
           for (const sl of saleLines) {
             const share = totalAmt ? (sl.amount || 0) / totalAmt : 1 / saleLines.length;
-            spread(sl.product_id, (l.cogs || 0) * share, l.category === "快递" ? "express_cogs" : "pack_cogs");
+            spread(sl.product_id, (l.cogs || 0) * share, packField(l));
           }
         }
       }
     }
-    aggSale.forEach((a) => { a.base_cogs = a.cogs; a.cogs = a.cogs + a.pack_cogs + (a.express_cogs || 0); });
+    aggSale.forEach((a) => {
+      a.pack_cogs = a.labor_cogs + a.material_cogs + a.other_cogs;
+      a.base_cogs = a.cogs;
+      a.cogs = a.cogs + a.pack_cogs + a.express_cogs;
+    });
   }
   const total = {
     amt: rows.reduce((s, o) => s + (o.total_amount || 0), 0),
@@ -3664,6 +3701,7 @@ function renderOutGroup() {
   data = data.map((a) => {
     const gp = (a.amount - a.cogs) || 0;
     const denom = a.gross_sales || a.amount || 0; // 扣点前销售金额
+    a.splitText = isSale ? costSplitText(a) : "";  // 代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 快递费
     const gp_rate = denom ? (gp / denom) * 100 : 0; // 毛利率 = 毛利 / 扣点前销售金额
     return { ...a, gp, gp_rate };
   });
@@ -3680,7 +3718,7 @@ function renderOutGroup() {
     ${isSale ? `<th data-key="gp_rate" class="num">毛利率${sortArrow("ogTable", "gp_rate")}</th>` : ""}
   </tr></thead><tbody>` +
     (data.length ? data.map((a) => `<tr>
-      <td>${esc(a.name)}${(a.subSub || a.sub) ? `<div class="muted" style="font-size:12px;font-weight:normal;">${esc(a.subSub || a.sub)}</div>` : ""}${isSale && (a.is_dropship || a.pack_cogs || a.express_cogs) ? `<div class="muted" style="font-size:11px;color:var(--danger);">${a.is_dropship ? "代发成本" : "商品成本"} ${fmtMoney(a.base_cogs ?? a.cogs)}${a.pack_cogs ? ` ＋ 打包人工+耗材 ${fmtMoney(a.pack_cogs)}` : ""}${a.express_cogs ? ` ＋ 快递费 ${fmtMoney(a.express_cogs)}` : ""}</div>` : ""}</td>
+      <td>${esc(a.name)}${(a.subSub || a.sub) ? `<div class="muted" style="font-size:12px;font-weight:normal;">${esc(a.subSub || a.sub)}</div>` : ""}${a.splitText ? `<div class="muted" style="font-size:11px;color:var(--danger);">${a.splitText}</div>` : ""}</td>
       <td class="num">${a.order_count} 单</td>
       ${isLaborPack ? "" : `<td>${esc(a.unit)}</td>`}
       ${isLaborPack ? "" : `<td class="num mono">${fmtNum(a.qty)}</td>`}
@@ -4004,10 +4042,9 @@ async function loadReport() {
       const total = Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
       const gp = (Number(p.amount) || 0) - total;
       const color = gp >= 0 ? "var(--green)" : "var(--red)";
-      // 成本构成：代发行也要列出来（代发成本 ＋ 打包人工/耗材 ＋ 快递费），不要因为后两项为 0 就不显示
-      const split = (p.is_dropship || p.pack_cogs || p.express_cogs)
-        ? `<div class="muted" style="font-size:11px;">${p.is_dropship ? "代发成本" : "商品成本"} ${fmtMoney(p.goods_cogs != null ? p.goods_cogs : p.cogs)}${p.pack_cogs ? ` ＋ 打包人工+耗材 ${fmtMoney(p.pack_cogs)}` : ""}${p.express_cogs ? ` ＋ 快递费 ${fmtMoney(p.express_cogs)}` : ""}</div>`
-        : "";
+      // 成本构成：代发行也要列出来（代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 其他关联结算 ＋ 快递费）
+      const splitText = costSplitText(p);
+      const split = splitText ? `<div class="muted" style="font-size:11px;">${splitText}</div>` : "";
       // 出库方式：代发（别人发货，不扣本仓库存）单独标出，不和库存商品混在一起
       const way = p.is_dropship
         ? '<span class="badge income">代发</span>'

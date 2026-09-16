@@ -90,6 +90,16 @@ def _pack_cost_category(p: Product | None, line: OutboundLine) -> str:
     return "其他关联结算"
 
 
+# 关联结算类别 → 「商品销售明细」逐行的成本字段。
+# 人工与耗材分开记，明细里才能写成「打包人工 ¥x ＋ 耗材 ¥y ＋ 快递费 ¥z」。
+PACK_FIELD_OF_CAT = {
+    "人工打包费": "labor_cogs",
+    "包材耗材": "material_cogs",
+    "快递运费": "express_cogs",
+    "其他关联结算": "other_cogs",
+}
+
+
 def _pack_cost_breakdown(outbounds: list[Outbound]) -> dict[str, float]:
     """按费用类别汇总出库单的关联结算成本。
 
@@ -295,7 +305,10 @@ def summary(
                 "gross_sales": 0.0,
                 "cogs": 0.0,  # 兼容旧字段：仅商品本身的结算成本
                 "goods_cogs": 0.0,  # 商品本身的先进先出结转成本
-                "pack_cogs": 0.0,  # 打包人工费 + 包材耗材
+                "pack_cogs": 0.0,  # 打包人工费 + 包材耗材（= 人工 + 耗材 + 其他，兼容旧字段）
+                "labor_cogs": 0.0,  # 打包人工费
+                "material_cogs": 0.0,  # 包材 / 耗材
+                "other_cogs": 0.0,  # 其他关联结算
                 "express_cogs": 0.0,  # 快递运费
             },
         )
@@ -327,7 +340,7 @@ def summary(
                 continue
             cat = _pack_cost_category(l.product, l)
             amount = l.cogs or 0.0
-            field = "express_cogs" if cat == "快递运费" else "pack_cogs"
+            field = PACK_FIELD_OF_CAT.get(cat, "other_cogs")
             # 仅当归属对象确实是本单的销售商品时才直接归属，避免历史脏数据把费用挂到
             # 不存在的商品上（并确保 _bucket 不会用「未归属」覆盖真实商品名）
             target = bucket_of_pid.get(l.sale_product_id) if l.sale_product_id else None
@@ -347,7 +360,10 @@ def summary(
     product_rows = []
     for _key, d in sorted(by_product.items(), key=lambda kv: -kv[1]["amount"]):
         goods = round(d["goods_cogs"], 2)
-        pack = round(d["pack_cogs"], 2)
+        labor = round(d["labor_cogs"], 2)       # 打包人工费
+        material = round(d["material_cogs"], 2)  # 包材 / 耗材
+        other = round(d["other_cogs"], 2)        # 其他关联结算
+        pack = round(labor + material + other, 2)  # 兼容旧字段「打包人工+耗材」
         express = round(d["express_cogs"], 2)
         total_cogs = round(goods + pack + express, 2)
         amount = round(d["amount"], 2)
@@ -369,6 +385,9 @@ def summary(
                 "cogs": total_cogs,
                 "goods_cogs": goods,
                 "pack_cogs": pack,
+                "labor_cogs": labor,        # 打包人工费（从 pack_cogs 拆出）
+                "material_cogs": material,  # 包材 / 耗材（从 pack_cogs 拆出）
+                "other_cogs": other,        # 其他关联结算
                 "express_cogs": express,
                 "total_cogs": total_cogs,
                 "gross_profit": gp,

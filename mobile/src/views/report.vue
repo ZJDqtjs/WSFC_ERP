@@ -268,9 +268,7 @@
             · 毛利率
             <b :class="grossProfitOf(p) >= 0 ? 'up' : 'down'">{{ gpRateText(p) }}</b>
           </div>
-          <div v-if="p.pack_cogs || p.express_cogs" class="item-meta cost-split">
-            商品成本 {{ fmtMoney(p.goods_cogs != null ? p.goods_cogs : p.cogs) }}<template v-if="p.pack_cogs"> ＋ 打包人工+耗材 {{ fmtMoney(p.pack_cogs) }}</template><template v-if="p.express_cogs"> ＋ 快递费 {{ fmtMoney(p.express_cogs) }}</template>
-          </div>
+          <div v-if="costSplitText(p)" class="item-meta cost-split">{{ costSplitText(p) }}</div>
         </div>
       </div>
       </template>
@@ -403,6 +401,30 @@ function gpRateText(p) {
   if (!denom) return '—'
   const rate = p.gp_rate != null ? num(p.gp_rate) : (grossProfitOf(p) / denom) * 100
   return rate.toFixed(1) + '%'
+}
+
+// 成本构成小字：代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 其他关联结算 ＋ 快递费（有哪项列哪项）。
+// 后端已把关联结算拆成 labor_cogs / material_cogs / other_cogs / express_cogs；
+// 旧后端只给合并的 pack_cogs 时，退回「打包人工+耗材」展示。
+function costSplitText(p) {
+  const express = num(p.express_cogs)
+  const oldPack = num(p.pack_cogs)
+  const split = p.labor_cogs != null || p.material_cogs != null || p.other_cogs != null
+  const labor = split ? num(p.labor_cogs) : 0
+  const material = split ? num(p.material_cogs) : 0
+  const other = split ? num(p.other_cogs) : 0
+  if (!(p.is_dropship || oldPack || express || labor || material || other)) return ''
+  const goods = num(p.goods_cogs != null ? p.goods_cogs : p.cogs)
+  const parts = [`${p.is_dropship ? '代发成本' : '商品成本'} ${fmtMoney(goods)}`]
+  if (split) {
+    if (labor) parts.push(`打包人工 ${fmtMoney(labor)}`)
+    if (material) parts.push(`耗材 ${fmtMoney(material)}`)
+    if (other) parts.push(`其他关联结算 ${fmtMoney(other)}`)
+  } else if (oldPack) {
+    parts.push(`打包人工+耗材 ${fmtMoney(oldPack)}`)
+  }
+  if (express) parts.push(`快递费 ${fmtMoney(express)}`)
+  return parts.join(' ＋ ')
 }
 
 const costRows = computed(() => {
