@@ -311,6 +311,9 @@ class WarehouseProduct(Base):
     shelf_life: Mapped[str] = mapped_column(String(32), default="")  # 保质期，如 半年/一年
     remark: Mapped[str] = mapped_column(String(255), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 关联结算（随货包材）：**每袋**入仓品配套消耗的包材清单 [{product_id, quantity, unit}]。
+    # 入仓时按「每袋用量 × 入仓袋数」结算：扣减包材库存并计入入仓成本（口径同出库的 pack_items）。
+    pack_items: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
@@ -319,6 +322,8 @@ class WarehouseIn(Base):
 
     amount = 数量 × (采购价 + 运费)；采购价/运费均为快照，后续可在系统单独维护。
     可按「采购单号 + 配送中心」保留入仓明细，供导入《入仓配送明细》常温贴单使用。
+    pack_items / pack_cost：入仓时按入仓品「关联结算（随货包材）」结算出来的包材明细快照与成本合计，
+    计入毛利（毛利 = 收入 − 商品成本 − 运费 − 包材成本），并同步扣减包材库存。
     """
 
     __tablename__ = "warehouse_ins"
@@ -346,7 +351,10 @@ class WarehouseIn(Base):
     cogs: Mapped[float] = mapped_column(Float, default=0.0)  # 商品成本
     amount: Mapped[float] = mapped_column(Float, default=0.0)  # 收入合计（=数量×采购价）
     freight_total: Mapped[float] = mapped_column(Float, default=0.0)  # 运费合计
-    profit: Mapped[float] = mapped_column(Float, default=0.0)  # 毛利 = 收入 - 商品成本 - 运费
+    # 随货包材结算快照 + 成本：pack_items=[{product_id,name,unit,quantity,quantity_base,cost}]，pack_cost 为合计
+    pack_items: Mapped[list] = mapped_column(JSON, default=list)
+    pack_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    profit: Mapped[float] = mapped_column(Float, default=0.0)  # 毛利 = 收入 - 商品成本 - 运费 - 包材成本
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
     operator: Mapped[str] = mapped_column(String(32), default="")
     remark: Mapped[str] = mapped_column(String(255), default="")

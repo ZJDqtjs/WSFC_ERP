@@ -262,6 +262,13 @@ def _product_referenced(db: Session, pid: int) -> bool:
         select(func.count()).select_from(WarehouseProduct).where(WarehouseProduct.stock_product_id == pid)
     ):
         return True
+    # 入仓品的关联结算（随货包材）清单引用
+    if any(
+        (it or {}).get("product_id") == pid
+        for wp in db.execute(select(WarehouseProduct)).scalars()
+        for it in (wp.pack_items or [])
+    ):
+        return True
     # 被其他商品的关联结算清单引用，或被订单商品作为库存关联引用
     for o in db.execute(select(Product).where(Product.id != pid)).scalars():
         if o.stock_product_id == pid:

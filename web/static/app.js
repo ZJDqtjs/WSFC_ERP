@@ -1686,6 +1686,9 @@ async function loadWarehouseProducts() {
     renderWarehouseProducts();
   } catch (e) { toast("加载入仓品失败：" + e.message); }
 }
+function wprodPackText(p) {
+  return (p.pack_items || []).map((it) => `${esc(it.name || "?")}×${fmtNum(it.quantity)}${esc(it.unit || "")}`).join("、") || "—";
+}
 function renderWarehouseProducts() {
   const t = $("wprodTable");
   const rows = WPROD || [];
@@ -1693,7 +1696,7 @@ function renderWarehouseProducts() {
     <th>名称</th><th>类目</th><th class="num">箱规(袋/箱)</th><th class="num">每袋净重</th>
     <th class="num">采购价(收入/袋)</th>
     <th class="num">运费(元/袋)</th><th class="num">每袋成本</th>
-    <th>关联库存商品</th><th>保质期</th><th></th></tr></thead><tbody>` +
+    <th>关联库存商品</th><th>关联结算(随货包材)</th><th>保质期</th><th></th></tr></thead><tbody>` +
     rows.map((p) => `<tr>
       <td><b>${esc(p.name)}</b><div class="muted" style="font-size:12px;">${esc(p.sku) || "—"}${p.barcode ? ` · ${esc(p.barcode)}` : ""}</div></td>
       <td>${esc(p.category) || "—"}</td>
@@ -1704,18 +1707,93 @@ function renderWarehouseProducts() {
       <td class="num mono">${p.bag_cost ? fmtMoney(p.bag_cost) : "—"}</td>
       <td>${p.stock_product_name ? esc(p.stock_product_name) : '<span class="muted">未关联</span>'}
         ${p.stock_product_id ? `<div class="muted" style="font-size:12px;">单位成本 ${fmtMoney(p.stock_unit_cost)}/${esc(p.stock_default_unit || "单位")}</div>` : ""}</td>
+      <td>${(p.pack_items || []).length ? wprodPackText(p) : '<span class="muted">未关联</span>'}</td>
       <td>${esc(p.shelf_life) || "—"}</td>
       <td style="white-space:nowrap;">
         <button class="btn sm" onclick="wprodEdit(${p.id})">改</button>
         <button class="btn sm danger" onclick="wprodDelete(${p.id})">删</button>
       </td></tr>`).join("") + `</tbody>`;
-  if (!rows.length) t.innerHTML = `<tr><td colspan="10" class="empty">暂无入仓品，可点「新增入仓品」录入</td></tr>`;
+  if (!rows.length) t.innerHTML = `<tr><td colspan="11" class="empty">暂无入仓品，可点「新增入仓品」录入</td></tr>`;
 }
 function stockProductOptions(selId) {
   const list = (PRODUCTS || []).filter((p) => p.product_type === "stock" && !["人工", "快递"].includes(p.category));
   return '<option value="">（不关联库存商品）</option>' +
     list.map((p) => `<option value="${p.id}" ${selId === p.id ? "selected" : ""}>${esc(p.name)}（${esc(p.category || "—")}）</option>`).join("");
 }
+/* ---------- 入仓品关联结算（随货包材）编辑 ---------- */
+function wPackRowsHtml(items) {
+  const list = items || [];
+  const opts = PRODUCTS.filter((p) => p.is_active)
+    .map((p) => `<option value="${p.id}">${esc(p.name)}（${esc(p.category || "—")}）</option>`).join("");
+  const unitSel = (m, u) => unitOptions(m, u) || `<option>${esc(u || "个")}</option>`;
+  return list.map((it) => {
+    const m = PRODUCTS.find((x) => x.id === it.product_id);
+    return `<div class="pack-row">
+      <input value="${esc(m ? m.name : it.product_id)}" readonly style="background:#f9fafb;" />
+      <select class="pack-unit" onchange="packUnitChanged(this)">${unitSel(m, it.unit)}</select>
+      <input type="number" step="any" value="${it.quantity}" class="pack-qty" />
+      <button class="btn danger sm" onclick="this.closest('.pack-row').remove()">删</button>
+    </div>`;
+  }).join("") + `
+    <div class="pack-row">
+      <select class="pack-product" onchange="wPackProductChanged(this)">
+        <option value="">选择随货包材…</option>${opts}
+      </select>
+      <select class="pack-unit"><option>个</option></select>
+      <input type="number" step="any" value="1" class="pack-qty" />
+      <button class="btn secondary sm" onclick="wPackAddRow()">＋</button>
+    </div>`;
+}
+function wPackProductChanged(sel) {
+  const row = sel.closest(".pack-row");
+  const m = PRODUCTS.find((x) => x.id === +sel.value);
+  row.querySelector(".pack-unit").innerHTML = m ? (unitOptions(m) || `<option>个</option>`) : `<option>个</option>`;
+}
+function wPackAddRow() {
+  const box = $("wpackRows");
+  const last = box.querySelector(".pack-row:last-child");
+  const sel = last.querySelector(".pack-product");
+  const qty = last.querySelector(".pack-qty").value;
+  const unit = last.querySelector(".pack-unit").value;
+  if (!sel || !sel.value || !(parseFloat(qty) > 0)) { toast("请选择随货包材并填数量"); return; }
+  const m = PRODUCTS.find((x) => x.id === +sel.value);
+  const opts = PRODUCTS.filter((p) => p.is_active)
+    .map((p) => `<option value="${p.id}">${esc(p.name)}（${esc(p.category || "—")}）</option>`).join("");
+  last.innerHTML = `
+    <input value="${esc(m.name)}" readonly style="background:#f9fafb;" />
+    <select class="pack-unit" onchange="packUnitChanged(this)">${unitOptions(m, unit) || `<option>${esc(unit)}</option>`}</select>
+    <input type="number" step="any" value="${qty}" class="pack-qty" />
+    <button class="btn danger sm" onclick="this.closest('.pack-row').remove()">删</button>`;
+  box.insertAdjacentHTML("beforeend", `
+    <div class="pack-row">
+      <select class="pack-product" onchange="wPackProductChanged(this)">
+        <option value="">选择随货包材…</option>${opts}
+      </select>
+      <select class="pack-unit"><option>个</option></select>
+      <input type="number" step="any" value="1" class="pack-qty" />
+      <button class="btn secondary sm" onclick="wPackAddRow()">＋</button>
+    </div>`);
+}
+function wCollectPacks() {
+  const out = [];
+  document.querySelectorAll("#wpackRows .pack-row").forEach((row) => {
+    const nameInput = row.querySelector("input[readonly]");
+    const sel = row.querySelector(".pack-product");
+    let pid = null;
+    if (nameInput) {
+      const n = nameInput.value.trim();
+      const m = PRODUCTS.find((x) => x.name === n);
+      pid = m ? m.id : null;
+    } else if (sel) {
+      pid = sel.value ? +sel.value : null;
+    }
+    const unit = row.querySelector(".pack-unit").value;
+    const qty = parseFloat(row.querySelector(".pack-qty").value);
+    if (pid && unit && qty > 0) out.push({ product_id: pid, quantity: qty, unit });
+  });
+  return out;
+}
+
 function wprodEdit(id) {
   const p = (WPROD || []).find((x) => x.id === id) || {};
   openModal(`
@@ -1733,6 +1811,9 @@ function wprodEdit(id) {
       <div class="field"><label>保质期</label><input id="wpShelf" value="${esc(p.shelf_life || "")}" placeholder="如 半年 / 一年" /></div>
       <div class="field" style="grid-column:1/-1;"><label>备注</label><input id="wpRemark" value="${esc(p.remark || "")}" /></div>
     </div>
+    <hr />
+    <h3>关联结算（随货包材） <span class="hint">每袋入仓品配套消耗的包材，入仓时按「每袋用量 × 袋数」扣减包材库存并计入入仓成本</span></h3>
+    <div id="wpackRows">${wPackRowsHtml(p.pack_items)}</div>
     <p class="hint" id="wpCostHint" style="margin-top:8px;"></p>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
@@ -1767,6 +1848,7 @@ async function wprodSave(id) {
     bag_weight: parseFloat($("wpBagWeight").value) || 0,
     shelf_life: $("wpShelf").value.trim(),
     remark: $("wpRemark").value.trim(),
+    pack_items: wCollectPacks(),
     is_active: true,
   };
   try {
@@ -1819,6 +1901,7 @@ function buildWinGroup(recs) {
     amount: recs.reduce((s, r) => s + (r.amount || 0), 0),
     cogs: recs.reduce((s, r) => s + (r.cogs || 0), 0),
     freight: recs.reduce((s, r) => s + (r.freight_total || 0), 0),
+    pack_cost: recs.reduce((s, r) => s + (r.pack_cost || 0), 0),
     profit: recs.reduce((s, r) => s + (r.profit || 0), 0),
     code: `批量 · ${recs.length}条`,
     date: dates[0] === dates[dates.length - 1] ? dates[0] : `${dates[0]} ~ ${dates[dates.length - 1]}`,
@@ -1846,10 +1929,10 @@ function renderWarehouseIns(d) {
   const sortable = rows.map((x) => x._group
     ? { _group: true, g: x.g, code: x.g.code, date: x.g.date, purchase_no: x.g.purchase_no,
         center: x.g.center, product: x.g.product, quantity: x.g.quantity, amount: x.g.amount,
-        cogs: x.g.cogs, freight: x.g.freight, profit: x.g.profit }
+        cogs: x.g.cogs, freight: x.g.freight, pack_cost: x.g.pack_cost, profit: x.g.profit }
     : { _group: false, rec: x.rec, code: x.rec.code, date: x.rec.date, purchase_no: x.rec.purchase_no,
         center: x.rec.center, product: x.rec.product_name, quantity: x.rec.quantity, amount: x.rec.amount,
-        cogs: x.rec.cogs, freight: x.rec.freight_total, profit: x.rec.profit });
+        cogs: x.rec.cogs, freight: x.rec.freight_total, pack_cost: x.rec.pack_cost, profit: x.rec.profit });
   sortable.sort((a, b) => {
     if (t._sort) { const dd = compareVal(a[t._sort.key], b[t._sort.key]) * t._sort.dir; if (dd) return dd; }
     return 0;
@@ -1860,7 +1943,7 @@ function renderWarehouseIns(d) {
     $("wInSummary").innerHTML =
       `共 <b>${flat.length}</b> 条 · 数量 <b>${fmtNum(tot.quantity)}</b> 袋 · ` +
       `收入 <b>${fmtMoney(tot.amount)}</b> · 商品成本 <b>${fmtMoney(tot.cogs)}</b> · ` +
-      `运费 <b>${fmtMoney(tot.freight)}</b> · 毛利 <b style="color:var(--green)">${fmtMoney(tot.profit)}</b>`;
+      `运费 <b>${fmtMoney(tot.freight)}</b> · 包材 <b>${fmtMoney(tot.pack_cost)}</b> · 毛利 <b style="color:var(--green)">${fmtMoney(tot.profit)}</b>`;
     $("wInSummary").style.display = flat.length ? "block" : "none";
   }
   t.innerHTML = `<thead><tr>
@@ -1874,16 +1957,21 @@ function renderWarehouseIns(d) {
     <th data-key="amount" class="num">收入${sortArrow("wInTable", "amount")}</th>
     <th data-key="cogs" class="num">商品成本${sortArrow("wInTable", "cogs")}</th>
     <th data-key="freight" class="num">运费${sortArrow("wInTable", "freight")}</th>
+    <th data-key="pack_cost" class="num">包材成本${sortArrow("wInTable", "pack_cost")}</th>
     <th data-key="profit" class="num">毛利${sortArrow("wInTable", "profit")}</th>
     <th></th></tr></thead><tbody>` +
     sortable.map((x) => x._group ? renderWinGroupRow(x.g) : renderWinRow(x.rec)).join("") + `</tbody>`;
-  if (!rows.length) t.innerHTML = `<tr><td colspan="12" class="empty">该时间段暂无入仓记录，可点「导入常温贴单」或「手动入仓」</td></tr>`;
+  if (!rows.length) t.innerHTML = `<tr><td colspan="13" class="empty">该时间段暂无入仓记录，可点「导入常温贴单」或「手动入仓」</td></tr>`;
   t._rows = sortable;
   t._render = loadWarehouseIns;
   updateBatchBar("win");
 }
+function wInPackText(r) {
+  return (r.pack_items || []).map((it) => `${esc(it.name || "?")}×${fmtNum(it.quantity)}${esc(it.unit || "")}`).join("、");
+}
 function renderWinRow(r) {
   const checked = winSel.has(r.id) ? "checked" : "";
+  const packTxt = wInPackText(r);
   return `<tr>
     <td class="cb-col"><input type="checkbox" value="${r.id}" ${checked} onchange="toggleSel('win',${r.id},this.checked)" /></td>
     <td class="mono">${esc(r.code)}</td>
@@ -1892,11 +1980,13 @@ function renderWinRow(r) {
     <td>${esc(r.center) || "—"}</td>
     <td><b>${esc(r.product_name)}</b>${r.product_id ? "" : ' <span class="badge" style="background:#fff3cd;color:#8a6d3b;">未关联</span>'}
       <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"} · 净重 ${r.bag_weight ? `${fmtNum(r.bag_weight)} ${esc(r.stock_default_unit || "")}`.trim() : "—"} · 单位成本 ${fmtMoney(r.unit_cost)}/${esc(r.stock_default_unit || "单位")}${r.deduction_percent ? ` · 扣点 ${fmtNum(r.deduction_percent)}%` : ""}</div>
+      ${packTxt ? `<div class="muted" style="font-size:12px;">随货包材：${packTxt}</div>` : ""}
     </td>
     <td class="num mono">${fmtNum(r.quantity)}</td>
     <td class="num mono">${fmtMoney(r.amount)}</td>
     <td class="num mono">${fmtMoney(r.cogs)}</td>
     <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}</td>
+    <td class="num mono">${r.pack_cost ? fmtMoney(r.pack_cost) : "—"}</td>
     <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
     <td style="white-space:nowrap;">
       <button class="btn sm" onclick="wInEdit(${r.id})">改</button>
@@ -1917,6 +2007,7 @@ function renderWinGroupRow(g) {
     <td class="num mono">${fmtMoney(g.amount)}</td>
     <td class="num mono">${fmtMoney(g.cogs)}</td>
     <td class="num mono">${g.freight ? fmtMoney(g.freight) : "—"}</td>
+    <td class="num mono">${g.pack_cost ? fmtMoney(g.pack_cost) : "—"}</td>
     <td class="num mono" style="color:${g.profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(g.profit)}</td>
     <td style="white-space:nowrap;">
       <button class="btn sm secondary" onclick="openWinGroup('${esc(g.import_group)}')">明细</button>
@@ -1959,6 +2050,7 @@ function renderWinGroupPage() {
     <div class="stat"><div class="label">收入</div><div class="value">${fmtMoney(g.amount)}</div></div>
     <div class="stat"><div class="label">商品成本</div><div class="value">${fmtMoney(g.cogs)}</div></div>
     <div class="stat"><div class="label">运费</div><div class="value">${fmtMoney(g.freight)}</div></div>
+    <div class="stat"><div class="label">包材成本</div><div class="value">${fmtMoney(g.pack_cost)}</div></div>
     <div class="stat success"><div class="label">毛利</div><div class="value" style="color:var(--green)">${fmtMoney(g.profit)}</div></div>`;
   const t = $("wgTable");
   const rows = applyTableSort(t, WGROUP);
@@ -1974,6 +2066,7 @@ function renderWinGroupPage() {
     <th data-key="amount" class="num">收入${sortArrow("wgTable", "amount")}</th>
     <th data-key="cogs" class="num">商品成本${sortArrow("wgTable", "cogs")}</th>
     <th data-key="freight_total" class="num">运费${sortArrow("wgTable", "freight_total")}</th>
+    <th data-key="pack_cost" class="num">包材成本${sortArrow("wgTable", "pack_cost")}</th>
     <th data-key="profit" class="num">毛利${sortArrow("wgTable", "profit")}</th>
     <th></th></tr></thead><tbody>` + rows.map((r) => `<tr>
     <td class="mono">${esc(r.code)}</td>
@@ -1981,13 +2074,15 @@ function renderWinGroupPage() {
     <td class="mono">${esc(r.purchase_no) || "—"}</td>
     <td>${esc(r.center) || "—"}</td>
     <td><b>${esc(r.product_name)}</b>
-      <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"} · 净重 ${r.bag_weight ? `${fmtNum(r.bag_weight)} ${esc(r.stock_default_unit || "")}`.trim() : "—"}${r.deduction_percent ? ` · 扣点 ${fmtNum(r.deduction_percent)}%` : ""}</div></td>
+      <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"} · 净重 ${r.bag_weight ? `${fmtNum(r.bag_weight)} ${esc(r.stock_default_unit || "")}`.trim() : "—"}${r.deduction_percent ? ` · 扣点 ${fmtNum(r.deduction_percent)}%` : ""}</div>
+      ${wInPackText(r) ? `<div class="muted" style="font-size:12px;">随货包材：${wInPackText(r)}</div>` : ""}</td>
     <td class="num mono">${fmtNum(r.quantity)}</td>
     <td class="num mono">${r.box_count ? fmtNum(r.box_count) : "—"}</td>
     <td class="num mono">${fmtMoney(r.unit_price)}</td>
     <td class="num mono">${fmtMoney(r.amount)}</td>
     <td class="num mono">${fmtMoney(r.cogs)}</td>
     <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}</td>
+    <td class="num mono">${r.pack_cost ? fmtMoney(r.pack_cost) : "—"}</td>
     <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
     <td style="white-space:nowrap;">
       <button class="btn sm" onclick="wInEdit(${r.id})">改</button>
@@ -2040,6 +2135,7 @@ function wInFormModal(rec) {
       <div class="field"><label>收入合计</label><input id="wiAmount" readonly /></div>
       <div class="field"><label>商品成本</label><input id="wiCogs" readonly /></div>
       <div class="field"><label>运费合计</label><input id="wiFreightTotal" readonly /></div>
+      <div class="field"><label>随货包材成本</label><input id="wiPackCost" readonly /></div>
       <div class="field"><label>毛利</label><input id="wiProfit" readonly /></div>
       <div class="field" style="grid-column:1/-1;"><label>备注</label><input id="wiRemark" value="${esc(rec.remark || "")}" /></div>
       <div class="field" style="grid-column:1/-1;">
@@ -2069,6 +2165,22 @@ function wInPickProduct() {
   $("wiBagWeight").value = p.bag_weight || "";
   wInCalc();
 }
+/* 随货包材预估：按每袋用量 × 袋数折算数量与成本（单位成本按库存均价优先，回退参考成本） */
+function wPackEstimate(p, qty) {
+  const items = (p && p.pack_items) || [];
+  let cost = 0;
+  const parts = [];
+  items.forEach((it) => {
+    const m = PRODUCTS.find((x) => x.id === it.product_id);
+    if (!m) return;
+    const factor = (m.conversions || {})[it.unit] || 1;
+    const base = ((m.avg_cost > 0 ? m.avg_cost : m.unit_cost) || 0);
+    const tq = (it.quantity || 0) * qty;
+    cost += tq * factor * base;
+    parts.push(`${esc(m.name)}×${fmtNum(tq)}${esc(it.unit)}`);
+  });
+  return { text: parts.join("、") || "—", cost };
+}
 function wInCalc() {
   const sel = $("wiProduct");
   const p = (WPROD || []).find((x) => x.id === +sel.value);
@@ -2081,15 +2193,18 @@ function wInCalc() {
   const revenue = qty * price * (1 - pct / 100);
   const cogs = qty * bw * uc;
   const ft = qty * freight;
+  const pe = wPackEstimate(p, qty);
   $("wiAmount").value = revenue.toFixed(2);
   $("wiCogs").value = cogs.toFixed(2);
   $("wiFreightTotal").value = ft.toFixed(2);
-  $("wiProfit").value = (revenue - cogs - ft).toFixed(2);
+  if ($("wiPackCost")) $("wiPackCost").value = pe.cost.toFixed(2);
+  $("wiProfit").value = (revenue - cogs - ft - pe.cost).toFixed(2);
   const hint = $("wiCostHint");
   if (hint) {
-    hint.textContent = p && p.stock_product_name
+    const base = p && p.stock_product_name
       ? `收入 = 采购价 × (1 − 扣点${fmtNum(pct)}%)；成本来源：${p.stock_product_name}，单位成本 ${fmtMoney(uc)}/${p.stock_default_unit || "单位"}`
       : `扣点 ${fmtNum(pct)}%；未关联库存商品：商品成本按 0 计。`;
+    hint.textContent = `${base}；随货包材：${pe.text}（预估成本 ${fmtMoney(pe.cost)}）`;
   }
 }
 async function openWarehouseInAdd() {
@@ -2206,20 +2321,22 @@ function renderWImportPreview(d, dateVal) {
       <table id="wiImportTable">
         <thead><tr>
           <th>商品名称（贴单）</th><th>入仓品</th><th class="num">箱数</th><th class="num">数量(袋)</th>
-          <th class="num">每袋净重</th><th class="num">采购价(收入)</th><th class="num">运费</th><th class="num">商品成本</th>
+          <th class="num">每袋净重</th><th class="num">采购价(收入)</th><th class="num">运费</th><th class="num">商品成本</th><th class="num">包材成本</th>
         </tr></thead>
-        <tbody>${rows.map((r, i) => `<tr data-i="${i}" data-uc="${r.unit_cost || 0}" data-pct="${r.deduction_percent || 0}">
+        <tbody>${rows.map((r, i) => `<tr data-i="${i}" data-uc="${r.unit_cost || 0}" data-pct="${r.deduction_percent || 0}" data-pid="${r.product_id || ""}">
           <td>${esc(r.product_name)}
             <div class="muted" style="font-size:12px;">${esc(r.purchase_no) || "—"} · ${esc(r.center) || "—"}</div>
           </td>
           <td><select class="wi-prod" onchange="wImportPick(${i})">${opts(r.product_id)}</select>
-            <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"}${r.deduction_percent ? ` · 扣点 ${fmtNum(r.deduction_percent)}%` : ""}</div></td>
+            <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"}${r.deduction_percent ? ` · 扣点 ${fmtNum(r.deduction_percent)}%` : ""}</div>
+            <div class="muted wi-pack" style="font-size:12px;"></div></td>
           <td><input class="wi-box" type="number" step="any" min="0" value="${r.box_count || ""}" style="width:58px;" /></td>
           <td><input class="wi-qty" type="number" step="any" min="0" value="${r.quantity}" style="width:68px;" oninput="wImportCalc()" /></td>
           <td><input class="wi-weight" type="number" step="any" min="0" value="${r.bag_weight || ""}" style="width:72px;" oninput="wImportCalc()" /></td>
           <td><input class="wi-price" type="number" step="any" min="0" value="${r.unit_price || ""}" style="width:70px;" oninput="wImportCalc()" /></td>
           <td><input class="wi-freight" type="number" step="any" min="0" value="${r.freight || ""}" style="width:64px;" oninput="wImportCalc()" /></td>
           <td class="num mono wi-cogs">—</td>
+          <td class="num mono wi-packcost">—</td>
         </tr>`).join("")}</tbody>
       </table>
     </div>
@@ -2236,6 +2353,7 @@ function wImportPick(i) {
   if (!tr) return;
   const p = (WPROD || []).find((x) => x.id === +tr.querySelector(".wi-prod").value);
   tr.dataset.uc = p ? (p.stock_unit_cost || 0) : 0;
+  tr.dataset.pid = p ? p.id : "";
   if (p) {
     tr.querySelector(".wi-price").value = p.purchase_price || "";
     tr.querySelector(".wi-freight").value = p.freight || "";
@@ -2246,7 +2364,7 @@ function wImportPick(i) {
   wImportCalc();
 }
 function wImportCalc() {
-  let rev = 0, cogs = 0, ft = 0, qtySum = 0;
+  let rev = 0, cogs = 0, ft = 0, packc = 0, qtySum = 0;
   document.querySelectorAll("#wiImportTable tbody tr").forEach((tr) => {
     const q = parseFloat(tr.querySelector(".wi-qty").value) || 0;
     const pr = parseFloat(tr.querySelector(".wi-price").value) || 0;
@@ -2254,13 +2372,20 @@ function wImportCalc() {
     const bw = parseFloat(tr.querySelector(".wi-weight").value) || 0;
     const uc = +(tr.dataset.uc || 0);
     const pct = +(tr.dataset.pct || 0);
+    const pid = +tr.dataset.pid || null;
+    const p = (WPROD || []).find((x) => x.id === pid);
+    const pe = wPackEstimate(p, q);
     const rowCogs = q * bw * uc;
     const cell = tr.querySelector(".wi-cogs");
     if (cell) cell.textContent = fmtMoney(rowCogs);
-    rev += q * pr * (1 - pct / 100); cogs += rowCogs; ft += q * fr; qtySum += q;
+    const pc = tr.querySelector(".wi-packcost");
+    if (pc) pc.textContent = pe.cost ? fmtMoney(pe.cost) : "—";
+    const packSub = tr.querySelector(".wi-pack");
+    if (packSub) packSub.textContent = pe.text !== "—" ? `随货包材：${pe.text}` : "";
+    rev += q * pr * (1 - pct / 100); cogs += rowCogs; ft += q * fr; packc += pe.cost; qtySum += q;
   });
   const el = $("wiImportTotal");
-  if (el) el.innerHTML = `数量 <b>${fmtNum(qtySum)}</b> 袋 · 收入 <b>${fmtMoney(rev)}</b> · 成本 <b>${fmtMoney(cogs)}</b> · 运费 <b>${fmtMoney(ft)}</b> · 毛利 <b style="color:var(--green)">${fmtMoney(rev - cogs - ft)}</b>`;
+  if (el) el.innerHTML = `数量 <b>${fmtNum(qtySum)}</b> 袋 · 收入 <b>${fmtMoney(rev)}</b> · 成本 <b>${fmtMoney(cogs)}</b> · 运费 <b>${fmtMoney(ft)}</b> · 包材 <b>${fmtMoney(packc)}</b> · 毛利 <b style="color:var(--green)">${fmtMoney(rev - cogs - ft - packc)}</b>`;
 }
 async function wImportConfirm() {
   if (!WIMPORT) { toast("请先解析预览"); return; }
@@ -2688,19 +2813,21 @@ function addPackRow() {
   // 把已填的行转为只读展示，再追加一行
   last.innerHTML = `
     <input value="${esc(m.name)}" readonly style="background:#f9fafb;" />
-    <select class="pack-unit" onchange="packUnitChanged(this)">${unitOptions(m, unit)}</select>
+    <select class="pack-unit searchable" onchange="packUnitChanged(this)">${unitOptions(m, unit)}</select>
     <input type="number" step="any" value="${qty}" class="pack-qty" />
     <button class="btn danger sm" onclick="this.closest('.pack-row').remove()">删</button>`;
   box.insertAdjacentHTML("beforeend", `
     <div class="pack-row">
-      <select class="pack-product" onchange="packProductChanged(this)">
+      <select class="pack-product searchable" onchange="packProductChanged(this)">
         <option value="">选择关联商品…</option>
         ${PRODUCTS.filter((p) => p.is_active).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}
       </select>
-      <select class="pack-unit"><option>个</option></select>
+      <select class="pack-unit searchable"><option>个</option></select>
       <input type="number" step="any" value="1" class="pack-qty" />
       <button class="btn secondary sm" onclick="addPackRow()">＋</button>
     </div>`);
+  // 新追加的行同样要转成「点击选择 / 输入筛选」的下拉（原先漏了这台转换，导致只能下拉不能输入搜索）
+  bindSearchable(box);
 }
 
 function openProductModal(pid = 0, prefillName = "") {
@@ -2893,7 +3020,9 @@ function prItemLinked(sel) {
   if (m) row.querySelector(".pr-item-name").value = m.name;
 }
 function addPrItemRow() {
-  $("prItems").insertAdjacentHTML("beforeend", prItemRowHtml());
+  const box = $("prItems");
+  box.insertAdjacentHTML("beforeend", prItemRowHtml());
+  bindSearchable(box); // 新追加行的下拉也需支持输入筛选
 }
 /* 箱型号→包材纸箱 关联 */
 function prBoxProducts() {
@@ -2930,7 +3059,9 @@ function prBoxLinked(sel) {
   }
 }
 function addPrBoxRow() {
-  $("prBoxItems").insertAdjacentHTML("beforeend", prBoxRowHtml());
+  const box = $("prBoxItems");
+  box.insertAdjacentHTML("beforeend", prBoxRowHtml());
+  bindSearchable(box); // 新追加行的下拉也需支持输入筛选
 }
 function collectPrBoxItems() {
   const out = [];

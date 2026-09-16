@@ -421,7 +421,13 @@ _EXTRA_COLUMNS = {
     "outbounds": _PAY_COLUMNS,
     "other_expenses": _PAY_COLUMNS,
     "finance_records": _PAY_COLUMNS,
-    "warehouse_ins": _PAY_COLUMNS,
+    "warehouse_ins": _PAY_COLUMNS + (
+        # 随货包材结算：明细快照 + 成本合计
+        ("pack_items", "JSON"),
+        ("pack_cost", "FLOAT DEFAULT 0"),
+    ),
+    # 入仓品：关联结算（随货包材）清单，每袋用量
+    "warehouse_products": (("pack_items", "JSON"),),
     # 出库行：代发标记（订单商品未关联库存大类 → 不扣库存，只记代发数量/成本）
     "outbound_lines": (("is_dropship", "BOOLEAN DEFAULT 0"),),
 }
