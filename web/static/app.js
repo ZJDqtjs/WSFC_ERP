@@ -1509,10 +1509,18 @@ function renderRemarkHtml(rmk) {
   }).join("");
 }
 
-/** 上传备注附件：成功后把 /uploads/xxx 追加进备注文本框，随表单一起保存 */
-async function uploadRemarkFiles(textareaId, inputEl) {
-  const files = Array.from(inputEl.files || []);
-  inputEl.value = "";  // 允许重复选择同一个文件
+/** 上传备注附件：成功后把 /uploads/xxx 追加进备注文本框，随表单一起保存。
+     source 可以是文件选择 input 元素，或粘贴传入的 FileList / File[]。 */
+async function uploadRemarkFiles(textareaId, source) {
+  let files;
+  if (source && typeof source.files !== "undefined") {
+    source.value = "";            // 允许重复选择同一个文件
+    files = Array.from(source.files || []);
+  } else if (source && typeof source[Symbol.iterator] === "function") {
+    files = Array.from(source);   // 粘贴：FileList / File[]
+  } else {
+    files = [];
+  }
   if (!files.length) return;
   try {
     for (const f of files) {
@@ -1523,6 +1531,20 @@ async function uploadRemarkFiles(textareaId, inputEl) {
     renderRemarkAttachments(textareaId);
     toast(`已添加 ${files.length} 个附件`);
   } catch (e) { toast("附件上传失败：" + e.message); }
+}
+
+/** 备注栏支持 Ctrl+V 粘贴图片 / 文件；剪贴板无附件时维持默认文本粘贴 */
+function pasteRemarkFiles(textareaId, event) {
+  const items = (event.clipboardData && event.clipboardData.items) || [];
+  const files = [];
+  for (const it of items) {
+    if (it.kind !== "file") continue;
+    const f = typeof it.getAsFile === "function" ? it.getAsFile() : null;
+    if (f) files.push(f);
+  }
+  if (!files.length) return;
+  if (event.cancelable) event.preventDefault();  // 有附件：阻止把文件以文本形式插入备注
+  uploadRemarkFiles(textareaId, files);
 }
 
 /** 渲染已选附件的小标签（可单个删除），仅作用于新增表单 */

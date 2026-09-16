@@ -7,12 +7,13 @@
     autosize
     :placeholder="placeholder"
     maxlength="500"
+    @paste="onPaste"
   />
   <div class="attach-bar">
     <van-button size="mini" plain type="primary" icon="plus" :loading="uploading" @click="pick">
       图片 / 附件
     </van-button>
-    <span class="attach-tip">支持图片、PDF、Excel 等</span>
+    <span class="attach-tip">支持图片、PDF、Excel 等，可直接粘贴</span>
     <input ref="fileEl" type="file" multiple style="display:none" @change="onFiles" />
   </div>
   <div v-if="files.length" class="attach-chips">
@@ -50,6 +51,24 @@ function pick() {
 async function onFiles(e) {
   const list = Array.from(e.target.files || [])
   e.target.value = ''
+  uploadFiles(list)
+}
+
+/** 支持在备注栏直接粘贴图片 / 附件；剪贴板无附件时维持默认文本粘贴 */
+function onPaste(e) {
+  const items = (e.clipboardData && e.clipboardData.items) || []
+  const files = []
+  for (const it of items) {
+    if (it.kind !== 'file') continue
+    const f = typeof it.getAsFile === 'function' ? it.getAsFile() : null
+    if (f) files.push(f)
+  }
+  if (!files.length) return
+  if (e.cancelable) e.preventDefault()   // 有附件：阻止把文件以文本形式插入备注
+  uploadFiles(files)
+}
+
+async function uploadFiles(list) {
   if (!list.length) return
   uploading.value = true
   try {

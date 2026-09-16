@@ -244,10 +244,10 @@
           </div>
           <div class="field" style="margin-top:12px;">
             <label>备注</label>
-            <textarea id="inRemark" rows="1" placeholder="可选"></textarea>
+            <textarea id="inRemark" rows="1" placeholder="可选" onpaste="pasteRemarkFiles('inRemark', event)"></textarea>
             <div class="attach-bar">
               <button type="button" class="btn sm secondary" onclick="$('inRemarkFile').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 图片 / 附件</button>
-              <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），附件随备注显示在记录里</span>
+              <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），可直接 Ctrl+V 粘贴</span>
               <input type="file" id="inRemarkFile" multiple style="display:none;" onchange="uploadRemarkFiles('inRemark', this)" />
             </div>
             <div class="attach-list" id="inRemarkFiles"></div>
@@ -294,10 +294,10 @@
             </div>
             <div class="field" style="grid-column:1/-1;">
               <label>备注</label>
-              <textarea id="outRemark" rows="1" placeholder="可选"></textarea>
+              <textarea id="outRemark" rows="1" placeholder="可选" onpaste="pasteRemarkFiles('outRemark', event)"></textarea>
               <div class="attach-bar">
                 <button type="button" class="btn sm secondary" onclick="$('outRemarkFile').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 图片 / 附件</button>
-                <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），附件随备注显示在记录里</span>
+                <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），可直接 Ctrl+V 粘贴</span>
                 <input type="file" id="outRemarkFile" multiple style="display:none;" onchange="uploadRemarkFiles('outRemark', this)" />
               </div>
               <div class="attach-list" id="outRemarkFiles"></div>
@@ -656,10 +656,10 @@
           </div>
           <div class="field" style="margin-top:12px;">
             <label>备注</label>
-            <textarea id="oeRemark" rows="1" placeholder="可选，如 收款方 / 用途 / 数量"></textarea>
+            <textarea id="oeRemark" rows="1" placeholder="可选，如 收款方 / 用途 / 数量" onpaste="pasteRemarkFiles('oeRemark', event)"></textarea>
             <div class="attach-bar">
               <button type="button" class="btn sm secondary" onclick="$('oeRemarkFile').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 图片 / 附件</button>
-              <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），附件随备注显示在记录里</span>
+              <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），可直接 Ctrl+V 粘贴</span>
               <input type="file" id="oeRemarkFile" multiple style="display:none;" onchange="uploadRemarkFiles('oeRemark', this)" />
             </div>
             <div class="attach-list" id="oeRemarkFiles"></div>
