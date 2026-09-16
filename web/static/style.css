@@ -1766,3 +1766,60 @@ tr.draft-off {
 }
 
 .attach-link:hover { text-decoration: underline; }
+
+/* AI 确认框 · 每行「已付款/待付款」滑动开关（带开/关动画） */
+.ai-sw {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.ai-sw input.ai-sw-in {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.ai-sw-track {
+  position: relative;
+  flex: none;
+  width: 38px;
+  height: 22px;
+  border-radius: 11px;
+  background: #c8ccd4;
+  box-shadow: inset 0 0 2px rgba(0, 0, 0, 0.15);
+  transition: background 0.25s ease;
+}
+.ai-sw-track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.ai-sw input:checked + .ai-sw-track {
+  background: #21a34c;
+}
+.ai-sw input:checked + .ai-sw-track::after {
+  transform: translateX(16px);
+}
+.ai-sw-label {
+  font-size: 12px;
+  transition: color 0.2s ease;
+}
+.ai-sw-label.on {
+  color: #138a36;
+  font-weight: 600;
+}
+.ai-sw-label.off {
+  color: #b45309;
+  font-weight: 600;
+}

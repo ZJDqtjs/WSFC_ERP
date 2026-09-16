@@ -1346,6 +1346,7 @@ function openAiConfirm(r) {
       <td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.quantity)}" style="width:90px;" /></td>
       <td><input class="ai-unit" value="${esc(ln.unit || "")}" style="width:70px;" />${unitBadge}</td>
       <td class="ai-price-cell"><input type="number" step="any" class="ai-price" value="${ln.unit_price ? ln.unit_price : ""}" placeholder="可留空" style="width:100px;" />${ln.price_defaulted ? '<span class="ai-price-badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按最近价</span>' : ""}</td>
+      <td>${aiPayHtml(ln, i)}</td>
       <td class="muted" style="font-size:12px;min-width:200px;">${esc(ln.hint || "")}</td>
       <td style="white-space:nowrap;"><button class="btn secondary" style="padding:4px 8px;" title="删除这一行" onclick="aiDelLine(${i})">🗑 删除</button></td>
     </tr>`;
@@ -1356,7 +1357,7 @@ function openAiConfirm(r) {
   openModal(`
     <h3>确认录入（${isIn ? "入库" : "出库"}） <button class="close" onclick="closeModal()">✕</button></h3>
     ${invImg}
-    <p class="hint" style="margin-bottom:12px;">已自动识别以下内容，请核对（可修改/可删除行）后提交；🆕 标记的商品为新物品，点「确认提交」后才会新增商品档案（取消不会创建）。单价可留空，提交后在单据里补也行。</p>
+    <p class="hint" style="margin-bottom:12px;">已自动识别以下内容，请核对（可修改/可删除行）后提交；🆕 标记的商品为新物品，点「确认提交」后才会新增商品档案（取消不会创建）。单价可留空，提交后在单据里补也行。每行默认<b>已付款</b>，可点成「待付款」把该笔列入「待付款账单」。</p>
     <div class="form-grid">
       <div class="field"><label>业务类型</label><select id="aiType" onchange="aiTypeChanged()">
         <option value="inbound" ${isIn ? "selected" : ""}>入库（进货）</option>
@@ -1367,14 +1368,37 @@ function openAiConfirm(r) {
       <div class="field"><label>备注</label><input id="aiRemark" value="${esc(r.remark)}" /></div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>分类</th><th>商品</th><th>数量</th><th>单位</th><th>${isIn ? "单价" : "售价"}</th><th>说明</th><th>操作</th></tr></thead>
-      <tbody id="aiLines">${linesHtml || '<tr><td colspan="7" class="empty">未识别到明细</td></tr>'}</tbody>
+      <thead><tr><th>分类</th><th>商品</th><th>数量</th><th>单位</th><th>${isIn ? "单价" : "售价"}</th><th>付款</th><th>说明</th><th>操作</th></tr></thead>
+      <tbody id="aiLines">${linesHtml || '<tr><td colspan="8" class="empty">未识别到明细</td></tr>'}</tbody>
     </table></div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
       <button class="btn green" onclick="aiSubmit()">✓ 确认提交</button>
     </div>`);
   $("modalBox").classList.add("wide");   // 明细列多，弹窗放宽，避免信息被挤没
+}
+// 每行「是否已付款」开关：默认已付款；点成「待付款」后该笔提交时计入「待付款账单」
+function aiPayHtml(ln, i) {
+  const paid = ln.paid !== false;
+  const st = paid ? "on" : "off";
+  return `<label class="ai-sw" title="已付款：直接进报表 / 待付款：列入待付款账单（点开关切换）">
+    <input type="checkbox" class="ai-sw-in" ${paid ? "checked" : ""} onchange="aiTogglePay(${i})" />
+    <span class="ai-sw-track"></span>
+    <span class="ai-sw-label ${st}">${paid ? "已付款" : "待付款"}</span>
+  </label>`;
+}
+function aiTogglePay(i) {
+  const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[i] : null;
+  const input = document.querySelector(`#aiLines tr[data-idx="${i}"] .ai-sw-in`);
+  if (!input) return;
+  const next = input.checked;
+  const lbl = document.querySelector(`#aiLines tr[data-idx="${i}"] .ai-sw-label`);
+  if (lbl) {
+    lbl.textContent = next ? "已付款" : "待付款";
+    lbl.classList.toggle("on", next);
+    lbl.classList.toggle("off", !next);
+  }
+  if (line) line.paid = next;
 }
 // 待新增商品的名字输入框：选中「🆕 新建」时出现，可自己改名字
 function aiNewNameHtml(ln) {
@@ -1425,6 +1449,7 @@ async function aiSubmit() {
       unit: tr.querySelector(".ai-unit").value.trim(),
       unit_price: priceRaw === "" ? 0 : parseFloat(priceRaw),   // 单价允许留空，提交后可在单据里补
       auto_created: !!line.auto_created,
+      paid: line.paid !== false,   // 默认已付款；点成「待付款」则这笔入「待付款账单」
     };
   }).filter((r) => r.product_id || r.new_product);
   if (!rows.length) { toast("请至少填写一条商品"); return; }
@@ -1451,11 +1476,18 @@ async function aiSubmit() {
     if (type === "inbound") {
       for (const r of rows) {
         const rmk = [inv, r.auto_created ? "[AI自动新增]" : "", remark].filter(Boolean).join(" ");
-        await api("/api/inbounds", "POST", { product_id: r.product_id, unit: r.unit, quantity: r.quantity, unit_price: r.unit_price, supplier: party, operator: op, date, remark: rmk });
+        await api("/api/inbounds", "POST", { product_id: r.product_id, unit: r.unit, quantity: r.quantity, unit_price: r.unit_price, supplier: party, operator: op, date, remark: rmk, pay_status: r.paid ? "paid" : "unpaid" });
       }
     } else {
-      const lines = rows.map((r) => ({ product_id: r.product_id, unit: r.unit, quantity: r.quantity, price: r.unit_price }));
-      await api("/api/outbounds", "POST", { customer: party, operator: op, date, remark: [inv, remark].filter(Boolean).join(" "), lines, pack_lines: [] });
+      // 已付款 / 待付款 分单：这样「待付款」的各笔会独立进入「待付款账单」，其余进报表
+      const groups = { paid: [], unpaid: [] };
+      rows.forEach((r) => groups[r.paid ? "paid" : "unpaid"].push(r));
+      for (const st of ["paid", "unpaid"]) {
+        const g = groups[st];
+        if (!g.length) continue;
+        const lines = g.map((r) => ({ product_id: r.product_id, unit: r.unit, quantity: r.quantity, price: r.unit_price }));
+        await api("/api/outbounds", "POST", { customer: party, operator: op, date, remark: [inv, remark].filter(Boolean).join(" "), lines, pack_lines: [], pay_status: st });
+      }
     }
     closeModal();
     AI_CONFIRM = null;
@@ -1758,10 +1790,10 @@ function wPackRowsHtml(items) {
     </div>`;
   }).join("") + `
     <div class="pack-row">
-      <select class="pack-product" onchange="wPackProductChanged(this)">
+      <select class="pack-product searchable" onchange="wPackProductChanged(this)">
         <option value="">选择随货包材…</option>${opts}
       </select>
-      <select class="pack-unit"><option>个</option></select>
+      <select class="pack-unit searchable"><option>个</option></select>
       <input type="number" step="any" value="1" class="pack-qty" />
       <button class="btn secondary sm" onclick="wPackAddRow()">＋</button>
     </div>`;
@@ -1788,13 +1820,15 @@ function wPackAddRow() {
     <button class="btn danger sm" onclick="this.closest('.pack-row').remove()">删</button>`;
   box.insertAdjacentHTML("beforeend", `
     <div class="pack-row">
-      <select class="pack-product" onchange="wPackProductChanged(this)">
+      <select class="pack-product searchable" onchange="wPackProductChanged(this)">
         <option value="">选择随货包材…</option>${opts}
       </select>
-      <select class="pack-unit"><option>个</option></select>
+      <select class="pack-unit searchable"><option>个</option></select>
       <input type="number" step="any" value="1" class="pack-qty" />
       <button class="btn secondary sm" onclick="wPackAddRow()">＋</button>
     </div>`);
+  // 新追加的行同样要转成「点击选择 / 输入筛选」的下拉，否则只能下拉不能输入搜索
+  bindSearchable(box);
 }
 function wCollectPacks() {
   const out = [];

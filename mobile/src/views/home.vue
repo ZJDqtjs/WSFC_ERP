@@ -207,6 +207,19 @@
           </div>
           <div v-if="ln.price_defaulted" class="muted" style="margin-top:4px;">单价未识别，已按该商品最近一次录入价回填，请核对</div>
           <div v-if="ln.hint" class="muted" style="margin-top:4px;">{{ ln.hint }}</div>
+          <!-- 是否已付款：滑动开关（自带开/关动画），默认已付款，关掉则这笔列入「待付款账单」 -->
+          <div class="row" style="gap:10px;margin-top:8px;align-items:center;">
+            <van-switch
+              v-model="ln.paid"
+              size="20"
+              active-color="#2ea24f"
+              inactive-color="#c9d1d9"
+            />
+            <span class="muted" style="font-size:12px;">
+              <span :style="ln.paid ? 'color:#2ea24f;font-weight:600;' : 'color:#b45309;font-weight:600;'">{{ ln.paid ? '已付款' : '待付款' }}</span>
+              · {{ ln.paid ? '直接进报表' : '列入待付款账单' }}
+            </span>
+          </div>
         </div>
         <div v-if="!aiForm.lines.length" class="empty">无明细，请重新识别</div>
 
@@ -374,6 +387,7 @@ function openConfirm(r) {
       new_name: (ln.new_product && ln.new_product.name) || '',   // 新商品名字（可改）
       price_defaulted,
       hint: ln.hint || '',
+      paid: true,   // 默认已付款；可关掉把该笔列入「待付款账单」
     }
   })
   confirmShow.value = true
@@ -432,21 +446,30 @@ async function submitAI() {
           supplier: aiForm.supplier,
           date: aiForm.date,
           remark: [inv, ln.auto_created ? '[AI自动新增]' : '', aiForm.remark].filter(Boolean).join(' '),
+          pay_status: ln.paid === false ? 'unpaid' : 'paid',
         })
       }
     } else {
-      await api('/api/outbounds', 'POST', {
-        customer: aiForm.customer,
-        date: aiForm.date,
-        remark: [inv, aiForm.remark].filter(Boolean).join(' '),
-        lines: ok.map((ln) => ({
-          product_id: +ln.product_id,
-          unit: ln.unit || '个',
-          quantity: +ln.quantity,
-          price: +ln.unit_price || 0,
-        })),
-        pack_lines: [],
-      })
+      // 已付款 / 待付款 分单：这样「待付款」的各笔会独立进入「待付款账单」，其余进报表
+      const groups = { paid: [], unpaid: [] }
+      ok.forEach((ln) => groups[ln.paid === false ? 'unpaid' : 'paid'].push(ln))
+      for (const st of ['paid', 'unpaid']) {
+        const g = groups[st]
+        if (!g.length) continue
+        await api('/api/outbounds', 'POST', {
+          customer: aiForm.customer,
+          date: aiForm.date,
+          remark: [inv, aiForm.remark].filter(Boolean).join(' '),
+          lines: g.map((ln) => ({
+            product_id: +ln.product_id,
+            unit: ln.unit || '个',
+            quantity: +ln.quantity,
+            price: +ln.unit_price || 0,
+          })),
+          pack_lines: [],
+          pay_status: st,
+        })
+      }
     }
     showToast(aiForm.type === 'inbound' ? '入库成功' : '出库成功')
     confirmShow.value = false
