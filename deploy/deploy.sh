@@ -51,6 +51,15 @@ sudo mkdir -p /var/www/erp
 sudo rm -rf /var/www/erp/*
 sudo cp -r "$APP_DIR/web/static/." /var/www/erp/
 sudo cp "$APP_DIR/config.json" /var/www/erp/config.json
+# 给桌面端 index.html 里的 app.js / style.css 追加部署时间戳（?v=...）：
+# 这样每次部署浏览器都会重新取这两个文件，即使某台机器此前把它们按「启发式缓存」长期缓存了，
+# 也会因为 URL 变化立刻拿到新版本，根治「新 index.html + 旧 app.js」导致的 is not defined / 点击没反应。
+# 只改 /var/www/erp 下的副本，仓库里的 index.html 保持干净。
+STAMP="$(date +%Y%m%d%H%M%S)"
+sudo sed -i -E \
+  -e 's#(src="/app\.js)(\?v=[^"]*)?(")#\1?v='"$STAMP"'\3#' \
+  -e 's#(href="/style\.css)(\?v=[^"]*)?(")#\1?v='"$STAMP"'\3#' \
+  /var/www/erp/index.html
 if [ ! -f "$APP_DIR/mobile/dist/index.html" ]; then
   echo "错误：找不到移动端生产构建 mobile/dist，请先在本地执行 npm --prefix mobile run build 并上传 mobile/dist" >&2
   exit 1

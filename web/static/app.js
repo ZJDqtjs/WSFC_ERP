@@ -154,7 +154,11 @@ function applyTableSort(tbl, rows) {
   if (tbl && tbl._sort && Array.isArray(rows)) {
     const k = tbl._sort.key, d = tbl._sort.dir;
     // 派生列没有原始字段，排序前按需换算，否则会拿 undefined 比较（等于没排序）
+    // 表格还可以自带 _sortVal（见 renderProducts）：把「显示出来那一格的值」换成排序值
+    const derive = tbl._sortVal;
     const valOf = (r) => {
+      const v = derive ? derive(r, k) : undefined;
+      if (v !== undefined) return v;
       if (k === "gross") return (Number(r.amount) || 0) - (Number(r.total_cogs != null ? r.total_cogs : r.cogs) || 0);
       return r[k];
     };
@@ -247,6 +251,25 @@ function refCostHtml(p) {
   if (p.avg_cost > 0) return `${fmtMoney(p.avg_cost * f)}/${du}`;
   if (p.unit_cost > 0) return `${fmtMoney(p.unit_cost * f)}/${du}`;
   return "—";
+}
+/* 参考成本那一格的「排序值」：与 refCostHtml 的显示规则完全一致（均价优先，无则参考成本，按默认单位换算）。
+   两者都为 0 时这一格显示「—」，排序时按空值处理（详见 compareVal），免得点了表头却看不出变化。 */
+function refCostValue(p) {
+  const c = Number(p.avg_cost) > 0 ? Number(p.avg_cost) : (Number(p.unit_cost) || 0);
+  if (!(c > 0)) return null;
+  return c * (unitFactor(p, defaultUnit(p)) || 1);
+}
+/* 库存那一格的「排序值」：与列表里这一格显示的内容对齐——
+   订单商品这一格显示的是「经库存商品」（库存记在它关联的库存商品上），故取该库存商品的现有库存；
+   人工显示的是工作量；其余按默认单位换算后的库存。 */
+function stockSortValue(p) {
+  if (p.product_type === "order") {
+    const sp = p.stock_product_id ? PRODUCTS.find((x) => x.id === p.stock_product_id) : null;
+    if (!sp) return 0; // 代发（未关联库存商品）：本仓不持有该商品库存
+    return (Number(sp.stock) || 0) / (unitFactor(sp, defaultUnit(sp)) || 1);
+  }
+  if (p.category === "人工") return Number(p.workload) || 0;
+  return (Number(p.stock) || 0) / (unitFactor(p, defaultUnit(p)) || 1);
 }
 /* 出库默认单价：优先默认售价，其次参考成本（库存均价/参考成本，按所选单位换算） */
 function fillSalePrice(tr, p, unit) {
@@ -2527,6 +2550,9 @@ async function renderProducts() {
     (isOrderPage || !ptype || p.product_type === ptype)
   );
   const t = $("prodTable");
+  // 「参考成本」和「库存」这两格显示的不是商品原始字段（参考成本可能是均价回退到参考成本，
+  // 库存对订单商品显示的是它关联的库存商品），排序时按显示值换算，否则点表头会看不出升/降序。
+  t._sortVal = (p, k) => (k === "avg_cost" ? refCostValue(p) : k === "stock" ? stockSortValue(p) : undefined);
   // 独立页默认按名称、商品页默认按库存升序排序（用户手动点击表头后保持其排序）
   if (!t._sort) t._sort = isOrderPage ? { key: "name", dir: 1 } : { key: "stock", dir: 1 };
   rows = applyTableSort(t, rows);
