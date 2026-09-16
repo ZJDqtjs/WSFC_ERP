@@ -273,7 +273,17 @@ const cats = computed(() => shrink(PRODUCTS.value.map((p) => p.category)))
 const filtered = computed(() => {
   const s = (kw.value || '').trim().toLowerCase()
   return PRODUCTS.value.filter((p) => {
-    if (s && !(`${p.name || ''} ${p.category || ''} ${p.code || ''}`.toLowerCase().includes(s))) return false
+    if (s) {
+      // 关键词：名称 / 分类 / 编码 / 规格 / 单位 / 出库方式（代发、扣减库存）/ 关联结算商品名
+      // 这样搜「代发」就能筛出未关联库存大类的订单商品
+      // 代发的关键词刻意不含「库存」二字：搜「库存」只出库存/扣减库存的商品，搜「代发」只出代发商品
+      const way = p.product_type === 'order'
+        ? (p.stock_product_id ? `订单 扣减库存 ${p.stock_product_name || ''}` : '订单 代发 外发')
+        : '库存商品'
+      const packs = (p.pack_items || []).map((it) => nameOf(it.product_id)).join(' ')
+      const hit = `${p.name || ''} ${p.category || ''} ${p.code || ''} ${p.spec || ''} ${p.unit || ''} ${p.base_unit || ''} ${way} ${packs}`
+      if (!hit.toLowerCase().includes(s)) return false
+    }
     if (ptype.value === 'pack' || ptype.value === 'labor' || ptype.value === 'express') {
       const label = { pack: '包材', labor: '人工', express: '快递' }[ptype.value]
       if (p.category !== label) return false

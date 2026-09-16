@@ -427,7 +427,7 @@
               <button class="seg-item" data-panel="og-labor" onclick="switchOgSeg(this)">人工</button>
               <button class="seg-item" data-panel="og-laborpack" onclick="switchOgSeg(this)">打包人工 + 耗材</button>
             </div>
-            <input id="ogSearch" placeholder="🔍 搜索商品..." oninput="renderOutGroup()" />
+            <input id="ogSearch" placeholder="🔍 搜索商品（可搜「代发」）..." oninput="renderOutGroup()" />
             <button class="btn secondary" onclick="renderOutGroup()">筛选</button>
             <div class="grow"></div>
             <button class="btn danger" onclick="deleteOutGroup()">🗑 删除本批（<span id="ogDelCount">0</span> 单）</button>
@@ -445,7 +445,7 @@
               <option value="">全部类型</option><option value="stock" selected>库存商品</option><option value="order">订单商品</option>
             </select>
             <select id="prodCategory" class="searchable" onchange="renderProducts()"><option value="">全部分类</option></select>
-            <input id="prodSearch" placeholder="🔍 搜索商品..." oninput="renderProducts()" />
+            <input id="prodSearch" placeholder="🔍 搜索商品 / 分类 / 规格 / 代发..." oninput="renderProducts()" />
             <div class="grow"></div>
             <button class="btn secondary" onclick="openUnitsModal()"><svg class="ic"><use href="#i-ruler"/></svg> 计量单位管理</button>
             <button class="btn secondary" onclick="pdataDownload('products_stock')"><svg class="ic"><use href="#i-download"/></svg> 导出库存JSON</button>

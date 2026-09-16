@@ -2483,8 +2483,22 @@ async function renderProducts() {
   const kw = ($("prodSearch")?.value || "").trim().toLowerCase();
   const cat = forced ? "" : (catSel ? catSel.value : "");
   const ptype = $("prodType")?.value || "";
+  // 关键词匹配：名称 / 分类 / 规格 / 编码 / 单位 / 出库方式（代发、扣减库存）/ 关联结算商品名
+  // 这样输入「代发」就能筛出未关联库存大类的订单商品。
+  const kwHit = (p) => {
+    if (!kw) return true;
+    if ((p.name || "").toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw)) return true;
+    // 代发的关键词刻意不含「库存」二字：这样搜「库存」只出库存/扣减库存的商品，搜「代发」只出代发商品
+    const way = p.product_type === "order"
+      ? (p.stock_product_id ? `订单 扣减库存 ${p.stock_product_name || ""}` : "订单 代发 外发")
+      : "库存商品";
+    const packs = (p.pack_items || [])
+      .map((it) => (PRODUCTS.find((x) => x.id === it.product_id) || {}).name || "")
+      .join(" ");
+    return [p.spec, p.code, p.unit, p.base_unit, way, packs].join(" ").toLowerCase().includes(kw);
+  };
   let rows = PRODUCTS.filter((p) =>
-    (!kw || p.name.toLowerCase().includes(kw) || p.category.toLowerCase().includes(kw)) &&
+    kwHit(p) &&
     (!cat || p.category === cat) &&
     (isOrderPage ? p.product_type === "order"
       : (forced ? p.category === forced : !EXCLUDED.includes(p.category))) &&
@@ -2512,11 +2526,12 @@ async function renderProducts() {
       const typeBadge = p.product_type === "order"
         ? '<span class="badge income">订单</span>'
         : '<span class="badge adjust">库存</span>';
+      // linkInfo 允许含 HTML（代发徽章），所以文本分支这里自己先 esc，渲染时不能再 esc 一次
       const linkInfo = p.product_type === "order"
         ? (p.stock_product_id
           ? `扣减：${esc(p.stock_product_name || "?")} ×${fmtNum(p.multiplier)}`
           : '<span class="badge income">代发</span> <span class="muted">不扣库存，只统计代发数量/成本</span>')
-        : (p.spec || "");
+        : esc(p.spec || "");
       const isLabor = p.category === "人工";
       const stockShown = p.product_type === "order" && p.stock_product_name
         ? `<span class="muted">经库存商品</span>`
@@ -2526,7 +2541,7 @@ async function renderProducts() {
       return `<tr>
         <td class="cb-col"><input type="checkbox" value="${p.id}" ${prodSel.has(p.id) ? "checked" : ""} onchange="toggleSel('prod',${p.id},this.checked)" /></td>
         <td class="muted mono">${esc(p.code) || "—"}</td>
-        <td><b>${typeBadge} ${esc(p.name)}</b><div class="muted" style="font-size:12px;">${esc(linkInfo)}</div></td>
+        <td><b>${typeBadge} ${esc(p.name)}</b><div class="muted" style="font-size:12px;">${linkInfo}</div></td>
         <td>${esc(p.category) ? `<span class="badge adjust">${esc(p.category)}</span>` : "—"}</td>
         <td class="muted" style="max-width:170px;">${esc(packs) || "—"}</td>
         <td class="num mono">${refCostHtml(p)}</td>
@@ -3618,10 +3633,12 @@ function renderOutGroup() {
   const rows = OUT_GROUP;
   const kw = ($("ogSearch")?.value || "").trim().toLowerCase();
   const t = $("ogTable");
-  const aggSale = outAggBy(rows, "sale").filter((a) => !kw || a.name.toLowerCase().includes(kw));
-  const aggPack = outAggBy(rows, "pack").filter((a) => !kw || a.name.toLowerCase().includes(kw));
-  const aggLabor = outAggBy(rows, "labor").filter((a) => !kw || a.name.toLowerCase().includes(kw));
-  const aggLaborPack = outAggBy(rows, "laborpack").filter((a) => !kw || a.name.toLowerCase().includes(kw));
+  // 销售商品可额外按出库方式筛：输入「代发」/「库存」即可筛出对应商品
+  const kwHit = (a, extra = "") => !kw || `${a.name} ${extra}`.toLowerCase().includes(kw);
+  const aggSale = outAggBy(rows, "sale").filter((a) => kwHit(a, a.is_dropship ? "代发 外发" : "库存出库"));
+  const aggPack = outAggBy(rows, "pack").filter((a) => kwHit(a));
+  const aggLabor = outAggBy(rows, "labor").filter((a) => kwHit(a));
+  const aggLaborPack = outAggBy(rows, "laborpack").filter((a) => kwHit(a, a.sub || ""));
   // 「销售商品」页签的成本需包含该商品关联的打包人工+耗材+快递费成本，否则毛利虚高：
   // 直接关联的打包行带 sale_product_id；一单多货或未回填的按该单销售金额比例分摊到销售商品。
   // 快递费（category=快递）单独归入 express_cogs，与打包人工+耗材分开展示。

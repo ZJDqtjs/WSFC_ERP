@@ -262,7 +262,11 @@ const current = computed(() => {
     : seg.value === 'pack' ? aggPack.value
       : seg.value === 'labor' ? aggLabor.value : aggLaborPack.value
   const s = (kw.value || '').trim().toLowerCase()
-  return s ? src.filter((a) => (a.name || '').toLowerCase().includes(s)) : src
+  if (!s) return src
+  const isSale = seg.value === 'sale'
+  // 销售商品可额外按出库方式筛：输入「代发」/「库存」即可筛出对应商品
+  return src.filter((a) => `${a.name || ''} ${a.sub || ''} ${isSale ? (a.is_dropship ? '代发 外发' : '库存出库') : ''}`
+    .toLowerCase().includes(s))
 })
 
 async function load() {
