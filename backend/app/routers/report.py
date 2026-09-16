@@ -245,10 +245,18 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
 def summary(
     date_from: str = "",
     date_to: str = "",
-    wh: str = "",   # 可选：指定查看哪个分仓（单仓总览手动切换用），缺省=本登录会话的分仓
+    wh: str = "",   # 可选：指定查看哪个分仓（单仓总览手动切换用），缺省=本登录会话的分仓；wh=all = 全仓合计
     db: Session = Depends(get_db_wh),
     user: User = Depends(get_current_user),
 ):
+    """经营汇总：默认本登录会话的分仓；wh=all 时合并所有分仓（各自是独立账套）。"""
+    if wh == ALL_WH:
+        return _summary_all(date_from, date_to)
+    return _summary_of(db, date_from, date_to, resolve_key(wh))
+
+
+def _summary_of(db: Session, date_from: str, date_to: str, key: str) -> dict:
+    """单个分仓的经营汇总（「单仓总览」各分区的数据源）。"""
     def scope(model):
         q = select(model)
         if date_from:
@@ -494,7 +502,6 @@ def summary(
     # 日期倒序；同一天保持「采购 → 其他开支 → 手工记账」顺序（稳定排序）
     expense_items.sort(key=lambda r: r["date"], reverse=True)
 
-    key = resolve_key(wh)
     return {
         "date_from": date_from,
         "date_to": date_to,
@@ -538,6 +545,173 @@ def summary(
     }
 
 
+# 「全仓合计」：每个分仓是独立账套（独立 db 文件），所以逐个分仓算完再合并。
+# 报表页「全仓总览」下的 汇总/支出/商品/流水 四个分区都用这里的合并结果，口径与单仓一致。
+ALL_WH = "all"
+
+
+def _each_warehouse(fn):
+    """逐个分仓执行 fn(db, key, name)，返回 (结果列表, 失败列表)。
+
+    某个仓读不出来只记一条失败信息，不影响其它仓（例如刚建仓、文件缺失）。
+    """
+    parts: list = []
+    failed: list = []
+    for w in get_warehouses():
+        key, name = w["key"], w.get("name", w["key"])
+        db = None
+        try:
+            db = get_sessionmaker(key)()
+            parts.append(fn(db, key, name))
+        except Exception as e:  # 单个仓失败不拖累整体
+            failed.append({"key": key, "name": name, "error": f"读取失败：{e}"})
+            print(f"[全仓合计] {key} 读取失败:", e)
+        finally:
+            if db is not None:
+                db.close()
+    return parts, failed
+
+
+def _summary_all(date_from: str, date_to: str) -> dict:
+    parts, failed = _each_warehouse(lambda db, key, name: _summary_of(db, date_from, date_to, key))
+    return _merge_summaries(parts, date_from, date_to, failed)
+
+
+def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: list[dict]) -> dict:
+    """把各分仓的 _summary_of 结果合并成「全仓合计」。
+
+    金额/笔数直接相加；商品、按日按月支出、逐笔明细按业务主键归并后重算比率/合计。
+    """
+    def s(field: str) -> float:
+        return round(sum(float(p.get(field) or 0) for p in parts), 2)
+
+    def i(field: str) -> int:
+        return int(sum(int(p.get(field) or 0) for p in parts))
+
+    def merge_maps(field: str) -> dict:
+        out: dict[str, float] = {}
+        for p in parts:
+            for k, v in (p.get(field) or {}).items():
+                out[k] = round(out.get(k, 0.0) + float(v or 0), 2)
+        return out
+
+    def pend(field: str) -> float:
+        return round(sum(float((p.get("pending") or {}).get(field) or 0) for p in parts), 2)
+
+    # ---- 商品：按「商品 + 规格 + 是否代发」归并，再用合并后的成本重算毛利/毛利率 ----
+    num_fields = ("qty", "amount", "gross_sales", "goods_cogs", "pack_cogs",
+                  "labor_cogs", "material_cogs", "other_cogs", "express_cogs")
+    buckets: dict[tuple, dict] = {}
+    for p in parts:
+        for r in p.get("by_product") or []:
+            k = (r.get("name") or "", r.get("spec") or "", bool(r.get("is_dropship")))
+            d = buckets.get(k)
+            if d is None:
+                d = {**r}
+                for f in num_fields:
+                    d[f] = 0.0
+                buckets[k] = d
+            for f in num_fields:
+                d[f] = float(d.get(f) or 0) + float(r.get(f) or 0)
+    product_rows: list[dict] = []
+    for d in buckets.values():
+        goods = round(d["goods_cogs"], 2)
+        pack = round(d["pack_cogs"], 2)
+        express = round(d["express_cogs"], 2)
+        total_cogs = round(goods + pack + express, 2)
+        amount = round(d["amount"], 2)
+        gross_sales = round(d["gross_sales"], 2)
+        gp = round(amount - total_cogs, 2)
+        denom = gross_sales or amount
+        product_rows.append({
+            **d,
+            "qty": round(d["qty"], 4),
+            "amount": amount,
+            "gross_sales": gross_sales,
+            # cogs 语义与单仓一致：总成本 = 商品成本 + 打包人工/耗材 + 快递费
+            "cogs": total_cogs,
+            "total_cogs": total_cogs,
+            "gross_profit": gp,
+            "gp_rate": round(gp / denom * 100, 2) if denom else 0.0,
+        })
+    product_rows.sort(key=lambda x: -x["amount"])
+
+    # ---- 支出：按日 / 按月归并（采购 + 其他开支 + 手工记账）----
+    def merge_expense_rows(field: str, label: str) -> list[dict]:
+        acc: dict[str, dict] = {}
+        for p in parts:
+            for r in p.get(field) or []:
+                k = r.get(label) or ""
+                if not k:
+                    continue
+                b = acc.setdefault(k, {"purchase": 0.0, "other": 0.0, "manual": 0.0, "count": 0})
+                b["purchase"] += float(r.get("purchase") or 0)
+                b["other"] += float(r.get("other_expense") or 0)
+                b["manual"] += float(r.get("manual_expense") or 0)
+                b["count"] += int(r.get("count") or 0)
+        return [
+            {
+                label: k,
+                "purchase": round(v["purchase"], 2),
+                "other_expense": round(v["other"], 2),
+                "manual_expense": round(v["manual"], 2),
+                "period_expense": round(v["other"] + v["manual"], 2),
+                "total": round(v["purchase"] + v["other"] + v["manual"], 2),
+                "count": v["count"],
+            }
+            for k, v in sorted(acc.items(), reverse=True)
+        ]
+
+    # ---- 逐笔支出明细：拼接并补上来源分仓，按日期倒序 ----
+    expense_items: list[dict] = []
+    for p in parts:
+        wname = (p.get("warehouse") or {}).get("name", "")
+        for r in p.get("expense_items") or []:
+            expense_items.append({**r, "warehouse": wname})
+    expense_items.sort(key=lambda r: r.get("date") or "", reverse=True)
+
+    pack_costs = merge_maps("pack_costs")
+    manual_fees = merge_maps("manual_fees")
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "warehouse": {"key": ALL_WH, "name": "全仓合计"},
+        "is_current": False,
+        # 前端据此给流水/支出明细加「分仓」列、给统计卡加「全仓」前缀
+        "is_all": True,
+        "warehouse_count": len(parts),
+        "failed": failed,
+        "pending": {
+            "payables_count": int(pend("payables_count")),
+            "payables_amount": pend("payables_amount"),
+            "receivables_count": int(pend("receivables_count")),
+            "receivables_amount": pend("receivables_amount"),
+        },
+        "revenue": s("revenue"),
+        "cogs": s("cogs"),
+        "goods_cogs": s("goods_cogs"),
+        "gross_profit": s("gross_profit"),
+        "expense": s("expense"),
+        "manual_expense": s("manual_expense"),
+        "other_expense": s("other_expense"),
+        "net_profit": s("net_profit"),
+        "purchase": s("purchase"),
+        "total_expense": s("total_expense"),
+        "stock_value": s("stock_value"),
+        "order_count": i("order_count"),
+        "inbound_count": i("inbound_count"),
+        "by_product": product_rows,
+        "pack_costs": pack_costs,
+        "pack_cost_total": round(sum(pack_costs.values()), 2),
+        "manual_fees": manual_fees,
+        "other_expenses": merge_maps("other_expenses"),
+        "expense_by_day": merge_expense_rows("expense_by_day", "date"),
+        "expense_by_month": merge_expense_rows("expense_by_month", "month"),
+        "expense_items": expense_items,
+        "fee_breakdown": {**pack_costs, **{k: v for k, v in manual_fees.items() if k not in pack_costs}},
+    }
+
+
 @router.get("/report/sales-by-spec")
 def sales_by_spec(
     date_from: str = "",
@@ -550,7 +724,15 @@ def sales_by_spec(
 
     口径与财务不同：这里**不区分是否已收款**（只看实际发出的货），
     「代发」行（订单商品未关联库存大类，本仓不出货）也一并列出，方便统计代发量。
+
+    wh=all 时把所有分仓的明细按「日期 × 规格」合并成全仓合计。
     """
+    if wh == ALL_WH:
+        return _sales_by_spec_all(date_from, date_to)
+    return _sales_by_spec_of(db, date_from, date_to, resolve_key(wh))
+
+
+def _sales_by_spec_of(db: Session, date_from: str, date_to: str, key: str) -> dict:
     q = select(Outbound).options(selectinload(Outbound.lines).selectinload(OutboundLine.product))
     if date_from:
         q = q.where(Outbound.date >= date_from)
@@ -617,7 +799,6 @@ def sales_by_spec(
             },
         })
 
-    key = resolve_key(wh)
     return {
         "date_from": date_from,
         "date_to": date_to,
@@ -639,6 +820,90 @@ def sales_by_spec(
             "amount": round(sum(x["amount"] for x in days.values()), 2),
             "dropship_qty": round(sum(x["dropship_qty"] for x in days.values()), 2),
             "dropship_cogs": round(sum(x["dropship_cogs"] for x in days.values()), 2),
+        },
+    }
+
+
+def _sales_by_spec_all(date_from: str, date_to: str) -> dict:
+    """全仓合计的出库明细：把各分仓的「日期 × 规格」结果按同一天/同一规格累加。"""
+    parts, failed = _each_warehouse(lambda db, key, name: _sales_by_spec_of(db, date_from, date_to, key))
+
+    def _fresh():
+        return {"orders": 0, "qty": 0.0, "amount": 0.0, "unit": "", "dropship_qty": 0.0, "dropship_cogs": 0.0}
+
+    days: dict[str, dict] = {}
+    totals = {"orders": 0, "qty": 0.0, "amount": 0.0, "dropship_qty": 0.0, "dropship_cogs": 0.0}
+    for p in parts:
+        t = p.get("totals") or {}
+        totals["orders"] += int(t.get("orders") or 0)
+        for f in ("qty", "amount", "dropship_qty", "dropship_cogs"):
+            totals[f] += float(t.get(f) or 0)
+        for r in p.get("rows") or []:
+            d = days.setdefault(r.get("date") or "", {"date": r.get("date") or "", "orders": 0, "cells": {}})
+            d["orders"] += int(r.get("orders") or 0)
+            for name, c in (r.get("cells") or {}).items():
+                cell = d["cells"].setdefault(name, _fresh())
+                cell["orders"] += int(c.get("orders") or 0)
+                for f in ("qty", "amount", "dropship_qty", "dropship_cogs"):
+                    cell[f] += float(c.get(f) or 0)
+                if not cell["unit"] and c.get("unit"):
+                    cell["unit"] = c["unit"]
+
+    spec_acc: dict[str, dict] = {}
+    rows: list[dict] = []
+    for date in sorted(days, reverse=True):
+        d = days[date]
+        for name, c in d["cells"].items():
+            acc = spec_acc.setdefault(name, {**_fresh(), "name": name, "days": set()})
+            acc["orders"] += c["orders"]
+            for f in ("qty", "amount", "dropship_qty", "dropship_cogs"):
+                acc[f] += c[f]
+            if not acc["unit"] and c["unit"]:
+                acc["unit"] = c["unit"]
+            acc["days"].add(date)
+        rows.append({
+            "date": date,
+            "orders": d["orders"],
+            "qty": round(sum(c["qty"] for c in d["cells"].values()), 2),
+            "amount": round(sum(c["amount"] for c in d["cells"].values()), 2),
+            "dropship_qty": round(sum(c["dropship_qty"] for c in d["cells"].values()), 2),
+            "dropship_cogs": round(sum(c["dropship_cogs"] for c in d["cells"].values()), 2),
+            "cells": {
+                n: {
+                    "orders": c["orders"], "qty": round(c["qty"], 2), "unit": c["unit"],
+                    "amount": round(c["amount"], 2),
+                    "dropship_qty": round(c["dropship_qty"], 2),
+                    "dropship_cogs": round(c["dropship_cogs"], 2),
+                }
+                for n, c in d["cells"].items()
+            },
+        })
+
+    spec_cols = sorted(spec_acc.values(), key=lambda x: (-len(x["days"]), -x["qty"]))
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "warehouse": {"key": ALL_WH, "name": "全仓合计"},
+        "is_all": True,
+        "warehouse_count": len(parts),
+        "failed": failed,
+        "specs": [
+            {
+                "name": x["name"], "orders": x["orders"], "days": len(x["days"]),
+                "qty": round(x["qty"], 2), "unit": x["unit"], "amount": round(x["amount"], 2),
+                "dropship_qty": round(x["dropship_qty"], 2), "dropship_cogs": round(x["dropship_cogs"], 2),
+            }
+            for x in spec_cols
+        ],
+        "rows": rows,
+        "totals": {
+            "orders": totals["orders"],
+            "days": len(days),
+            "spec_count": len(spec_cols),
+            "qty": round(totals["qty"], 2),
+            "amount": round(totals["amount"], 2),
+            "dropship_qty": round(totals["dropship_qty"], 2),
+            "dropship_cogs": round(totals["dropship_cogs"], 2),
         },
     }
 
@@ -746,10 +1011,16 @@ def all_warehouses(date_from: str = "", date_to: str = "", user: User = Depends(
 def list_finance(
     date_from: str = "",
     date_to: str = "",
-    wh: str = "",   # 可选：查看指定分仓（与 /report/summary 的 wh 保持一致）
+    wh: str = "",   # 可选：查看指定分仓（与 /report/summary 的 wh 保持一致）；wh=all = 全仓流水
     db: Session = Depends(get_db_wh),
     user: User = Depends(get_current_user),
 ):
+    if wh == ALL_WH:
+        return _finance_all(date_from, date_to)
+    return _finance_of(db, date_from, date_to)
+
+
+def _finance_of(db: Session, date_from: str, date_to: str, wh_name: str = "") -> list[dict]:
     q = _date_filter(select(FinanceRecord), date_from, date_to).options(selectinload(FinanceRecord.product)).order_by(FinanceRecord.id.desc())
     return [
         {
@@ -766,9 +1037,19 @@ def list_finance(
             "ref_id": f.ref_id,
             "pay_status": getattr(f, "pay_status", PAID) or PAID,
             "paid_at": getattr(f, "paid_at", "") or "",
+            # 全仓流水需要区分来源分仓（单仓模式下为空，前端不显示该列）
+            **({"warehouse": wh_name} if wh_name else {}),
         }
         for f in db.execute(q).scalars()
     ]
+
+
+def _finance_all(date_from: str, date_to: str) -> list[dict]:
+    """全仓财务流水：拼接各分仓记录（带来源分仓名），按日期倒序。"""
+    parts, _failed = _each_warehouse(lambda db, key, name: _finance_of(db, date_from, date_to, name))
+    rows = [r for part in parts for r in part]
+    rows.sort(key=lambda r: (r.get("date") or "", int(r.get("id") or 0)), reverse=True)
+    return rows
 
 
 @router.post("/finance")

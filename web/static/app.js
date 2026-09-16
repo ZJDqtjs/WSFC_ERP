@@ -3934,16 +3934,20 @@ async function repEnsureWhOptions() {
   } catch (e) { /* 拿不到分仓列表时按"当前分仓"看，不影响报表 */ }
 }
 
-/** 顶层切换：全仓总览 / 单仓总览 */
+/** 顶层切换：全仓总览 / 单仓总览
+ *  四个分区 tab（汇总/支出/商品/流水）两种视角都用：数据源由请求的 wh 决定
+ *  （全仓 = wh=all，后端把各分仓独立账套的结果合并）。 */
 function repScope(btn) {
   btn.closest(".seg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
   REP_SCOPE = btn.dataset.scope === "all" ? "all" : "one";
-  const one = REP_SCOPE === "one";
-  $("rep-one").style.display = one ? "" : "none";
-  $("rep-panel-all").style.display = one ? "none" : "";
-  $("repWhBar").style.display = one ? "" : "none";
-  $("repSeg").style.display = one ? "" : "none";   // 汇总/支出/商品/流水 只属于单仓总览
+  applyRepScopeUi();
   loadReport();
+}
+function applyRepScopeUi() {
+  const all = REP_SCOPE === "all";
+  $("repWhBar").style.display = all ? "none" : "";       // 全仓总览不需要选分仓
+  $("rep-panel-all").style.display = all ? "" : "none";  // 各分仓明细表只在全仓总览的「汇总」里出现
+  $("repAllStats").style.display = "none";               // 全仓统计卡统一用「汇总」里的 repStats（带「全仓」前缀），避免两套重复
 }
 
 function repWhChange() {
@@ -3969,7 +3973,6 @@ async function loadAllWarehouses(from, to) {
     const items = d.items || [];
     const tot = d.total || {};
     const rate = (v, base) => (base ? ((v / base) * 100).toFixed(1) + "%" : "—");
-    $("repRangeHint").textContent = `统计区间 ${from || "最早"} ~ ${to || "最新"} · 全仓合计`;
     $("repAllStats").innerHTML = `
       <div class="stat blue"><div class="label">全仓销售收入</div><div class="value">${fmtMoney(tot.revenue)}</div><div class="sub">${tot.orders || 0} 单 · ${tot.warehouse_count || 0} 个分仓</div></div>
       <div class="stat amber"><div class="label">全仓结转成本</div><div class="value">${fmtMoney(tot.cogs)}</div><div class="sub">全仓毛利 ${fmtMoney(tot.gross)}（${rate(tot.gross, tot.revenue)}）</div></div>
@@ -4049,35 +4052,45 @@ async function loadReport() {
     await repEnsureWhOptions();
   }
   const from = $("repDateFrom").value, to = $("repDateTo").value;
-  // 全仓总览：只看各分仓合计，不需要单仓明细
-  if (REP_SCOPE === "all") { await loadAllWarehouses(from, to); return; }
-
-  const whQs = REP_WH ? `&wh=${encodeURIComponent(REP_WH)}` : "";
-  const [rep, finance] = await Promise.all([
-    api(`/api/report/summary?date_from=${from || ""}&date_to=${to || ""}${whQs}`),
-    api(`/api/finance?date_from=${from || ""}&date_to=${to || ""}${whQs}`),
-  ]);
+  const all = REP_SCOPE === "all";
+  // 全仓总览：wh=all 让后端把各分仓（各自独立账套）的结果合并；单仓总览：可切换查看指定分仓
+  const whQs = all ? "&wh=all" : (REP_WH ? `&wh=${encodeURIComponent(REP_WH)}` : "");
+  let rep, finance;
+  try {
+    [rep, finance] = await Promise.all([
+      api(`/api/report/summary?date_from=${from || ""}&date_to=${to || ""}${whQs}`),
+      api(`/api/finance?date_from=${from || ""}&date_to=${to || ""}${whQs}`),
+    ]);
+  } catch (e) {
+    toast("加载报表失败：" + e.message);
+    return;
+  }
   const rh = $("repRangeHint");
   if (rh) {
     rh.textContent = `统计区间 ${from || "最早"} ~ ${to || "最新"}`
-      + (rep.warehouse ? ` · ${rep.warehouse.name}${rep.is_current ? "（当前分仓）" : ""}` : "");
+      + (all
+        ? ` · 全仓合计${rep.warehouse_count ? `（${rep.warehouse_count} 个分仓）` : ""}`
+        : (rep.warehouse ? ` · ${rep.warehouse.name}${rep.is_current ? "（当前分仓）" : ""}` : ""));
   }
-  const whHint = $("repWhHint");
-  if (whHint) {
-    whHint.textContent = rep.warehouse && !rep.is_current
-      ? `正在查看「${rep.warehouse.name}」的数据（仅查看，不会改变你的工作分仓）`
-      : "默认是你当前所在分仓；换一个只是换看谁的数据，不会改变你的工作分仓";
+  if (!all) {
+    const whHint = $("repWhHint");
+    if (whHint) {
+      whHint.textContent = rep.warehouse && !rep.is_current
+        ? `正在查看「${rep.warehouse.name}」的数据（仅查看，不会改变你的工作分仓）`
+        : "默认是你当前所在分仓；换一个只是换看谁的数据，不会改变你的工作分仓";
+    }
   }
   const packTotal = rep.pack_cost_total || 0;
+  const pre = all ? "全仓" : "";   // 全仓总览给统计卡加前缀，避免和单仓混淆
   $("repStats").innerHTML = `
-    <div class="stat blue"><div class="label">销售收入</div><div class="value">${fmtMoney(rep.revenue)}</div><div class="sub">${rep.order_count} 单</div></div>
-    <div class="stat amber"><div class="label">结转成本</div><div class="value">${fmtMoney(rep.cogs)}</div><div class="sub">含关联结算 ${fmtMoney(packTotal)}</div></div>
-    <div class="stat green"><div class="label">毛利</div><div class="value">${fmtMoney(rep.gross_profit)}</div><div class="sub">${rep.revenue ? ((rep.gross_profit / rep.revenue) * 100).toFixed(1) + "%" : "—"}</div></div>
-    <div class="stat red"><div class="label">期间费用</div><div class="value">${fmtMoney(rep.expense)}</div><div class="sub">其他开支 ${fmtMoney(rep.other_expense)} · 手工记账 ${fmtMoney(rep.manual_expense)}</div></div>
-    <div class="stat ${rep.net_profit >= 0 ? "green" : "red"}"><div class="label">净利润</div><div class="value">${fmtMoney(rep.net_profit)}</div></div>
-    <div class="stat"><div class="label">本期进货</div><div class="value">${fmtMoney(rep.purchase)}</div></div>
-    <div class="stat red"><div class="label">本期总支出</div><div class="value">${fmtMoney(rep.total_expense)}</div><div class="sub">含采购 ${fmtMoney(rep.purchase)} · 期间费用 ${fmtMoney(rep.expense)}</div></div>
-    <div class="stat blue"><div class="label">当前库存总值</div><div class="value">${fmtMoney(rep.stock_value)}</div></div>`;
+    <div class="stat blue"><div class="label">${pre}销售收入</div><div class="value">${fmtMoney(rep.revenue)}</div><div class="sub">${rep.order_count} 单${all ? ` · ${rep.warehouse_count || 0} 个分仓` : ""}</div></div>
+    <div class="stat amber"><div class="label">${pre}结转成本</div><div class="value">${fmtMoney(rep.cogs)}</div><div class="sub">含关联结算 ${fmtMoney(packTotal)}</div></div>
+    <div class="stat green"><div class="label">${pre}毛利</div><div class="value">${fmtMoney(rep.gross_profit)}</div><div class="sub">${rep.revenue ? ((rep.gross_profit / rep.revenue) * 100).toFixed(1) + "%" : "—"}</div></div>
+    <div class="stat red"><div class="label">${pre}期间费用</div><div class="value">${fmtMoney(rep.expense)}</div><div class="sub">其他开支 ${fmtMoney(rep.other_expense)} · 手工记账 ${fmtMoney(rep.manual_expense)}</div></div>
+    <div class="stat ${rep.net_profit >= 0 ? "green" : "red"}"><div class="label">${pre}净利润</div><div class="value">${fmtMoney(rep.net_profit)}</div></div>
+    <div class="stat"><div class="label">${pre}本期进货</div><div class="value">${fmtMoney(rep.purchase)}</div></div>
+    <div class="stat red"><div class="label">${pre}本期总支出</div><div class="value">${fmtMoney(rep.total_expense)}</div><div class="sub">含采购 ${fmtMoney(rep.purchase)} · 期间费用 ${fmtMoney(rep.expense)}</div></div>
+    <div class="stat blue"><div class="label">${pre}当前库存总值</div><div class="value">${fmtMoney(rep.stock_value)}</div></div>`;
 
   renderCostBreakdown(rep);
   renderExpenseSummary(rep);
@@ -4128,14 +4141,16 @@ async function loadReport() {
     }).join("") + `</tbody>`;
   pt._rows = prodRows;
   pt._render = loadReport;
-  renderSalesBySpec(from, to);   // 出库明细：每天 × 每种规格卖了多少单（含代发数量/代发成本）
+  renderSalesBySpec(from, to, whQs);   // 出库明细：每天 × 每种规格卖了多少单（含代发数量/代发成本）
 
   const ft = $("financeTable");
   let finRows = finance;
   const fkw = ($("repSearch")?.value || "").trim().toLowerCase();
-  if (fkw) finRows = finRows.filter((f) => [f.category, f.product_name, f.remark, f.operator, f.type].join(" ").toLowerCase().includes(fkw));
+  if (fkw) finRows = finRows.filter((f) => [f.category, f.product_name, f.remark, f.operator, f.type, f.warehouse].join(" ").toLowerCase().includes(fkw));
   finRows = applyTableSort(ft, finRows);
+  const finWh = !!rep.is_all;   // 全仓总览：流水来自多个分仓，需要标出来源
   ft.innerHTML = `<thead><tr>
+    ${finWh ? "<th>分仓</th>" : ""}
     <th>类型</th>
     <th data-key="category">分类${sortArrow("financeTable", "category")}</th>
     <th data-key="product_name">商品${sortArrow("financeTable", "product_name")}</th>
@@ -4144,6 +4159,7 @@ async function loadReport() {
     <th data-key="date">日期${sortArrow("financeTable", "date")}</th>
     <th>备注</th><th></th></tr></thead><tbody>` +
     finRows.map((f) => `<tr>
+      ${finWh ? `<td>${esc(f.warehouse) || "—"}</td>` : ""}
       <td>${f.type === "income" ? '<span class="badge income">收入</span>' : '<span class="badge expense">支出</span>'}</td>
       <td>${esc(f.category)}</td>
       <td>${esc(f.product_name) || "—"}</td>
@@ -4151,9 +4167,12 @@ async function loadReport() {
       <td>${esc(f.operator) || "—"}</td><td>${f.date}</td>
       <td class="muted">${esc(f.remark)}</td>
       <td>${f.ref_type === "manual" ? `<button class="btn sm danger" onclick="deleteFinance(${f.id})">删</button>` : ""}</td></tr>`).join("") + `</tbody>`;
-  if (!finRows.length) ft.innerHTML = `<tr><td colspan="8" class="empty">本期无财务流水</td></tr>`;
+  if (!finRows.length) ft.innerHTML = `<tr><td colspan="${finWh ? 9 : 8}" class="empty">本期无财务流水</td></tr>`;
   ft._rows = finRows;
   ft._render = loadReport;
+
+  // 全仓总览：额外加载「各分仓收入 / 支出 / 利润」明细表（汇总分区里）
+  if (all) await loadAllWarehouses(from, to);
 }
 
 /* 销售成本构成：商品成本 vs 出库自动结算的包材/人工/快递 */
@@ -4203,12 +4222,11 @@ function renderCostBreakdown(rep) {
     ${packTotal ? "" : `<div class="alert warn" style="margin-top:10px;">本期没有包材 / 人工 / 快递等关联结算成本。若商品已配置包装清单，请确认出库时是否生成了关联结算行。</div>`}`;
 }
 /** 出库明细：每天 × 每种规格卖了多少单（含代发行的代发数量/代发成本） */
-async function renderSalesBySpec(from, to) {
+async function renderSalesBySpec(from, to, whQs) {
   const t = $("repSpecTable");
   if (!t) return;
-  const whQs = REP_WH ? `&wh=${encodeURIComponent(REP_WH)}` : "";
   try {
-    const d = await api(`/api/report/sales-by-spec?date_from=${from || ""}&date_to=${to || ""}${whQs}`);
+    const d = await api(`/api/report/sales-by-spec?date_from=${from || ""}&date_to=${to || ""}${whQs || ""}`);
     const specs = d.specs || [];
     const rows = d.rows || [];
     const tot = d.totals || {};
@@ -4282,18 +4300,20 @@ function renderExpDrill() {
   const title = d.key ? `${d.key}${d.keyName === "month" ? "（整月）" : ""} 支出明细` : "本期（查询区间）支出明细";
   const rows = d.source ? d.items.filter((r) => r.source === d.source) : d.items;
   const sum = rows.reduce((a, r) => a + (r.amount || 0), 0);
+  const withWh = rows.some((r) => r.warehouse);   // 全仓总览：标出来源分仓
   const chips = REP_SRC_TABS
     .map(([v, label]) => `<button class="btn sm ${d.source === v ? "" : "secondary"}" onclick="repDrillSource('${v}')">${label}</button>`)
     .join("");
   const body = rows.length
     ? rows.map((r) => `<tr>
+        ${withWh ? `<td>${esc(r.warehouse) || "—"}</td>` : ""}
         <td class="mono">${esc(r.date)}</td>
         <td><span class="cost-dot" style="background:${REP_EXP_SRC_COLORS[r.source] || "var(--muted)"};"></span>${esc(r.source)}${r.auto ? '<span class="muted"> 自动</span>' : ""}</td>
         <td>${esc(r.item || r.category)}${r.ref ? ` <span class="muted">${esc(r.ref)}</span>` : ""}</td>
         <td class="num mono"><b>${fmtMoney(r.amount)}</b></td>
         <td>${esc(r.operator) || "—"}</td>
         <td class="muted" style="max-width:260px;">${renderRemarkHtml(r.remark)}</td></tr>`).join("")
-    : `<tr><td colspan="6" class="empty">${REP_EXP_API_OK
+    : `<tr><td colspan="${withWh ? 7 : 6}" class="empty">${REP_EXP_API_OK
         ? "该时段没有此类支出"
         : "后端未返回逐笔明细字段（expense_items）：请更新并重启后端服务后刷新"}</td></tr>`;
 
@@ -4305,9 +4325,9 @@ function renderExpDrill() {
     </div>
     <div class="toolbar" style="margin-bottom:8px;">${chips}</div>
     <div class="table-wrap"><table>
-      <thead><tr><th>日期</th><th>来源</th><th>项目</th><th class="num">金额</th><th>操作员</th><th>备注</th></tr></thead>
+      <thead><tr>${withWh ? "<th>分仓</th>" : ""}<th>日期</th><th>来源</th><th>项目</th><th class="num">金额</th><th>操作员</th><th>备注</th></tr></thead>
       <tbody>${body}</tbody>
-      ${rows.length ? `<tfoot><tr><td><b>合计</b></td>
+      ${rows.length ? `<tfoot><tr>${withWh ? "<td></td>" : ""}<td><b>合计</b></td>
         <td class="muted" colspan="2">${esc(d.source || "全部来源")} · ${rows.length} 笔</td>
         <td class="num mono"><b>${fmtMoney(sum)}</b></td><td colspan="2"></td></tr></tfoot>` : ""}
     </table></div>
@@ -4447,10 +4467,12 @@ function renderExpenseTables(rep) {
 const REP_EXP_SRC_COLORS = { "采购": "#1989fa", "其他开支": "#f97316", "手工记账": "#6366f1" };
 let REP_EXP_ITEMS = [];
 let REP_EXP_API_OK = true;
+let REP_EXP_WITH_WH = false;   // 全仓总览：逐笔明细来自多个分仓，需要显示来源分仓列
 
 function renderExpenseItems(rep) {
   REP_EXP_ITEMS = rep.expense_items || [];
   REP_EXP_API_OK = Array.isArray(rep.expense_items);   // 后端未升级时给出明确提示，避免"看着是空的"
+  REP_EXP_WITH_WH = !!rep.is_all;
   const sel = $("repExpItemSrc");
   if (sel) sel.value = "";   // 换区间后重置筛选，避免"看不到数据"的困惑
   const kw = $("repExpItemSearch");
@@ -4463,11 +4485,12 @@ function renderExpenseItemRows() {
   if (!t) return;
   const src = ($("repExpItemSrc") || {}).value || "";
   const kw = (($("repExpItemSearch") || {}).value || "").trim().toLowerCase();
+  const withWh = REP_EXP_WITH_WH;
   let rows = REP_EXP_ITEMS;
   if (src) rows = rows.filter((r) => r.source === src);
   if (kw) {
     rows = rows.filter((r) =>
-      [r.date, r.source, r.category, r.item, r.remark, r.operator, r.ref].join(" ").toLowerCase().includes(kw));
+      [r.date, r.source, r.category, r.item, r.remark, r.operator, r.ref, r.warehouse].join(" ").toLowerCase().includes(kw));
   }
   const MAX = 200;
   const shown = rows.slice(0, MAX);
@@ -4482,20 +4505,23 @@ function renderExpenseItemRows() {
   }
 
   t.innerHTML = `<thead><tr>
+    ${withWh ? "<th>分仓</th>" : ""}
     <th>日期</th><th>来源</th><th>项目</th><th class="num">金额</th><th>操作员</th><th>备注</th>
     </tr></thead><tbody>` +
     (shown.length
       ? shown.map((r) => `<tr>
+          ${withWh ? `<td>${esc(r.warehouse) || "—"}</td>` : ""}
           <td class="mono">${esc(r.date)}</td>
           <td><span class="cost-dot" style="background:${REP_EXP_SRC_COLORS[r.source] || "var(--muted)"};"></span>${esc(r.source)}${r.auto ? '<span class="muted"> 自动</span>' : ""}</td>
           <td>${esc(r.item || r.category)}${r.ref ? ` <span class="muted">${esc(r.ref)}</span>` : ""}</td>
           <td class="num mono"><b>${fmtMoney(r.amount)}</b></td>
           <td>${esc(r.operator) || "—"}</td>
           <td class="muted" style="max-width:280px;">${renderRemarkHtml(r.remark)}</td></tr>`).join("")
-      : `<tr><td colspan="6" class="empty">${!REP_EXP_API_OK ? needRestart : (REP_EXP_ITEMS.length ? "没有符合筛选条件的支出" : "本期无支出")}</td></tr>`) +
+      : `<tr><td colspan="${withWh ? 7 : 6}" class="empty">${!REP_EXP_API_OK ? needRestart : (REP_EXP_ITEMS.length ? "没有符合筛选条件的支出" : "本期无支出")}</td></tr>`) +
     `</tbody>` +
     (rows.length
       ? `<tfoot><tr>
+          ${withWh ? "<td></td>" : ""}
           <td><b>合计</b></td>
           <td class="muted" colspan="2">${esc(src || "全部来源")} · ${rows.length} 笔</td>
           <td class="num mono"><b>${fmtMoney(sum)}</b></td>

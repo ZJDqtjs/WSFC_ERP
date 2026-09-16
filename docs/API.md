@@ -387,7 +387,7 @@ Outbound 字段：`id, code, customer, operator, date, remark, total_amount, tot
 
 ### 7.2 经营汇总
 
-`GET /api/report/summary?date_from=&date_to=`
+`GET /api/report/summary?date_from=&date_to=&wh=`
 响应：
 
 ```json
@@ -401,10 +401,23 @@ Outbound 字段：`id, code, customer, operator, date, remark, total_amount, tot
 }
 ```
 
+**`wh` 参数**（报表页「全仓总览 / 单仓总览」共用同一批接口与四个分区 tab）：
+
+* 省略 / `wh=<分仓key>`：单个分仓（省略 = 本登录会话所在分仓）；
+* `wh=all`：**全仓合计**——各分仓是独立账套，后端逐个分仓计算后合并（金额/笔数相加，
+  商品按「名称+规格+是否代发」归并，支出按日/按月归并，逐笔明细拼接并补 `warehouse` 来源分仓名）。
+  响应额外带 `is_all: true`、`warehouse: {key:"all", name:"全仓合计"}`、`warehouse_count`、`failed: [...]`。
+
+同样支持 `wh=all` 的还有：
+
+* `GET /api/report/sales-by-spec?date_from=&date_to=&wh=all` → 出库明细（按天 × 规格）全仓合并；
+* `GET /api/finance?date_from=&date_to=&wh=all` → 全仓财务流水（每条带 `warehouse` 来源分仓）。
+
 ### 7.3 财务流水
 
-`GET /api/finance?date_from=&date_to=`
-响应：`[{id, type(income/expense), category, product_id, product_name, amount, date, operator, remark, ref_type, ref_id}]`
+`GET /api/finance?date_from=&date_to=&wh=`
+响应：`[{id, type(income/expense), category, product_id, product_name, amount, date, operator, remark, ref_type, ref_id, warehouse?}]`
+（`warehouse` 仅在 `wh=all` 全仓流水时返回，用于在流水表里标出来源分仓）
 
 ### 7.4 新增财务记录（手动）
 

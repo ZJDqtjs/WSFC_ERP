@@ -22,7 +22,26 @@
         <div class="seg-item" :class="{ active: scope === 'one' }" @click="setScope('one')">单仓总览</div>
       </div>
 
-      <!-- ============ 全仓总览：所有分仓的收入 / 支出 / 利润 ============ -->
+      <!-- 查看分仓（只有单仓总览需要选看哪个仓） -->
+      <div v-if="scope === 'one'" class="card" style="padding:10px 12px;" @click="whShow = true">
+        <div class="row">
+          <span class="grow">查看分仓：<b>{{ whName }}</b>{{ isCurrent ? '（当前分仓）' : '' }}</span>
+          <van-icon name="arrow" color="#969799" />
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:2px;">换一个只是换看谁的数据，不会改变你的工作分仓</div>
+      </div>
+
+      <!-- 分区 tab：全仓总览 / 单仓总览 两种视角都用（数据源由请求的 wh 决定） -->
+      <div class="seg">
+        <div class="seg-item" :class="{ active: tab === 'summary' }" @click="tab = 'summary'">汇总</div>
+        <div class="seg-item" :class="{ active: tab === 'expense' }" @click="tab = 'expense'">支出</div>
+        <div class="seg-item" :class="{ active: tab === 'goods' }" @click="tab = 'goods'">商品</div>
+        <div class="seg-item" :class="{ active: tab === 'flow' }" @click="tab = 'flow'">流水</div>
+      </div>
+
+      <!-- 汇总 -->
+      <template v-if="tab === 'summary'">
+      <!-- 全仓总览：全仓合计 + 各分仓收入 / 支出 / 利润（支出/商品/流水分区用 wh=all 的合并数据） -->
       <template v-if="scope === 'all'">
         <div class="stat-grid" style="margin-bottom:12px;">
           <div class="stat accent"><div class="label">全仓销售收入</div><div class="value">{{ fmtMoney(allTot.revenue) }}</div><div class="sub">{{ allTot.orders || 0 }} 单 · {{ allTot.warehouse_count || 0 }} 个分仓</div></div>
@@ -55,27 +74,8 @@
         </div>
       </template>
 
-      <!-- ============ 单仓总览（默认当前分仓，可切换查看其他分仓） ============ -->
+      <!-- 单仓总览：以下为原有内容（汇总 / 支出 / 商品 / 流水） -->
       <template v-else>
-      <!-- 查看分仓 -->
-      <div class="card" style="padding:10px 12px;" @click="whShow = true">
-        <div class="row">
-          <span class="grow">查看分仓：<b>{{ whName }}</b>{{ isCurrent ? '（当前分仓）' : '' }}</span>
-          <van-icon name="arrow" color="#969799" />
-        </div>
-        <div class="muted" style="font-size:12px;margin-top:2px;">换一个只是换看谁的数据，不会改变你的工作分仓</div>
-      </div>
-
-      <!-- 分区 tab：一次只看一类，避免把多天/多月的记录竖向堆在一页 -->
-      <div class="seg">
-        <div class="seg-item" :class="{ active: tab === 'summary' }" @click="tab = 'summary'">汇总</div>
-        <div class="seg-item" :class="{ active: tab === 'expense' }" @click="tab = 'expense'">支出</div>
-        <div class="seg-item" :class="{ active: tab === 'goods' }" @click="tab = 'goods'">商品</div>
-        <div class="seg-item" :class="{ active: tab === 'flow' }" @click="tab = 'flow'">流水</div>
-      </div>
-
-      <!-- 汇总 -->
-      <template v-if="tab === 'summary'">
       <div class="stat-grid" style="margin-bottom:12px;">
         <div class="stat accent"><div class="label">销售收入</div><div class="value">{{ fmtMoney(rep.revenue) }}</div><div class="sub">{{ rep.order_count || 0 }} 单</div></div>
         <div class="stat warn"><div class="label">结转成本</div><div class="value">{{ fmtMoney(rep.cogs) }}</div><div class="sub">含关联结算 {{ fmtMoney(rep.pack_cost_total) }}</div></div>
@@ -125,6 +125,7 @@
           </div>
         </template>
       </div>
+      </template>   <!-- /单仓总览·汇总 -->
 
       </template>
 
@@ -289,7 +290,7 @@
             <span :class="f.type === 'income' ? 'down' : 'up'">{{ f.type === 'income' ? '+' : '-' }}{{ fmtMoney(f.amount) }}</span>
           </div>
           <div class="item-meta">
-            {{ f.date }}{{ f.product_name ? ' · ' + f.product_name : '' }}{{ f.operator ? ' · ' + f.operator : '' }}
+            <template v-if="f.warehouse">{{ f.warehouse }} · </template>{{ f.date }}{{ f.product_name ? ' · ' + f.product_name : '' }}{{ f.operator ? ' · ' + f.operator : '' }}
             <template v-if="f.ref_type !== 'manual'"> · 单据自动生成</template>
           </div>
           <div v-if="f.remark" class="item-meta">{{ f.remark }}</div>
@@ -298,7 +299,6 @@
           </div>
         </div>
       </div>
-      </template>
       </template>
 
       <!-- 查看分仓选择 -->
@@ -351,7 +351,7 @@
             <span class="bold up">{{ fmtMoney(r.amount) }}</span>
           </div>
           <div class="item-meta">
-            {{ r.date }}{{ r.operator ? ' · ' + r.operator : '' }}{{ r.auto ? ' · 单据自动生成' : '' }}{{ r.ref ? ' · ' + r.ref : '' }}
+            {{ r.warehouse ? r.warehouse + ' · ' : '' }}{{ r.date }}{{ r.operator ? ' · ' + r.operator : '' }}{{ r.auto ? ' · 单据自动生成' : '' }}{{ r.ref ? ' · ' + r.ref : '' }}
           </div>
           <div v-if="r.remark" class="item-meta">{{ r.remark }}</div>
         </div>
@@ -547,7 +547,7 @@ const financeFiltered = computed(() => {
 
 async function load() {
   await ensureWh()
-  // 全仓总览：所有分仓的收入 / 支出 / 利润合计
+  // 全仓总览：各分仓收入 / 支出 / 利润明细（合计卡由下面 wh=all 的 rep 提供）
   if (scope.value === 'all') {
     try {
       const d = await api(`/api/report/all-warehouses?date_from=${df.value}&date_to=${dt.value}`)
@@ -560,10 +560,12 @@ async function load() {
         : ''
       inited = true
     } catch (e) { showToast(e.message || '加载失败') }
-    return
   }
+  // 四个分区（汇总 / 支出 / 商品 / 流水）两种视角共用：全仓 = wh=all（后端合并各分仓独立账套）
   try {
-    const whqs = whKey.value ? `&wh=${encodeURIComponent(whKey.value)}` : ''
+    const whqs = scope.value === 'all'
+      ? '&wh=all'
+      : (whKey.value ? `&wh=${encodeURIComponent(whKey.value)}` : '')
     const [r1, r2] = await Promise.all([
       api(`/api/report/summary?date_from=${df.value}&date_to=${dt.value}${whqs}`),
       api(`/api/finance?date_from=${df.value}&date_to=${dt.value}${whqs}`),

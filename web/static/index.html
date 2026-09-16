@@ -516,22 +516,7 @@
           </div>
         </div>
 
-        <!-- 全仓总览：所有分仓的收入 / 支出 / 利润 -->
-        <div id="rep-panel-all" style="display:none;">
-          <div class="stat-grid" id="repAllStats"></div>
-          <div class="card">
-            <div class="card-head">
-              <h3>各分仓收入 / 支出 / 利润</h3>
-              <span class="muted" id="repAllHint"></span>
-              <div class="grow"></div>
-              <button class="btn secondary" onclick="loadReport()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
-            </div>
-            <div id="repAllWarn" class="alert warn" style="display:none;"></div>
-            <div class="table-wrap"><table id="repAllTable"></table></div>
-          </div>
-        </div>
-
-        <!-- 单仓总览：以下为原有内容（汇总 / 支出 / 商品 / 流水） -->
+        <!-- 汇总 / 支出 / 商品 / 流水 四个分区：单仓总览看当前（或所选）分仓，全仓总览看各分仓合并合计 -->
         <div id="rep-one">
 
         <!-- 汇总 -->
@@ -540,6 +525,21 @@
           <div class="card">
             <div class="card-head"><h3>销售成本构成</h3><span class="muted" id="repCostHint"></span></div>
             <div id="repCostBreak"></div>
+          </div>
+
+          <!-- 全仓总览专有：全仓合计统计卡 + 各分仓收入 / 支出 / 利润 -->
+          <div id="rep-panel-all" style="display:none;">
+            <div class="stat-grid" id="repAllStats"></div>
+            <div class="card">
+              <div class="card-head">
+                <h3>各分仓收入 / 支出 / 利润</h3>
+                <span class="muted" id="repAllHint"></span>
+                <div class="grow"></div>
+                <button class="btn secondary" onclick="loadReport()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+              </div>
+              <div id="repAllWarn" class="alert warn" style="display:none;"></div>
+              <div class="table-wrap"><table id="repAllTable"></table></div>
+            </div>
           </div>
         </div>
 
