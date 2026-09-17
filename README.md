@@ -88,21 +88,21 @@ npm run dev                 # 开发：http://localhost:5173（已代理 /api �
 npm run build               # 生产构建 → mobile/dist
 ```
 
-**Flutter Android 端**（`flutter/statistics_erp_app`，不参与 Web/PWA 部署）：默认 API 为 `http://***REMOVED-IP***`，可用 `API_BASE_URL` 覆盖：
+**Flutter Android 端**（`flutter/statistics_erp_app`，不参与 Web/PWA 部署）：接口地址在构建时通过 `API_BASE_URL` 注入（未注入时使用代码中的默认值）：
 
 ```powershell
 cd flutter\statistics_erp_app
 flutter pub get
 flutter analyze
-flutter build apk --release --dart-define=API_BASE_URL=http://***REMOVED-IP***
+flutter build apk --release --dart-define=API_BASE_URL=http://<服务器地址>
 ```
 
 ## Linux 部署（nginx 反代 80）
 
-前置：代码与移动端构建产物已同步到服务器 `/home/azureuser/WSFC_ERP`，服务器装有 Python3/nginx。
+前置：代码与移动端构建产物已同步到服务器部署目录（下称 `$APP_DIR`），服务器装有 Python3/nginx。
 
 ```bash
-bash /home/azureuser/WSFC_ERP/deploy/deploy.sh
+bash "$APP_DIR/deploy/deploy.sh"
 ```
 
 > 部署前请在本地执行 `npm --prefix mobile run build` 并上传 `mobile/dist`；脚本会在服务器端 `backend/` 下创建虚拟环境并安装依赖。
@@ -124,10 +124,10 @@ bash /home/azureuser/WSFC_ERP/deploy/deploy.sh
 `users.fingerprint`（SHA256）。因此**用户名必须与私钥一一对应**，用户名写错、或用别人的私钥，都会返回
 `401 用户名或私钥不匹配`。
 
-- 当前用户可用 `${workspace}/backend/data/*.db`（分仓库）的 `users` 表查看：
+- 账号与私钥的对应关系可用分仓库 `backend/data/*.db` 的 `users` 表查看：
   `username / name / role / fingerprint / is_active`。
 - ⚠️ **`admin1` 是历史遗留账号，`fingerprint` 为 NULL，无法用私钥登录**（旧密码登录已废弃）。
-  请使用私钥管理工具分发的账号（如 `小王` / `小万` / `小李` / `小林` / `殷总` / `大凯`）。
+  日常使用请走私钥管理工具分发的账号；账号名单由管理员在后台维护，不在文档里列出。
 - `accounts`（建议写在 `config.local.json`，见「配置文件」）每次启动都会同步口令与姓名/角色，但**不会给已有账号补发私钥**。
 - 私钥管理后台：`cd backend && uv run python keyadmin.py`（端口 8001）——用它生成/重发私钥，
   生成的私钥文件只在当时一次性下载，请妥善保管。
