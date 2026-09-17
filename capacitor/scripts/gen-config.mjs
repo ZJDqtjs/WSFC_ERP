@@ -10,7 +10,7 @@
  *
  * 用法：npm run config   （下面的 sync / copy / open:android 都会先自动执行它）
  */
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -39,6 +39,11 @@ if (!existsSync(TEMPLATE)) {
 const hasLocal = existsSync(LOCAL);
 const config = merge(readJson(TEMPLATE), hasLocal ? readJson(LOCAL) : {});
 writeFileSync(OUT, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+
+// cap sync 要往 android/app/src/main/assets 写 capacitor.config.json 与 capacitor.plugins.json，
+// 而该目录被 .gitignore 排除（构建产物），新克隆的仓库里不存在时 sync 会直接 ENOENT 失败，这里兜底创建。
+const ASSETS_DIR = join(root, 'android/app/src/main/assets');
+if (existsSync(join(root, 'android'))) mkdirSync(ASSETS_DIR, { recursive: true });
 
 console.log(`[cap-config] 已生成 capacitor.config.json（server.url = ${config?.server?.url ?? '未设置'}）`);
 if (!hasLocal) {
