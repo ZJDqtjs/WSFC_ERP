@@ -16,6 +16,14 @@
         </div>
       </div>
 
+      <!-- 报表口径开关：开启后不计入「其他开支」的款项，只看商品售卖利润（默认开启） -->
+      <div class="caliber" :class="{ off: !excludeOther }">
+        <span class="grow">
+          {{ excludeOther ? '排除其他开支 · 只看商品售卖利润' : '含其他开支（并入期间费用）' }}
+        </span>
+        <van-switch v-model="excludeOther" size="18" @update:model-value="onExcludeOther" />
+      </div>
+
       <!-- 顶层：全仓总览 / 单仓总览 -->
       <div class="seg">
         <div class="seg-item" :class="{ active: scope === 'all' }" @click="setScope('all')">全仓总览</div>
@@ -372,8 +380,19 @@ import api from '../api'
 import OperatorField from '../components/OperatorField.vue'
 import { fmtMoney, fmtNum, num, todayStr } from '../utils/format'
 import { userName, ensureUserName } from '../utils/user'
+import { getExcludeOther, setExcludeOther, excludeOtherQs } from '../utils/reportPref'
 
 const router = useRouter()
+
+/* 报表口径：是否排除其他开支（开关在本页顶部，与 web 端共用同一偏好） */
+const excludeOther = ref(getExcludeOther())
+
+function onExcludeOther(v) {
+  setExcludeOther(v)
+  showToast(v ? '已排除其他开支：只看商品售卖利润' : '已计入其他开支：含全部期间费用')
+  load()   // 口径变了，按新口径重算
+}
+
 function goBack() {
   if (window.history.length > 1) router.back()
   else router.replace('/mine')
@@ -484,12 +503,16 @@ const expItems = computed(() => (rep.value.expense_items || []).slice(0, MAX_EXP
 const expItemsTruncated = computed(() => (rep.value.expense_items || []).length > MAX_EXP_ITEMS)
 
 /* 支出下钻：点按日/按月的某条，弹层看该时段构成（二级页面） */
-const DRILL_TABS = [
+const DRILL_TABS_ALL = [
   { v: '', label: '全部' },
   { v: '采购', label: '采购' },
   { v: '其他开支', label: '其他' },
   { v: '手工记账', label: '手工' },
 ]
+// 已排除其他开支时，逐笔明细里不会有该来源，对应筛选项一并隐藏
+const DRILL_TABS = computed(() =>
+  excludeOther.value ? DRILL_TABS_ALL.filter((t) => t.v !== '其他开支') : DRILL_TABS_ALL
+)
 const drillShow = ref(false)
 const drillKey = ref('')
 const drillSrc = ref('')
@@ -550,7 +573,7 @@ async function load() {
   // 全仓总览：各分仓收入 / 支出 / 利润明细（合计卡由下面 wh=all 的 rep 提供）
   if (scope.value === 'all') {
     try {
-      const d = await api(`/api/report/all-warehouses?date_from=${df.value}&date_to=${dt.value}`)
+      const d = await api(`/api/report/all-warehouses?date_from=${df.value}&date_to=${dt.value}${excludeOtherQs()}`)
       allItems.value = d.items || []
       allTot.value = d.total || {}
       allCurrent.value = d.current || ''
@@ -567,7 +590,7 @@ async function load() {
       ? '&wh=all'
       : (whKey.value ? `&wh=${encodeURIComponent(whKey.value)}` : '')
     const [r1, r2] = await Promise.all([
-      api(`/api/report/summary?date_from=${df.value}&date_to=${dt.value}${whqs}`),
+      api(`/api/report/summary?date_from=${df.value}&date_to=${dt.value}${whqs}${excludeOtherQs()}`),
       api(`/api/finance?date_from=${df.value}&date_to=${dt.value}${whqs}`),
     ])
     rep.value = r1
@@ -632,6 +655,13 @@ onMounted(() => { if (!inited) load() })
 
 <style scoped>
 .sub-page { min-height: 100vh; background: #f7f8fa; }
+.caliber {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; margin-bottom: 8px;
+  border-radius: 6px; background: #e8f7ee; color: #07a05a;
+  font-size: 12px; line-height: 1.5;
+}
+.caliber.off { background: #f2f3f5; color: #646566; }
 .cost-stack { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: #f2f3f5; margin-bottom: 10px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; flex-shrink: 0; }
 .cost-split { color: #969799; font-size: 11px; }

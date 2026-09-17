@@ -400,14 +400,16 @@ Outbound 字段：`id, code, customer, operator, date, remark, total_amount, tot
 
 ### 7.2 经营汇总
 
-`GET /api/report/summary?date_from=&date_to=&wh=`
+`GET /api/report/summary?date_from=&date_to=&wh=&exclude_other=`
 响应：
 
 ```json
 {
   "date_from": "", "date_to": "",
   "revenue": 0, "cogs": 0, "gross_profit": 0,
-  "expense": 0, "net_profit": 0, "purchase": 0, "stock_value": 0,
+  "expense": 0, "other_expense": 0, "manual_expense": 0,
+  "exclude_other_expense": false, "excluded_other_expense": 0,
+  "net_profit": 0, "purchase": 0, "total_expense": 0, "stock_value": 0,
   "order_count": 0, "inbound_count": 0,
   "by_product": [ { "product_id": 1, "name": "番茄", "qty": 3, "amount": 24, "cogs": 12 } ],
   "fee_breakdown": { "人工打包费": 0, "其他支出": 0 }
@@ -425,6 +427,17 @@ Outbound 字段：`id, code, customer, operator, date, remark, total_amount, tot
 
 * `GET /api/report/sales-by-spec?date_from=&date_to=&wh=all` → 出库明细（按天 × 规格）全仓合并；
 * `GET /api/finance?date_from=&date_to=&wh=all` → 全仓财务流水（每条带 `warehouse` 来源分仓）。
+
+**`exclude_other` 参数**（主界面「排除其他开支」开关，前端默认开启）：
+
+* 省略 / `exclude_other=0`：其他开支并入期间费用（`expense = manual_expense + other_expense`），
+  净利润 = 毛利 − 期间费用，与改造前完全一致；
+* `exclude_other=1`：**不计入其他开支**——`other_expense = 0`、`other_expenses = {}`，
+  `expense` 只剩手工记账支出，`net_profit` 即「只看商品售卖」的利润；逐笔明细 `expense_items`
+  与按日/按月支出里的「其他开支」也都为 0 / 不出现。
+  被排除掉的真实金额仍以 `excluded_other_expense` 返回（配合 `exclude_other_expense: true` 供前端提示）。
+
+`GET /api/report/all-warehouses` 支持同样的 `exclude_other` 参数（全仓总览口径一致）。
 
 ### 7.3 财务流水
 

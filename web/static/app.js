@@ -4243,6 +4243,30 @@ async function batchDeleteOutbounds() {
 
 /* =============== 报表 =============== */
 /* 报表两级视图：全仓总览（所有分仓合计）/ 单仓总览（默认当前分仓，可切换查看其他分仓） */
+/* =============== 报表口径：排除其他开支（默认开启） ===============
+   开启后财务报表不计入「其他开支」（经营分析 → 其他开支）的款项，只看商品售卖利润。
+   偏好存在本机，web 端与 PWA 端共用同一个 localStorage key。 */
+const EXCLUDE_OTHER_KEY = "erp_exclude_other_expense";
+let EXCLUDE_OTHER = localStorage.getItem(EXCLUDE_OTHER_KEY) !== "0";   // 无记录时默认开启
+
+/** 报表请求附加的口径参数（前后端都默认含其他开支，所以这里总是显式声明） */
+const excludeOtherQs = () => (EXCLUDE_OTHER ? "&exclude_other=1" : "&exclude_other=0");
+
+/** 把本机偏好回显到报表页的口径开关（初始化时调用） */
+function syncExcludeOtherHint() {
+  const chk = $("excludeOtherChk");
+  if (chk) chk.checked = EXCLUDE_OTHER;
+}
+
+/** 报表页口径开关：切换后持久化，并立即按新口径重算 */
+function toggleExcludeOther(chk) {
+  EXCLUDE_OTHER = !!chk.checked;
+  localStorage.setItem(EXCLUDE_OTHER_KEY, EXCLUDE_OTHER ? "1" : "0");
+  syncExcludeOtherHint();
+  toast(EXCLUDE_OTHER ? "已排除其他开支：只看商品售卖利润" : "已计入其他开支：含全部期间费用");
+  loadReport();
+}
+
 let REP_SCOPE = "one";   // all 全仓总览 / one 单仓总览
 let REP_WH = "";         // 单仓总览查看的分仓 key；"" = 当前分仓
 let repWhLoaded = false;
@@ -4298,7 +4322,7 @@ function repViewWarehouse(key) {
 async function loadAllWarehouses(from, to) {
   const t = $("repAllTable");
   try {
-    const d = await api(`/api/report/all-warehouses?date_from=${from || ""}&date_to=${to || ""}`);
+    const d = await api(`/api/report/all-warehouses?date_from=${from || ""}&date_to=${to || ""}${excludeOtherQs()}`);
     const items = d.items || [];
     const tot = d.total || {};
     const rate = (v, base) => (base ? ((v / base) * 100).toFixed(1) + "%" : "—");
@@ -4387,7 +4411,7 @@ async function loadReport() {
   let rep, finance;
   try {
     [rep, finance] = await Promise.all([
-      api(`/api/report/summary?date_from=${from || ""}&date_to=${to || ""}${whQs}`),
+      api(`/api/report/summary?date_from=${from || ""}&date_to=${to || ""}${whQs}${excludeOtherQs()}`),
       api(`/api/finance?date_from=${from || ""}&date_to=${to || ""}${whQs}`),
     ]);
   } catch (e) {
@@ -4396,10 +4420,15 @@ async function loadReport() {
   }
   const rh = $("repRangeHint");
   if (rh) {
+    // 口径：明确「其他开支」算没算进来，避免和「其他开支」页的数字对不上
+    const caliber = rep.exclude_other_expense
+      ? `已排除其他开支 ${fmtMoney(rep.excluded_other_expense)}`
+      : `含其他开支 ${fmtMoney(rep.excluded_other_expense)}`;
     rh.textContent = `统计区间 ${from || "最早"} ~ ${to || "最新"}`
       + (all
         ? ` · 全仓合计${rep.warehouse_count ? `（${rep.warehouse_count} 个分仓）` : ""}`
-        : (rep.warehouse ? ` · ${rep.warehouse.name}${rep.is_current ? "（当前分仓）" : ""}` : ""));
+        : (rep.warehouse ? ` · ${rep.warehouse.name}${rep.is_current ? "（当前分仓）" : ""}` : ""))
+      + ` · ${caliber}`;
   }
   if (!all) {
     const whHint = $("repWhHint");
@@ -4804,6 +4833,12 @@ function renderExpenseItems(rep) {
   REP_EXP_WITH_WH = !!rep.is_all;
   const sel = $("repExpItemSrc");
   if (sel) sel.value = "";   // 换区间后重置筛选，避免"看不到数据"的困惑
+  // 已排除其他开支时，逐笔明细里不会有该来源，把筛选项置灰并说明原因
+  const optOther = sel ? sel.querySelector('option[value="其他开支"]') : null;
+  if (optOther) {
+    optOther.disabled = !!rep.exclude_other_expense;
+    optOther.textContent = rep.exclude_other_expense ? "其他开支（已排除）" : "其他开支";
+  }
   const kw = $("repExpItemSearch");
   if (kw) kw.value = "";
   renderExpenseItemRows();
@@ -5466,6 +5501,7 @@ function esc(s) {
     $("inUnit").onchange = calcInbound;
   } catch (e) {}
   try { bindSearchable(document); } catch (e) {}
+  syncExcludeOtherHint();   // 报表页「排除其他开支」开关按本机偏好回显（默认开启）
   loadDashboard();
   applyHashRoute(); // 支持深链：登录后跳转到指定二级页
 })();

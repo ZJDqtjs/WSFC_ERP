@@ -492,6 +492,11 @@
         <div class="card">
           <div class="card-head">
             <h3>财务利润报表</h3>
+            <!-- 报表口径开关：开启后不计入「其他开支」的款项，只看商品售卖利润（默认开启） -->
+            <label class="rep-switch" title="开启后本报表不计入「其他开支」的款项，只看商品售卖利润">
+              <input type="checkbox" id="excludeOtherChk" checked onchange="toggleExcludeOther(this)" />
+              <span>排除其他开支</span>
+            </label>
             <span class="hint" id="repRangeHint"></span>
             <div class="grow"></div>
             <div class="seg" id="repScopeSeg" style="margin-bottom:0;">

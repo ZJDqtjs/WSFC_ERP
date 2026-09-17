@@ -246,17 +246,22 @@ def summary(
     date_from: str = "",
     date_to: str = "",
     wh: str = "",   # 可选：指定查看哪个分仓（单仓总览手动切换用），缺省=本登录会话的分仓；wh=all = 全仓合计
+    exclude_other: int = 0,   # 1 = 排除「其他开支」，报表只看商品售卖利润（默认 0：含其他开支）
     db: Session = Depends(get_db_wh),
     user: User = Depends(get_current_user),
 ):
     """经营汇总：默认本登录会话的分仓；wh=all 时合并所有分仓（各自是独立账套）。"""
     if wh == ALL_WH:
-        return _summary_all(date_from, date_to)
-    return _summary_of(db, date_from, date_to, resolve_key(wh))
+        return _summary_all(date_from, date_to, bool(exclude_other))
+    return _summary_of(db, date_from, date_to, resolve_key(wh), bool(exclude_other))
 
 
-def _summary_of(db: Session, date_from: str, date_to: str, key: str) -> dict:
-    """单个分仓的经营汇总（「单仓总览」各分区的数据源）。"""
+def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_other: bool = False) -> dict:
+    """单个分仓的经营汇总（「单仓总览」各分区的数据源）。
+
+    exclude_other=True 时不计入「其他开支」（other_expenses 表）：期间费用只剩手工记账支出，
+    净利润即「只看商品售卖」的利润；被排除的金额仍以 excluded_other_expense 返回，供前端提示。
+    """
     def scope(model):
         q = select(model)
         if date_from:
@@ -282,7 +287,10 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str) -> dict:
     gross = round(revenue - cogs, 2)
     # 期间费用 = 财务流水里手工登记的支出（不含采购支出，采购已计入库存成本）+ 其他开支
     manual_expense = sum(f.amount for f in finances if f.type == "expense" and f.category != "采购支出")
-    other_total = round(sum(e.amount or 0.0 for e in others), 2)
+    # 其他开支原始金额始终统计，便于前端提示「已排除多少」；口径关闭时不计入任何支出/净利计算
+    other_raw = round(sum(e.amount or 0.0 for e in others), 2)
+    others_in = [] if exclude_other else others
+    other_total = 0.0 if exclude_other else other_raw
     expense = round(manual_expense + other_total, 2)
     purchase = sum(f.amount for f in finances if f.type == "expense" and f.category == "采购支出")
     purchase_db = sum(i.total_amount for i in inbounds)
@@ -416,9 +424,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str) -> dict:
             continue
         manual_fees[f.category] = round(manual_fees.get(f.category, 0.0) + f.amount, 2)
 
-    # 其他开支（网线费/安装费/机器费/样品费…），按费用类型归集
+    # 其他开支（网线费/安装费/机器费/样品费…），按费用类型归集（口径关闭时为空）
     other_fees: dict[str, float] = {}
-    for e in others:
+    for e in others_in:
         other_fees[e.category] = round(other_fees.get(e.category, 0.0) + (e.amount or 0.0), 2)
 
     # 逐日 / 逐月支出：三类合计——采购进货 + 其他开支 + 手工记账。
@@ -437,7 +445,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str) -> dict:
     for i in inbounds:  # 采购/进货（与顶部「本期进货」同源）
         _add_expense(exp_day, i.date, "purchase", i.total_amount)
         _add_expense(exp_month, (i.date or "")[:7], "purchase", i.total_amount)
-    for e in others:
+    for e in others_in:
         _add_expense(exp_day, e.date, "other", e.amount)
         _add_expense(exp_month, (e.date or "")[:7], "other", e.amount)
     for f in finances:
@@ -483,7 +491,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str) -> dict:
             "operator": i.operator or "", "remark": i.supplier or i.remark or "",
             "ref": i.code or "", "auto": False,
         })
-    for e in others:
+    for e in others_in:
         expense_items.append({
             "date": e.date, "source": "其他开支", "category": e.category,
             "item": e.category, "amount": round(e.amount or 0.0, 2),
@@ -518,6 +526,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str) -> dict:
         "expense": expense,
         "manual_expense": round(manual_expense, 2),
         "other_expense": other_total,
+        # 报表口径开关：exclude_other_expense=True = 已排除其他开支（只看商品售卖利润）
+        "exclude_other_expense": bool(exclude_other),
+        "excluded_other_expense": other_raw,   # 被排除掉的其他开支金额（仅供提示）
         "net_profit": net,
         "purchase": round(purchase_db, 2),
         # 全部支出 = 采购（进货）+ 其他开支 + 手工记账；仅用于"支出"展示口径
@@ -572,8 +583,10 @@ def _each_warehouse(fn):
     return parts, failed
 
 
-def _summary_all(date_from: str, date_to: str) -> dict:
-    parts, failed = _each_warehouse(lambda db, key, name: _summary_of(db, date_from, date_to, key))
+def _summary_all(date_from: str, date_to: str, exclude_other: bool = False) -> dict:
+    parts, failed = _each_warehouse(
+        lambda db, key, name: _summary_of(db, date_from, date_to, key, exclude_other)
+    )
     return _merge_summaries(parts, date_from, date_to, failed)
 
 
@@ -581,6 +594,7 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
     """把各分仓的 _summary_of 结果合并成「全仓合计」。
 
     金额/笔数直接相加；商品、按日按月支出、逐笔明细按业务主键归并后重算比率/合计。
+    各分仓已经按 exclude_other_expense 口径算好，这里只做相加与标记透传。
     """
     def s(field: str) -> float:
         return round(sum(float(p.get(field) or 0) for p in parts), 2)
@@ -694,6 +708,9 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
         "expense": s("expense"),
         "manual_expense": s("manual_expense"),
         "other_expense": s("other_expense"),
+        # 全仓口径开关：任一分仓标记为「排除其他开支」即视为同一口径
+        "exclude_other_expense": any(bool(p.get("exclude_other_expense")) for p in parts),
+        "excluded_other_expense": s("excluded_other_expense"),
         "net_profit": s("net_profit"),
         "purchase": s("purchase"),
         "total_expense": s("total_expense"),
@@ -908,8 +925,11 @@ def _sales_by_spec_all(date_from: str, date_to: str) -> dict:
     }
 
 
-def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str) -> dict:
-    """单个分仓的「收入 / 支出 / 利润」总览（口径与 /report/summary 完全一致：只含已付款单据）。"""
+def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str, exclude_other: bool = False) -> dict:
+    """单个分仓的「收入 / 支出 / 利润」总览（口径与 /report/summary 完全一致：只含已付款单据）。
+
+    exclude_other=True 时不计入其他开支（只看商品售卖利润）。
+    """
     def scope(model):
         q = select(model)
         if date_from:
@@ -926,7 +946,8 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str)
     revenue = round(sum(o.total_amount or 0 for o in outbounds), 2)
     cogs = round(sum(o.total_cogs or 0 for o in outbounds), 2)
     manual_expense = sum(f.amount or 0 for f in finances if f.type == "expense" and f.category != "采购支出")
-    other_expense = round(sum(e.amount or 0 for e in others), 2)
+    other_raw = round(sum(e.amount or 0 for e in others), 2)
+    other_expense = 0.0 if exclude_other else other_raw
     expense = round(manual_expense + other_expense, 2)
     purchase = round(sum(i.total_amount or 0 for i in inbounds), 2)
     return {
@@ -938,6 +959,8 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str)
         "expense": expense,
         "other_expense": other_expense,
         "manual_expense": round(manual_expense, 2),
+        "exclude_other_expense": bool(exclude_other),
+        "excluded_other_expense": other_raw,
         "purchase": purchase,
         "total_expense": round(purchase + expense, 2),
         "net_profit": round(revenue - cogs - expense, 2),
@@ -949,7 +972,12 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str)
 
 
 @router.get("/report/all-warehouses")
-def all_warehouses(date_from: str = "", date_to: str = "", user: User = Depends(get_current_user)):
+def all_warehouses(
+    date_from: str = "",
+    date_to: str = "",
+    exclude_other: int = 0,   # 1 = 排除「其他开支」（与 /report/summary 同口径）
+    user: User = Depends(get_current_user),
+):
     """全仓总览：把所有分仓的收入 / 支出 / 利润汇总成一张表 + 合计。
 
     每个分仓是**独立账套**（独立 db 文件），因此逐个分仓查询后累加；某个仓读不出来只标记该行，
@@ -961,7 +989,7 @@ def all_warehouses(date_from: str = "", date_to: str = "", user: User = Depends(
         db = None
         try:
             db = get_sessionmaker(key)()
-            items.append(_overview_of(db, key, name, date_from, date_to))
+            items.append(_overview_of(db, key, name, date_from, date_to, bool(exclude_other)))
         except Exception as e:  # 单个仓失败不拖累整体
             print(f"[全仓总览] {key} 读取失败:", e)
             items.append({"key": key, "name": name, "error": f"读取失败：{e}"})
@@ -984,6 +1012,7 @@ def all_warehouses(date_from: str = "", date_to: str = "", user: User = Depends(
         "expense": s("expense"),
         "other_expense": s("other_expense"),
         "manual_expense": s("manual_expense"),
+        "excluded_other_expense": s("excluded_other_expense"),
         "purchase": s("purchase"),
         "total_expense": s("total_expense"),
         "net_profit": s("net_profit"),
@@ -1001,6 +1030,7 @@ def all_warehouses(date_from: str = "", date_to: str = "", user: User = Depends(
     return {
         "date_from": date_from,
         "date_to": date_to,
+        "exclude_other_expense": bool(exclude_other),
         "current": resolve_key(""),   # 本登录会话所在分仓（前端默认选中）
         "items": items,
         "total": total,
