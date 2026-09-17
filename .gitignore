@@ -14,8 +14,10 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# 必须锚定到仓库根（带前导 /）。未锚定的 `lib/` 会匹配任意层级的 lib 目录，
+# 曾把 flutter/statistics_erp_app/lib/（Flutter 全部源码）静默排除，导致源码始终没能入库。
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -257,19 +259,54 @@ coverage/
 *票据*.png
 data-src/*发票*
 data-src/*票据*
-# Capacitor 安卓应用 (capacitor/)
+# ==================== 移动端（capacitor / flutter）====================
+# ---- Capacitor（Android 套壳，远程加载已部署的 PWA）----
 capacitor/node_modules/
 capacitor/dist/
 # 本机构建环境（勿提交）
 capacitor/android-sdk/
 capacitor/tools/
 capacitor/android/.gradle/
+capacitor/android/.cxx/
 capacitor/android/build/
 capacitor/android/app/build/
+capacitor/android/app/debug/
+capacitor/android/app/profile/
+capacitor/android/app/release/
 capacitor/android/local.properties
+capacitor/android/captures/
+capacitor/android/.idea/
 capacitor/android/capacitor-cordova-android-plugins/
 capacitor/android/app/src/main/assets/
-capacitor/android/captures/
+# 服务端地址等本机私有配置：由 scripts/gen-config.mjs 合成出 capacitor.config.json
+/capacitor/capacitor.config.json
+/capacitor/capacitor.config.local.json
+
+# ---- Flutter（statistics_erp_app）----
+# flutter/statistics_erp_app/.gitignore 与 android/.gitignore 已覆盖大部分，
+# 这里再兜底一层：万一嵌套规则被删掉，也不会把构建产物、签名文件提交上来。
+flutter/**/.dart_tool/
+flutter/**/.flutter-plugins
+flutter/**/.flutter-plugins-dependencies
+flutter/**/build/
+flutter/**/.idea/
+flutter/**/*.iml
+flutter/**/windows/flutter/ephemeral/
+flutter/**/ios/Pods/
+flutter/**/ios/.symlinks/
+flutter/**/ios/Flutter/Generated.xcconfig
+flutter/**/ios/Flutter/flutter_export_environment.sh
+
+# ---- 安卓签名与本机环境（**绝不可提交**）----
+# Android 官方模板里 *.jks / *.keystore / key.properties / google-services.json
+# 都是注释掉的，这里显式排除，覆盖 capacitor/ 与 flutter/ 两个工程。
+*.jks
+*.keystore
+key.properties
+google-services.json
+# 打包产物
+*.apk
+*.aab
 
 
 !/deploy

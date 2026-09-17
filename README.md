@@ -21,7 +21,9 @@ WSFC_ERP/                # 项目根（本地开发 = Linux 部署单元）
 │   └── static/          #   index.html / app.js / style.css
 ├── mobile/              # 移动端 PWA（Vue3 + Vant4 + Vite，构建产物 mobile/dist）
 ├── capacitor/           # 移动端 Capacitor Android 套壳（远程加载已部署的 /mobile/ PWA）
-├── flutter/             # 移动端 Flutter 应用（statistics_erp_app）
+│   ├── capacitor.config.template.json #  入库模板（server.url 为占位地址）
+│   └── capacitor.config.local.json    #  本机私有真实地址（已 gitignore，需自建）
+├── flutter/             # 移动端 Flutter 应用（statistics_erp_app，源码在 lib/）
 ├── deploy/              # Linux 部署：nginx.conf / erp.service / deploy.sh / service.sh
 ├── data-src/            # 商品源数据（七月份干货/蔬菜统计表等）
 ├── scripts/             # 独立分析脚本（月度商品发货统计 / 箱子及薪水支出统计）
@@ -61,6 +63,29 @@ WSFC_ERP/                # 项目根（本地开发 = Linux 部署单元）
 - 加载逻辑见 `backend/app/config.py`；也支持环境变量覆盖：`ERP_LLM_API_KEY` / `ERP_LLM_BASE_URL` / `ERP_LLM_MODEL`。
 - `accounts` 的口令在每次启动时与数据库比对并**强制同步**，因此改完 `config.local.json` 重启即完成管理员改密。
 - **新机器/新服务器克隆后必须自建 `config.local.json`**，否则 AI 录入不可用、也不会创建任何初始账号。
+
+### 移动端配置
+
+Capacitor CLI 只读 `capacitor/capacitor.config.json`，且 JSON 配置不支持读环境变量，
+所以服务端地址走「入库模板 + 本机私有覆盖」两层，由脚本合成：
+
+| 文件 | 是否入库 | 内容 |
+| --- | --- | --- |
+| `capacitor/capacitor.config.template.json` | 是 | 结构模板，`server.url` 为占位地址 |
+| `capacitor/capacitor.config.local.json` | 否（已 gitignore） | 真实地址，例如 `{"server":{"url":"http://<服务器地址>/mobile/"}}` |
+| `capacitor/capacitor.config.json` | 否（已 gitignore） | 由脚本合成，CLI 实际读取的文件 |
+
+```bash
+cd capacitor && npm install
+npm run sync          # 会先合成配置再执行 cap sync；copy / open:android 同理
+```
+
+Flutter 端同理：地址写进本机私有 JSON `flutter/statistics_erp_app/dart_defines.local.json`（已 gitignore，格式见同目录 `dart_defines.template.json`），打包时
+
+```bash
+cd flutter/statistics_erp_app
+flutter build apk --release --dart-define-from-file=dart_defines.local.json
+```
 
 ## 本地开发（前后端分离）
 
