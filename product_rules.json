@@ -59,7 +59,7 @@
   "llm": {
     "enabled": true,
     "base_url": "https://ai.yun.139.com/api/llm/102001/v1/chat/completions",
-    "api_key": "***REMOVED-LLM-KEY***",
+    "api_key": "",
     "model": "blian_qwen35_plus"
   },
 
