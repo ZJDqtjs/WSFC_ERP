@@ -1256,6 +1256,15 @@ td.num, th.num {
   grid-template-columns: 1.6fr 1fr 1fr auto; 
 }
 
+/* 订单商品「扣减库存商品」多行：库存商品 + 倍数 + 删除 */
+.stock-link-row {
+  display: grid;
+  grid-template-columns: 1.8fr 1fr auto;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
 .pr-item-row {
   display: grid;
   grid-template-columns: 1.7fr 1.4fr 0.8fr auto;

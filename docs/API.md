@@ -113,9 +113,10 @@ Product 字段：
 | conversions          | object   | 单位换算表 `{单位: 到基础单位的系数}`                  |
 | pack\_items          | array    | 关联结算清单 `[{product_id, quantity, unit}]` |
 | pack\_fee            | float    | 每单固定人工/包装费                              |
-| stock\_product\_id   | int/null | 订单商品关联的库存商品 ID                          |
-| stock\_product\_name | string   | 关联库存商品名称                                |
-| multiplier           | float    | 1 单订单商品 = multiplier × 库存默认单位           |
+| stock\_product\_id   | int/null | 订单商品关联的库存商品 ID（多关联时为**首项**，兼容旧逻辑/扣点分类） |
+| stock\_product\_name | string   | 首个关联库存商品名称                              |
+| multiplier           | float    | 1 单订单商品 = multiplier × 库存默认单位（首项倍数）      |
+| stock\_links         | array    | 订单商品的多扣减关联 `[{product_id, name, category, multiplier, default_unit}]`；空数组 = 代发（不扣库存） |
 | is\_active           | bool     | 是否启用                                    |
 | stock                | float    | 当前库存（基础单位）                              |
 | avg\_cost            | float    | 库存均价（先进先出剩余批次加权，基础单位）                   |
@@ -143,11 +144,16 @@ Product 字段：
   "pack_fee": 0,
   "stock_product_id": null,
   "multiplier": 1,
+  "stock_links": [ { "product_id": 3, "multiplier": 1 }, { "product_id": 7, "multiplier": 2 } ],
   "is_active": true
 }
 ```
 
 响应：创建的 `Product` 对象。`conversions` 缺省时按 `base_unit` 生成默认换算表。
+
+> 订单商品（`product_type=order`）可用 `stock_links` 关联**多个**库存商品（大类）：卖 1 单时按各自 `multiplier` 依次扣减。
+> 出库明细仍为一行（数量/金额/成本合计），库存流水按每个被扣减的库存商品各记一条（成本按 FIFO 分别结转）。
+> `stock_product_id` + `multiplier` 保留为单关联的兼容字段（多关联时取 `stock_links` 首项）；请求体不传 `stock_links` 时按该单关联字段处理（未升级的旧客户端编辑商品若未改动关联，服务端会保留已有 `stock_links`）。
 
 ### 3.3 更新商品
 

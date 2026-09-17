@@ -27,6 +27,12 @@ class PackItem(BaseModel):
     unit: str = "个"
 
 
+class StockLinkIn(BaseModel):
+    """订单商品 → 库存商品（大类）的扣减关联项。"""
+    product_id: int
+    multiplier: float = 1.0  # 1单订单商品 = multiplier × 该库存商品默认单位
+
+
 class ProductIn(BaseModel):
     code: str = ""
     name: str
@@ -41,8 +47,10 @@ class ProductIn(BaseModel):
     conversions: dict[str, float] = {}
     pack_items: list[PackItem] = []
     pack_fee: float = 0.0
-    stock_product_id: int | None = None  # 订单商品关联的库存商品
+    stock_product_id: int | None = None  # 订单商品关联的库存商品（单关联，兼容旧客户端；多关联请看 stock_links）
     multiplier: float = 1.0  # 1单订单商品 = multiplier × 库存商品默认单位
+    # 订单商品可关联多个扣减库存商品：[{product_id, multiplier}]；None = 未提供（回退单关联字段）
+    stock_links: list[StockLinkIn] | None = None
     is_active: bool = True
 
 
@@ -51,6 +59,23 @@ def _to_dict(p: Product, db: Session | None = None) -> dict:
     if p.stock_product_id and db:
         sp = db.get(Product, p.stock_product_id)
         sp_name = sp.name if sp else ""
+    # 多扣减关联清单（含商品名与单位，供前端直接展示）；旧数据无 stock_links 时用单关联字段兜底
+    raw_links = list(p.stock_links or [])
+    if not raw_links and p.stock_product_id:
+        raw_links = [{"product_id": p.stock_product_id, "multiplier": p.multiplier or 1.0}]
+    links = []
+    for it in raw_links:
+        pid = (it or {}).get("product_id")
+        sp = db.get(Product, pid) if (db and pid) else None
+        if not sp:
+            continue
+        links.append({
+            "product_id": sp.id,
+            "name": sp.name,
+            "category": sp.category,
+            "multiplier": float((it or {}).get("multiplier") or 1.0),
+            "default_unit": sp.default_unit or sp.base_unit,
+        })
     return {
         "id": p.id,
         "code": p.code,
@@ -69,6 +94,7 @@ def _to_dict(p: Product, db: Session | None = None) -> dict:
         "stock_product_id": p.stock_product_id,
         "stock_product_name": sp_name,
         "multiplier": p.multiplier,
+        "stock_links": links,
         "is_active": p.is_active,
         "stock": p.stock,
         "avg_cost": p.avg_cost,
@@ -77,16 +103,33 @@ def _to_dict(p: Product, db: Session | None = None) -> dict:
     }
 
 
-def _validate_stock_link(db: Session, data: ProductIn) -> int | None:
-    """订单商品关联的库存商品校验（必须存在且是库存商品）。"""
-    if not data.stock_product_id:
-        return None
-    sp = db.get(Product, data.stock_product_id)
-    if not sp:
-        raise HTTPException(400, "关联的库存商品不存在")
-    if sp.product_type != "stock":
-        raise HTTPException(400, "只能关联「库存商品」（大类）作为扣减对象")
-    return sp.id
+def _validate_stock_links(db: Session, data: ProductIn) -> list[dict]:
+    """订单商品 → 库存商品 的扣减关联校验（支持多个），返回规范化清单。
+
+    - 显式传 stock_links（含空数组 = 代发）时按其校验；
+    - 未传（None）时回退旧的单关联字段 stock_product_id + multiplier；
+    - 重复关联同一库存商品只保留第一项。
+    """
+    raw: list = list(data.stock_links) if data.stock_links is not None else []
+    if data.stock_links is None:
+        if not data.stock_product_id:
+            return []
+        raw = [StockLinkIn(product_id=data.stock_product_id, multiplier=data.multiplier)]
+    links, seen = [], set()
+    for it in raw:
+        sp = db.get(Product, it.product_id)
+        if not sp:
+            raise HTTPException(400, "关联的库存商品不存在")
+        if sp.product_type != "stock":
+            raise HTTPException(400, "只能关联「库存商品」（大类）作为扣减对象")
+        if sp.id in seen:
+            continue
+        mult = float(it.multiplier or 0)
+        if mult <= 0:
+            raise HTTPException(400, f"「{sp.name}」的扣减倍数必须大于 0")
+        seen.add(sp.id)
+        links.append({"product_id": sp.id, "multiplier": mult})
+    return links
 
 
 @router.get("/stocks")
@@ -167,7 +210,8 @@ def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = 
         raise HTTPException(400, f"商品「{data.name}」已存在")
     if data.product_type not in ("stock", "order"):
         raise HTTPException(400, "商品类型必须为 stock 或 order")
-    sp_id = _validate_stock_link(db, data)
+    stock_links = _validate_stock_links(db, data)
+    first = stock_links[0] if stock_links else None
     conversions = data.conversions or default_conversions(data.base_unit)
     p = Product(
         code=data.code.strip(),
@@ -183,8 +227,9 @@ def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = 
         conversions=conversions,
         pack_items=[item.model_dump() for item in data.pack_items],
         pack_fee=data.pack_fee,
-        stock_product_id=sp_id,
-        multiplier=data.multiplier,
+        stock_product_id=first["product_id"] if first else None,
+        multiplier=first["multiplier"] if first else 1.0,
+        stock_links=stock_links,
         is_active=data.is_active,
     )
     db.add(p)
@@ -203,7 +248,16 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
         raise HTTPException(400, f"商品「{data.name}」已存在")
     if data.product_type not in ("stock", "order"):
         raise HTTPException(400, "商品类型必须为 stock 或 order")
-    sp_id = _validate_stock_link(db, data)
+    if data.stock_links is not None:
+        stock_links = _validate_stock_links(db, data)
+    elif (data.stock_product_id or None) == (p.stock_product_id or None) \
+            and abs(float(data.multiplier or 1.0) - float(p.multiplier or 1.0)) < 1e-9:
+        # 旧客户端（如未升级的移动端）不传 stock_links 且未改动单关联字段：
+        # 保留已有的多关联清单，避免顺手改个名字就把多扣减关联冲掉。
+        stock_links = [dict(x) for x in (p.stock_links or [])]
+    else:
+        stock_links = _validate_stock_links(db, data)
+    first = stock_links[0] if stock_links else None
     p.code = data.code.strip()
     p.name = data.name.strip()
     p.category = data.category.strip()
@@ -217,8 +271,9 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
     p.conversions = data.conversions or default_conversions(data.base_unit)
     p.pack_items = [item.model_dump() for item in data.pack_items]
     p.pack_fee = data.pack_fee
-    p.stock_product_id = sp_id
-    p.multiplier = data.multiplier
+    p.stock_product_id = first["product_id"] if first else None
+    p.multiplier = first["multiplier"] if first else 1.0
+    p.stock_links = stock_links
     p.is_active = data.is_active
     db.commit()
     db.refresh(p)
@@ -269,9 +324,11 @@ def _product_referenced(db: Session, pid: int) -> bool:
         for it in (wp.pack_items or [])
     ):
         return True
-    # 被其他商品的关联结算清单引用，或被订单商品作为库存关联引用
+    # 被其他商品的关联结算清单引用，或被订单商品作为库存扣减关联引用
     for o in db.execute(select(Product).where(Product.id != pid)).scalars():
         if o.stock_product_id == pid:
+            return True
+        if any((it or {}).get("product_id") == pid for it in (o.stock_links or [])):
             return True
         if any((it or {}).get("product_id") == pid for it in (o.pack_items or [])):
             return True

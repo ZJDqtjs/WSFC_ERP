@@ -1436,6 +1436,7 @@ def _auto_create_order(db: Session, ext_name: str, stock: Product | None = None)
         conversions={"单": 1},
         stock_product_id=sid,
         multiplier=mult,
+        stock_links=[{"product_id": sid, "multiplier": mult}] if sid else [],
         is_active=True,
     )
     db.add(p)
@@ -1496,6 +1497,7 @@ def parse_jushuitan(file: UploadFile, db: Session = Depends(get_db), user: User 
             if stock:
                 order_p.stock_product_id = stock.id
                 order_p.multiplier = _spec_multiplier(stock, c["external_code"])
+                order_p.stock_links = [{"product_id": stock.id, "multiplier": order_p.multiplier}]
                 order_p.spec = f"每单约 {fmt_qty(order_p.multiplier)}{stock.default_unit or stock.base_unit}"
         # 编码关联统一指向库存商品（大类）；无匹配库存则不关联（留待人工）
         sp = db.get(Product, order_p.stock_product_id) if order_p.stock_product_id else None

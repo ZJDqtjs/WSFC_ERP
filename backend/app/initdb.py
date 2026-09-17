@@ -34,7 +34,16 @@ def migrate(engine: Engine, maker: sessionmaker) -> None:
             conn.execute(text("ALTER TABLE products ADD COLUMN workload FLOAT DEFAULT 0"))
         if "weight_kg" not in cols:
             conn.execute(text("ALTER TABLE products ADD COLUMN weight_kg FLOAT DEFAULT 0"))
+        if "stock_links" not in cols:
+            conn.execute(text("ALTER TABLE products ADD COLUMN stock_links JSON"))
         conn.commit()
+
+    # 库存流水：出库行 id（多扣减时一行出库明细对应多条流水，成本回写用）
+    with engine.connect() as conn:
+        smcols = [r[1] for r in conn.execute(text("PRAGMA table_info(stock_movements)")).fetchall()]
+        if smcols and "line_id" not in smcols:
+            conn.execute(text("ALTER TABLE stock_movements ADD COLUMN line_id INTEGER"))
+            conn.commit()
 
     # 用户表：SSH 指纹认证所需字段
     with engine.connect() as conn:

@@ -55,8 +55,11 @@ class Product(Base):
     # 订单商品 → 库存商品 的关联（解耦）
     stock_product_id: Mapped[int | None] = mapped_column(
         ForeignKey("products.id"), nullable=True, index=True
-    )  # 关联的库存商品（大类）
+    )  # 关联的库存商品（大类）；多关联时为首项（兼容旧逻辑/扣点分类）
     multiplier: Mapped[float] = mapped_column(Float, default=1.0)  # 1单订单商品 = multiplier × 库存商品默认单位
+    # 订单商品 → 库存商品 的**多扣减关联**：[{product_id, multiplier}, ...]
+    # 卖 1 单该订单商品时依次扣减这些库存商品（如 礼盒 = 苹果1斤 + 梨1斤）；空 = 代发（不扣库存）
+    stock_links: Mapped[list] = mapped_column(JSON, default=list)
 
     # 缓存聚合（由库存流水重算）
     stock: Mapped[float] = mapped_column(Float, default=0.0)
@@ -158,6 +161,9 @@ class StockMovement(Base):
     amount: Mapped[float] = mapped_column(Float, default=0.0)  # 入库金额 / 出库成本
     ref_type: Mapped[str] = mapped_column(String(16), default="")  # inbound / outbound / manual
     ref_id: Mapped[int] = mapped_column(Integer, nullable=True)
+    # 出库行 id（仅出库产生的流水）：一行出库明细可能对应多条流水（订单商品关联多个库存商品），
+    # 供 FIFO 成本重算精确回写到对应出库行；空 = 旧数据（按顺序一一对应）
+    line_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     date: Mapped[str] = mapped_column(String(10), index=True)
     operator: Mapped[str] = mapped_column(String(32), default="")
     remark: Mapped[str] = mapped_column(String(255), default="")

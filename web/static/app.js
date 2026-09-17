@@ -262,10 +262,24 @@ function refCostValue(p) {
 /* 库存那一格的「排序值」：与列表里这一格显示的内容对齐——
    订单商品这一格显示的是「经库存商品」（库存记在它关联的库存商品上），故取该库存商品的现有库存；
    人工显示的是工作量；其余按默认单位换算后的库存。 */
+/* 订单商品的扣减库存商品清单（支持多个；兼容旧的单关联字段） */
+function prodStockLinks(p) {
+  const raw = Array.isArray(p.stock_links) && p.stock_links.length
+    ? p.stock_links
+    : (p.stock_product_id ? [{ product_id: p.stock_product_id, multiplier: p.multiplier || 1 }] : []);
+  return raw.map((l) => ({
+    product_id: l.product_id,
+    multiplier: Number(l.multiplier) || 1,
+    name: l.name || (PRODUCTS.find((x) => x.id === l.product_id) || {}).name || "?",
+    default_unit: l.default_unit || ((PRODUCTS.find((x) => x.id === l.product_id) || {}).default_unit || ""),
+  }));
+}
 function stockSortValue(p) {
   if (p.product_type === "order") {
-    const sp = p.stock_product_id ? PRODUCTS.find((x) => x.id === p.stock_product_id) : null;
-    if (!sp) return 0; // 代发（未关联库存商品）：本仓不持有该商品库存
+    const links = prodStockLinks(p);
+    if (!links.length) return 0; // 代发（未关联库存商品）：本仓不持有该商品库存
+    const sp = PRODUCTS.find((x) => x.id === links[0].product_id);
+    if (!sp) return 0;
     return (Number(sp.stock) || 0) / (unitFactor(sp, defaultUnit(sp)) || 1);
   }
   if (p.category === "人工") return Number(p.workload) || 0;
@@ -2801,7 +2815,7 @@ async function renderProducts() {
     if ((p.name || "").toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw)) return true;
     // 代发的关键词刻意不含「库存」二字：这样搜「库存」只出库存/扣减库存的商品，搜「代发」只出代发商品
     const way = p.product_type === "order"
-      ? (p.stock_product_id ? `订单 扣减库存 ${p.stock_product_name || ""}` : "订单 代发 外发")
+      ? (prodStockLinks(p).length ? `订单 扣减库存 ${prodStockLinks(p).map((l) => l.name).join(" ")}` : "订单 代发 外发")
       : "库存商品";
     const packs = (p.pack_items || [])
       .map((it) => (PRODUCTS.find((x) => x.id === it.product_id) || {}).name || "")
@@ -2841,13 +2855,14 @@ async function renderProducts() {
         ? '<span class="badge income">订单</span>'
         : '<span class="badge adjust">库存</span>';
       // linkInfo 允许含 HTML（代发徽章），所以文本分支这里自己先 esc，渲染时不能再 esc 一次
+      const links = p.product_type === "order" ? prodStockLinks(p) : [];
       const linkInfo = p.product_type === "order"
-        ? (p.stock_product_id
-          ? `扣减：${esc(p.stock_product_name || "?")} ×${fmtNum(p.multiplier)}`
+        ? (links.length
+          ? `扣减：${links.map((l) => `${esc(l.name)} ×${fmtNum(l.multiplier)}`).join("、")}`
           : '<span class="badge income">代发</span> <span class="muted">不扣库存，只统计代发数量/成本</span>')
         : esc(p.spec || "");
       const isLabor = p.category === "人工";
-      const stockShown = p.product_type === "order" && p.stock_product_name
+      const stockShown = p.product_type === "order" && links.length
         ? `<span class="muted">经库存商品</span>`
         : isLabor
           ? `<span class="badge income">工作量 ${fmtNum(p.workload)} 单</span>`
@@ -2996,8 +3011,12 @@ function openProductModal(pid = 0, prefillName = "") {
       <div class="field" id="pWeightBox"><label>单件净重（kg）</label><input id="pWeightKg" type="number" step="any" value="${p?.weight_kg || 0}" /><div class="field-hint">用于计算快递费。重量类库存自动按「扣减库存量」推导；按袋/按件等计数库存推不出重量时，就用这里手填的净重兜底（如 四神汤200g 填 0.2）。<b>代发商品填了净重也会按净重结算快递费</b>（不填=代发方包邮，不计快递费）</div></div>
     </div>
     <div id="pStockBox" class="form-grid" style="margin-top:10px;display:${ptype === "order" ? "grid" : "none"};">
-      <div class="field"><label>关联库存商品（大类）</label><select id="pStockLink" class="searchable"><option value="">— 加载中… —</option></select><div class="field-hint">出库时从该大类扣减库存（可输入名称快速筛选）；<b>留空 = 代发</b>：本仓不扣任何库存，只统计代发数量与代发成本（按下面「参考成本」计）</div></div>
-      <div class="field"><label>倍数（1单订单 = ? 库存单位）</label><input id="pMultiplier" type="number" step="any" value="${p?.multiplier || 1}" /><div class="field-hint">如 佛手柑大果2个 → 倍数2：卖1单扣 2个 佛手柑大果（代发时不用填）</div></div>
+      <div class="field" style="grid-column:1/-1;">
+        <label>关联库存商品（可多个，出库时全部扣减）</label>
+        <div id="stockLinkRows"></div>
+        <button class="btn secondary sm" onclick="addStockLinkRow()">＋ 添加扣减库存商品</button>
+        <div class="field-hint">卖 1 单本商品时，从下面每个库存大类按其倍数扣减库存（可输入名称快速筛选）；如 礼盒 = 苹果1斤 + 梨1斤。一个都不填 = <b>代发</b>：本仓不扣任何库存，只统计代发数量与代发成本（按下面「参考成本」计）</div>
+      </div>
     </div>
     <div class="field" style="margin-top:10px;"><label>规格说明</label><input id="pSpec" value="${esc(p?.spec || "")}" placeholder="如：每个约150克；或每袋5斤" /></div>
     <hr />
@@ -3014,16 +3033,14 @@ function openProductModal(pid = 0, prefillName = "") {
       <button class="btn" onclick="saveProduct(${pid || 0})">保存</button>
     </div>`);
   initProductUnitSelect(ptype, curUnit);
-  // 加载库存商品（大类）列表
+  // 加载库存商品（大类）列表，并渲染「扣减库存商品」多行（支持 + 号新增）
   if (ptype === "order") {
     api("/api/stocks").then((stocks) => {
-      const sel = $("pStockLink");
-      sel.innerHTML = '<option value="">— 不关联（代发：不扣库存）—</option>' +
-        stocks.map((s) => `<option value="${s.id}" ${s.id === p?.stock_product_id ? "selected" : ""}>${esc(s.name)}（${esc(s.category) || "—"}·单位${esc(s.default_unit || s.base_unit)}）</option>`).join("");
-      sel.dispatchEvent(new Event("change", { bubbles: true })); // 让可搜索下拉同步显示
-    }).catch(() => { $("pStockLink").innerHTML = '<option value="">— 加载失败 —</option>'; });
+      STOCKS = stocks || [];
+      renderStockLinkRows(prodStockLinks(p || {}));
+    }).catch(() => { $("stockLinkRows").innerHTML = '<div class="muted">库存商品加载失败</div>'; });
   } else {
-    $("pStockLink").innerHTML = '<option value="">—</option>';
+    $("stockLinkRows").innerHTML = "";
   }
 }
 function initProductUnitSelect(ptype, curUnit) {
@@ -3043,13 +3060,51 @@ function pTypeChanged() {
   const t = $("pType").value;
   $("pStockBox").style.display = t === "order" ? "grid" : "none";
   initProductUnitSelect(t, $("pUnit").value);
-  if (t === "order" && $("pStockLink").options.length <= 1) {
+  if (t === "order" && !STOCKS.length) {
     api("/api/stocks").then((stocks) => {
-      const sel = $("pStockLink");
-      sel.innerHTML = '<option value="">— 不关联（代发：不扣库存）—</option>' +
-        stocks.map((s) => `<option value="${s.id}">${esc(s.name)}（${esc(s.category) || "—"}·单位${esc(s.default_unit || s.base_unit)}）</option>`).join("");
+      STOCKS = stocks || [];
+      if ($("stockLinkRows") && !$("stockLinkRows").querySelector(".stock-link-row")) renderStockLinkRows([]);
     });
   }
+}
+
+/* ---------- 订单商品「扣减库存商品」多行（支持 + 号新增多个） ---------- */
+let STOCKS = [];   // 库存商品（大类）缓存，供关联行下拉使用
+function stockLinkOptions(selId) {
+  const list = STOCKS.length ? STOCKS : PRODUCTS.filter((p) => p.is_active && p.product_type === "stock");
+  return '<option value="">选择库存商品（大类）…</option>' + list.map((s) => {
+    const du = s.default_unit || s.base_unit || s.unit || "";
+    return `<option value="${s.id}" ${Number(selId) === s.id ? "selected" : ""}>${esc(s.name)}（${esc(s.category || "—")}${du ? "·单位" + esc(du) : ""}）</option>`;
+  }).join("");
+}
+function stockLinkRowHtml(link) {
+  return `<div class="stock-link-row">
+    <select class="stock-link searchable">${stockLinkOptions(link && link.product_id)}</select>
+    <input type="number" step="any" min="0" class="stock-mult" value="${link ? (Number(link.multiplier) || 1) : 1}" placeholder="倍数（1单=？库存单位）" />
+    <button class="btn danger sm" onclick="this.closest('.stock-link-row').remove()">删</button>
+  </div>`;
+}
+function renderStockLinkRows(links) {
+  const box = $("stockLinkRows");
+  if (!box) return;
+  box.innerHTML = (links || []).map((l) => stockLinkRowHtml(l)).join("");
+  bindSearchable(box);
+}
+function addStockLinkRow() {
+  const box = $("stockLinkRows");
+  if (!box) return;
+  box.insertAdjacentHTML("beforeend", stockLinkRowHtml(null));
+  bindSearchable(box); // 新追加行的下拉也需支持输入筛选
+}
+function collectStockLinks() {
+  const out = [];
+  document.querySelectorAll("#stockLinkRows .stock-link-row").forEach((row) => {
+    const sel = row.querySelector(".stock-link");
+    const pid = sel && sel.value ? +sel.value : null;
+    const mult = parseFloat(row.querySelector(".stock-mult").value);
+    if (pid && mult > 0) out.push({ product_id: pid, multiplier: mult });
+  });
+  return out;
 }
 function collectPacks() {
   const out = [];
@@ -3075,6 +3130,8 @@ async function saveProduct(pid) {
   const ptype = $("pType").value;
   const unit = $("pUnit") ? $("pUnit").value : "斤";
   const unitPayload = deriveUnitPayload(ptype, unit);
+  // 订单商品可关联多个扣减库存商品（stock_links）；stock_product_id/multiplier 保留首项以兼容旧逻辑（扣点分类等）
+  const stockLinks = ptype === "order" ? collectStockLinks() : [];
   const payload = {
     code: $("pCode").value,
     name: $("pName").value,
@@ -3089,14 +3146,15 @@ async function saveProduct(pid) {
     conversions: unitPayload.conversions,
     pack_items: collectPacks(),
     pack_fee: +$("pPackFee").value || 0,
-    stock_product_id: ptype === "order" && $("pStockLink") ? (+$("pStockLink").value || null) : null,
-    multiplier: +$("pMultiplier").value || 1,
+    stock_product_id: stockLinks.length ? stockLinks[0].product_id : null,
+    multiplier: stockLinks.length ? stockLinks[0].multiplier : 1,
+    stock_links: stockLinks,
     is_active: $("pActive") ? $("pActive").checked : true,
   };
   if (!payload.name.trim()) { toast("请填写商品名称"); return; }
   // 订单商品可以不关联库存大类 = 代发（本仓不扣库存，只统计代发数量与代发成本）；
   // 但代发成本按「参考成本」计，没填就会算成 0，这里给个提醒（不拦保存）。
-  if (payload.product_type === "order" && payload.stock_product_id == null && !payload.unit_cost) {
+  if (payload.product_type === "order" && !stockLinks.length && !payload.unit_cost) {
     if (!confirm("该订单商品未关联库存商品（= 代发），但「参考成本」为 0，代发成本会按 0 计。仍要保存吗？")) return;
   }
   try {
@@ -3455,7 +3513,6 @@ async function loadInbounds() {
     <th data-key="code">单号${sortArrow("inTable", "code")}</th>
     <th data-key="product_name">商品${sortArrow("inTable", "product_name")}</th>
     <th data-key="quantity">数量${sortArrow("inTable", "quantity")}</th>
-    <th>折算</th>
     <th data-key="unit_price" class="num">单价${sortArrow("inTable", "unit_price")}</th>
     <th data-key="total_amount" class="num">金额${sortArrow("inTable", "total_amount")}</th>
     <th data-key="supplier">供应商${sortArrow("inTable", "supplier")}</th>
@@ -3468,7 +3525,6 @@ async function loadInbounds() {
       <td class="mono">${r.code}${payTag(r.pay_status)}</td>
       <td><b>${esc(r.product_name)}</b></td>
       <td>${fmtNum(r.quantity)} ${r.unit}</td>
-      <td class="muted">= ${fmtNum(r.quantity_base)} 基础单位</td>
       <td class="num mono">${fmtMoney(r.unit_price)}/${r.unit}</td>
       <td class="num mono">${fmtMoney(r.total_amount)}</td>
       <td>${esc(r.supplier) || "—"}</td>
@@ -3503,7 +3559,6 @@ function addSaleRow() {
     <td><select class="searchable sale-unit" onchange="saleUnitChanged(this)"></select></td>
     <td><input type="number" step="any" value="1" oninput="saleCalcRow(this)" style="width:90px;" /></td>
     <td><input type="number" step="any" value="0" oninput="saleCalcRow(this)" style="width:100px;" /></td>
-    <td class="muted sale-conv">—</td>
     <td class="num sale-sub">¥0.00</td>
     <td><button class="btn sm danger" onclick="this.closest('tr').remove()">✕</button></td>`;
   $("outSaleBody").appendChild(tr);
@@ -3570,23 +3625,8 @@ function saleUnitChanged(sel) {
 }
 function saleCalcRow(inp) {
   const tr = inp.closest("tr");
-  const p = PRODUCTS.find((x) => x.id === +tr.dataset.pid);
-  const unitSel = tr.querySelector(".sale-unit");
-  const unit = unitSel ? unitSel.value : "";
   const qty = parseFloat(tr.querySelectorAll("input[type=number]")[0].value) || 0;
   const price = parseFloat(tr.querySelectorAll("input[type=number]")[1].value) || 0;
-  if (p && unit) {
-    const factor = (p.conversions || {})[unit] || 1;
-    const qb = qty * factor;
-    if (p.product_type === "order" && p.stock_product_id) {
-      tr.querySelector(".sale-conv").textContent = `扣 ${esc(p.stock_product_name || "?")} ×${fmtNum(qb * p.multiplier)}`;
-    } else if (p.product_type === "order") {
-      // 未关联库存大类 = 代发：不扣任何库存，成本按参考成本计
-      tr.querySelector(".sale-conv").textContent = `代发（不扣库存）· 成本 ${fmtMoney(qb * (p.unit_cost || 0))}`;
-    } else {
-      tr.querySelector(".sale-conv").textContent = `= ${fmtNum(qb)} ${p.base_unit}`;
-    }
-  }
   tr.querySelector(".sale-sub").textContent = fmtMoney(qty * price);
 }
 function collectSaleLines() {

@@ -69,6 +69,16 @@ def _product_dict(p: Product, db) -> dict:
             "quantity": (it or {}).get("quantity", 1),
             "unit": (it or {}).get("unit", "个"),
         })
+    # 多扣减关联（订单商品可关联多个库存商品）：引用一律用名称
+    stock_links = []
+    for it in (p.stock_links or []):
+        pid = (it or {}).get("product_id")
+        sp = db.get(Product, pid) if pid else None
+        if not sp:
+            continue
+        stock_links.append({"product": sp.name, "multiplier": (it or {}).get("multiplier", 1)})
+    if not stock_links and sp_name:
+        stock_links = [{"product": sp_name, "multiplier": p.multiplier}]
     return {
         "code": p.code,
         "name": p.name,
@@ -82,8 +92,9 @@ def _product_dict(p: Product, db) -> dict:
         "conversions": p.conversions or {},
         "pack_items": pack_items,
         "pack_fee": p.pack_fee,
-        "stock_product": sp_name,  # 订单商品关联的库存商品名称
+        "stock_product": sp_name,  # 订单商品关联的库存商品名称（单关联，兼容旧数据）
         "multiplier": p.multiplier,
+        "stock_links": stock_links,  # [{product, multiplier}] 多扣减关联（按名称）
         "is_active": p.is_active,
     }
 
@@ -226,15 +237,28 @@ def _import_products(db, items, default_type: str) -> dict:
         p.multiplier = float(it.get("multiplier", p.multiplier) or 1)
         p.pack_fee = float(it.get("pack_fee", p.pack_fee) or 0)
         p.is_active = bool(it.get("is_active", True))
-        # 关联库存商品（按名称）
-        sp_name = str(it.get("stock_product", "")).strip()
-        p.stock_product_id = None
-        if sp_name:
-            sp = _get_product_by_name(db, sp_name)
-            if sp:
-                p.stock_product_id = sp.id
-            else:
-                warnings.append(f"商品「{name}」关联的库存商品「{sp_name}」不存在，关联已置空")
+        # 关联库存商品（按名称）：优先读多扣减清单 stock_links，缺失时回退旧的单关联字段
+        raw_links = it.get("stock_links")
+        if raw_links is None:
+            sp_name = str(it.get("stock_product", "")).strip()
+            raw_links = [{"product": sp_name, "multiplier": it.get("multiplier", p.multiplier)}] if sp_name else []
+        links, seen = [], set()
+        for li in (raw_links or []):
+            ln = str((li or {}).get("product", "")).strip()
+            if not ln:
+                continue
+            sp = _get_product_by_name(db, ln)
+            if not sp:
+                warnings.append(f"商品「{name}」关联的库存商品「{ln}」不存在，已跳过")
+                continue
+            if sp.id in seen:
+                continue
+            seen.add(sp.id)
+            links.append({"product_id": sp.id, "multiplier": float((li or {}).get("multiplier", 1) or 1)})
+        p.stock_links = links
+        p.stock_product_id = links[0]["product_id"] if links else None
+        if links:
+            p.multiplier = links[0]["multiplier"]
         # 关联结算清单（按名称）
         pack = []
         for pi in (it.get("pack_items") or []):
