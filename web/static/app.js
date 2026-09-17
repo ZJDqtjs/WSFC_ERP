@@ -1203,6 +1203,9 @@ async function aiRecognizeOne(f, idx, total, label) {
 }
 // 支持 Ctrl+V 粘贴图片批量识别
 document.addEventListener("paste", (e) => {
+  // 粘贴目标若是「备注/附件」输入框：交给其自身 onpaste 走附件上传，不再触发 AI 识别
+  const _pt = e.target;
+  if (_pt && _pt.closest && _pt.closest("textarea[onpaste]")) return;
   const files = Array.from((e.clipboardData || {}).items || [])
     .filter((it) => it.type.startsWith("image/"))
     .map((it) => it.getAsFile())
@@ -1352,7 +1355,7 @@ function openAiConfirm(r) {
     </tr>`;
   }).join("");
   const invImg = r.image_url
-    ? `<div class="ai-invoice"><span class="muted">📎 票据凭证</span><img src="${esc(r.image_url)}" alt="票据" onclick="window.open('${esc(r.image_url)}','_blank')" /></div>`
+    ? `<div class="ai-invoice"><span class="muted">📎 票据凭证（点击预览）</span><img src="${esc(r.image_url)}" alt="票据" onclick="openAttachmentPreview('${r.image_url}','票据凭证')" /></div>`
     : "";
   openModal(`
     <h3>确认录入（${isIn ? "入库" : "出库"}） <button class="close" onclick="closeModal()">✕</button></h3>
@@ -1535,13 +1538,73 @@ function renderRemarkHtml(rmk) {
     if (s.text !== undefined) return esc(s.text).replace(/\n/g, "<br />");
     const u = routePath(s.url);
     if (s.isImage) {
-      return `<a href="${u}" target="_blank" title="${esc(s.name)}"><img src="${u}" alt="${esc(s.name)}" style="height:34px;vertical-align:middle;border-radius:4px;margin-right:4px;border:1px solid var(--border-light);" /></a>`;
+      return `<span style="cursor:zoom-in;display:inline-block;vertical-align:middle;" onclick="openAttachmentPreview('${s.url}','${esc(s.name)}')" title="${esc(s.name)} — 点击预览"><img src="${u}" alt="${esc(s.name)}" style="height:34px;vertical-align:middle;border-radius:4px;margin-right:4px;border:1px solid var(--border-light);" /></span>`;
     }
-    return `<a class="attach-link" href="${u}" target="_blank" title="${esc(s.name)}">📎 ${esc(s.name)}</a>`;
+    return `<a class="attach-link" href="${u}" target="_blank" title="${esc(s.name)} — 点击预览" onclick="openAttachmentPreview('${s.url}','${esc(s.name)}');return false;">📎 ${esc(s.name)}</a>`;
   }).join("");
 }
+/* 附件点击预览：图片全屏浮层预览（点遮罩或按 Esc 关闭），非图片（PDF/Excel 等）新标签打开 */
+let __prevLayer = null;
+function __prevKeydown(e) { if (e.key === "Escape") closeAttachmentPreview(); }
+function closeAttachmentPreview() {
+  if (__prevLayer) { __prevLayer.remove(); __prevLayer = null; }
+  document.removeEventListener("keydown", __prevKeydown);
+}
+function openAttachmentPreview(url, name) {
+  const u = routePath(url);
+  const label = name || "附件";
+  if (!/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(u)) { window.open(u, "_blank"); return; }
+  closeAttachmentPreview();
+  const lay = document.createElement("div");
+  lay.className = "attach-preview";
+  const img = document.createElement("img");
+  img.className = "attach-preview-img";   // 显式宽高 auto，避免被其它 img 规则影响而"全黑"
+  img.alt = label;
+  img.src = u;
+  const cap = document.createElement("div");
+  cap.className = "attach-preview-cap";
+  cap.textContent = label;
+  img.addEventListener("click", (ev) => ev.stopPropagation());   // 点图片自身不关闭
+  img.addEventListener("error", () => { cap.textContent = "图片加载失败：" + label + "（" + u + "）"; });
+  lay.appendChild(img);
+  lay.appendChild(cap);
+  lay.addEventListener("click", closeAttachmentPreview);
+  document.body.appendChild(lay);
+  document.addEventListener("keydown", __prevKeydown);
+  __prevLayer = lay;
+}
 
-/** 上传备注附件：成功后把 /uploads/xxx 追加进备注文本框，随表单一起保存。
+/* 备注附件与文本分离存放：文本框只保留用户输入的纯文本，附件统一以标签展示；
+   提交时再拼接为「纯文本\n/uploads/xxx」，与后端存储格式保持一致（列表/移动端读取不受影响）。 */
+const REMARK_ATTACH = {};   // textareaId -> [{ url, name, isImage }]
+
+/** 备注最终值（提交用）：纯文本 + 附件路径，与历史数据格式一致 */
+function remarkValue(textareaId) {
+  const ta = $(textareaId);
+  const text = ((ta && ta.value) || "").trim();
+  const urls = (REMARK_ATTACH[textareaId] || []).map((f) => f.url);
+  return [text, ...urls].filter(Boolean).join("\n");
+}
+
+/** 回填备注（编辑场景）：把已有 /uploads/xxx 拆到附件区，文本框只留纯文本 */
+function setRemarkValue(textareaId, remark) {
+  const ta = $(textareaId);
+  if (!ta) return;
+  const segs = splitRemark(remark || "");
+  REMARK_ATTACH[textareaId] = segs.filter((s) => s.url).map((s) => ({ url: s.url, name: s.name, isImage: s.isImage }));
+  ta.value = segs.filter((s) => s.text !== undefined).map((s) => s.text).join("").trim();
+  renderRemarkAttachments(textareaId);
+}
+
+/** 清空备注及其附件 */
+function clearRemarkField(textareaId) {
+  const ta = $(textareaId);
+  if (ta) ta.value = "";
+  REMARK_ATTACH[textareaId] = [];
+  renderRemarkAttachments(textareaId);
+}
+
+/** 上传备注附件：只登记到附件区并展示标签，不写入文本框。
      source 可以是文件选择 input 元素，或粘贴传入的 FileList / File[]。 */
 async function uploadRemarkFiles(textareaId, source) {
   let files;
@@ -1554,11 +1617,11 @@ async function uploadRemarkFiles(textareaId, source) {
     files = [];
   }
   if (!files.length) return;
+  const list = REMARK_ATTACH[textareaId] = REMARK_ATTACH[textareaId] || [];
   try {
     for (const f of files) {
       const r = await apiUpload("/api/uploads", f);
-      const ta = $(textareaId);
-      ta.value = (ta.value.trim() ? ta.value.replace(/\s+$/, "") + "\n" : "") + r.url;
+      list.push({ url: r.url, name: r.name || attachName(r.url), isImage: r.is_image });
     }
     renderRemarkAttachments(textareaId);
     toast(`已添加 ${files.length} 个附件`);
@@ -1568,31 +1631,53 @@ async function uploadRemarkFiles(textareaId, source) {
 /** 备注栏支持 Ctrl+V 粘贴图片 / 文件；剪贴板无附件时维持默认文本粘贴 */
 function pasteRemarkFiles(textareaId, event) {
   const items = (event.clipboardData && event.clipboardData.items) || [];
+  const text = (event.clipboardData && typeof event.clipboardData.getData === "function")
+    ? (event.clipboardData.getData("text/plain") || "")
+    : "";
   const files = [];
   for (const it of items) {
     if (it.kind !== "file") continue;
     const f = typeof it.getAsFile === "function" ? it.getAsFile() : null;
     if (f) files.push(f);
   }
-  if (!files.length) return;
-  if (event.cancelable) event.preventDefault();  // 有附件：阻止把文件以文本形式插入备注
-  uploadRemarkFiles(textareaId, files);
+  // 剪贴板带真实文件（图片/PDF/Excel 等）：阻止把文本写入备注，作为附件上传
+  if (files.length) {
+    if (event.cancelable) event.preventDefault();
+    uploadRemarkFiles(textareaId, files);
+    return;
+  }
+  // 剪贴板只有「本地文件路径」文本（资源管理器复制文件 / 右键「复制为路径」）：阻止写入备注
+  if (looksLikeLocalPath(text)) {
+    if (event.cancelable) event.preventDefault();
+    toast("检测到本地文件路径，已取消写入备注；如需挂附件，请用「图片/附件」按钮重新选择该文件。");
+    return;
+  }
+  // 无附件：维持默认文本粘贴
+}
+/** 判断文本是否像本地文件路径：兼容带引号的「复制为路径」、UNC、file://、Unix 绝对路径 */
+function looksLikeLocalPath(s) {
+  let t = String(s || "").trim();
+  t = t.replace(/^["'“”«»]+/, "").replace(/["'“”«»]+$/, "").trim();   // 去掉成对引号
+  if (!t) return false;
+  if (/^(?:[A-Za-z]:[\\/]|\\\\|\/\/|file:\/\/)/i.test(t)) return true;  // C:\ ; \\server ; // ; file://
+  if (/^\/[^\/\s]/.test(t)) return true;                                // /usr/local/...
+  return /[A-Za-z]:[\\/]/.test(t);                                      // 文本中夹带的 C:\ 或 C:/
 }
 
-/** 渲染已选附件的小标签（可单个删除），仅作用于新增表单 */
+/** 渲染已选附件的小标签（可点击预览、可单个删除），仅作用于新增/编辑表单 */
 function renderRemarkAttachments(textareaId) {
   const box = $(textareaId + "Files");
   if (!box) return;
-  const files = splitRemark($(textareaId).value).filter((s) => s.url);
-  box.innerHTML = files.map((s) =>
-    `<span class="attach-chip"><span>${s.isImage ? "🖼" : "📎"} ${esc(s.name)}</span><b onclick="removeRemarkAttachment('${textareaId}','${s.url}')">✕</b></span>`
+  const files = REMARK_ATTACH[textareaId] || [];
+  box.innerHTML = files.map((s, i) =>
+    `<span class="attach-chip"><span style="cursor:pointer;" onclick="openAttachmentPreview('${s.url}','${esc(s.name)}')">${s.isImage ? "🖼" : "📎"} ${esc(s.name)}</span><b onclick="removeRemarkAttachment('${textareaId}',${i})">✕</b></span>`
   ).join("");
 }
 
-/** 从备注里移除某个附件 */
-function removeRemarkAttachment(textareaId, url) {
-  const ta = $(textareaId);
-  ta.value = ta.value.split(url).join("").replace(/[ \t]+$/gm, "").replace(/\n{2,}/g, "\n").trim();
+/** 从附件区移除某个附件 */
+function removeRemarkAttachment(textareaId, index) {
+  const list = REMARK_ATTACH[textareaId] || [];
+  if (index >= 0 && index < list.length) list.splice(index, 1);
   renderRemarkAttachments(textareaId);
 }
 
@@ -3347,12 +3432,12 @@ async function submitInbound() {
     await api("/api/inbounds", "POST", {
       product_id: pid, unit, quantity: qty, unit_price: price,
       supplier: $("inSupplier").value, operator: $("inOperator").value,
-      date: $("inDate").value, remark: $("inRemark").value,
+      date: $("inDate").value, remark: remarkValue("inRemark"),
       pay_status: payStatus,
     });
     toast(`已入库 ${fmtNum(qty)}${unit} ${p.name}${payStatus === "unpaid" ? "（待付款，已进待付款账单）" : ""}`);
-    $("inQty").value = ""; $("inPrice").value = ""; $("inAmount").value = ""; $("inRemark").value = "";
-    renderRemarkAttachments("inRemark");
+    $("inQty").value = ""; $("inPrice").value = ""; $("inAmount").value = "";
+    clearRemarkField("inRemark");
     setPay("inPay", "paid");   // 回到默认「已付款」
     loadInbounds(); loadStock();
   } catch (e) { toast("入库失败：" + e.message); }
@@ -3632,7 +3717,7 @@ async function submitOutbound() {
     const payStatus = payOf("outPay");
     const r = await api("/api/outbounds", "POST", {
       customer: $("outCustomer").value, operator: $("outOperator").value,
-      date: $("outDate").value, remark: $("outRemark").value,
+      date: $("outDate").value, remark: remarkValue("outRemark"),
       lines, pack_lines: packLines, pack_fee_total: fee,
       auto_express: autoExpressOn(),   // 与预览一致：关掉就不再自动加快递费
       pay_status: payStatus,
@@ -3641,8 +3726,8 @@ async function submitOutbound() {
     toast("出库成功" + (payStatus === "unpaid" ? "（待付款，已进待付款账单）" : "") + warns, 3800);
     $("outSaleBody").innerHTML = ""; outSaleRowId = 0; addSaleRow();
     clearPreview();
-    $("outCustomer").value = ""; $("outRemark").value = "";
-    renderRemarkAttachments("outRemark");
+    $("outCustomer").value = "";
+    clearRemarkField("outRemark");
     setPay("outPay", "paid");
     if ($("outAutoExpress")) $("outAutoExpress").checked = true;   // 复位：下一笔仍默认自动计快递费
     loadOutbounds(); loadStock();
@@ -5018,10 +5103,9 @@ function oeResetForm() {
   OE_EDIT_ID = null;
   $("oeCategory").value = "";
   $("oeAmount").value = "";
-  $("oeRemark").value = "";
   $("oeDate").value = today();
   setPay("oePay", "paid");
-  renderRemarkAttachments("oeRemark");
+  clearRemarkField("oeRemark");
   $("oeSaveBtn").textContent = "✓ 保存开支";
   oeAlertMsg("");
 }
@@ -5033,9 +5117,8 @@ function oeEdit(id) {
   $("oeCategory").value = r.category;
   $("oeAmount").value = r.amount;
   $("oeDate").value = r.date;
-  $("oeRemark").value = r.remark || "";
+  setRemarkValue("oeRemark", r.remark);   // 已有附件拆到标签区，文本框只留纯文本
   setPay("oePay", r.pay_status);
-  renderRemarkAttachments("oeRemark");   // 已有附件显示成可删除的小标签
   $("oeSaveBtn").textContent = "✓ 保存修改";
   oeAlertMsg(`正在修改 ${r.date}「${r.category}」${fmtMoney(r.amount)}（保存后覆盖原记录）`);
   $("oeCategory").focus();
@@ -5049,7 +5132,7 @@ async function oeSubmit() {
   if (!(amount > 0)) { oeAlertMsg("金额必须大于 0"); return; }
   if (!date) { oeAlertMsg("请选择日期"); return; }
   const payStatus = payOf("oePay");
-  const body = { category, amount, date, remark: ($("oeRemark").value || "").trim(), pay_status: payStatus };
+  const body = { category, amount, date, remark: remarkValue("oeRemark"), pay_status: payStatus };
   const editing = !!OE_EDIT_ID;
   try {
     if (editing) await api("/api/other-expenses/" + OE_EDIT_ID, "PUT", body);

@@ -63,9 +63,28 @@ function onPaste(e) {
     const f = typeof it.getAsFile === 'function' ? it.getAsFile() : null
     if (f) files.push(f)
   }
-  if (!files.length) return
-  if (e.cancelable) e.preventDefault()   // 有附件：阻止把文件以文本形式插入备注
-  uploadFiles(files)
+  if (files.length) {
+    if (e.cancelable) e.preventDefault()   // 有附件：阻止把文件以文本形式插入备注
+    uploadFiles(files)
+    return
+  }
+  // 无附件：若剪贴板是本地文件路径文本（资源管理器复制文件 / 「复制为路径」），阻止其污染备注
+  const text = (e.clipboardData && typeof e.clipboardData.getData === 'function')
+    ? (e.clipboardData.getData('text/plain') || '') : ''
+  if (looksLikeLocalPath(text)) {
+    if (e.cancelable) e.preventDefault()
+    showToast('检测到本地文件路径，已取消写入备注；如需挂附件请点「图片 / 附件」')
+  }
+}
+
+/** 判断文本是否像本地文件路径（兼容带引号、UNC、file://、Unix 绝对路径） */
+function looksLikeLocalPath(s) {
+  let t = String(s || '').trim()
+  t = t.replace(/^["'“”«»]+/, '').replace(/["'“”«»]+$/, '').trim()
+  if (!t) return false
+  if (/^(?:[A-Za-z]:[\\/]|\\\\|\/\/|file:\/\/)/i.test(t)) return true
+  if (/^\/[^\/\s]/.test(t)) return true
+  return /[A-Za-z]:[\\/]/.test(t)
 }
 
 async function uploadFiles(list) {

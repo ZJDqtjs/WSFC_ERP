@@ -1823,3 +1823,36 @@ tr.draft-off {
   color: #b45309;
   font-weight: 600;
 }
+
+/* 附件图片全屏预览浮层 */
+.attach-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.82);
+  cursor: zoom-out;
+}
+.attach-preview-img {
+  width: auto;
+  height: auto;
+  max-width: 92vw;
+  max-height: 82vh;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
+.attach-preview-cap {
+  margin-top: 10px;
+  color: #fff;
+  font-size: 13px;
+  max-width: 90vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
