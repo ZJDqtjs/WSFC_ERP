@@ -1,6 +1,6 @@
 """AI 智能录入：调用云端大模型，把用户口语拆分为 入库/出库 结构化参数。
 
-- LLM 配置在 product_rules.json 的 llm 段（base_url / api_key / model）
+- LLM 配置在 product_rules.json 的 llm 段（base_url / model）；api_key 等敏感项放在被忽略的 config.local.json
 - 通过官方 openai 客户端调用（标准 OpenAI 兼容协议 /chat/completions），支持流式输出
 - 大模型只负责"理解 + 抽取"，商品匹配与单位换算在服务端做（更快、更可靠），前端弹确认框核对
 - 提速要点：不向模型发送 307 个商品的完整目录（由后端匹配），并采用流式返回（首 token 约 1~2 秒）
@@ -17,13 +17,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
+from ..config import llm_config
 from ..database import get_db
 from ..models import Inbound, OutboundLine, Product, Unit, User
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-CONFIG_FILE = ROOT.parent / "product_rules.json"
 
 # AI 票据图片保存目录（backend/data/uploads）：记录备注可引用 /uploads/xxx.jpg 预览
 UPLOAD_DIR = ROOT / "data" / "uploads"
@@ -100,11 +100,8 @@ class ParseIn(BaseModel):
 
 
 def _llm_config() -> dict:
-    try:
-        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        return (cfg.get("llm") or {}) if cfg.get("llm", {}).get("enabled", True) else {}
-    except Exception:
-        return {}
+    """llm 段配置：product_rules.json 为默认值，config.local.json / 环境变量可覆盖。"""
+    return llm_config()
 
 
 def _make_client(cfg: dict) -> OpenAI:

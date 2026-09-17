@@ -11,47 +11,22 @@ import hmac
 import json
 import secrets
 import time
-from pathlib import Path
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .config import seed_accounts
 from .database import DATA_DIR, get_user_db
 from .models import User
 
 COOKIE_NAME = "erp_token"
 TOKEN_MAX_AGE = 60 * 60 * 24 * 7  # 7 天
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-CONFIG_FILE = ROOT / "product_rules.json"
-
-# 兜底账号（配置文件缺失/无 accounts 时使用）
-_FALLBACK_USERS = [
-    {"username": "admin1", "password": "admin1", "name": "管理员", "role": "admin"},
-]
-
-
-def _load_seed_users() -> list[dict]:
-    """从 product_rules.json 读取账号配置，用于数据库初始化。"""
-    try:
-        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        accs = cfg.get("accounts") or []
-        return [
-            {
-                "username": str(a.get("username", "")).strip(),
-                "password": str(a.get("password", "")),
-                "name": str(a.get("name", "")).strip(),
-                "role": str(a.get("role", "user")).strip() or "user",
-            }
-            for a in accs
-            if a.get("username")
-        ]
-    except Exception:
-        return _FALLBACK_USERS
-
-
-SEED_USERS = _load_seed_users()
+# 种子账号：来自 product_rules.json 的 accounts 段（可被 config.local.json 的 accounts 整体覆盖，
+# 见 app/config.py）。仓库里 accounts 为空，口令只存在于本机私有的 config.local.json，
+# 因此不再内置任何默认账号/默认口令。
+SEED_USERS = seed_accounts()
 
 SECRET_FILE = DATA_DIR / ".secret"
 

@@ -466,7 +466,7 @@ Outbound 字段：`id, code, customer, operator, date, remark, total_amount, tot
 
 ## 9. AI 智能录入
 
-> 需在 `product_rules.json` 的 `llm` 段配置 api\_key（`enabled: false` 或未配置时接口返回 400）。
+> 需配置 `llm` 段的 api\_key：默认配置在 `product_rules.json`，密钥写在本机私有的 `config.local.json`（或环境变量 `ERP_LLM_API_KEY`）；`enabled: false` 或未配置时接口返回 400。
 
 ### 9.1 文字解析（非流式）
 

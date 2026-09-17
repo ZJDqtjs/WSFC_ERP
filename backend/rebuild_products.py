@@ -1,7 +1,7 @@
 """重建商品档案（两级商品模型版）：
 - 库存商品（大类·真实库存）：柠檬云商品 + 纸箱(包材) + 人工打包费 + 快递费 + 从七月SKU自动提炼的大类
 - 订单商品（小类·出库销售）：七月干货/蔬菜 SKU，关联到库存商品，倍数 = 每单消耗的库存默认单位数
-- 规则全部来自 product_rules.json（代码层面，方便维护）
+- 规则来自 product_rules.json，可用本机私有的 config.local.json 覆盖（见 app/config.py）
 """
 import http.cookiejar
 import json
@@ -13,13 +13,14 @@ from pathlib import Path
 from openpyxl import load_workbook
 from sqlalchemy import select
 
+from app.config import load_rules
 from app.database import SessionLocal
 from app.models import CodeMapping, Product
 
 BASE = "http://127.0.0.1:8000"
 LEMON = "柠檬云商品导入模板.xlsx"
 ROOT = Path(__file__).resolve().parent.parent
-CFG = json.loads((ROOT / "product_rules.json").read_text(encoding="utf-8"))
+CFG = load_rules()
 OPENER = None
 
 SRC_FILES = CFG["source_files"]

@@ -279,6 +279,10 @@ capacitor/android/captures/
 /backend/data1/
 /backend/json/
 
+# 本机私有配置（LLM 密钥、初始账号口令等敏感项），**切勿提交**
+/config.local.json
+*.local.json
+
 # AI 工具工作目录（本机缓存，勿提交）
 /.workbuddy/
 /.trae/

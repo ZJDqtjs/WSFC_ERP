@@ -27,7 +27,8 @@ WSFC_ERP/                # 项目根（本地开发 = Linux 部署单元）
 ├── scripts/             # 独立分析脚本（月度商品发货统计 / 箱子及薪水支出统计）
 ├── docs/                # API.md 等文档
 ├── config.json          # 根路由/端口集中配置（路由前后端共用，勿随意改）
-├── product_rules.json   # 账号 / 单位 / LLM / 关联规则等配置
+├── product_rules.json   # 默认配置：单位 / 箱规 / 类别 / LLM 参数 / 关联规则（不含任何密钥）
+├── config.local.json    # 本机私有配置（LLM api_key、初始账号口令）：已被 gitignore，每台机器各存一份
 ├── dev.py               # 本地一键开发：后端 + 桌面 Web 前端
 └── requirements.txt / pyproject.toml / uv.lock（位于 backend/ 内）
 ```
@@ -38,6 +39,28 @@ WSFC_ERP/                # 项目根（本地开发 = Linux 部署单元）
 - **后端 API 端口 8000**（仅本机/内网）：`cd backend && uv run python run.py`，Linux 由 systemd 托管于 127.0.0.1:8000。
 - **私钥管理后台端口 8001**：`cd backend && uv run python keyadmin.py`。
 - 根目录 `config.json` 集中管理绑定地址、端口以及 `/api`、`/uploads`、`/mobile` 前缀。
+
+## 配置文件（product_rules.json + config.local.json）
+
+配置分两层，后者按**深合并**覆盖前者（只写要覆盖的字段即可，dict 递归合并、列表整体替换）：
+
+| 文件 | 是否入库 | 内容 |
+| --- | --- | --- |
+| `product_rules.json` | 是 | 单位换算、箱规、类别、LLM 的 `base_url` / `model`、编码关联等**非敏感**默认配置 |
+| `config.local.json` | 否（已 gitignore） | **本机私有**：`llm.api_key`、`accounts`（初始账号与口令）等敏感项 |
+
+```json
+{
+  "llm": { "api_key": "在这里填你的密钥" },
+  "accounts": [
+    { "username": "admin1", "password": "改成强口令", "name": "管理员", "role": "admin" }
+  ]
+}
+```
+
+- 加载逻辑见 `backend/app/config.py`；也支持环境变量覆盖：`ERP_LLM_API_KEY` / `ERP_LLM_BASE_URL` / `ERP_LLM_MODEL`。
+- `accounts` 的口令在每次启动时与数据库比对并**强制同步**，因此改完 `config.local.json` 重启即完成管理员改密。
+- **新机器/新服务器克隆后必须自建 `config.local.json`**，否则 AI 录入不可用、也不会创建任何初始账号。
 
 ## 本地开发（前后端分离）
 
@@ -105,7 +128,7 @@ bash /home/azureuser/WSFC_ERP/deploy/deploy.sh
   `username / name / role / fingerprint / is_active`。
 - ⚠️ **`admin1` 是历史遗留账号，`fingerprint` 为 NULL，无法用私钥登录**（旧密码登录已废弃）。
   请使用私钥管理工具分发的账号（如 `小王` / `小万` / `小李` / `小林` / `殷总` / `大凯`）。
-- 根目录 `product_rules.json` 的 `accounts` 只在**建库初始化**时同步，改它不会给已有账号补发密钥。
+- `accounts`（建议写在 `config.local.json`，见「配置文件」）每次启动都会同步口令与姓名/角色，但**不会给已有账号补发私钥**。
 - 私钥管理后台：`cd backend && uv run python keyadmin.py`（端口 8001）——用它生成/重发私钥，
   生成的私钥文件只在当时一次性下载，请妥善保管。
 - 换分仓 / 新建分仓后旧 token 立即失效，需要重新登录（登录页会提示"登录状态已失效"）。

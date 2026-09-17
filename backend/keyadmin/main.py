@@ -1,7 +1,7 @@
 """私钥管理工具：独立的登录密钥生成与账号管理后台。
 
 - 单独端口、单独启动脚本（项目根 keyadmin.py），不随 ERP 一起启动。
-- 打开即进入管理界面；首次使用需输入管理员密码（product_rules.json 中 accounts 的管理员密码，默认 admin1/admin1）。
+- 打开即进入管理界面；首次使用需输入管理员密码（config.local.json 中 accounts 的管理员口令）。
 - 复用 ERP 的用户表与密钥算法；私钥生成/重新生成时仅一次返回。
 """
 import base64

@@ -43,7 +43,7 @@ if __name__ == "__main__":
     for ip in lan_ips():
         print(f"  局域网后台: http://{ip}:{KEYADMIN_PORT}")
     print("-" * 46)
-    print("  首次进入需输入管理员密码（product_rules.json 中 accounts 的管理员密码）")
+    print("  首次进入需输入管理员密码（config.local.json 中 accounts 的管理员口令）")
     print("  关闭服务:  按 Ctrl+C")
     print("=" * 46)
 
