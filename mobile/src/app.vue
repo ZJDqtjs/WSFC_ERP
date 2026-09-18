@@ -1,12 +1,9 @@
 <template>
   <!-- 停服公告滚动条：仅在管理员发布维护公告（倒计时）期间显示 -->
-  <div v-if="mtState.noticeOn" class="mt-notice">
+  <div v-if="mtState.noticeOn" class="mt-notice" ref="noticeBarRef">
     <span class="mt-notice-ico">⚠</span>
     <div class="mt-notice-vp">
-      <div class="mt-notice-track">
-        <span class="mt-notice-txt">{{ noticeLine }}</span>
-        <span class="mt-notice-txt">{{ noticeLine }}</span>
-      </div>
+      <div class="mt-notice-track"></div>
     </div>
   </div>
 
@@ -54,7 +51,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api from './api'
 import { mtState, maskText, noticeText } from './utils/maintenance'
@@ -68,9 +65,62 @@ const noticeLine = computed(() => (mtState.noticeOn ? noticeText() : ''))
 const maskTip = computed(() => maskText())
 function reloadPage() { location.reload() }
 
+/* ---------- 公告滚动条：按宽度铺满，保证任何屏宽都在无缝滚动 ---------- */
+const NOTICE_SPEED = 55 // px/s，与屏宽无关
+const noticeBarRef = ref(null)
+let noticeSpans = []
+
+function buildNoticeTrack(text) {
+  const bar = noticeBarRef.value
+  if (!bar) return
+  const vp = bar.querySelector('.mt-notice-vp')
+  const track = bar.querySelector('.mt-notice-track')
+  if (!vp || !track) return
+  track.style.animation = 'none'
+  track.innerHTML = ''
+  const probe = document.createElement('span')
+  probe.className = 'mt-notice-txt'
+  probe.textContent = text
+  track.appendChild(probe)
+  const unitW = probe.getBoundingClientRect().width || 200
+  const vpW = vp.clientWidth || 1
+  // 一组铺 n 份，使一组宽度 ≥ 视口 + 一份宽度（位移一组后正好无缝）
+  const n = Math.max(1, Math.ceil((vpW + unitW) / unitW))
+  track.innerHTML = ''
+  noticeSpans = []
+  for (let g = 0; g < 2; g++) {
+    for (let i = 0; i < n; i++) {
+      const s = document.createElement('span')
+      s.className = 'mt-notice-txt'
+      s.textContent = text
+      noticeSpans.push(s)
+      track.appendChild(s)
+    }
+  }
+  const dur = Math.max(10, Math.round((n * unitW) / NOTICE_SPEED))
+  track.style.animation = `mtNotice ${dur}s linear infinite`
+}
+
+function syncNotice() {
+  if (!mtState.noticeOn) { noticeSpans = []; return }
+  const text = noticeText()
+  if (!noticeSpans.length) { nextTick(() => buildNoticeTrack(text)); return }
+  noticeSpans.forEach((s) => { s.textContent = text }) // 只改文字，动画不中断
+}
+
+watch(noticeLine, () => syncNotice(), { immediate: true })
+
+let noticeResizeTimer = null
+function onNoticeResize() {
+  if (!mtState.noticeOn) return
+  clearTimeout(noticeResizeTimer)
+  noticeResizeTimer = setTimeout(() => { noticeSpans = []; syncNotice() }, 300)
+}
+
 // 分仓标识：分仓随登录会话（切仓只重签自己的令牌、不会掉线），整页刷新后取一次即可
 const warehouse = ref('')
 onMounted(async () => {
+  window.addEventListener('resize', onNoticeResize) // 横竖屏切换后重铺公告文本
   try {
     const me = await api('/api/auth/me')
     if (me && me.warehouse && me.warehouse.name) warehouse.value = me.warehouse.name

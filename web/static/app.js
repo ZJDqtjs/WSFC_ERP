@@ -5470,8 +5470,6 @@ function mtEls() {
   return {
     bar: document.getElementById("noticeBar"),
     mask: document.getElementById("maintainMask"),
-    text: document.getElementById("noticeText"),
-    text2: document.getElementById("noticeText2"),
   };
 }
 async function mtFetchStatus() {
@@ -5504,21 +5502,70 @@ function mtNoticeText() {
   const left = m > 0 ? `${m} 分 ${String(s).padStart(2, "0")} 秒` : `${s} 秒`;
   return `${head}系统将于 ${left} 后停机维护${eta}，请及时保存当前工作并退出，以免数据丢失。`;
 }
+const MT_NOTICE_SPEED = 55; // 滚动速度（像素/秒）：与窗口宽度无关，宽屏窄屏观感一致
+
+/* 按实际宽度铺满公告文本，保证「无论窗口多宽都在滚、且没有空白段」：
+   把文本复制 n 份组成一组，轨道里放两组，位移一组宽度（-50%）即无缝循环。
+   n 取到「一组宽度 ≥ 视口宽度 + 一份宽度」，宽屏时自动多铺几份。 */
+function mtBuildNoticeTrack(text) {
+  const { bar } = mtEls();
+  if (!bar) return;
+  const vp = bar.querySelector(".notice-viewport");
+  const track = bar.querySelector(".notice-track");
+  if (!vp || !track) return;
+
+  track.style.animation = "none";
+  track.innerHTML = "";
+  const probe = document.createElement("span");
+  probe.className = "notice-text";
+  probe.textContent = text;
+  track.appendChild(probe);
+  const unitW = probe.getBoundingClientRect().width || 200;
+  const vpW = vp.clientWidth || 1;
+  const n = Math.max(1, Math.ceil((vpW + unitW) / unitW));
+
+  track.innerHTML = "";
+  const spans = [];
+  for (let g = 0; g < 2; g++) {
+    for (let i = 0; i < n; i++) {
+      const s = document.createElement("span");
+      s.className = "notice-text";
+      s.textContent = text;
+      spans.push(s);
+      track.appendChild(s);
+    }
+  }
+  track._spans = spans;
+  const dur = Math.max(10, Math.round((n * unitW) / MT_NOTICE_SPEED));
+  track.style.animation = `noticeScroll ${dur}s linear infinite`;
+}
+
 function mtShowNotice() {
-  const { bar, text, text2 } = mtEls();
+  const { bar } = mtEls();
   if (!bar) return;
   const t = mtNoticeText();
-  if (text) text.textContent = t;
-  if (text2) text2.textContent = t;
   bar.style.display = "flex";
   document.body.classList.add("notice-on");
-  requestAnimationFrame(() => {
-    const track = bar.querySelector(".notice-track");
-    const vp = bar.querySelector(".notice-viewport");
-    if (!track || !vp) return;
-    // 文案较短时不滚动（滚动会显得内容空转）
-    track.style.animation = track.scrollWidth / 2 > vp.clientWidth + 4 ? "" : "none";
-  });
+  const track = bar.querySelector(".notice-track");
+  if (!track) return;
+  if (!track._spans || !track._spans.length) {
+    mtBuildNoticeTrack(t); // 首次显示 / 窗口尺寸变化后重建轨道
+    return;
+  }
+  // 只改文字、不重建节点，滚动动画不会被打断（倒计时每秒都在变）
+  track._spans.forEach((s) => { s.textContent = t; });
+}
+
+/* 窗口尺寸变化后按新宽度重新铺文本（窄屏 → 宽屏时原本可能只剩几份） */
+let mtResizeTimer = null;
+function mtOnResize() {
+  if (!MT_STATE.noticeOn) return;
+  clearTimeout(mtResizeTimer);
+  mtResizeTimer = setTimeout(() => {
+    const track = document.querySelector(".notice-track");
+    if (track) track._spans = null;
+    mtShowNotice();
+  }, 300);
 }
 function mtHideNotice() {
   const { bar } = mtEls();
@@ -5603,6 +5650,7 @@ async function mtCheck() {
 }
 function startMaintenanceWatch() {
   if (MT_STATE.timer) return;
+  window.addEventListener("resize", mtOnResize);
   mtPollInterval(15000);
   mtCheck();
 }
