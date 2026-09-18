@@ -32,10 +32,10 @@ from app.clear_data import (
     warehouse_choices,
 )
 from app.config import seed_accounts
-from app.routers.backup import _list_backups, _safe_path, create_backup_file
+from app.routers.backup import _belongs, _list_backups, _safe_path, create_backup_file
 from app.database import (
-    DATA_DIR, DB_PATH, DEFAULT_WAREHOUSE_KEY, get_db_default as get_db,
-    get_sessionmaker, get_warehouses,
+    DATA_DIR, DEFAULT_WAREHOUSE_KEY, get_db_default as get_db,
+    get_sessionmaker, get_warehouses, warehouse_db_path,
 )
 from app.keys import generate_keypair
 from app.models import User
@@ -397,30 +397,69 @@ def delete_user(
 # ============================================================
 #  备份与应急抢救（后门）：ERP 主进程登录失效 / 数据异常时，
 #  可在本私钥管理后台直接备份 / 恢复数据库，或重置初始管理员登录私钥。
+#  ⚠️ 备份按分仓隔离：每个分仓是独立的 db 文件，备份/恢复/删除都必须带上分仓 key；
+#     恢复与删除都会校验备份文件名属于该分仓，杜绝跨仓覆盖（如把奥斯迪的备份灌进 wh01）。
 # ============================================================
+class BackupIn(BaseModel):
+    key: str | None = None
+
+
 class RestoreBackupIn(BaseModel):
     name: str
+    key: str | None = None
+
+
+def _rescue_key(key: str | None) -> str:
+    """校验并归一化抢救目标分仓 key（缺省默认仓）。"""
+    k = (key or "").strip() or DEFAULT_WAREHOUSE_KEY
+    if k not in {w["key"] for w in get_warehouses()}:
+        raise HTTPException(404, f"分仓不存在：{k}")
+    return k
+
+
+def _rescue_payload(key: str) -> dict:
+    """抢救面板数据：当前分仓信息 + 全部分仓选项 + 该分仓的备份列表。
+
+    注意：分仓名嵌在 warehouse.name 里，不能平铺成 name —— 否则会覆盖接口返回的
+    备份文件名（name），导致前端拿到分仓名去恢复。
+    """
+    name = next((w.get("name") or w["key"] for w in get_warehouses() if w["key"] == key), key)
+    return {
+        "key": key,
+        "warehouse": {"key": key, "name": name},
+        "warehouses": warehouse_choices(),
+        "backups": _list_backups(key),
+    }
 
 
 @app.get("/api/backups")
-def rescue_list_backups(_: bool = Depends(_require)):
-    return {"backups": _list_backups(DEFAULT_WAREHOUSE_KEY)}
+def rescue_list_backups(key: str | None = None, _: bool = Depends(_require)):
+    """列出指定分仓（缺省默认仓）的备份文件。"""
+    return _rescue_payload(_rescue_key(key))
 
 
 @app.post("/api/backup")
-def rescue_create_backup(_: bool = Depends(_require)):
-    name = create_backup_file(DEFAULT_WAREHOUSE_KEY)
-    return {"ok": True, "name": name, "backups": _list_backups(DEFAULT_WAREHOUSE_KEY)}
+def rescue_create_backup(data: BackupIn | None = None, _: bool = Depends(_require)):
+    """为指定分仓（缺省默认仓）创建备份文件。"""
+    k = _rescue_key(data.key if data else None)
+    name = create_backup_file(k)
+    return {"ok": True, "name": name, **_rescue_payload(k)}
 
 
 @app.post("/api/backup/restore")
 def rescue_restore_backup(data: RestoreBackupIn, _: bool = Depends(_require)):
-    """用备份文件覆盖当前数据库（含 WAL 一致性）。恢复后旧登录令牌失效，需重新登录。"""
+    """用备份文件覆盖**指定分仓**的数据库（含 WAL 一致性），其他分仓不受影响。
+
+    备份文件名必须属于该分仓，否则拒绝，避免跨仓灌数据。恢复后该仓需重新登录。
+    """
+    k = _rescue_key(data.key)
+    if not _belongs(data.name, k):
+        raise HTTPException(400, "备份文件不属于所选分仓，拒绝恢复")
     src_path = _safe_path(data.name)
     if not src_path.exists():
         raise HTTPException(404, "备份文件不存在")
     src = sqlite3.connect(str(src_path))
-    dst = sqlite3.connect(str(DB_PATH))
+    dst = sqlite3.connect(str(warehouse_db_path(k)))
     try:
         src.backup(dst)
     except Exception as e:
@@ -428,16 +467,20 @@ def rescue_restore_backup(data: RestoreBackupIn, _: bool = Depends(_require)):
     finally:
         dst.close()
         src.close()
-    return {"ok": True, "restored": data.name, "backups": _list_backups()}
+    return {"ok": True, "restored": data.name, **_rescue_payload(k)}
 
 
 @app.delete("/api/backup/{name}")
-def rescue_delete_backup(name: str, _: bool = Depends(_require)):
+def rescue_delete_backup(name: str, key: str | None = None, _: bool = Depends(_require)):
+    """删除**指定分仓**的备份文件。"""
+    k = _rescue_key(key)
+    if not _belongs(name, k):
+        raise HTTPException(400, "备份文件不属于所选分仓，拒绝删除")
     src_path = _safe_path(name)
     if not src_path.exists():
         raise HTTPException(404, "备份文件不存在")
     src_path.unlink()
-    return {"ok": True, "backups": _list_backups()}
+    return {"ok": True, **_rescue_payload(k)}
 
 
 @app.post("/api/rescue/reset-admin")

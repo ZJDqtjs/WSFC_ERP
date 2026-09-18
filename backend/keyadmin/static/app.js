@@ -393,10 +393,29 @@ async function clearLogs() {
   } catch (e) { toast("清空失败：" + e.message); }
 }
 
-/* ---------- 备份与应急抢救（后门） ---------- */
+/* ---------- 备份与应急抢救（后门，按分仓隔离） ---------- */
+function bkWarehouseKey() {
+  const sel = $("bkWarehouse");
+  return sel ? (sel.value || "") : "";
+}
+function bkWarehouseName() {
+  const sel = $("bkWarehouse");
+  if (!sel || !sel.selectedOptions.length) return bkWarehouseKey();
+  return sel.selectedOptions[0].textContent || bkWarehouseKey();
+}
+function renderBkWarehouses(list, current) {
+  const sel = $("bkWarehouse");
+  if (!sel || sel.options.length || !(list || []).length) return;
+  sel.innerHTML = list.map((w) =>
+    `<option value="${esc(w.key)}">${esc(w.name)}（${esc(w.key)}）</option>`
+  ).join("");
+  if (current) sel.value = current;
+}
 async function loadBackups() {
+  const key = bkWarehouseKey();
   try {
-    const r = await api("/api/backups");
+    const r = await api("/api/backups" + (key ? `?key=${encodeURIComponent(key)}` : ""));
+    renderBkWarehouses(r.warehouses, r.key);
     const rows = r.backups || [];
     const t = $("bkTable");
     t.innerHTML = `<thead><tr><th>文件名</th><th>大小</th><th>备份时间</th><th>操作</th></tr></thead><tbody>` +
@@ -408,29 +427,33 @@ async function loadBackups() {
           <button class="btn sm danger" onclick="restoreBackup('${esc(b.name)}')">恢复</button>
           <button class="btn sm ghost" onclick="delBackup('${esc(b.name)}')">删除</button>
         </td>
-      </tr>`).join("") : `<tr><td colspan="4" class="empty">暂无备份文件（data/backups）</td></tr>`) + `</tbody>`;
+      </tr>`).join("") : `<tr><td colspan="4" class="empty">分仓「${esc((r.warehouse && r.warehouse.name) || r.key || "")}」暂无备份文件（data/backups）</td></tr>`) + `</tbody>`;
   } catch (e) { toast("加载备份失败：" + e.message); }
 }
 async function creBackup() {
+  const key = bkWarehouseKey();
   try {
-    const r = await api("/api/backup", "POST");
-    toast("已创建备份：" + r.name);
+    const r = await api("/api/backup", "POST", { key });
+    toast(`已为「${bkWarehouseName()}」创建备份：` + r.name);
     loadBackups();
   } catch (e) { toast("备份失败：" + e.message); }
 }
 async function restoreBackup(name) {
-  if (!confirm(`确认用备份「${name}」覆盖当前数据库？\n恢复后当前未保存的数据将丢失，且所有人需重新登录。`)) return;
+  const key = bkWarehouseKey();
+  const wh = bkWarehouseName();
+  if (!confirm(`确认用备份「${name}」覆盖分仓「${wh}」的数据库？\n只影响该分仓；恢复后该仓未保存的数据将丢失，且该仓需重新登录。`)) return;
   try {
-    const r = await api("/api/backup/restore", "POST", { name });
-    toast("已恢复备份：" + (r.restored || name));
+    const r = await api("/api/backup/restore", "POST", { name, key });
+    toast(`已恢复「${wh}」的备份：` + (r.restored || name));
     loadBackups();
     loadUsers();
   } catch (e) { toast("恢复失败：" + e.message); }
 }
 async function delBackup(name) {
-  if (!confirm(`确认删除备份「${name}」？`)) return;
+  const key = bkWarehouseKey();
+  if (!confirm(`确认删除分仓「${bkWarehouseName()}」的备份「${name}」？`)) return;
   try {
-    await api(`/api/backup/${encodeURIComponent(name)}`, "DELETE");
+    await api(`/api/backup/${encodeURIComponent(name)}?key=${encodeURIComponent(key)}`, "DELETE");
     toast("已删除备份");
     loadBackups();
   } catch (e) { toast("删除失败：" + e.message); }
