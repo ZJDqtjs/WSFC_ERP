@@ -1,7 +1,8 @@
-"""备份与恢复：SQLite 在线备份 / 恢复、自动备份配置（按当前分仓隔离）。
+"""备份与恢复：SQLite 在线备份 / 恢复、自动备份配置（按分仓隔离）。
 
 备份文件保存在 data/backups，命名 {prefix}_backup_YYYYMMDD_HHMMSS.db（奥斯迪仓 prefix=erp，兼容历史）。
-列表/自动清理/恢复均只针对当前分仓；恢复时校验文件名属于当前仓，防止跨仓恢复。
+「当前分仓」= 本次登录会话所在分仓（分仓随会话，不再是进程全局）：列表/自动清理/恢复均只针对它，
+恢复时校验文件名属于该仓，防止跨仓恢复。自动备份由 main.py 的后台任务逐个分仓执行。
 """
 import json
 import re
@@ -58,7 +59,7 @@ def save_config(cfg: dict) -> dict:
 
 
 def create_backup_file(key: str | None = None) -> str:
-    """使用 SQLite 在线备份接口（兼容 WAL），备份指定分仓（缺省当前分仓），返回备份文件名。"""
+    """使用 SQLite 在线备份接口（兼容 WAL），备份指定分仓（缺省本登录会话的分仓），返回备份文件名。"""
     key = key or get_current_key()
     BACKUP_DIR.mkdir(exist_ok=True)
     name = f"{_backup_prefix(key)}_backup_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".db"

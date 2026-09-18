@@ -37,17 +37,16 @@
             </div>
             <div class="item-meta">
               {{ fmtNum(a.qty) }} {{ a.unit }} · 金额 {{ fmtMoney(a.amount) }}
+              <template v-if="a.dropship_qty"> · <van-tag type="warning" plain>代发 {{ fmtNum(a.dropship_qty) }}</van-tag></template>
             </div>
+            <div v-if="(a.specs || []).length" class="item-meta faint">规格 {{ a.specs.join(' / ') }}</div>
             <div class="item-meta">
               成本 {{ fmtMoney(a.cogs) }} · 毛利
               <b :class="a.amount - a.cogs >= 0 ? 'up' : 'down'">{{ fmtMoney(a.amount - a.cogs) }}</b>
               · 毛利率 {{ (a.gpRate || 0).toFixed(1) }}%
             </div>
-            <div v-if="a.pack_cogs || a.express_cogs" class="item-meta faint">
-              商品成本 {{ fmtMoney(a.base_cogs) }}
-              <template v-if="a.pack_cogs"> ＋ 打包人工+耗材 {{ fmtMoney(a.pack_cogs) }}</template>
-              <template v-if="a.express_cogs"> ＋ 快递费 {{ fmtMoney(a.express_cogs) }}</template>
-            </div>
+            <!-- 成本构成：代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 快递费（有哪项列哪项） -->
+            <div v-if="costSplitText(a)" class="item-meta faint">{{ costSplitText(a) }}</div>
           </div>
         </template>
 
@@ -93,6 +92,22 @@ const deleting = ref(false)
 const rows = ref([])
 const kw = ref('')
 const seg = ref('sale')
+
+/** 成本构成小字：代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 其他关联结算 ＋ 快递费（有哪项列哪项） */
+function costSplitText(a) {
+  const express = num(a.express_cogs)
+  const labor = num(a.labor_cogs)
+  const material = num(a.material_cogs)
+  const other = num(a.other_cogs)
+  if (!(a.is_dropship || labor || material || other || express)) return ''
+  const goods = num(a.base_cogs != null ? a.base_cogs : a.cogs)
+  const parts = [`${a.is_dropship ? '代发成本' : '商品成本'} ${fmtMoney(goods)}`]
+  if (labor) parts.push(`打包人工 ${fmtMoney(labor)}`)
+  if (material) parts.push(`耗材 ${fmtMoney(material)}`)
+  if (other) parts.push(`其他关联结算 ${fmtMoney(other)}`)
+  if (express) parts.push(`快递费 ${fmtMoney(express)}`)
+  return parts.join(' ＋ ')
+}
 
 const segs = [
   { key: 'sale', label: '销售商品' },
@@ -153,7 +168,7 @@ function outAggBy(list, pool) {
         k = own.key; name = own.name; sub = own.sub; unit = l.unit
       }
       if (!map.has(k)) {
-        map.set(k, { pid: l.product_id, name, sub, unit, orders: new Set(), qty: 0, amount: 0, cogs: 0, gross_sales: 0, boxes: new Set(), hasBox: false })
+        map.set(k, { pid: l.product_id, name, sub, unit, orders: new Set(), qty: 0, amount: 0, cogs: 0, gross_sales: 0, boxes: new Set(), hasBox: false, specs: new Set(), dropship_qty: 0, is_dropship: false })
       }
       const a = map.get(k)
       a.orders.add(o.id)
@@ -161,6 +176,13 @@ function outAggBy(list, pool) {
       a.amount += num(l.amount)
       a.cogs += num(l.cogs)
       a.gross_sales += num(l.gross_sales) || num(l.amount)
+      if (pool === 'sale') {
+        if (l.spec) a.specs.add(l.spec)
+        if (l.is_dropship) {
+          a.is_dropship = true
+          a.dropship_qty += num(l.quantity)   // 代发：不扣库存，只记代发数量
+        }
+      }
       if (!a.sub && sub) a.sub = sub
       if (pool === 'laborpack' && l.line_type === 'pack' && !isLabor) {
         a.hasBox = true
@@ -175,7 +197,7 @@ function outAggBy(list, pool) {
       const bx = boxes.join(' + ')
       subSub = a.sub ? `${a.sub} · 纸箱:${bx}` : `纸箱:${bx}`
     }
-    return { ...a, boxes, order_count: a.orders.size, subSub }
+    return { ...a, boxes, specs: [...(a.specs || [])], order_count: a.orders.size, subSub }
   })
 }
 
@@ -184,11 +206,20 @@ const aggSale = computed(() => {
   // 销售商品成本需含其关联的打包人工+耗材+快递费，否则毛利虚高
   const byPid = new Map()
   data.forEach((a) => {
-    a.pack_cogs = 0
+    a.labor_cogs = 0
+    a.material_cogs = 0
+    a.other_cogs = 0
     a.express_cogs = 0
     if (!byPid.has(a.pid)) byPid.set(a.pid, [])
     byPid.get(a.pid).push(a)
   })
+  // 关联结算行归类：快递 / 人工 / 耗材 / 其他（与后端 report.py 的 PACK_FIELD_OF_CAT 对齐）
+  const packField = (l) => {
+    if (l.category === '快递') return 'express_cogs'
+    if (l.is_labor) return 'labor_cogs'
+    if (['包材', '耗材', '包装'].includes(l.category)) return 'material_cogs'
+    return 'other_cogs'
+  }
   const spread = (pid, amt, field) => {
     const arr = byPid.get(pid) || []
     if (!arr.length) return
@@ -202,19 +233,20 @@ const aggSale = computed(() => {
     for (const l of o.lines || []) {
       if (l.line_type !== 'pack') continue
       if (l.sale_product_id == null) { unowned.push(l); continue }
-      spread(l.sale_product_id, num(l.cogs), l.category === '快递' ? 'express_cogs' : 'pack_cogs')
+      spread(l.sale_product_id, num(l.cogs), packField(l))
     }
     if (unowned.length && saleLines.length) {
       for (const l of unowned) {
         for (const sl of saleLines) {
           const share = totalAmt ? num(sl.amount) / totalAmt : 1 / saleLines.length
-          spread(sl.product_id, num(l.cogs) * share, l.category === '快递' ? 'express_cogs' : 'pack_cogs')
+          spread(sl.product_id, num(l.cogs) * share, packField(l))
         }
       }
     }
   }
   return data.map((a) => {
     const base_cogs = a.cogs
+    a.pack_cogs = a.labor_cogs + a.material_cogs + a.other_cogs   // 兼容旧字段：人工+耗材
     const cogs = base_cogs + a.pack_cogs + a.express_cogs
     const denom = a.gross_sales || a.amount || 0
     const gp = a.amount - cogs
@@ -230,7 +262,11 @@ const current = computed(() => {
     : seg.value === 'pack' ? aggPack.value
       : seg.value === 'labor' ? aggLabor.value : aggLaborPack.value
   const s = (kw.value || '').trim().toLowerCase()
-  return s ? src.filter((a) => (a.name || '').toLowerCase().includes(s)) : src
+  if (!s) return src
+  const isSale = seg.value === 'sale'
+  // 销售商品可额外按出库方式筛：输入「代发」/「库存」即可筛出对应商品
+  return src.filter((a) => `${a.name || ''} ${a.sub || ''} ${isSale ? (a.is_dropship ? '代发 外发' : '库存出库') : ''}`
+    .toLowerCase().includes(s))
 })
 
 async function load() {

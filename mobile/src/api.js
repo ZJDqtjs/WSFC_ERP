@@ -10,12 +10,14 @@ export function apiPath(path) {
 export function assetUrl(path) {
   if (!path) return ''
   if (/^https?:\/\//i.test(path)) return path
-  return path.startsWith('/uploads') ? API_BASE + path.slice(1) : path
+  // /uploads 与 /api 同源（nginx 统一反代），去掉 API_BASE 的 /api 尾巴再拼前缀
+  const uploadsBase = API_BASE.replace(/\/api\/?$/, '')
+  return path.startsWith('/uploads') ? uploadsBase + path : path
 }
 
 function onUnauthorized() {
   localStorage.removeItem('erp_authed')
-  // 打标记，登录页据此解释"为什么被踢回来"（换分仓 / 会话过期）
+  // 打标记，登录页据此解释"为什么被踢回来"（会话过期 / 账号被停用）
   try { sessionStorage.setItem('erp_kicked', '1') } catch (e) {}
   // 已经在登录页时不要再整页跳转一次，否则登录失败会被刷成"没反应"，
   // 而且会把刚填的用户名/已选私钥一起清空。

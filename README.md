@@ -21,13 +21,16 @@ WSFC_ERP/                # 项目根（本地开发 = Linux 部署单元）
 │   └── static/          #   index.html / app.js / style.css
 ├── mobile/              # 移动端 PWA（Vue3 + Vant4 + Vite，构建产物 mobile/dist）
 ├── capacitor/           # 移动端 Capacitor Android 套壳（远程加载已部署的 /mobile/ PWA）
-├── flutter/             # 移动端 Flutter 应用（statistics_erp_app）
+│   ├── capacitor.config.template.json #  入库模板（server.url 为占位地址）
+│   └── capacitor.config.local.json    #  本机私有真实地址（已 gitignore，需自建）
+├── flutter/             # 移动端 Flutter 应用（statistics_erp_app，源码在 lib/）
 ├── deploy/              # Linux 部署：nginx.conf / erp.service / deploy.sh / service.sh
 ├── data-src/            # 商品源数据（七月份干货/蔬菜统计表等）
 ├── scripts/             # 独立分析脚本（月度商品发货统计 / 箱子及薪水支出统计）
 ├── docs/                # API.md 等文档
 ├── config.json          # 根路由/端口集中配置（路由前后端共用，勿随意改）
-├── product_rules.json   # 账号 / 单位 / LLM / 关联规则等配置
+├── product_rules.json   # 默认配置：单位 / 箱规 / 类别 / LLM 参数 / 关联规则（不含任何密钥）
+├── config.local.json    # 本机私有配置（LLM api_key、初始账号口令）：已被 gitignore，每台机器各存一份
 ├── dev.py               # 本地一键开发：后端 + 桌面 Web 前端
 └── requirements.txt / pyproject.toml / uv.lock（位于 backend/ 内）
 ```
@@ -38,6 +41,51 @@ WSFC_ERP/                # 项目根（本地开发 = Linux 部署单元）
 - **后端 API 端口 8000**（仅本机/内网）：`cd backend && uv run python run.py`，Linux 由 systemd 托管于 127.0.0.1:8000。
 - **私钥管理后台端口 8001**：`cd backend && uv run python keyadmin.py`。
 - 根目录 `config.json` 集中管理绑定地址、端口以及 `/api`、`/uploads`、`/mobile` 前缀。
+
+## 配置文件（product_rules.json + config.local.json）
+
+配置分两层，后者按**深合并**覆盖前者（只写要覆盖的字段即可，dict 递归合并、列表整体替换）：
+
+| 文件 | 是否入库 | 内容 |
+| --- | --- | --- |
+| `product_rules.json` | 是 | 单位换算、箱规、类别、LLM 的 `base_url` / `model`、编码关联等**非敏感**默认配置 |
+| `config.local.json` | 否（已 gitignore） | **本机私有**：`llm.api_key`、`accounts`（初始账号与口令）等敏感项 |
+
+```json
+{
+  "llm": { "api_key": "在这里填你的密钥" },
+  "accounts": [
+    { "username": "admin1", "password": "改成强口令", "name": "管理员", "role": "admin" }
+  ]
+}
+```
+
+- 加载逻辑见 `backend/app/config.py`；也支持环境变量覆盖：`ERP_LLM_API_KEY` / `ERP_LLM_BASE_URL` / `ERP_LLM_MODEL`。
+- `accounts` 的口令在每次启动时与数据库比对并**强制同步**，因此改完 `config.local.json` 重启即完成管理员改密。
+- **新机器/新服务器克隆后必须自建 `config.local.json`**，否则 AI 录入不可用、也不会创建任何初始账号。
+
+### 移动端配置
+
+Capacitor CLI 只读 `capacitor/capacitor.config.json`，且 JSON 配置不支持读环境变量，
+所以服务端地址走「入库模板 + 本机私有覆盖」两层，由脚本合成：
+
+| 文件 | 是否入库 | 内容 |
+| --- | --- | --- |
+| `capacitor/capacitor.config.template.json` | 是 | 结构模板，`server.url` 为占位地址 |
+| `capacitor/capacitor.config.local.json` | 否（已 gitignore） | 真实地址，例如 `{"server":{"url":"http://<服务器地址>/mobile/"}}` |
+| `capacitor/capacitor.config.json` | 否（已 gitignore） | 由脚本合成，CLI 实际读取的文件 |
+
+```bash
+cd capacitor && npm install
+npm run sync          # 会先合成配置再执行 cap sync；copy / open:android 同理
+```
+
+Flutter 端同理：地址写进本机私有 JSON `flutter/statistics_erp_app/dart_defines.local.json`（已 gitignore，格式见同目录 `dart_defines.template.json`），打包时
+
+```bash
+cd flutter/statistics_erp_app
+flutter build apk --release --dart-define-from-file=dart_defines.local.json
+```
 
 ## 本地开发（前后端分离）
 
@@ -105,7 +153,7 @@ bash "$APP_DIR/deploy/deploy.sh"
   `username / name / role / fingerprint / is_active`。
 - ⚠️ **`admin1` 是历史遗留账号，`fingerprint` 为 NULL，无法用私钥登录**（旧密码登录已废弃）。
   日常使用请走私钥管理工具分发的账号；账号名单由管理员在后台维护，不在文档里列出。
-- 根目录 `product_rules.json` 的 `accounts` 只在**建库初始化**时同步，改它不会给已有账号补发密钥。
+- `accounts`（建议写在 `config.local.json`，见「配置文件」）每次启动都会同步口令与姓名/角色，但**不会给已有账号补发私钥**。
 - 私钥管理后台：`cd backend && uv run python keyadmin.py`（端口 8001）——用它生成/重发私钥，
   生成的私钥文件只在当时一次性下载，请妥善保管。
 - 换分仓 / 新建分仓后旧 token 立即失效，需要重新登录（登录页会提示"登录状态已失效"）。

@@ -41,27 +41,54 @@ def unit_to_base(product: Product, unit: str, quantity: float) -> float:
     return quantity * float(factor)
 
 
-def stock_deduction(db: Session, order_product: Product, qty_base_in_order: float) -> tuple[Product, float]:
-    """计算出库时实际扣减的库存商品与扣减数量（库存基础单位）。
+def stock_deductions(db: Session, order_product: Product, qty_base_in_order: float) -> list[tuple[Product, float]]:
+    """计算出库时实际需扣减的库存商品清单 [(库存商品, 扣减数量(基础单位)), ...]（可为多个）。
 
-    - 订单商品关联了库存商品：扣减库存商品，扣减数 = 订单基础数量 × 倍数 × 库存默认单位折算
-    - 未关联：回退为扣减订单商品自身
+    - 订单商品关联了 1~N 个库存商品（stock_links）：逐个扣减，扣减数 = 订单基础数量 × 倍数 × 库存默认单位折算；
+    - 仅配置了旧的单关联字段（stock_product_id + multiplier）时按单关联扣减；
+    - **订单商品无任何关联**：视为**代发**（别人代发，自己不出货），返回空列表，不扣任何库存，
+      只在出库明细里记代发数量与代发成本；
+    - 库存商品（大类）直接销售：未关联时扣减自身库存（原有行为不变）。
     """
-    if order_product.stock_product_id:
+    items: list[tuple[Product, float]] = []
+
+    def _add(sp: Product, multiplier: float) -> None:
+        du = sp.default_unit or sp.base_unit
+        factor = (sp.conversions or {}).get(du, 1.0)
+        qty = qty_base_in_order * float(multiplier or 1.0) * float(factor)
+        if qty > 0:
+            items.append((sp, qty))
+
+    for it in (order_product.stock_links or []):
+        pid = (it or {}).get("product_id")
+        sp = db.get(Product, pid) if pid else None
+        if sp:
+            _add(sp, float((it or {}).get("multiplier") or 1.0))
+    if not items and order_product.stock_product_id:
         sp = db.get(Product, order_product.stock_product_id)
         if sp:
-            du = sp.default_unit or sp.base_unit
-            factor = (sp.conversions or {}).get(du, 1.0)
-            return sp, qty_base_in_order * (order_product.multiplier or 1.0) * float(factor)
-    return order_product, qty_base_in_order
+            _add(sp, order_product.multiplier or 1.0)
+    if not items and (order_product.product_type or "stock") != "order":
+        # 库存商品（大类）直接销售：按其自身基础单位数量扣减（不做默认单位折算，保持原行为）
+        items.append((order_product, qty_base_in_order))
+    return items
 
 
-def _deduct_with_override(db: Session, order_product: Product, qty_base_in_order: float,
-                          stock_product_id: int | None, multiplier: float = 1.0) -> tuple[Product, float]:
-    """计算一次出库的扣减目标库存商品与扣减数量。
+def stock_deduction(db: Session, order_product: Product, qty_base_in_order: float) -> tuple[Product, float, bool]:
+    """（兼容旧接口）取第一项扣减目标；订单商品无任何关联时视为代发（扣减数 0）。"""
+    items = stock_deductions(db, order_product, qty_base_in_order)
+    if not items:
+        return order_product, 0.0, True   # 代发：不扣库存
+    sp, qty = items[0]
+    return sp, qty, False
 
-    一单多货规则若显式指定了关联库存商品（大类）与倍数，则优先按其扣减；
-    否则回退为按订单商品自身关联扣减（stock_deduction）。
+
+def _deductions_with_override(db: Session, order_product: Product, qty_base_in_order: float,
+                              stock_product_id: int | None, multiplier: float = 1.0) -> list[tuple[Product, float]]:
+    """计算一次出库需扣减的库存商品清单。
+
+    一单多货规则若显式指定了关联库存商品（大类）与倍数，则优先按其扣减（单项）；
+    否则回退为按订单商品自身关联扣减（stock_deductions；订单商品未关联即代发，返回空）。
     扣减数 = 订单基础数量 × 倍数 × 库存商品默认单位系数。
     """
     if stock_product_id:
@@ -69,8 +96,11 @@ def _deduct_with_override(db: Session, order_product: Product, qty_base_in_order
         if sp and sp.product_type == "stock":
             du = sp.default_unit or sp.base_unit
             factor = (sp.conversions or {}).get(du, 1.0)
-            return sp, qty_base_in_order * float(multiplier or 1.0) * float(factor)
-    return stock_deduction(db, order_product, qty_base_in_order)
+            qty = qty_base_in_order * float(multiplier or 1.0) * float(factor)
+            if qty > 0:
+                return [(sp, qty)]
+            return []
+    return stock_deductions(db, order_product, qty_base_in_order)
 
 
 def base_to_unit(product: Product, unit: str, quantity_base: float) -> float:
@@ -262,8 +292,8 @@ def _fifo_replay(moves, fallback: float = 0.0) -> tuple[float, float, list, floa
 def _sync_outbound_cogs(db: Session, outbound_id: int) -> None:
     """把 FIFO 重算后的出库流水金额回写到出库单行成本与单据总成本。
 
-    出库时会为每条明细同序生成一条库存流水，故按 id 顺序一一对应；
-    结构不一致(数量不等)时保守跳过，避免错配。
+    优先按流水的 line_id 归组求和回写（订单商品可关联多个库存商品，一行明细对应多条流水）；
+    旧数据（流水无 line_id）退化为按 id 顺序一一对应；结构不一致(数量不等)时保守跳过，避免错配。
     """
     out = db.get(Outbound, outbound_id)
     if not out:
@@ -276,6 +306,23 @@ def _sync_outbound_cogs(db: Session, outbound_id: int) -> None:
             .order_by(StockMovement.id)
         ).scalars()
     )
+    by_line: dict[int, list] = {}
+    for m in moves:
+        if m.line_id:
+            by_line.setdefault(m.line_id, []).append(m)
+    if by_line:
+        total = 0.0
+        for line in lines:
+            ms = by_line.get(line.id) or []
+            if not ms:
+                total += line.cogs or 0.0
+                continue
+            amount = round(sum(m.amount or 0.0 for m in ms), 2)
+            if abs((line.cogs or 0.0) - amount) > 1e-6:
+                line.cogs = amount
+            total += line.cogs or 0.0
+        out.total_cogs = round(total, 2)
+        return
     if len(lines) != len(moves):
         return
     total = 0.0
@@ -392,6 +439,18 @@ def gen_outbound_code(db: Session, date: str) -> str:
     return f"CK{date}-{count + 1:03d}"
 
 
+def pay_fields(payload: dict, date: str = "") -> dict:
+    """付款状态：paid 已付款（默认）/ unpaid 待付款。
+
+    待付款的单据先进「待付款账单」，点「已支付」后才纳入财务报表；已付款时记下支付日期（默认=单据日期）。
+    """
+    status = "unpaid" if (payload.get("pay_status") or "").strip() == "unpaid" else "paid"
+    paid_at = (payload.get("paid_at") or "").strip()
+    if status == "paid" and not paid_at:
+        paid_at = (date or payload.get("date") or "").strip()
+    return {"pay_status": status, "paid_at": paid_at if status == "paid" else ""}
+
+
 def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     """创建入库单（含库存流水 + 财务记录 + 成本重算）。"""
     product = db.get(Product, payload["product_id"])
@@ -407,6 +466,7 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     amount = round(quantity * unit_price, 2)
     op = (payload.get("operator") or "").strip() or operator
 
+    pay = pay_fields(payload, date)
     rec = Inbound(
         code=gen_inbound_code(db, date),
         product_id=product.id,
@@ -419,6 +479,7 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
         operator=op,
         date=date,
         remark=(payload.get("remark") or "").strip(),
+        **pay,
     )
     db.add(rec)
     db.flush()
@@ -446,6 +507,7 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
             remark=f"采购入库 {rec.code}",
             ref_type="inbound",
             ref_id=rec.id,
+            **pay,   # 挂账状态随入库单：待付款时这笔采购支出也不进报表
         )
     )
     recompute_product(db, product.id)
@@ -453,10 +515,13 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     return rec
 
 
-def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
+def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_express: bool = True) -> dict:
     """构建出库单明细：销售行 + 关联结算行(包装材料) + 费用，并校验库存。不落库。
 
     成本结转按「先进先出(FIFO)」：从商品最早的入库批次依次扣减，成本 = Σ(批次单位成本 × 扣减数量)。
+
+    auto_express=False 时不自动结算快递费（手动出库时用户在预览里删掉「快递费」行即为不结算），
+    其余批量导入/聚水潭等流程不传该参数，保持「按整单毛重自动计快递费」的原行为。
     """
     pack_lines = pack_lines or []
     sale_rows, pack_rows, warnings = [], [], []
@@ -493,29 +558,59 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
             raise ValueError("商品不存在")
         if quantity <= 0:
             raise ValueError(f"「{p.name}」数量必须大于 0")
+        # 规格：导入单（聚水潭）会带「每件2斤」这类规格，手动单没有 → 回退用商品维护的「规格说明」，
+        # 这样「出库明细（每天×每种规格）」对手动单也能按规格归类。
+        if not spec:
+            spec = (p.spec or "").strip()
         qty_base = unit_to_base(p, unit, quantity)
         amount = round(quantity * price, 2)
         # 扣点前销售金额（原始金额）：导入扣点单传入；否则等于实际销售金额
         gross_sales = round(float(gross), 2) if gross and float(gross) > 0 else amount
-        # 扣减目标：一单多货规则如指定库存大类则按其扣减；否则按订单商品关联的库存商品（大类），未关联则扣减自身
-        target, deduction_base = _deduct_with_override(db, p, qty_base, ov_sp, ov_mult)
-        # 订单/库存商品净重优先由「扣减库存量」推导（如 七彩花生2斤 → 扣 1kg 库存 → 净重 1kg）；
-        # 推导不出（0）时按序回退：扣减目标库存商品自身的净重 → 当前销售商品自身填的净重；都没有算 0。
-        line_net_kg = deduction_net_weight_kg(target, deduction_base)
-        if line_net_kg <= 0:
-            line_net_kg = line_weight_kg(target, deduction_base)
+        # 扣减目标：一单多货规则如指定库存大类则按其扣减；否则按订单商品关联的库存商品（大类）；
+        # 订单商品未关联库存大类 = 代发：不扣任何库存，只记代发数量与代发成本。
+        deds = _deductions_with_override(db, p, qty_base, ov_sp, ov_mult)
+        is_dropship = not deds
+        ded_info: list[dict] = []
+        if is_dropship:
+            # 代发：商品由别人发出，本仓不扣库存；代发成本按商品「参考成本（每基础单位）」计（未填则 0，并给出提示）。
+            # 快递费：代发商品若填了「单件净重」（weight_kg），仍按净重结算快递费（有的代发只包货不包邮）；
+            # 没填净重就不计（视为代发方包邮）。
+            express_weight += line_weight_kg(p, qty_base)
+            cogs = round(qty_base * (p.unit_cost or 0.0), 2)
+            if not (p.unit_cost or 0.0):
+                warnings.append(f"「{p.name}」是代发商品（未关联库存大类）但没填「参考成本」，代发成本按 0 计")
+        else:
+            # 订单商品可关联多个库存商品：成本与净重按各扣减项分别结转后累加。
+            # 净重优先由「扣减库存量」推导（如 七彩花生2斤 → 扣 1kg 库存 → 净重 1kg）；
+            # 推导不出（0）时回退扣减目标自身的净重；全部推导不出再用当前销售商品填的净重。
+            line_net_kg = 0.0
+            cogs = 0.0
+            for sp, ded_qty in deds:
+                kg = deduction_net_weight_kg(sp, ded_qty)
+                if kg <= 0:
+                    kg = line_weight_kg(sp, ded_qty)
+                line_net_kg += kg
+                c = _fifo_cogs(sp, ded_qty)
+                cogs += c
+                ded_info.append({
+                    "product_id": sp.id, "product_name": sp.name, "base_unit": sp.base_unit,
+                    "deduction_base": ded_qty, "cogs": c,
+                })
             if line_net_kg <= 0:
                 line_net_kg = line_weight_kg(p, qty_base)
-        express_weight += line_net_kg
-        cogs = round(_fifo_cogs(target, deduction_base), 2)
+            express_weight += line_net_kg
+            cogs = round(cogs, 2)
         if fee is None:
             fee = p.pack_fee
         sale_rows.append(
             {
                 "product_id": p.id, "product_name": p.name, "base_unit": p.base_unit,
                 "unit": unit, "quantity": quantity, "quantity_base": qty_base,
-                "stock_product_id": target.id, "stock_product_name": target.name,
-                "deduction_base": deduction_base,
+                # 首个扣减项（兼容旧字段与展示）；deductions 为全部扣减项（多关联）
+                "stock_product_id": deds[0][0].id if deds else p.id,
+                "stock_product_name": deds[0][0].name if deds else p.name,
+                "deduction_base": deds[0][1] if deds else 0.0,
+                "deductions": ded_info, "is_dropship": is_dropship,
                 "unit_price": price, "amount": amount, "cogs": cogs, "pack_fee": fee, "gross_sales": gross_sales,
                 "line_type": "sale", "spec": spec,
             }
@@ -580,7 +675,8 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
         total_cogs += cogs
 
     # 快递费自动结算：整单净重(商品净重累加) + 每单箱体 0.1kg，按「每kg快递费单价」计算，作为一项「快递」分类成本
-    if express_weight > 0:
+    # auto_express=False（手动出库并在预览里删掉了「快递费」行）时不再自动追加
+    if auto_express and express_weight > 0:
         total_weight = round(express_weight + EXPRESS_BOX_WEIGHT_KG, 3)
         express_fee = compute_express_fee(total_weight)
         if express_fee > 0:
@@ -602,19 +698,22 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None) -> dict:
     else:
         total_fee = round(sum(r["pack_fee"] for r in sale_rows), 2)
 
-    # 库存预警（允许继续，仅提示；服务型商品如 人工/快递 不校验库存）
+    # 库存预警（允许继续，仅提示；服务型商品如 人工/快递 不校验库存）；
+    # 订单商品关联多个库存商品时，逐个扣减目标分别提示。
     for r in sale_rows + pack_rows:
         if r["line_type"] == "sale":
-            pid, need = r["stock_product_id"], r["deduction_base"]
-            label = f"{r['product_name']}（扣{fmt_qty(need)} {r['stock_product_name']}）"
+            if r.get("is_dropship"):
+                continue   # 代发不扣库存，无需预警
+            checks = [(d["product_id"], d["deduction_base"], d.get("product_name") or "") for d in (r.get("deductions") or [])]
         else:
-            pid, need = r["product_id"], r["quantity_base"]
-            label = r["product_name"]
-        p = db.get(Product, pid)
-        if not p or p.category in ("人工", "快递"):
-            continue
-        if need > p.stock + 1e-6:
-            warnings.append(f"「{label}」库存不足：需 {fmt_qty(need)} {p.base_unit}，现有 {fmt_qty(p.stock)} {p.base_unit}")
+            checks = [(r["product_id"], r["quantity_base"], "")]
+        for pid, need, sp_name in checks:
+            p = db.get(Product, pid)
+            if not p or p.category in ("人工", "快递"):
+                continue
+            if need > p.stock + 1e-6:
+                label = r["product_name"] if not sp_name else f"{r['product_name']}（扣{fmt_qty(need)} {sp_name}）"
+                warnings.append(f"「{label}」库存不足：需 {fmt_qty(need)} {p.base_unit}，现有 {fmt_qty(p.stock)} {p.base_unit}")
 
     return {
         "sale_lines": sale_rows,
@@ -633,9 +732,13 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
     import_group：批量导入批次号，空表示手动单条。
     """
     lines = payload["lines"]
-    order = build_order(db, lines, payload.get("pack_lines"), payload.get("pack_fee_total"))
+    order = build_order(
+        db, lines, payload.get("pack_lines"), payload.get("pack_fee_total"),
+        payload.get("auto_express", True),   # 手动出库可关掉自动快递费；批量导入等默认开
+    )
     op = (payload.get("operator") or "").strip() or operator
     date = payload["date"]
+    pay = pay_fields(payload, date)
     rec = Outbound(
         code=gen_outbound_code(db, date),
         import_group=import_group,
@@ -648,6 +751,7 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
         total_amount=order["total_amount"],
         total_cogs=order["total_cogs"],
         total_fee=order["total_fee"],
+        **pay,
     )
     db.add(rec)
     db.flush()
@@ -655,47 +759,70 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
     affected = set()
     for r in order["sale_lines"] + order["pack_lines"]:
         is_sale = r["line_type"] == "sale"
-        # 库存流水扣在库存商品上（订单商品扣减其关联大类）
-        move_pid = r["stock_product_id"] if is_sale else r["product_id"]
-        if is_sale:
-            move_qty, move_type = -r["deduction_base"], "out"
-        else:
-            # 人工 / 快递等服务类记为正向工作量（不扣库存）；包材等仍为负向包装消耗
-            pack_p = db.get(Product, r["product_id"])
-            is_service = bool(pack_p and pack_p.category in ("人工", "快递"))
-            move_qty = r["quantity_base"] if is_service else -r["quantity_base"]
-            move_type = "work" if is_service else "pack_out"
-        db.add(
-            OutboundLine(
-                outbound_id=rec.id,
-                product_id=r["product_id"],
-                line_type=r["line_type"],
-                sale_product_id=r.get("sale_product_id"),  # pack 行所属销售商品（组合统计用）
-                spec=r.get("spec", ""),  # 销售行规格来源
-                unit=r["unit"],
-                quantity=r["quantity"],
-                quantity_base=r["quantity_base"],
-                unit_price=r["unit_price"],
-                amount=r["amount"],
-                cogs=r["cogs"],
-                gross_sales=r.get("gross_sales", 0) or 0,
-                pack_fee=r["pack_fee"],
-            )
+        dropship = bool(is_sale and r.get("is_dropship"))
+        line = OutboundLine(
+            outbound_id=rec.id,
+            product_id=r["product_id"],
+            line_type=r["line_type"],
+            sale_product_id=r.get("sale_product_id"),  # pack 行所属销售商品（组合统计用）
+            spec=r.get("spec", ""),  # 销售行规格来源
+            unit=r["unit"],
+            quantity=r["quantity"],
+            quantity_base=r["quantity_base"],
+            unit_price=r["unit_price"],
+            amount=r["amount"],
+            cogs=r["cogs"],
+            gross_sales=r.get("gross_sales", 0) or 0,
+            pack_fee=r["pack_fee"],
+            is_dropship=dropship,
         )
-        db.add(
-            StockMovement(
-                product_id=move_pid,
-                move_type=move_type,
-                quantity_base=move_qty,
-                amount=r["cogs"],
-                ref_type="outbound",
-                ref_id=rec.id,
-                date=date,
-                operator=op,
-                remark=f"{'销售' if is_sale else '包装消耗'} {rec.code}",
-            )
-        )
-        affected.add(move_pid)
+        db.add(line)
+        db.flush()   # 取行 id：订单商品关联多个库存商品时，一行明细对应多条库存流水
+        if not dropship:   # 代发：本仓不出货，不产生库存流水（否则会把库存扣成负数）
+            if is_sale:
+                # 库存流水扣在库存商品（大类）上：订单商品关联多个则逐个扣减，每条流水回指本行
+                deds = r.get("deductions") or []
+                if deds:
+                    move_items = [(d["product_id"], -d["deduction_base"], d["cogs"]) for d in deds]
+                else:
+                    move_items = [(r["stock_product_id"], -r["deduction_base"], r["cogs"])]
+                for move_pid, move_qty, move_amount in move_items:
+                    db.add(
+                        StockMovement(
+                            product_id=move_pid,
+                            move_type="out",
+                            quantity_base=move_qty,
+                            amount=move_amount,
+                            ref_type="outbound",
+                            ref_id=rec.id,
+                            line_id=line.id,
+                            date=date,
+                            operator=op,
+                            remark=f"销售 {rec.code}",
+                        )
+                    )
+                    affected.add(move_pid)
+            else:
+                # 人工 / 快递等服务类记为正向工作量（不扣库存）；包材等仍为负向包装消耗
+                pack_p = db.get(Product, r["product_id"])
+                is_service = bool(pack_p and pack_p.category in ("人工", "快递"))
+                move_qty = r["quantity_base"] if is_service else -r["quantity_base"]
+                move_type = "work" if is_service else "pack_out"
+                db.add(
+                    StockMovement(
+                        product_id=r["product_id"],
+                        move_type=move_type,
+                        quantity_base=move_qty,
+                        amount=r["cogs"],
+                        ref_type="outbound",
+                        ref_id=rec.id,
+                        line_id=line.id,
+                        date=date,
+                        operator=op,
+                        remark=f"包装消耗 {rec.code}",
+                    )
+                )
+                affected.add(r["product_id"])
         affected.add(r["product_id"])
         if is_sale and r["amount"] > 0:
             db.add(
@@ -703,6 +830,7 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
                     type="income", category="销售收入", product_id=r["product_id"],
                     amount=r["amount"], date=date, operator=op,
                     remark=f"销售 {rec.code}", ref_type="outbound", ref_id=rec.id,
+                    **pay,   # 挂账状态随出库单
                 )
             )
     if order["total_fee"] > 0:
@@ -711,6 +839,7 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
                 type="expense", category="人工打包费", product_id=None,
                 amount=order["total_fee"], date=date, operator=op,
                 remark=f"打包费 {rec.code}", ref_type="outbound", ref_id=rec.id,
+                **pay,   # 挂账状态随出库单
             )
         )
     for pid in affected:

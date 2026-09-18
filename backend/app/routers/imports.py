@@ -664,14 +664,27 @@ def _line_deduct_stock_category(db: Session, p: Product | None, stock_product_id
 
 
 def _resolve_jst_product(db: Session, mapping_by_code: dict[str, CodeMapping], ext_name: str) -> Product | None:
-    """聚水潭商品名 → 系统商品：优先编码关联，回退按名称/编码精确匹配。"""
+    """聚水潭商品名 → 系统商品。
+
+    优先级：
+    1) 编码关联指向的**订单商品（小类）**：以用户维护的映射为准；
+    2) 编码关联指向**库存大类**（或没关联）时，若存在**同名的订单商品（小类）**，优先用小类
+       —— 小类才有规格、关联结算与「代发」语义（出库时仍按它关联的库存大类扣减），
+          否则出库明细里不同规格会挤在同一个大类里、代发商品也标不出来；
+    3) 再回退按名称/编码精确匹配。
+    """
     m = mapping_by_code.get(ext_name)
     pid = m.product_id if m else None
-    p = db.get(Product, pid) if pid else None
-    if not p:
-        # 未配置编码关联时，回退按商品名称/编码精确匹配（如「佛手柑中果2个」）
-        p = db.scalar(select(Product).where(or_(Product.name == ext_name, Product.code == ext_name)))
-    return p
+    mapped = db.get(Product, pid) if pid else None
+    if mapped and mapped.product_type != "stock":
+        return mapped
+    same = db.scalar(select(Product).where(Product.name == ext_name, Product.product_type == "order"))
+    if same:
+        return same
+    if mapped:
+        return mapped
+    # 未配置编码关联时，回退按商品名称/编码精确匹配（如「佛手柑中果2个」）
+    return db.scalar(select(Product).where(or_(Product.name == ext_name, Product.code == ext_name)))
 
 
 def _collect_batch_unit_price(db: Session, orders: list[dict], mapping_by_code: dict[str, CodeMapping]) -> dict[int, float]:
@@ -861,7 +874,7 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                     quantity=ln["qty"], price=round(amt / ln["qty"], 4) if ln["qty"] else 0,
                     amount=amt, gross_sales=gross_amount,
                     deduct=f"{ln['ext_name']} 每件{fmt_qty(ln['per_item'])}{ln['unit']}" if ln["per_item"] else "",
-                    spec=f"每件{fmt_qty(ln['per_item'])}{ln['unit']}" if ln["per_item"] else "",
+                    spec=jst_spec_label(ln["ext_name"], ln["unit"], ln["per_item"]),
                 )
             )
         drafts.append(
@@ -1064,6 +1077,8 @@ def parse_jushuitan_name(name: str) -> list[tuple[str, float]]:
     return out
 
 
+# 聚水潭商品名开头的序号（如「1.牛奶芋头4.5斤50g＋」的「1.」）
+JST_SERIAL_RE = re.compile(r"^\s*\d+\s*[.、,，)）]\s*")
 # 聚水潭商品名中的单件规格：如 "京鲜生七彩花生2斤" → 每件 2斤
 # 整件净重优先（斤/公斤/千克）——商品名里可能同时含“单颗克重”与“整件斤重”，
 # 如「京喜红皮土豆80g+1斤(带箱」应为 1斤，而非单颗 80g。
@@ -1086,6 +1101,19 @@ def parse_jst_spec(name: str) -> tuple[str | None, float | None]:
         u = UNIT_ALIAS.get(m.group(2), m.group(2))
         return u, float(m.group(1))
     return None, None
+
+
+def jst_spec_label(ext_name: str, unit: str = "", per_item: float = 0.0) -> str:
+    """聚水潭一行的「规格」标签：外部商品名去掉开头序号。
+
+    如「1.牛奶芋头4.5斤50g＋」→「牛奶芋头4.5斤50g＋」。外部名本身就是规格描述
+    （4.5斤 / 3斤、50g+ / 30g+ 的差异都在名字里），把它写到出库行上，
+    出库明细与报表才能「按每种规格」区分；解析不出时回退「每件X单位」。
+    """
+    name = JST_SERIAL_RE.sub("", str(ext_name or "").strip())
+    if name:
+        return name
+    return f"每件{fmt_qty(per_item)}{unit}" if per_item else ""
 
 
 def pick_jst_unit(product: Product, ext_name: str) -> tuple[str | None, float | None]:
@@ -1163,7 +1191,7 @@ def _pack_rule_settle(db: Session, rule: PackRule, order_items: list[tuple[str, 
             issues.append(f"「{name}」换算单位「{unit}」未配置")
             continue
         q_orders = qty_by_name.get(name, float(it.get("quantity", 1) or 1))
-        spec = f"每件{fmt_qty(per_item)}{unit}"
+        spec = jst_spec_label(name, unit, per_item)
         if q_orders > 1:
             spec += f"，合并{fmt_qty(q_orders)}件"
         sale_lines.append({
@@ -1408,6 +1436,7 @@ def _auto_create_order(db: Session, ext_name: str, stock: Product | None = None)
         conversions={"单": 1},
         stock_product_id=sid,
         multiplier=mult,
+        stock_links=[{"product_id": sid, "multiplier": mult}] if sid else [],
         is_active=True,
     )
     db.add(p)
@@ -1468,6 +1497,7 @@ def parse_jushuitan(file: UploadFile, db: Session = Depends(get_db), user: User 
             if stock:
                 order_p.stock_product_id = stock.id
                 order_p.multiplier = _spec_multiplier(stock, c["external_code"])
+                order_p.stock_links = [{"product_id": stock.id, "multiplier": order_p.multiplier}]
                 order_p.spec = f"每单约 {fmt_qty(order_p.multiplier)}{stock.default_unit or stock.base_unit}"
         # 编码关联统一指向库存商品（大类）；无匹配库存则不关联（留待人工）
         sp = db.get(Product, order_p.stock_product_id) if order_p.stock_product_id else None
@@ -1494,16 +1524,52 @@ def parse_jushuitan(file: UploadFile, db: Session = Depends(get_db), user: User 
 
 @router.get("/mappings")
 def list_mappings(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    rows = db.execute(select(CodeMapping).order_by(CodeMapping.id)).scalars()
-    return [
-        {
-            "id": m.id, "source": m.source, "external_code": m.external_code,
-            "external_name": m.external_name, "product_id": m.product_id,
-            "product_name": m.product.name if m.product else "",
+    rows = list(db.execute(select(CodeMapping).order_by(CodeMapping.id.desc())).scalars())
+    # 预取关联商品，避免逐条查询（史山遗留：原实现直接 m.product.name 触发 N+1）
+    pids = {m.product_id for m in rows if m.product_id}
+    prods = {
+        p.id: p
+        for p in db.execute(select(Product).where(Product.id.in_(pids))).scalars()
+    } if pids else {}
+    sp_ids = {p.stock_product_id for p in prods.values() if p.stock_product_id}
+    sp_names = {
+        p.id: p.name
+        for p in db.execute(select(Product).where(Product.id.in_(sp_ids))).scalars()
+    } if sp_ids else {}
+
+    items, linked, linked_order, linked_stock = [], 0, 0, 0
+    for m in rows:
+        p = prods.get(m.product_id) if m.product_id else None
+        items.append({
+            "id": m.id,
+            "source": m.source,
+            "external_code": m.external_code,
+            "external_name": m.external_name or m.external_code,
+            "product_id": m.product_id,
+            "product_name": p.name if p else "",
+            "product_type": p.product_type if p else "",
+            "product_category": p.category if p else "",
+            "stock_product_id": p.stock_product_id if p else None,
+            "stock_product_name": sp_names.get(p.stock_product_id, "") if p and p.stock_product_id else "",
             "auto_score": m.auto_score,
-        }
-        for m in rows
-    ]
+        })
+        if p:
+            linked += 1
+            if p.product_type == "order":
+                linked_order += 1
+            else:
+                linked_stock += 1
+
+    return {
+        "summary": {
+            "total": len(items),
+            "linked": linked,
+            "unlinked": len(items) - linked,
+            "linked_order": linked_order,
+            "linked_stock": linked_stock,
+        },
+        "items": items,
+    }
 
 
 class MappingIn(BaseModel):
@@ -1563,6 +1629,9 @@ def auto_mappings(db: Session = Depends(get_db), user: User = Depends(get_curren
 class AiMappingsIn(BaseModel):
     source: str = "jushuitan"
     codes: list[str] = []
+    # apply=False 时只做「试算」：调用大模型归并库存大类并给出关联方案，但不落库，
+    # 由前端把方案展示给用户，用户确认后再以 apply=True 二次调用真正新增。
+    apply: bool = True
 
 
 # “AI 自动关联”：请大模型为一批未关联的聚水潭出库商品名归并出「库存大类」并分类，
@@ -1653,9 +1722,48 @@ def _apply_ai_mappings(db: Session, names: list[str], products: list[dict]) -> d
     }
 
 
+def _preview_ai_mappings(db: Session, names: list[str], products: list[dict]) -> dict:
+    """只试算不落库：返回 AI 归并出的库存大类（标注是否新建）与每个外部名的关联去向。"""
+    stock_names: list[str] = []
+    items: list[dict] = []
+    seen: set[str] = set()
+    for pr in products:
+        pname = str(pr.get("name") or "").strip()
+        if not pname or pname in seen:
+            continue
+        seen.add(pname)
+        existing = db.scalar(select(Product).where(Product.name == pname))
+        stock_names.append(pname)
+        items.append({
+            "name": pname,
+            "category": _CAT_NORM.get(str(pr.get("category") or "").strip(), "商品"),
+            "is_new": existing is None,
+            "product_id": existing.id if existing else None,
+        })
+    mappings, leftover = [], []
+    for name in names:
+        best = max((n for n in stock_names if n and n in name), key=len, default=None)
+        if best is None:
+            leftover.append(name)
+        else:
+            mappings.append({"code": name, "target": best})
+    new_cnt = sum(1 for it in items if it["is_new"])
+    msg = f"计划新增 {new_cnt} 个库存大类，关联 {len(mappings)}/{len(names)} 个商品名。"
+    if leftover:
+        msg += f"仍有 {len(leftover)} 个无法自动关联：{'、'.join(leftover)}，请手动补充。"
+    return {
+        "ok": True, "dry_run": True, "products": items, "mappings": mappings,
+        "created_products": [], "mapped": len(mappings), "total": len(names),
+        "leftover": leftover, "message": msg,
+    }
+
+
 @router.post("/mappings/ai-suggest")
 def ai_suggest_mappings(data: AiMappingsIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """AI 自动新增库存大类 + 编码关联，供出库解析未关联商品时一键补全。"""
+    """AI 自动新增库存大类 + 编码关联，供出库解析未关联商品时一键补全。
+
+    apply=False（默认由前端传入）：只试算并返回方案，供用户确认；apply=True 时真正落库。
+    """
     names = list(dict.fromkeys(n.strip() for n in (data.codes or []) if n and n.strip()))
     if not names:
         raise HTTPException(400, "没有需要关联的商品名")
@@ -1668,7 +1776,12 @@ def ai_suggest_mappings(data: AiMappingsIn, db: Session = Depends(get_db), user:
         raise
     except Exception as e:
         raise HTTPException(502, f"AI 归并库存大类失败：{type(e).__name__}: {e}")
-    return _apply_ai_mappings(db, names, parsed.get("products") or [])
+    products = parsed.get("products") or []
+    if not data.apply:
+        return _preview_ai_mappings(db, names, products)
+    res = _apply_ai_mappings(db, names, products)
+    res["dry_run"] = False
+    return res
 
 
 @router.delete("/mappings")
@@ -1691,83 +1804,20 @@ def delete_mapping(mid: int, db: Session = Depends(get_db), user: User = Depends
 
 @router.post("/jushuitan/import")
 def import_jushuitan(file: UploadFile, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    rows = read_rows(file)
-    orders, skip = jushuitan_rows(rows)
-    mapping_rows = list(db.execute(select(CodeMapping)).scalars())
-    mapping_by_code = {m.external_code: m for m in mapping_rows}
+    """一键导入（设置页的旧入口，保留兼容）。
 
-    created, warnings, failed = 0, [], []
-    unmapped_codes = set()
-    for o in orders:
-        lines = []
-        for ext_name, qty in parse_jushuitan_name(o["name"]):
-            m = mapping_by_code.get(ext_name)
-            pid = m.product_id if m else None
-            p = db.get(Product, pid) if pid else None
-            if not p:
-                # 未配置编码关联时，回退按商品名称/编码精确匹配（如「佛手柑中果2个」）
-                p = db.scalar(select(Product).where(or_(Product.name == ext_name, Product.code == ext_name)))
-            if not p:
-                unmapped_codes.add(ext_name)
-                continue
-            unit, per_item = pick_jst_unit(p, ext_name)
-            if unit is None or per_item is None:
-                failed.append({"doc": o["doc_no"], "reason": f"「{ext_name}」未配置每件重量换算（如 1个=1000克 或 每件2斤），请在商品管理中补充换算后重试"})
-                continue
-            if unit not in (p.conversions or {}):
-                failed.append({"doc": o["doc_no"], "reason": f"「{ext_name}」换算单位「{unit}」未配置"})
-                continue
-            # 消耗量 = 件数 × 每件数量（如 1件×2斤=2斤）
-            lines.append({"product": p, "ext_name": ext_name, "unit": unit, "qty": round(qty * per_item, 4)})
-        if not lines:
-            failed.append({"doc": o["doc_no"], "reason": "无已关联商品（未关联编码）"})
-            continue
-
-        # 金额按商品默认售价比例分摊卖家实收
-        revenue = o["amount"]
-        qty_bases, raws = [], []
-        for ln in lines:
-            qb = unit_to_base(ln["product"], ln["unit"], ln["qty"])
-            ln["qty_base"] = qb
-            qty_bases.append(qb)
-            raws.append(ln["product"].sale_price * qb)
-        sum_raw = sum(raws)
-        sum_qb = sum(qty_bases)
-        for ln, raw, qb in zip(lines, raws, qty_bases):
-            if sum_raw > 0:
-                amt = revenue * raw / sum_raw
-            else:
-                amt = revenue * qb / sum_qb if sum_qb > 0 else 0
-            ln["amount"] = round(amt, 2)
-            ln["price"] = round(amt / ln["qty"], 4) if ln["qty"] else 0
-        try:
-            rec, warns = create_outbound(
-                db,
-                {
-                    "customer": o["customer"] or o["shop"],
-                    "operator": o["seller"] or user.name,
-                    "date": o["date"],
-                    "remark": f"聚水潭导入 单{o['doc_no']} {o['express']}{o['track']}",
-                    "lines": [
-                        {"product_id": ln["product"].id, "unit": ln["unit"], "quantity": ln["qty"], "price": ln["price"]}
-                        for ln in lines
-                    ],
-                    "pack_lines": [],
-                    "pack_fee_total": None,
-                },
-                operator=user.name,
-            )
-            db.flush()
-            created += 1
-            for w in warns:
-                warnings.append(f"{rec.code}: {w}")
-        except Exception as e:
-            failed.append({"doc": o["doc_no"], "reason": str(e)})
-
-    db.commit()
+    以前这里是另一套简化逻辑：不写「规格」、不走店铺扣点/一单多货规则、也不会按订单商品（小类）
+    与「代发」结算，导致出库明细里各规格挤在一个库存大类上、代发商品标不出来。
+    现在直接复用「出库页 → 导入聚水潭出库单」的同一套解析 + 落库，口径完全一致。
+    """
+    drafts, failed, skip, unmapped, unmapped_list, unmatched_multi = parse_jushuitan_draft(file, db, user)
+    res = _confirm_orders(db, user, [d.model_dump() for d in drafts])
     return {
-        "ok": True, "created": created, "skip": skip,
-        "failed": failed, "warnings": warnings,
-        "unmapped_codes": sorted(unmapped_codes),
+        **res,
+        "skip": skip,
+        "failed": failed,
+        "unmapped_codes": sorted(unmapped),
+        "unmapped": unmapped_list,
+        "unmatched_multi": unmatched_multi,
         "failed_count": len(failed),
     }

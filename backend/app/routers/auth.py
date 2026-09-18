@@ -16,7 +16,12 @@ from ..auth import (
     get_current_user,
     make_token,
 )
-from ..database import current_warehouse_name, get_current_key, get_db
+from ..database import (
+    current_warehouse_name,
+    get_current_key,
+    get_default_key,
+    get_user_db,
+)
 from ..keys import public_from_private
 from ..models import User
 
@@ -29,7 +34,12 @@ class LoginIn(BaseModel):
 
 
 @router.post("/login")
-def login(data: LoginIn, response: Response, db: Session = Depends(get_db)):
+def login(data: LoginIn, response: Response, db: Session = Depends(get_user_db)):
+    """私钥登录。
+
+    账号注册表固定在默认仓（keyadmin 只写这里），所以登录不受任何"当前分仓"影响；
+    新会话从默认分仓起步，之后各人可自行切仓（切仓只重签自己的令牌，无需重新登录）。
+    """
     user = db.scalar(select(User).where(User.username == data.username.strip()))
     if not user or not user.is_active:
         raise HTTPException(401, "用户名或私钥不匹配")
@@ -40,14 +50,15 @@ def login(data: LoginIn, response: Response, db: Session = Depends(get_db)):
     if not user.fingerprint or not hmac.compare_digest(fp, user.fingerprint):
         raise HTTPException(401, "用户名或私钥不匹配")
 
-    token = make_token(user.id)
+    wh = get_default_key()
+    token = make_token(user.id, wh)
     response.set_cookie(
         COOKIE_NAME, token, max_age=TOKEN_MAX_AGE, httponly=True, path="/", samesite="lax"
     )
     return {
         "ok": True,
         "user": {"id": user.id, "username": user.username, "name": user.name, "role": user.role},
-        "warehouse": {"key": get_current_key(), "name": current_warehouse_name()},
+        "warehouse": {"key": wh, "name": current_warehouse_name(wh)},
     }
 
 
@@ -59,7 +70,8 @@ def logout(response: Response):
 
 @router.get("/me")
 def me(user: User = Depends(get_current_user)):
+    key = get_current_key()  # 本登录会话自己的分仓
     return {
         "id": user.id, "username": user.username, "name": user.name, "role": user.role,
-        "warehouse": {"key": get_current_key(), "name": current_warehouse_name()},
+        "warehouse": {"key": key, "name": current_warehouse_name(key)},
     }

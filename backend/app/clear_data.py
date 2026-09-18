@@ -56,15 +56,15 @@ CLEAR_ITEMS: list[dict] = [
     {
         "key": "stock_reset",
         "name": "商品库存归零（含成本）",
-        "desc": "将商品的 stock / avg_cost / stock_value / workload 全部归零",
-        "tables": [],
+        "desc": "清空库存流水，并将商品的 stock / avg_cost / stock_value / workload 归零（库存以流水为准，不清流水会在下次入库时把旧库存带回）",
+        "tables": ["stock_movements"],
         "reset_fields": ["stock", "avg_cost", "stock_value", "workload"],
     },
     {
         "key": "stock_only",
         "name": "仅清库存（数量与价值）",
-        "desc": "仅将商品的 stock / stock_value 归零，保留 avg_cost / workload",
-        "tables": [],
+        "desc": "清空库存流水，并将商品的 stock / stock_value 归零（库存以流水为准，不清流水会在下次入库时把旧库存带回）",
+        "tables": ["stock_movements"],
         "reset_fields": ["stock", "stock_value"],
     },
     {
@@ -172,12 +172,12 @@ def preview(key: str | None = None) -> dict:
     try:
         items = []
         for it in CLEAR_ITEMS:
+            # 受影响行数 = 将要清空的表行数 + 将要归零/删除的商品数
+            count = sum(_count_table(conn, t) for t in it["tables"])
             if it.get("delete_products"):
-                count = _count_table(conn, "products")
+                count += _count_table(conn, "products")
             elif it.get("reset_fields"):
-                count = _stock_reset_count(conn, it["reset_fields"])
-            else:
-                count = sum(_count_table(conn, t) for t in it["tables"])
+                count += _stock_reset_count(conn, it["reset_fields"])
             items.append(
                 {
                     "key": it["key"],

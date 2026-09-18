@@ -4,6 +4,8 @@ import { showToast } from 'vant'
 import Vant from 'vant'
 import App from './app.vue'
 import routes from './router'
+import { setupNativeBack } from './utils/back'
+import { startMaintenanceWatch } from './utils/maintenance'
 import 'vant/lib/index.css'
 
 const router = createRouter({ history: createWebHistory(import.meta.env.BASE_URL), routes })
@@ -19,4 +21,6 @@ const app = createApp(App)
 app.use(Vant)          // 全量注册 Vant 组件（van-field / van-button / van-tabbar 等）
 app.use(router)
 app.provide('toast', showToast)
+setupNativeBack(router)   // Capacitor 套壳里接管安卓返回键（浏览器/PWA 自动跳过）
+startMaintenanceWatch()   // 停服公告 / 系统维护页：与桌面端共用后端维护状态
 app.mount('#app')

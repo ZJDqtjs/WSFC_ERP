@@ -1,6 +1,6 @@
 """AI 智能录入：调用云端大模型，把用户口语拆分为 入库/出库 结构化参数。
 
-- LLM 配置在 product_rules.json 的 llm 段（base_url / api_key / model）
+- LLM 配置在 product_rules.json 的 llm 段（base_url / model）；api_key 等敏感项放在被忽略的 config.local.json
 - 通过官方 openai 客户端调用（标准 OpenAI 兼容协议 /chat/completions），支持流式输出
 - 大模型只负责"理解 + 抽取"，商品匹配与单位换算在服务端做（更快、更可靠），前端弹确认框核对
 - 提速要点：不向模型发送 307 个商品的完整目录（由后端匹配），并采用流式返回（首 token 约 1~2 秒）
@@ -17,13 +17,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
+from ..config import llm_config
 from ..database import get_db
 from ..models import Inbound, OutboundLine, Product, Unit, User
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-CONFIG_FILE = ROOT.parent / "product_rules.json"
 
 # AI 票据图片保存目录（backend/data/uploads）：记录备注可引用 /uploads/xxx.jpg 预览
 UPLOAD_DIR = ROOT / "data" / "uploads"
@@ -71,7 +71,9 @@ IMAGE_SYSTEM_PROMPT = """你是「企业台账系统」的采购票据识别助�
 
 处理要求：
 1. 业务类型一律为入库（inbound）：这些票据代表公司采购了货物进入仓库。
-2. 逐条提取每条采购商品的：商品名称（product，按票据原文，简洁）、数量（quantity）、单位（unit，如 张/个/斤/公斤/袋/箱）、单价（unit_price，每单位的金额，保留小数）。
+2. 逐条提取每条采购商品的：商品名称（product）、数量（quantity）、单位（unit，如 张/个/斤/公斤/袋/箱）、单价（unit_price，每单位的金额，保留小数）。
+   - product 必须逐字照抄票据上的名称（保留括号、规格、编号等），不要改写、缩写、纠错，也不要自行补「干货」等字样；名称中不要插入空格。
+   - quantity 取票据上直接列出的数量（如「数额」列）为准，不要用「计算明细」里的算式自行重算；票据上没有单价的，unit_price 一律填 0，禁止拿明细里的数字当单价。
 3. category 商品分类：逐条判断属于"库存商品"（货品/蔬菜/干货）、"包材"（纸箱/泡沫箱/胶带/包装袋等包装材料）、还是"人工"（打包劳务）；销售小规格的"订单商品"一般不出现，出现也按"库存商品"处理。无法判断时不输出该字段（省略）。
 4. supplier：票据上的销方（卖方）公司名称；customer 留空。
 5. 日期 date：票据上若有日期就用它（格式 YYYY-MM-DD），没有就用"今天"（今天的日期见用户消息）。
@@ -98,11 +100,8 @@ class ParseIn(BaseModel):
 
 
 def _llm_config() -> dict:
-    try:
-        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        return (cfg.get("llm") or {}) if cfg.get("llm", {}).get("enabled", True) else {}
-    except Exception:
-        return {}
+    """llm 段配置：product_rules.json 为默认值，config.local.json / 环境变量可覆盖。"""
+    return llm_config()
 
 
 def _make_client(cfg: dict) -> OpenAI:
@@ -210,6 +209,9 @@ PACK_KEYWORDS = (
     "纸箱", "拖箱", "果箱", "泡沫箱", "保温箱", "周转箱", "编织袋", "保鲜袋",
     "包装袋", "胶带", "气泡膜", "珍珠棉", "冰袋", "内膜袋", "牛皮纸", "封箱",
     "气柱", "吸塑", "拉链袋", "自封袋", "网兜", "彩盒", "礼盒盒",
+    # 「号箱」「箱子」：票据里常只写「6号箱」「冰糖橙箱子」，缺这些关键字会被判成非包材，
+    # 从而走不到包材的等价匹配（「6号箱」↔「6号纸箱」）。
+    "号箱", "箱子",
 )
 
 
@@ -353,9 +355,21 @@ def _extract_json(content: str) -> dict:
     return _repair_truncated_json(content)
 
 
+# 快速解析时误并入商品名开头的动作词/时间词（「入库苹果10箱」→「苹果」）
+_QUICK_LEAD_RE = re.compile(
+    r"^(?:今天|昨天|前天|今早|上午|下午|晚上|早上|刚才|刚刚)?"
+    r"(?:入库|进货|采购|进仓|收货|出库|销售|卖出|发货|出货)+了*"
+)
+
+
 def _normalize_quick_product_name(name: str) -> str:
     name = (name or "").strip().strip("，,。;；")
     name = re.sub(r"^(?:的|约|大约|约为)\s*", "", name)
+    # 名称写在数量之前时（如「入库苹果10箱」），正则会把开头的动作词一起吃进名称，这里去掉；
+    # 只有去掉后仍剩 ≥2 个字才替换，避免误伤「出库费」这类真实商品名。
+    stripped = _QUICK_LEAD_RE.sub("", name)
+    if stripped != name and len(stripped) >= 2:
+        name = stripped
     return name
 
 
@@ -379,8 +393,12 @@ def _quick_parse_text(text: str) -> dict | None:
     )
     matches = list(line_pattern.finditer(s))
     if not matches:
+        # 名称在数量之前（如「入库6号纸箱100个」）。
+        # 注意：f-string 里正则量词的花括号必须写成 {{0,20}}，写成 {0,20} 会被当成格式字段，
+        # 编译出的正则变成「[^...]0?」，商品名只能匹配到 2 个字（「6号纸箱」被截成「纸箱」），
+        # 结果匹配不到具体商品（只能匹配到一堆相似商品），价格也就无从回填。
         alt_pattern = re.compile(
-            rf"(?P<product>[A-Za-z0-9\u4e00-\u9fa5][^\d，,。!！?？;；\n]{0,20}?)\s*(?P<qty>\d+(?:\.\d+)?)\s*(?P<unit>{unit_pattern})",
+            rf"(?P<product>[A-Za-z0-9\u4e00-\u9fa5][^\d，,。!！?？;；\n]{{0,20}}?)\s*(?P<qty>\d+(?:\.\d+)?)\s*(?P<unit>{unit_pattern})",
             re.S,
         )
         matches = list(alt_pattern.finditer(s))
@@ -391,7 +409,12 @@ def _quick_parse_text(text: str) -> dict | None:
     for idx, m in enumerate(matches):
         qty = float(m.group("qty") or 0)
         unit = m.group("unit") or "个"
-        product = _normalize_quick_product_name(m.group("product"))
+        raw_product = m.group("product") or ""
+        # 名称里含数字且写在数量之前的写法（如「入库20*30*10纸箱100个」），可能只截到后半段（「0纸箱」）：
+        # 若商品名以数字开头且紧邻的前一个字符也是数字，说明只是更长词条的一截，丢弃该行交给大模型。
+        if raw_product[:1].isdigit() and m.start("product") > 0 and s[m.start("product") - 1].isdigit():
+            continue
+        product = _normalize_quick_product_name(raw_product)
         if not product:
             continue
         tail = s[m.end():]
@@ -408,8 +431,15 @@ def _quick_parse_text(text: str) -> dict | None:
                 price = float(pm.group("price") or 0)
                 break
         if idx == 0 and price == 0:
-            # 例如：今天入库了100斤木耳，25一斤 -> 取尾部的数字价格
-            pm = re.search(r"(?:￥|¥)?(?P<price>\d+(?:\.\d+)?)\s*(?:一|两)?(?P<u>斤|公斤|千克|个|件|袋|包|盒|箱|份|单)", s, re.S)
+            # 兜底：价格写在本行数量之前时（如「25元一斤的木耳100斤」）。
+            # 只在本行数量之外查找，且必须带价格特征（元/¥ 或「一/两+单位」），
+            # 否则会把数量本身（如「100个」）误当成单价（旧实现就因此把 100 当成价格）。
+            others = s[: m.start()] + tail
+            pm = re.search(
+                rf"(?:￥|¥)?(?P<price>\d+(?:\.\d+)?)\s*(?:元|￥|¥|(?:一|两)(?:{unit_pattern}))",
+                others,
+                re.S,
+            )
             if pm:
                 price = float(pm.group("price") or 0)
 
@@ -433,10 +463,11 @@ def _quick_parse_text(text: str) -> dict | None:
 
 
 def _match_product(db: Session, name: str, want: str | None) -> Product | None:
-    """按名称匹配商品：先精确，再子串包含（取匹配更长的）。want: stock/order/None=不限。"""
+    """按名称匹配商品：先精确（忽略空白），再子串包含（取匹配更长的）。want: stock/order/None=不限。"""
     name = (name or "").strip()
     if not name:
         return None
+    qkey = _tight(name)
     q = db.query(Product).filter(Product.is_active.is_(True))
     if want == "stock":
         q = q.filter(Product.product_type == "stock")
@@ -445,10 +476,15 @@ def _match_product(db: Session, name: str, want: str | None) -> Product | None:
     p = q.filter(Product.name == name).first()
     if p:
         return p
+    rows = q.all()
+    for p in rows:  # 忽略空白的同名（模型常把「8号拖箱」写成「8 号拖箱」）
+        if _tight(p.name) == qkey:
+            return p
     cands = []
-    for p in q.all():
-        if name in p.name or p.name in name:
-            cands.append((min(len(p.name), len(name)), p))
+    for p in rows:
+        pn = _tight(p.name)
+        if qkey in pn or pn in qkey:
+            cands.append((min(len(pn), len(qkey)), p))
     if cands:
         cands.sort(key=lambda x: -x[0])
         return cands[0][1]
@@ -494,10 +530,16 @@ def _match_by_category(db: Session, name: str, cat: str) -> Product | None:
     p = q.filter(Product.name == name).first()
     if p:
         return p
+    qkey = _tight(name)
+    rows = q.all()
+    for c in rows:
+        if _tight(c.name) == qkey:      # 忽略空白的同名（如票据「8 号拖箱」↔ 档案「8号拖箱」）
+            return c
     best, blen = None, -1
-    for c in q.all():
-        if name in c.name or c.name in name:
-            m = min(len(c.name), len(name))
+    for c in rows:
+        cn = _tight(c.name)
+        if qkey in cn or cn in qkey:
+            m = min(len(cn), len(qkey))
             if m > blen:
                 blen, best = m, c
     return best
@@ -521,6 +563,47 @@ def _resolve_line(db: Session, name: str, op_type: str, cat: str) -> Product | N
     if op_type == "inbound":
         return _resolve_inbound_product(db, name)
     return _resolve_outbound_product(db, name)
+
+
+# 等价单位（写法不同、含义相同）：用于消除「千克 vs 公斤」这类假告警
+_UNIT_EQUIVALENTS = {"千克": "公斤", "kg": "公斤", "KG": "公斤", "公斤": "公斤"}
+
+
+def _canonical_unit(unit: str) -> str:
+    """把识别到的单位统一成系统里的写法：千克/kg 一律记「公斤」，免得新建出同义单位。"""
+    s = (unit or "").strip()
+    return _UNIT_EQUIVALENTS.get(s, s)
+
+
+def _same_unit(a: str, b: str) -> bool:
+    """两个单位是否等价（如「千克」与「公斤」都是 1000 克）。"""
+    if not a or not b:
+        return False
+    a, b = _canonical_unit(a), _canonical_unit(b)
+    return a == b
+
+
+def _unit_incompatible(p: Product, unit: str) -> bool:
+    """票据单位与商品单位体系是否完全对不上（如票据按「瓶」、商品按「公斤」管）。
+
+    用途：名称只是「包含」关系（如「冻干黑花生」↔「黑花生」）且单位体系还不同时，
+    基本可断定不是同一个货品，应走「新增品类」而不是硬塞给相似商品。
+    """
+    unit = (unit or "").strip()
+    if not unit:
+        return False
+    conv = p.conversions or {}
+    du = p.default_unit or p.base_unit
+    u = _norm_unit(unit, conv) or unit
+    if _same_unit(u, du) or _same_unit(u, p.base_unit):
+        return False
+    if u in conv and conv.get(u):
+        return False                        # 换算表里有，可换算
+    if u == "斤" and "公斤" in conv:
+        return False
+    if _canonical_unit(u) == "公斤" and "公斤" in conv:
+        return False
+    return True
 
 
 def _norm_unit(unit: str, conv: dict) -> str | None:
@@ -559,17 +642,22 @@ def _last_price_default(db: Session, p: Product | None, op_type: str) -> float:
         row = db.query(Inbound).filter(Inbound.product_id == p.id).order_by(Inbound.id.desc()).first()
         if row and row.unit_price:
             return to_du(row.unit_price, row.unit)
-        return to_du(p.unit_cost, p.base_unit)
+        # 参考采购价没维护时，退回商品资料里的「均价」（库存均价），再没有才是 0
+        return to_du(p.unit_cost, p.base_unit) or to_du(p.avg_cost, p.base_unit)
     row = db.query(OutboundLine).filter(OutboundLine.product_id == p.id).order_by(OutboundLine.id.desc()).first()
     if row and row.unit_price:
         return to_du(row.unit_price, row.unit)
     return to_du(p.sale_price, p.base_unit)
 
 
+def _tight(s: str) -> str:
+    """名称归一：去掉所有空白，便于与商品档案名比较（模型常输出「8 号拖箱」）。"""
+    return re.sub(r"\s+", "", s or "")
+
+
 def _pack_key(s: str) -> str:
     """包材宽松名：去空白、去“纸/拖”等箱型限定词，用于「9号箱」↔「9号纸箱」的等价判断。"""
-    s = re.sub(r"\s+", "", s or "")
-    return s.replace("纸", "").replace("拖", "")
+    return _tight(s).replace("纸", "").replace("拖", "")
 
 
 def _line_candidates(db: Session, name: str, op_type: str, cat: str) -> list[Product]:
@@ -599,12 +687,13 @@ def _line_candidates(db: Session, name: str, op_type: str, cat: str) -> list[Pro
         rows = q.all()
     else:
         rows = db.query(Product).filter(Product.is_active.is_(True)).all()
-    qkey = _pack_key(name) if cat == "pack" else name
+    qname = _tight(name)
+    qkey = _pack_key(name) if cat == "pack" else qname
     exact = []
     for p in rows:
-        if p.name == name:
+        if _tight(p.name) == qname:          # 同名（忽略空白）
             exact.append(p)
-        elif cat == "pack" and _pack_key(p.name) == qkey and p.name != name:
+        elif cat == "pack" and _pack_key(p.name) == qkey and _tight(p.name) != qname:
             exact.append(p)
     # 去重（按 id）
     seen = {p.id for p in exact}
@@ -612,13 +701,14 @@ def _line_candidates(db: Session, name: str, op_type: str, cat: str) -> list[Pro
     for p in rows:
         if p.id in seen:
             continue
-        hit = (name in p.name or p.name in name)
+        pn = _tight(p.name)
+        hit = (qname in pn or pn in qname)
         if not hit and cat == "pack":
             pkey = _pack_key(p.name)
             hit = (qkey in pkey or pkey in qkey)
         if hit:
             sub.append(p)
-    sub.sort(key=lambda p: -min(len(p.name), len(name)))
+    sub.sort(key=lambda p: -min(len(_tight(p.name)), len(qname)))
     return exact + sub
 
 
@@ -630,12 +720,14 @@ def _normalize_line(db: Session, p: Product | None, line: dict, op_type: str, au
     """
     name = (line.get("product") or "").strip()
     qty = float(line.get("quantity") or 0)
-    unit = str(line.get("unit") or "").strip()
+    unit = _canonical_unit(str(line.get("unit") or "").strip())   # 千克→公斤，统一单位写法
     price = float(line.get("unit_price") or 0)
 
     out = {
         "product_id": 0,
         "product_name": name,
+        "recognized_name": name,         # 票据/文本里的原始名称（供前端「新建」使用）
+        "recognized_unit": unit,         # 票据/文本里的原始单位（切到「新建」时用它）
         "category": category,
         "quantity": qty,
         "unit": unit,
@@ -683,15 +775,21 @@ def _normalize_line(db: Session, p: Product | None, line: dict, op_type: str, au
             out["unit"] = du if du else unit
             out["hint"] += "；未能换算单位，请核对"
 
+    # 商品档案若把默认单位写成「千克」，展示与提交统一改用「公斤」（同义单位不再重复引入）
+    tgt = _canonical_unit(out["unit"])
+    if tgt != out["unit"] and (not conv or tgt in conv):
+        out["unit"] = tgt
+
     # 单位冲突检测：识别原始单位 与 商品库存/展示单位 不一致时，提示用户确认换算
+    # 注意：千克/公斤 是同一单位，不可当冲突报（否则票据里的「千克」会全行刷告警）。
     raw_unit = _norm_unit(unit, conv) or (unit or "")  # 归一化后的识别单位
     stored_unit = du or p.base_unit
     if (
         out["unit"]                       # 已换算出的目标单位
         and raw_unit
         and stored_unit
-        and raw_unit != stored_unit
-        and raw_unit != out["unit"]
+        and not _same_unit(raw_unit, stored_unit)
+        and not _same_unit(raw_unit, out["unit"])
         and not (auto_created)            # 自动新增不冲突
     ):
         out["unit_conflict"] = True
@@ -707,7 +805,7 @@ def _normalize_line(db: Session, p: Product | None, line: dict, op_type: str, au
         if last:
             out["unit_price"] = round(last, 4)
             out["price_defaulted"] = True
-            out["hint"] += "；价格未识别，已按上次录入单价默认填入，请核对"
+            out["hint"] += "；价格未识别，已按该商品最近价 / 均价默认填入，请核对"
     return out
 
 
@@ -735,38 +833,82 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
         auto = False
         cands = _line_candidates(db, name, op_type, cat)
         if cat == "pack":
-            # 包材做宽松判定：以「去空白/纸/拖」后的名称为准。
-            # 存在≥2个宽松等价候选（如票据“9 号箱” vs 已有“9号纸箱”）→ 视为歧义，让用户挑选，绝不抢先自动新增。
+            # 包材判定分三级，优先级从高到低：
+            #   ① 同名（忽略空白）：票据「8号拖箱」必须命中档案里的「8号拖箱」，绝不串到「8号纸箱」
+            #   ② 去「纸/拖」等限定词后等价且唯一：「3号箱」→「3号纸箱」
+            #   ③ 前缀近似且唯一：「松茸6号」→「松茸6号箱」
+            # 仍剩多个候选（如「8号箱」同时对上 8号纸箱 / 8号拖箱）才算歧义，交给用户挑选。
+            qname = _tight(name)
             qkey = _pack_key(name)
-            loose = [c for c in cands if _pack_key(c.name) == qkey]
-            sub = [c for c in cands if c not in loose and (qkey in _pack_key(c.name) or _pack_key(c.name) in qkey)]
-            cands = loose + sub
-            if len(loose) == 1:
+            exact_name = [c for c in cands if _tight(c.name) == qname]
+            loose = [c for c in cands if c not in exact_name and _pack_key(c.name) == qkey]
+            sub = [
+                c for c in cands
+                if c not in exact_name and c not in loose
+                and (
+                    _pack_key(c.name).startswith(qkey) or qkey.startswith(_pack_key(c.name))
+                )
+            ]
+            cands = exact_name + loose + sub
+            if exact_name:
                 exact_hit = True
-                p = loose[0]  # 唯一的宽松等价：直接采用该包材
+                p = exact_name[0]
+            elif len(loose) == 1:
+                exact_hit = True
+                p = loose[0]
+            elif not loose and len(sub) == 1:
+                exact_hit = True
+                p = sub[0]
             else:
                 exact_hit = False
                 p = None       # 没有/有多个等价 → 交由用户选择
         else:
-            exact_hit = any(c.name == name for c in cands)
-            if p is None and exact_hit:
-                # 有精确同名但被分类过滤漏掉（罕见），直接采用精确同名
-                for c in cands:
-                    if c.name == name:
-                        p = c
-                        break
+            name_t = _tight(name)
+            # 只是「包含」关系、且计量单位体系也对不上（票据「瓶」vs 商品「公斤」）的候选直接剔除：
+            # 那不是同一个货品，应该按新品类处理（如「冻干黑花生 464 瓶」不该塞进「黑花生」）。
+            raw_unit = ln.get("unit", "")
+            cands = [
+                c for c in cands
+                if _tight(c.name) == name_t or _tight(c.name).startswith(name_t)
+                or not _unit_incompatible(c, raw_unit)
+            ]
+            exact_name = [c for c in cands if _tight(c.name) == name_t]
+            # 「票据名是商品名的前缀」算可靠命中：如「香菇」→「香菇干货」、「七彩花生米」→「七彩花生米（去壳）」。
+            # 反之（票据「冻干黑花生」落到商品「黑花生」）只是「包含」命中，商品可能不是同一个，
+            # 不能静默采信，必须标成待确认让用户核对（否则会把 A 商品的数量记到 B 商品上）。
+            prefix = [c for c in cands if c not in exact_name and _tight(c.name).startswith(name_t)]
+            rest = [c for c in cands if c not in exact_name and c not in prefix]
+            cands = exact_name + prefix + rest
+            if exact_name:
+                exact_hit = True
+                p = exact_name[0]
+            elif len(prefix) == 1:
+                exact_hit = True
+                p = prefix[0]
+            elif prefix:
+                exact_hit = False
+                p = None                  # 多个前缀候选（如「黑花生」对上「黑花生米（去壳）」等）→ 用户挑
+            elif p is not None and _tight(p.name).startswith(name_t):
+                exact_hit = True          # 分类内没命中但全局命中了前缀同名（罕见）
+            else:
+                exact_hit = False         # 仅「包含」命中 → 交给用户确认
+            # p 是被剔除的模糊候选（或单位对不上）时，不再沿用
+            if p is not None and all(c.id != p.id for c in cands):
+                p = None
         similar = [c for c in cands if c.id != (p.id if p else None)]
-        # 存在近似候选且无完全同名 => 歧义：不自动新增，交由用户在候选里挑选
-        ambiguous = bool(similar) and not exact_hit
+        # 非完全命中（含仅「包含」命中）或存在其他候选 => 歧义：不自动新增，交由用户确认
+        ambiguous = (not exact_hit) and (p is not None or bool(similar))
         pending_new = None
         if p is None and not ambiguous and op_type == "inbound":
             # 入库的新物品（无任何相似商品）：识别阶段只生成「待新增档案」预览，绝不写库。
             # 用户点「确认提交」时才真正建档（见 materialize_products），取消则不产生任何商品/包材数据。
-            pending_new = _new_product_meta(name, cat or "stock")
+            pending_new = _new_product_meta(_tight(name), cat or "stock")
             auto = True
         category = _product_category(p) if p else (cat or "")
         ln_out = _normalize_line(db, p, ln, op_type, auto_created=auto, category=category)
         ln_out["ambiguous"] = ambiguous
+        if ambiguous and p is not None and all(c.id != p.id for c in cands):
+            cands = [p] + cands      # 保证默认选中的那一个一定在候选列表里
         ln_out["candidates"] = (
             [
                 {
@@ -781,13 +923,30 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
             if ambiguous else []
         )
         if pending_new:
-            ln_out["new_product"] = {**pending_new, "unit": (ln.get("unit") or "").strip() or "个"}
+            ln_out["product_name"] = pending_new["name"]     # 用归一后的名称（去掉模型多余空格）
+            ln_out["new_product"] = {**pending_new, "unit": _canonical_unit(ln.get("unit")) or "个"}
             ln_out["hint"] = (
-                f"🆕 系统暂无此商品，确认提交后将新增到「{pending_new['category_label']}」（取消不会创建）"
+                f"🆕 系统暂无此商品，确认提交后将新增到「{pending_new['category_label']}」，"
+                f"新商品没有历史价，请填写单价（取消不会创建）"
             )
         if ambiguous:
             names = "、".join(c["name"] for c in ln_out["candidates"])
-            ln_out["hint"] = f"⚠ 识别到多个相似商品（{names}），请确认选哪一个"
+            rec = ln_out.get("recognized_name") or name
+            only_approx = not any(_tight(c["name"]) == _tight(rec) for c in ln_out["candidates"])
+            if only_approx:
+                ln_out["hint"] = (
+                    f"⚠ 没有与「{rec}」完全同名的商品，最接近的是（{names}），"
+                    f"请确认识别对没有（不是同一商品时，可在下拉里选「🆕 新建」）"
+                )
+            else:
+                ln_out["hint"] = f"⚠ 识别到多个相似商品（{names}），请确认选哪一个"
+            # 歧义行也先按默认候选（列表第一个，即前端默认选中的那个）的最近价填入，
+            # 免得用户看到空单价；用户改选其他候选时前端会跟着刷新。
+            if not ln_out["unit_price"] and ln_out["candidates"] and ln_out["candidates"][0]["last_price"]:
+                first = ln_out["candidates"][0]
+                ln_out["unit_price"] = first["last_price"]
+                ln_out["price_defaulted"] = True
+                ln_out["hint"] += f"；已按默认候选「{first['name']}」最近价 {first['last_price']} 填入，请核对"
         lines.append(ln_out)
 
     # 日期校验：格式非法/为空时回退为今天，避免模型幻觉日期
@@ -973,7 +1132,9 @@ def materialize_products(
         p = db.query(Product).filter(Product.name == name).first()
         created = False
         if not p:
-            p = _auto_create_product(db, name, (it.unit or "").strip() or "个", it.category or "stock")
+            # 单位统一：千克/kg → 公斤，避免新建出与「公斤」同义的计量单位
+            unit = _canonical_unit(it.unit) or "个"
+            p = _auto_create_product(db, name, unit, it.category or "stock")
             created = True
         results.append({
             "name": name,

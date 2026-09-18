@@ -11,7 +11,7 @@
 
 | 环境              | 地址                                                       |
 | --------------- | -------------------------------------------------------- |
-| 生产（nginx 反代 80） | `http://***REMOVED-IP***`（即 `http://***REMOVED-IP***/api/...`） |
+| 生产（nginx 反代 80） | `http://<服务器地址>`（即 `http://<服务器地址>/api/...`） |
 | 本地开发后端          | `http://127.0.0.1:8000`（`/api/...`）                      |
 
 * 前端页面由 nginx 托管在 **80 端口**，后端 API 由 nginx 把 `/api`、`/uploads` 反代到本机 `127.0.0.1:8000`。
@@ -45,6 +45,8 @@
 * 日期格式统一为字符串 `YYYY-MM-DD`。
 
 * 错误响应格式：`{"detail": "错误信息"}`，配合 HTTP 状态码（400 / 401 / 404 / 500 等）。
+
+* 操作员（`operator`）：入库 / 出库 / 盘点调整 / 手动记账一律以**当前登录账号**为准，请求体里的 `operator` 会被忽略（批量导入的 Excel「操作员」列仍然生效）。
 
 ***
 
@@ -111,9 +113,10 @@ Product 字段：
 | conversions          | object   | 单位换算表 `{单位: 到基础单位的系数}`                  |
 | pack\_items          | array    | 关联结算清单 `[{product_id, quantity, unit}]` |
 | pack\_fee            | float    | 每单固定人工/包装费                              |
-| stock\_product\_id   | int/null | 订单商品关联的库存商品 ID                          |
-| stock\_product\_name | string   | 关联库存商品名称                                |
-| multiplier           | float    | 1 单订单商品 = multiplier × 库存默认单位           |
+| stock\_product\_id   | int/null | 订单商品关联的库存商品 ID（多关联时为**首项**，兼容旧逻辑/扣点分类） |
+| stock\_product\_name | string   | 首个关联库存商品名称                              |
+| multiplier           | float    | 1 单订单商品 = multiplier × 库存默认单位（首项倍数）      |
+| stock\_links         | array    | 订单商品的多扣减关联 `[{product_id, name, category, multiplier, default_unit}]`；空数组 = 代发（不扣库存） |
 | is\_active           | bool     | 是否启用                                    |
 | stock                | float    | 当前库存（基础单位）                              |
 | avg\_cost            | float    | 库存均价（先进先出剩余批次加权，基础单位）                   |
@@ -141,11 +144,16 @@ Product 字段：
   "pack_fee": 0,
   "stock_product_id": null,
   "multiplier": 1,
+  "stock_links": [ { "product_id": 3, "multiplier": 1 }, { "product_id": 7, "multiplier": 2 } ],
   "is_active": true
 }
 ```
 
 响应：创建的 `Product` 对象。`conversions` 缺省时按 `base_unit` 生成默认换算表。
+
+> 订单商品（`product_type=order`）可用 `stock_links` 关联**多个**库存商品（大类）：卖 1 单时按各自 `multiplier` 依次扣减。
+> 出库明细仍为一行（数量/金额/成本合计），库存流水按每个被扣减的库存商品各记一条（成本按 FIFO 分别结转）。
+> `stock_product_id` + `multiplier` 保留为单关联的兼容字段（多关联时取 `stock_links` 首项）；请求体不传 `stock_links` 时按该单关联字段处理（未升级的旧客户端编辑商品若未改动关联，服务端会保留已有 `stock_links`）。
 
 ### 3.3 更新商品
 
@@ -232,9 +240,12 @@ Inbound 字段：`id, code(单号), product_id, product_name, unit, quantity, qu
 {
   "lines": [
     { "product_id": 1, "unit": "斤", "quantity": 3, "price": 8, "pack_fee": null }
-  ]
+  ],
+  "auto_express": true
 }
 ```
+
+> `auto_express`（默认 `true`）：是否按整单毛重自动结算快递费。手动出库时用户可在预览里删掉「快递费」行（或在出库表单取消勾选「自动计快递费」），前端会以 `auto_express: false` 再预览/提交，后端就不再自动追加快递费行；批量导入 / 聚水潭导入不传该参数，保持自动结算。
 
 响应：
 
@@ -284,9 +295,13 @@ Outbound 字段：`id, code, customer, operator, date, remark, total_amount, tot
   "remark": "",
   "lines": [ { "product_id": 1, "unit": "斤", "quantity": 3, "price": 8, "pack_fee": null } ],
   "pack_lines": [],
-  "pack_fee_total": null
+  "pack_fee_total": null,
+  "auto_express": true
 }
 ```
+
+> `auto_express: false` = 这笔不自动结算快递费（手动出库删掉「快递费」行时前端会传 `false`）；
+> 不传（或 `true`）时按整单毛重自动加速递费，批量导入与聚水潭导入即走此默认。
 
 响应：
 
@@ -385,24 +400,50 @@ Outbound 字段：`id, code, customer, operator, date, remark, total_amount, tot
 
 ### 7.2 经营汇总
 
-`GET /api/report/summary?date_from=&date_to=`
+`GET /api/report/summary?date_from=&date_to=&wh=&exclude_other=`
 响应：
 
 ```json
 {
   "date_from": "", "date_to": "",
   "revenue": 0, "cogs": 0, "gross_profit": 0,
-  "expense": 0, "net_profit": 0, "purchase": 0, "stock_value": 0,
+  "expense": 0, "other_expense": 0, "manual_expense": 0,
+  "exclude_other_expense": false, "excluded_other_expense": 0,
+  "net_profit": 0, "purchase": 0, "total_expense": 0, "stock_value": 0,
   "order_count": 0, "inbound_count": 0,
   "by_product": [ { "product_id": 1, "name": "番茄", "qty": 3, "amount": 24, "cogs": 12 } ],
   "fee_breakdown": { "人工打包费": 0, "其他支出": 0 }
 }
 ```
 
+**`wh` 参数**（报表页「全仓总览 / 单仓总览」共用同一批接口与四个分区 tab）：
+
+* 省略 / `wh=<分仓key>`：单个分仓（省略 = 本登录会话所在分仓）；
+* `wh=all`：**全仓合计**——各分仓是独立账套，后端逐个分仓计算后合并（金额/笔数相加，
+  商品按「名称+规格+是否代发」归并，支出按日/按月归并，逐笔明细拼接并补 `warehouse` 来源分仓名）。
+  响应额外带 `is_all: true`、`warehouse: {key:"all", name:"全仓合计"}`、`warehouse_count`、`failed: [...]`。
+
+同样支持 `wh=all` 的还有：
+
+* `GET /api/report/sales-by-spec?date_from=&date_to=&wh=all` → 出库明细（按天 × 规格）全仓合并；
+* `GET /api/finance?date_from=&date_to=&wh=all` → 全仓财务流水（每条带 `warehouse` 来源分仓）。
+
+**`exclude_other` 参数**（主界面「排除其他开支」开关，前端默认开启）：
+
+* 省略 / `exclude_other=0`：其他开支并入期间费用（`expense = manual_expense + other_expense`），
+  净利润 = 毛利 − 期间费用，与改造前完全一致；
+* `exclude_other=1`：**不计入其他开支**——`other_expense = 0`、`other_expenses = {}`，
+  `expense` 只剩手工记账支出，`net_profit` 即「只看商品售卖」的利润；逐笔明细 `expense_items`
+  与按日/按月支出里的「其他开支」也都为 0 / 不出现。
+  被排除掉的真实金额仍以 `excluded_other_expense` 返回（配合 `exclude_other_expense: true` 供前端提示）。
+
+`GET /api/report/all-warehouses` 支持同样的 `exclude_other` 参数（全仓总览口径一致）。
+
 ### 7.3 财务流水
 
-`GET /api/finance?date_from=&date_to=`
-响应：`[{id, type(income/expense), category, product_id, product_name, amount, date, operator, remark, ref_type, ref_id}]`
+`GET /api/finance?date_from=&date_to=&wh=`
+响应：`[{id, type(income/expense), category, product_id, product_name, amount, date, operator, remark, ref_type, ref_id, warehouse?}]`
+（`warehouse` 仅在 `wh=all` 全仓流水时返回，用于在流水表里标出来源分仓）
 
 ### 7.4 新增财务记录（手动）
 
@@ -444,7 +485,7 @@ Outbound 字段：`id, code, customer, operator, date, remark, total_amount, tot
 
 ## 9. AI 智能录入
 
-> 需在 `product_rules.json` 的 `llm` 段配置 api\_key（`enabled: false` 或未配置时接口返回 400）。
+> 需配置 `llm` 段的 api\_key：默认配置在 `product_rules.json`，密钥写在本机私有的 `config.local.json`（或环境变量 `ERP_LLM_API_KEY`）；`enabled: false` 或未配置时接口返回 400。
 
 ### 9.1 文字解析（非流式）
 
@@ -630,6 +671,8 @@ data: {"done": true}
 
 * `POST /api/mappings/auto` → 自动为未关联编码推荐匹配：`{ "ok": true, "matched": n, "total": n }`
 
+* `POST /api/mappings/ai-suggest` 请求：`{ "source": "jushuitan", "codes": ["商品名"...], "apply": false }` → AI 归并库存大类并给出编码关联方案。`apply=false` 只试算不落库，返回 `{ "dry_run": true, "products": [{name, category, is_new, product_id}], "mappings": [{code, target}], "mapped": n, "total": n, "leftover": [...], "message": "..." }`；`apply=true`（缺省）真正新增库存大类并写入关联，返回 `{ "dry_run": false, "created_products": [...], "mapped": n, "total": n, "leftover": [...], "message": "..." }`
+
 * `DELETE /api/mappings?source=jushuitan` → 清空该来源全部关联
 
 * `DELETE /api/mappings/{mid}` → 删除单条
@@ -640,11 +683,24 @@ data: {"done": true}
 
 * `GET /uploads/{filename}`：AI 票据识别时保存的票据图片，可直接用做 `<img src>` 预览，也可写入备注（形如 `/uploads/invoice_20260831_xxx.jpg`）。
 
+### 12.1 备注附件上传（手动入库 / 出库）
+
+`POST /api/uploads`（multipart：`file`，需登录）→ 上传任意格式附件（单文件 ≤ 20MB）。
+
+响应：
+
+```json
+{ "url": "/uploads/attach_20260914_153000_123456_送货单.pdf", "name": "送货单.pdf", "size": 20480, "is_image": false }
+```
+
+* 把返回的 `url` 追加到入库 / 出库的 `remark` 即可（多个附件用换行分隔），记录列表会自动渲染：图片显示缩略图，其他格式显示下载链接。
+* 前端新增接口只负责上传，落盘文件名会做字符净化（保留中英文、数字、下划线、短横线与点），因此 `remark` 里的附件路径格式稳定可解析。
+
 ***
 
 ## 13. Flutter 对接速查
 
-1. **基础 URL**：`http://***REMOVED-IP***`（nginx 80）。本地联调可用 `http://127.0.0.1:8000`（注意 127.0.0.1 只在本机；真机调试用局域网 IP + 8000 或部署后域名/公网 IP）。
+1. **基础 URL**：`http://<服务器地址>`（nginx 80）。本地联调可用 `http://127.0.0.1:8000`（注意 127.0.0.1 只在本机；真机调试用局域网 IP + 8000 或部署后域名/公网 IP）。
 2. **登录**：`POST /api/auth/login` → 捕获 `set-cookie` 里的 `erp_token`。
 3. **鉴权**：每个请求头加 `Cookie: erp_token=xxx`；遇 `401` 则重新登录。
 4. **文件上传**：`multipart/form-data`，文件字段名统一为 `file`（AI 图片接口另有 `text` 字段）。

@@ -81,6 +81,19 @@
       </div>
     </div>
 
+    <!-- 其他开支（本月） -->
+    <div class="card">
+      <div class="row">
+        <div class="grow">
+          <div class="muted">本月其他开支（网线费 / 安装费 / 样品费…）</div>
+          <div class="bold up" style="font-size:18px;margin-top:2px;">{{ fmtMoney(month.other_expense) }}</div>
+          <div class="muted">今日 {{ fmtMoney(todayStats.other_expense) }}</div>
+        </div>
+        <van-button size="small" plain type="primary" @click="$router.push('/otherexp')">其他开支</van-button>
+        <van-button size="small" plain type="warning" @click="$router.push('/payables')">待付款账单</van-button>
+      </div>
+    </div>
+
     <!-- 缺货预警 -->
     <div class="card">
       <div class="card-title">
@@ -148,8 +161,8 @@
     </div>
 
     <!-- AI 识别确认弹层 -->
-    <van-popup v-model:show="confirmShow" position="bottom" round :style="{ height: '90%' }">
-      <div class="sheet-body">
+    <van-popup v-model:show="confirmShow" position="bottom" round :style="{ height: '94%' }">
+      <div class="sheet-body ai-sheet">
         <div class="sheet-title">确认{{ aiForm.type === 'inbound' ? '入库' : '出库' }}</div>
 
         <div class="seg" style="margin-bottom:10px;">
@@ -180,13 +193,33 @@
             </span>
             <van-icon name="delete-o" color="#ee0a24" @click="aiForm.lines.splice(i, 1)" />
           </div>
+          <van-field
+            v-if="ln.new_product"
+            v-model="ln.new_name"
+            label="新商品名"
+            placeholder="可修改后提交"
+            style="margin-top:6px;background:#fff7e6;border-radius:6px;"
+          />
           <div class="row mt8">
             <van-field v-model="ln.quantity" type="number" label="数量" />
             <van-field v-model="ln.unit" label="单位" style="max-width:86px;" />
-            <van-field v-model="ln.unit_price" type="number" label="单价" />
+            <van-field v-model="ln.unit_price" type="number" label="单价" placeholder="可留空" />
           </div>
           <div v-if="ln.price_defaulted" class="muted" style="margin-top:4px;">单价未识别，已按该商品最近一次录入价回填，请核对</div>
           <div v-if="ln.hint" class="muted" style="margin-top:4px;">{{ ln.hint }}</div>
+          <!-- 是否已付款：滑动开关（自带开/关动画），默认已付款，关掉则这笔列入「待付款账单」 -->
+          <div class="row" style="gap:10px;margin-top:8px;align-items:center;">
+            <van-switch
+              v-model="ln.paid"
+              size="20"
+              active-color="#2ea24f"
+              inactive-color="#c9d1d9"
+            />
+            <span class="muted" style="font-size:12px;">
+              <span :style="ln.paid ? 'color:#2ea24f;font-weight:600;' : 'color:#b45309;font-weight:600;'">{{ ln.paid ? '已付款' : '待付款' }}</span>
+              · {{ ln.paid ? '直接进报表' : '列入待付款账单' }}
+            </span>
+          </div>
         </div>
         <div v-if="!aiForm.lines.length" class="empty">无明细，请重新识别</div>
 
@@ -351,8 +384,10 @@ function openConfirm(r) {
       unit_price,
       auto_created: !!ln.auto_created,
       new_product: ln.new_product || null,   // 待新增商品：提交时才建档
+      new_name: (ln.new_product && ln.new_product.name) || '',   // 新商品名字（可改）
       price_defaulted,
       hint: ln.hint || '',
+      paid: true,   // 默认已付款；可关掉把该笔列入「待付款账单」
     }
   })
   confirmShow.value = true
@@ -370,11 +405,12 @@ async function onReplaceProduct(p) {
   ln.product_name = p.name
   ln.new_product = null                     // 已改选为系统已有商品，不再新增
   if (!ln.unit) ln.unit = p.default_unit || p.base_unit
-  // 选了别的商品：单价为空时回填该商品最近一次的录入价
-  if (!(+ln.unit_price)) {
+  // 单价为空、或上一版价格是自动回填的：按新商品最近一次的录入价刷新
+  if (!(+ln.unit_price) || ln.price_defaulted) {
     try {
       const d = await api(`/api/ai/last-price?product_id=${p.id}&op_type=${aiForm.type}`)
       if (d && d.price) { ln.unit_price = d.price; ln.price_defaulted = true }
+      else if (ln.price_defaulted) { ln.unit_price = ''; ln.price_defaulted = false }
     } catch (e) { /* 忽略 */ }
   }
 }
@@ -390,7 +426,7 @@ async function submitAI() {
     if (pend.length) {
       const d = await api('/api/ai/products', 'POST', {
         items: pend.map((l) => ({
-          name: l.new_product.name,
+          name: (l.new_name || '').trim() || l.new_product.name,
           category: l.new_product.category || 'stock',
           unit: l.unit || l.new_product.unit || '个',
         })),
@@ -410,21 +446,30 @@ async function submitAI() {
           supplier: aiForm.supplier,
           date: aiForm.date,
           remark: [inv, ln.auto_created ? '[AI自动新增]' : '', aiForm.remark].filter(Boolean).join(' '),
+          pay_status: ln.paid === false ? 'unpaid' : 'paid',
         })
       }
     } else {
-      await api('/api/outbounds', 'POST', {
-        customer: aiForm.customer,
-        date: aiForm.date,
-        remark: [inv, aiForm.remark].filter(Boolean).join(' '),
-        lines: ok.map((ln) => ({
-          product_id: +ln.product_id,
-          unit: ln.unit || '个',
-          quantity: +ln.quantity,
-          price: +ln.unit_price || 0,
-        })),
-        pack_lines: [],
-      })
+      // 已付款 / 待付款 分单：这样「待付款」的各笔会独立进入「待付款账单」，其余进报表
+      const groups = { paid: [], unpaid: [] }
+      ok.forEach((ln) => groups[ln.paid === false ? 'unpaid' : 'paid'].push(ln))
+      for (const st of ['paid', 'unpaid']) {
+        const g = groups[st]
+        if (!g.length) continue
+        await api('/api/outbounds', 'POST', {
+          customer: aiForm.customer,
+          date: aiForm.date,
+          remark: [inv, aiForm.remark].filter(Boolean).join(' '),
+          lines: g.map((ln) => ({
+            product_id: +ln.product_id,
+            unit: ln.unit || '个',
+            quantity: +ln.quantity,
+            price: +ln.unit_price || 0,
+          })),
+          pack_lines: [],
+          pay_status: st,
+        })
+      }
     }
     showToast(aiForm.type === 'inbound' ? '入库成功' : '出库成功')
     confirmShow.value = false
@@ -448,6 +493,9 @@ async function submitAI() {
 .ai-img { width: 100%; max-height: 200px; object-fit: contain; border-radius: 8px; margin-bottom: 10px; background: #f7f8fa; }
 .ai-line { padding: 10px 0; border-bottom: 1px solid #f5f5f5; }
 .ai-line-name { font-weight: 600; font-size: 14px; }
+/* AI 确认弹层：撑满可用高度 + 底部按钮吸底，明细多时也不会被挤没 */
+.ai-sheet { display: flex; flex-direction: column; max-height: 88vh; }
+.ai-sheet .sheet-foot { position: sticky; bottom: 0; background: #fff; padding: 10px 0 4px; }
 :deep(.van-grid-item__content) { padding: 10px 4px; }
 :deep(.van-grid-item__text) { font-size: 12px; }
 </style>

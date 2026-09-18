@@ -15,8 +15,9 @@
         <van-cell-group inset>
           <van-field v-model="form.date" label="日期" type="date" />
           <van-field v-model="form.supplier" label="供应商" placeholder="可留空" />
-          <van-field v-model="form.operator" label="操作员" placeholder="谁操作的" />
-          <van-field v-model="form.remark" label="备注" placeholder="可留空" />
+          <OperatorField v-model="form.operator" />
+          <PayStatusField v-model="form.pay_status" hint="待付款：先进「待付款账单」，点「已支付」后才计入财务报表" />
+          <AttachmentField v-model="form.remark" />
         </van-cell-group>
 
         <div class="divider"></div>
@@ -99,6 +100,7 @@
                 <van-button size="mini" plain type="danger" @click="del(r)">删除</van-button>
               </span>
             </div>
+            <RemarkView v-if="r.remark" :remark="r.remark" />
           </div>
         </van-pull-refresh>
       </div>
@@ -169,13 +171,18 @@ import { ref, reactive, computed, onMounted, onActivated } from 'vue'
 import { showToast, showConfirmDialog } from 'vant'
 import api, { upload, downloadFile } from '../api'
 import ProductPicker from '../components/ProductPicker.vue'
+import AttachmentField from '../components/AttachmentField.vue'
+import RemarkView from '../components/RemarkView.vue'
+import OperatorField from '../components/OperatorField.vue'
+import PayStatusField from '../components/PayStatusField.vue'
+import { ensureUserName } from '../utils/user'
 import { fmtMoney, fmtNum, num, defaultUnit, unitFactor, todayStr } from '../utils/format'
 
 const tab = ref('new')
 const refreshing = ref(false)
 
 // ---------- 新增 ----------
-const form = reactive({ date: todayStr(), supplier: '', operator: '', remark: '' })
+const form = reactive({ date: todayStr(), supplier: '', operator: '', remark: '', pay_status: 'paid' })
 const rows = ref([newRow()])
 const saving = ref(false)
 
@@ -214,10 +221,12 @@ async function submit() {
         operator: form.operator,
         date: form.date,
         remark: form.remark,
+        pay_status: form.pay_status,
       })
     }
-    showToast('入库成功')
+    showToast(form.pay_status === 'unpaid' ? '入库成功（待付款，已进待付款账单）' : '入库成功')
     clearRows()
+    form.pay_status = 'paid'
     loadList()
   } catch (e) { showToast('入库失败：' + e.message) }
   saving.value = false
@@ -406,7 +415,10 @@ async function confirmBatch() {
   batchSaving.value = false
 }
 
-onMounted(loadList)
+onMounted(async () => {
+  form.operator = await ensureUserName()   // 操作员固定为当前登录账号
+  loadList()
+})
 onActivated(() => { if (tab.value === 'list') loadList() })
 </script>
 

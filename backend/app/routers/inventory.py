@@ -91,7 +91,7 @@ def adjust_stock(data: AdjustIn, db: Session = Depends(get_db), user: User = Dep
     conv = p.conversions or {}
     du = p.default_unit or p.base_unit
     f_disp = conv.get(du, 1) or 1
-    op = data.operator.strip() or user.name
+    op = user.name  # 操作员固定为当前登录账号（不接受前端指定）
     reason = (data.remark or "").strip()  # 盘点原因（在盘点记录备注栏展示，供追溯）
     adjust_summary = ""
 

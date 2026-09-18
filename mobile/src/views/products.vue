@@ -59,7 +59,10 @@
             · {{ p.is_active ? '启用' : '停用' }}
           </div>
           <div v-if="p.product_type === 'order'" class="item-meta">
-            关联库存：{{ p.stock_product_name || '未关联' }} × {{ fmtNum(p.multiplier) }}
+            <template v-if="orderLinks(p).length">
+              关联库存：{{ orderLinks(p).map((l) => `${l.name} × ${fmtNum(l.multiplier)}`).join('、') }}
+            </template>
+            <template v-else><van-tag type="warning" plain>代发</van-tag> 不扣库存，只统计代发数量/成本</template>
           </div>
           <div v-if="(p.pack_items || []).length || p.pack_fee" class="item-meta">
             关联结算：{{ (p.pack_items || []).map((it) => `${it.quantity}${it.unit} ${nameOf(it.product_id)}`).join('、') || '无' }}
@@ -107,17 +110,19 @@
         </div>
 
         <template v-if="form.product_type === 'order'">
-          <van-cell-group inset title="关联库存商品（出库扣减对象）">
-            <van-field
-              :model-value="stockLinkName"
-              readonly
-              label="库存大类"
-              placeholder="点击选择"
-              @click="stockLinkPickShow = true"
-            />
-            <van-field v-model="form.multiplier" type="number" label="倍数" placeholder="1单订单 = ? 库存单位" />
+          <van-cell-group inset title="关联库存商品（出库扣减对象·可多个）">
+            <div v-if="!form.stock_links.length" class="muted" style="padding:8px 4px;">未关联任何库存商品 = <b>代发</b>：不扣库存，只统计代发数量与代发成本</div>
+            <div v-for="(l, i) in form.stock_links" :key="i" class="row" style="gap:8px;align-items:center;padding:6px 4px;">
+              <span class="grow pack-name" @click="openStockLinkPicker(i)">{{ nameOf(l.product_id) || '＋ 选择库存商品' }}</span>
+              <van-field v-model="l.multiplier" type="number" label="倍数" style="max-width:160px;" />
+              <van-icon name="delete-o" color="#ee0a24" @click="form.stock_links.splice(i, 1)" />
+            </div>
+            <van-button size="mini" plain type="primary" icon="plus" style="margin:8px 4px;" @click="addStockLink">添加扣减库存商品</van-button>
           </van-cell-group>
-          <div class="muted" style="padding:0 4px 8px;">如 佛手柑大果2个 → 倍数 2：卖 1 单扣 2 个 佛手柑大果。</div>
+          <div class="muted" style="padding:0 4px 8px;">
+            卖 1 单本商品时，从下面每个库存大类按其倍数扣减库存（如 礼盒 = 苹果1斤 + 梨1斤）；
+            一个都不填 = <b>代发</b>：本仓不扣库存，只统计代发数量与代发成本（按「参考成本」计）。
+          </div>
         </template>
 
         <div class="divider"></div>
@@ -231,13 +236,14 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api, { downloadFile } from '../api'
 import ProductPicker from '../components/ProductPicker.vue'
 import { fmtMoney, fmtNum, num, defaultUnit, unitFactor, fmtStock, shrink } from '../utils/format'
 
 const router = useRouter()
+const route = useRoute()
 function goBack() {
   if (window.history.length > 1) router.back()
   else router.replace('/mine')
@@ -264,7 +270,17 @@ const cats = computed(() => shrink(PRODUCTS.value.map((p) => p.category)))
 const filtered = computed(() => {
   const s = (kw.value || '').trim().toLowerCase()
   return PRODUCTS.value.filter((p) => {
-    if (s && !(`${p.name || ''} ${p.category || ''} ${p.code || ''}`.toLowerCase().includes(s))) return false
+    if (s) {
+      // 关键词：名称 / 分类 / 编码 / 规格 / 单位 / 出库方式（代发、扣减库存）/ 关联结算商品名
+      // 这样搜「代发」就能筛出未关联库存大类的订单商品
+      // 代发的关键词刻意不含「库存」二字：搜「库存」只出库存/扣减库存的商品，搜「代发」只出代发商品
+      const way = p.product_type === 'order'
+        ? (orderLinks(p).length ? `订单 扣减库存 ${orderLinks(p).map((l) => l.name).join(' ')}` : '订单 代发 外发')
+        : '库存商品'
+      const packs = (p.pack_items || []).map((it) => nameOf(it.product_id)).join(' ')
+      const hit = `${p.name || ''} ${p.category || ''} ${p.code || ''} ${p.spec || ''} ${p.unit || ''} ${p.base_unit || ''} ${way} ${packs}`
+      if (!hit.toLowerCase().includes(s)) return false
+    }
     if (ptype.value === 'pack' || ptype.value === 'labor' || ptype.value === 'express') {
       const label = { pack: '包材', labor: '人工', express: '快递' }[ptype.value]
       if (p.category !== label) return false
@@ -282,6 +298,17 @@ const stockProducts = computed(() => PRODUCTS.value.filter((p) => p.product_type
 
 const nameOf = (pid) => (PRODUCTS.value.find((p) => p.id === +pid) || {}).name || ''
 const unitPrice = (p, field) => num(p[field]) * unitFactor(p, defaultUnit(p))
+/* 订单商品的扣减库存商品清单（支持多个；兼容旧的单关联字段） */
+function orderLinks(p) {
+  const raw = (p.stock_links && p.stock_links.length)
+    ? p.stock_links
+    : (p.stock_product_id ? [{ product_id: p.stock_product_id, multiplier: p.multiplier || 1 }] : [])
+  return raw.map((l) => ({
+    product_id: l.product_id,
+    multiplier: num(l.multiplier) || 1,
+    name: l.name || nameOf(l.product_id),
+  }))
+}
 
 async function load() {
   try { PRODUCTS.value = await api('/api/products') } catch (e) { showToast(e.message || '加载失败') }
@@ -310,9 +337,8 @@ const editShow = ref(false)
 const form = reactive({
   id: 0, code: '', name: '', category: '', product_type: 'stock', unit: '斤',
   sale_price: 0, unit_cost: 0, weight_kg: 0, spec: '', pack_items: [], pack_fee: 0,
-  stock_product_id: null, multiplier: 1, is_active: true, base_unit: '克', conversions: {},
+  stock_links: [], is_active: true, base_unit: '克', conversions: {},
 })
-const stockLinkName = computed(() => nameOf(form.stock_product_id))
 
 const stockUnitOptions = ['克', '斤', '公斤', '千克', '个', '袋', '包', '盒', '箱', '件', '份', '单']
 function deriveUnitPayload(pt, unit) {
@@ -322,12 +348,12 @@ function deriveUnitPayload(pt, unit) {
   return { base_unit: '个', default_unit: unit, conversions: { 个: 1, [unit]: 1 } }
 }
 
-function openProduct(p) {
+function openProduct(p, prefillName = '') {
   if (!p) {
     Object.assign(form, {
-      id: 0, code: '', name: '', category: pcat.value || '', product_type: 'stock', unit: '斤',
+      id: 0, code: '', name: prefillName || '', category: pcat.value || '', product_type: 'stock', unit: '斤',
       sale_price: 0, unit_cost: 0, weight_kg: 0, spec: '', pack_items: [], pack_fee: 0,
-      stock_product_id: null, multiplier: 1, is_active: true,
+      stock_links: [], is_active: true,
     })
   } else {
     const u = p.default_unit || p.base_unit
@@ -337,7 +363,7 @@ function openProduct(p) {
       unit: p.product_type === 'order' ? '单' : (stockUnitOptions.includes(u) ? u : '斤'),
       sale_price: p.sale_price || 0, unit_cost: p.unit_cost || 0, weight_kg: p.weight_kg || 0,
       spec: p.spec || '', pack_fee: p.pack_fee || 0,
-      stock_product_id: p.stock_product_id || null, multiplier: p.multiplier || 1,
+      stock_links: orderLinks(p).map((l) => ({ product_id: l.product_id, multiplier: l.multiplier })),
       is_active: p.is_active !== false,
       pack_items: (p.pack_items || []).map((it) => ({ product_id: it.product_id, quantity: it.quantity, unit: it.unit })),
     })
@@ -347,15 +373,23 @@ function openProduct(p) {
 
 function onTypeChange(v) {
   if (v === 'order') { form.unit = '单'; form.conversions = { 单: 1 }; form.base_unit = '单' }
-  else if (form.unit === '单') { form.unit = '斤'; form.stock_product_id = null }
+  else if (form.unit === '单') { form.unit = '斤'; form.stock_links = [] }
 }
 
 async function save() {
   if (!form.name.trim()) { showToast('请填写商品名称'); return }
   const payload = deriveUnitPayload(form.product_type, form.unit)
-  if (form.product_type === 'order' && !form.stock_product_id) {
-    showToast('订单商品请选择关联的库存商品（大类）')
+  // 订单商品的扣减库存商品（可多个）：存在空行/倍数非法时拦住，避免保存出无效关联
+  if (form.product_type === 'order' && form.stock_links.some((l) => !l.product_id || !(num(l.multiplier) > 0))) {
+    showToast('关联库存商品存在无效行（商品/倍数需完整）')
     return
+  }
+  // 订单商品不关联任何库存大类 = 代发（本仓不扣库存，只统计代发数量与代发成本）；
+  // 代发成本按「参考成本」计，没填会按 0 计，这里提醒但不拦保存。
+  if (form.product_type === 'order' && !form.stock_links.length && !num(form.unit_cost)) {
+    try {
+      await showConfirmDialog({ title: '代发商品', message: '未关联库存大类（= 代发）且「参考成本」为 0，代发成本会按 0 计。仍要保存吗？' })
+    } catch (e) { return }
   }
   if (form.pack_items.some((it) => !it.product_id || !(num(it.quantity) > 0) || !it.unit)) {
     showToast('关联结算清单存在无效行（商品/单位/数量需完整）')
@@ -376,8 +410,12 @@ async function save() {
     conversions: payload.conversions,
     pack_items: form.pack_items.map((it) => ({ product_id: +it.product_id, quantity: num(it.quantity), unit: it.unit })),
     pack_fee: num(form.pack_fee),
-    stock_product_id: form.product_type === 'order' ? (+form.stock_product_id || null) : null,
-    multiplier: num(form.multiplier) || 1,
+    // 多扣减关联；stock_product_id/multiplier 保留首项，兼容旧逻辑（扣点分类等）
+    stock_links: form.product_type === 'order'
+      ? form.stock_links.map((l) => ({ product_id: +l.product_id, multiplier: num(l.multiplier) || 1 }))
+      : [],
+    stock_product_id: form.product_type === 'order' && form.stock_links.length ? +form.stock_links[0].product_id : null,
+    multiplier: form.product_type === 'order' && form.stock_links.length ? (num(form.stock_links[0].multiplier) || 1) : 1,
     is_active: form.is_active !== false,
   }
   try {
@@ -444,11 +482,22 @@ const unitActions = computed(() =>
 )
 function onUnitPick(a) { form.unit = a.value }
 
-/* 库存大类选择 */
+/* 库存大类选择（支持多个扣减关联：按行索引回填） */
 const stockLinkPickShow = ref(false)
+const stockLinkIndex = ref(-1)
+function addStockLink() {
+  form.stock_links.push({ product_id: null, multiplier: 1 })
+}
+function openStockLinkPicker(i) {
+  stockLinkIndex.value = i
+  stockLinkPickShow.value = true
+}
 function onStockLinkPick(p) {
-  form.stock_product_id = p.id
-  if (!form.category) form.category = ''
+  const i = stockLinkIndex.value
+  const it = i >= 0 ? form.stock_links[i] : null
+  if (!it) return
+  it.product_id = p.id
+  if (!(num(it.multiplier) > 0)) it.multiplier = 1
 }
 
 /* ---------- 批量修改 ---------- */
@@ -529,7 +578,12 @@ async function delUnit(u) {
   } catch (e) { showToast(e.message || '删除失败') }
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  // 批量导入未关联商品时跳转过来：?new=商品名，直接打开新增弹窗并预填名称
+  const nm = route.query.new
+  if (nm) openProduct(null, Array.isArray(nm) ? nm[0] : String(nm))
+})
 </script>
 
 <style scoped>

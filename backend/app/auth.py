@@ -11,47 +11,22 @@ import hmac
 import json
 import secrets
 import time
-from pathlib import Path
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .database import DATA_DIR, get_db
+from .config import seed_accounts
+from .database import DATA_DIR, get_user_db
 from .models import User
 
 COOKIE_NAME = "erp_token"
 TOKEN_MAX_AGE = 60 * 60 * 24 * 7  # 7 天
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-CONFIG_FILE = ROOT / "product_rules.json"
-
-# 兜底账号（配置文件缺失/无 accounts 时使用）
-_FALLBACK_USERS = [
-    {"username": "admin1", "password": "admin1", "name": "管理员", "role": "admin"},
-]
-
-
-def _load_seed_users() -> list[dict]:
-    """从 product_rules.json 读取账号配置，用于数据库初始化。"""
-    try:
-        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        accs = cfg.get("accounts") or []
-        return [
-            {
-                "username": str(a.get("username", "")).strip(),
-                "password": str(a.get("password", "")),
-                "name": str(a.get("name", "")).strip(),
-                "role": str(a.get("role", "user")).strip() or "user",
-            }
-            for a in accs
-            if a.get("username")
-        ]
-    except Exception:
-        return _FALLBACK_USERS
-
-
-SEED_USERS = _load_seed_users()
+# 种子账号：来自 product_rules.json 的 accounts 段（可被 config.local.json 的 accounts 整体覆盖，
+# 见 app/config.py）。仓库里 accounts 为空，口令只存在于本机私有的 config.local.json，
+# 因此不再内置任何默认账号/默认口令。
+SEED_USERS = seed_accounts()
 
 SECRET_FILE = DATA_DIR / ".secret"
 
@@ -79,37 +54,68 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(hash_password(password, salt), stored)
 
 
-def make_token(user_id: int) -> str:
+def make_token(user_id: int, warehouse: str | None = None) -> str:
+    """签发会话令牌。
+
+    payload.wh = 该会话所属分仓（登录时取默认分仓；切仓时重签一份即可，无需重新登录）。
+    分仓只写在令牌里，服务端不再维护"全局当前分仓"，因此谁的会话属于哪个仓互不影响。
+    """
     from .database import get_current_key
 
     payload = {
         "uid": user_id,
-        "wh": get_current_key(),  # 签发时绑定当前分仓，切仓后旧 token 失效
+        "wh": warehouse or get_current_key(),
         "exp": int(time.time()) + TOKEN_MAX_AGE,
     }
-    raw = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    # 去掉 base64 的 "=" 填充：令牌里就不会出现 "="，cookie 值无需被加引号包裹，
+    # 避免个别浏览器/代理对引号处理不一致导致取不到令牌（老令牌带填充仍可解析）。
+    raw = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
     sig = hmac.new(_SECRET, raw.encode(), hashlib.sha256).hexdigest()
     return f"{raw}.{sig}"
 
 
-def verify_token(token: str) -> int | None:
-    from .database import DEFAULT_WAREHOUSE_KEY, get_current_key
+def decode_token(token: str | None) -> dict | None:
+    """校验签名与有效期，返回 payload（含 uid / wh）；非法或过期返回 None。
 
+    注意：**不再**拿 payload.wh 去和某个全局"当前仓"比对——那样任何一次切仓都会让所有
+    旧令牌失效（历史 bug：一人切仓，全员被登出）。
+    """
+    if not token:
+        return None
     try:
         raw, sig = token.split(".")
         expect = hmac.new(_SECRET, raw.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig, expect):
             return None
-        payload = json.loads(base64.urlsafe_b64decode(raw.encode()))
+        # 兼容两种编码：新版无 "=" 填充，历史令牌带填充（补足到 4 的倍数即可）
+        payload = json.loads(base64.urlsafe_b64decode((raw + "=" * (-len(raw) % 4)).encode()))
         if payload["exp"] < time.time():
             return None
-        # 旧 token 无 wh 字段视为默认仓（奥斯迪）；与当前仓不一致则失效（需重登）
-        wh = payload.get("wh") or DEFAULT_WAREHOUSE_KEY
-        if wh != get_current_key():
+        if not payload.get("uid"):
             return None
-        return int(payload["uid"])
+        return payload
     except Exception:
         return None
+
+
+def token_warehouse(token: str | None) -> str | None:
+    """令牌所属分仓；旧令牌无 wh 字段视为默认仓。
+
+    分仓已不在注册表里时返回 None（由调用方回退默认仓），避免用废弃 key 建出野库。
+    """
+    from .database import DEFAULT_WAREHOUSE_KEY, key_exists
+
+    payload = decode_token(token)
+    if not payload:
+        return None
+    wh = payload.get("wh") or DEFAULT_WAREHOUSE_KEY
+    return wh if key_exists(wh) else None
+
+
+def verify_token(token: str | None) -> int | None:
+    """兼容旧调用：返回令牌对应的用户 id（不再做分仓比对）。"""
+    payload = decode_token(token)
+    return int(payload["uid"]) if payload else None
 
 
 def ensure_seed_users(db: Session) -> None:
@@ -133,12 +139,16 @@ def ensure_seed_users(db: Session) -> None:
     db.commit()
 
 
-def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
-    token = request.cookies.get(COOKIE_NAME)
-    uid = verify_token(token) if token else None
-    if not uid:
+def get_current_user(request: Request, db: Session = Depends(get_user_db)) -> User:
+    """当前登录用户。
+
+    账号注册表（用户/私钥/角色）固定在默认仓，由 keyadmin 维护：业务数据按会话分仓隔离，
+    但"你是谁"必须与当前分仓无关，否则切到某仓发现该仓没有此账号就会被判 401 掉线。
+    """
+    payload = decode_token(request.cookies.get(COOKIE_NAME))
+    if not payload:
         raise HTTPException(401, "未登录")
-    user = db.get(User, uid)
+    user = db.get(User, int(payload["uid"]))
     if not user or not user.is_active:
         raise HTTPException(401, "账号不可用")
     return user

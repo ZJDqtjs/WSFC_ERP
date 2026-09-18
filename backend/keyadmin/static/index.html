@@ -11,7 +11,7 @@
   <div class="gate" id="gate">
     <div class="gate-box">
       <div class="gate-title">私钥管理工具</div>
-      <p class="gate-sub">登录密钥生成 · 账号管理</p>
+      <p class="gate-sub">登录密钥生成 · 账号管理 · 维护与日志</p>
       <div class="field">
         <label>管理员密码</label>
         <input id="gatePass" type="password" placeholder="请输入管理员密码" onkeydown="if(event.key==='Enter')gateLogin()" />
@@ -22,78 +22,184 @@
   </div>
 
   <!-- 管理界面 -->
-  <div id="admin" style="display:none;">
-    <header class="topbar">
-      <div class="brand">私钥管理工具</div>
-      <div class="grow"></div>
-      <button class="btn sm ghost" onclick="logout()">退出</button>
-    </header>
+  <div id="admin" class="layout" style="display:none;">
+    <aside class="side">
+      <div class="side-brand"><span class="side-dot"></span>私钥管理工具</div>
+      <nav class="side-nav">
+        <button class="side-item active" data-panel="login" onclick="switchPanel('login')">🔑 登录管理</button>
+        <button class="side-item" data-panel="maint" onclick="switchPanel('maint')">🛠 更新维护</button>
+        <button class="side-item" data-panel="logs" onclick="switchPanel('logs')">📡 网站日志</button>
+        <button class="side-item" data-panel="backup" onclick="switchPanel('backup')">🗄 备份与恢复</button>
+        <button class="side-item" data-panel="clear" onclick="switchPanel('clear')">🧹 数据清理</button>
+      </nav>
+      <div class="side-foot">
+        <button class="btn sm ghost" style="width:100%;" onclick="logout()">退出</button>
+      </div>
+    </aside>
 
-    <main class="main">
-      <div class="card">
-        <div class="card-head">
-          <h3>生成 SSH 私钥</h3>
-          <span class="hint">输入用户名生成 Ed25519 私钥，交给对方即可登录 ERP；私钥只显示一次，请及时下载</span>
-        </div>
-        <div class="form-grid">
-          <div class="field"><label>用户名 *</label><input id="kuUsername" placeholder="登录用户名，如 xiaowan" /></div>
-          <div class="field"><label>姓名</label><input id="kuName" placeholder="业务员姓名（可选）" /></div>
-          <div class="field"><label>角色</label>
-            <select id="kuRole">
-              <option value="user">业务员</option>
-              <option value="admin">管理员</option>
-            </select>
+    <div class="content">
+      <header class="topbar">
+        <div class="brand" id="pageTitle">登录管理</div>
+        <div class="grow"></div>
+        <span class="hint" id="topHint"></span>
+      </header>
+
+      <main class="main">
+        <!-- ============ 登录管理 ============ -->
+        <section id="panel-login" class="panel active">
+          <div class="card">
+            <div class="card-head">
+              <h3>生成 SSH 私钥</h3>
+              <span class="hint">输入用户名生成 Ed25519 私钥，交给对方即可登录 ERP；私钥只显示一次，请及时下载</span>
+            </div>
+            <div class="form-grid">
+              <div class="field"><label>用户名 *</label><input id="kuUsername" placeholder="登录用户名，如 xiaowan" /></div>
+              <div class="field"><label>姓名</label><input id="kuName" placeholder="业务员姓名（可选）" /></div>
+              <div class="field"><label>角色</label>
+                <select id="kuRole">
+                  <option value="user">业务员</option>
+                  <option value="admin">管理员</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-actions"><button class="btn primary" onclick="genKey()">⚡ 生成私钥</button></div>
           </div>
-        </div>
-        <div class="form-actions"><button class="btn primary" onclick="genKey()">⚡ 生成私钥</button></div>
-      </div>
 
-      <div class="card">
-        <div class="card-head">
-          <h3>已创建账号 / 密钥</h3>
-          <span class="hint">重新生成会使旧私钥立即失效；删除后该用户无法再登录。账号/私钥会自动同步到所有分仓</span>
-          <button class="btn sm ghost" style="margin-left:auto;" onclick="syncUsers()">↻ 同步到各分仓</button>
-          <button class="btn sm ghost" onclick="loadUsers()">刷新</button>
-        </div>
-        <div class="table-wrap"><table id="kuTable"></table></div>
-      </div>
-
-      <div class="card card-danger">
-        <div class="card-head">
-          <h3>🧹 数据清理（细化清除）</h3>
-          <span class="hint">按分仓、按类别细化清除业务数据，如只清空某仓的入库信息或库存信息，不影响其他数据。<b>清除前会自动备份，操作不可撤销，请谨慎。</b></span>
-          <button class="btn sm ghost" style="margin-left:auto;" onclick="loadClearItems()">刷新</button>
-        </div>
-        <div class="form-grid" style="max-width:340px;">
-          <div class="field">
-            <label>目标分仓</label>
-            <select id="clWarehouse" onchange="loadClearItems()"></select>
+          <div class="card">
+            <div class="card-head">
+              <h3>已创建账号 / 密钥</h3>
+              <span class="hint">重新生成会使旧私钥立即失效；删除后该用户无法再登录。账号/私钥会自动同步到所有分仓</span>
+              <button class="btn sm ghost" style="margin-left:auto;" onclick="syncUsers()">↻ 同步到各分仓</button>
+              <button class="btn sm ghost" onclick="loadUsers()">刷新</button>
+            </div>
+            <div class="table-wrap"><table id="kuTable"></table></div>
           </div>
-        </div>
-        <div id="clItems" class="clear-list"></div>
-        <div class="form-actions">
-          <label class="check-inline"><input type="checkbox" id="clBackup" checked /> 清除前自动备份数据库</label>
-        </div>
-        <div class="form-actions" style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button class="btn sm ghost" onclick="toggleAllClear(true)">全选</button>
-          <button class="btn sm ghost" onclick="toggleAllClear(false)">全不选</button>
-          <button class="btn danger" onclick="runClear()">⚠ 执行清除所选数据</button>
-        </div>
-      </div>
+        </section>
 
-      <div class="card card-danger">
-        <div class="card-head">
-          <h3>⚡ 备份与应急抢救（后门）</h3>
-          <span class="hint">当 ERP 主账号无法登录 / 数据异常时，可在此创建备份、恢复备份或重置初始管理员登录私钥来抢救。<b>恢复备份会覆盖当前数据，请谨慎操作。</b></span>
-          <button class="btn sm ghost" style="margin-left:auto;" onclick="loadBackups()">刷新</button>
-        </div>
-        <div class="form-actions" style="margin-bottom:10px;">
-          <button class="btn primary" onclick="creBackup()">🗄 立即备份当前数据库</button>
-          <button class="btn danger" onclick="resetAdminLogin()">🆘 重置初始管理员登录私钥</button>
-        </div>
-        <div class="table-wrap"><table id="bkTable"></table></div>
-      </div>
-    </main>
+        <!-- ============ 更新维护 ============ -->
+        <section id="panel-maint" class="panel">
+          <div class="card">
+            <div class="card-head">
+              <h3>系统状态</h3>
+              <span class="hint">控制 ERP 前端的停服公告与维护页</span>
+              <button class="btn sm ghost" style="margin-left:auto;" onclick="loadMaint()">刷新</button>
+            </div>
+            <div id="maintStatus" class="maint-status"><span class="ms-label muted">加载中…</span></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h3>📢 发布停服公告（倒计时提示）</h3>
+              <span class="hint">用户网站顶部会滚动提示「还有 X 分钟停机维护」，倒计时归零自动切到维护页</span>
+            </div>
+            <div class="form-grid">
+              <div class="field"><label>提前通知（分钟）</label><input id="mtLead" type="number" min="1" value="10" /></div>
+              <div class="field"><label>预计维护时长（分钟）</label><input id="mtEta" type="number" min="1" value="30" /></div>
+              <div class="field" style="grid-column:1/-1;"><label>公告文案（留空使用默认）</label><input id="mtMsg" placeholder="例如：系统升级维护，请提前保存当前工作" /></div>
+            </div>
+            <div class="form-actions">
+              <label class="check-inline"><input type="checkbox" id="mtAutoResume" checked /> 再次启动主服务时自动结束维护</label>
+            </div>
+            <div class="form-actions" style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button class="btn primary" onclick="maintAnnounce()">📢 发布公告并倒计时</button>
+              <button class="btn danger" onclick="maintStart()">⛔ 立即进入维护模式</button>
+              <button class="btn ghost" onclick="maintCancel()">✅ 结束维护 / 取消公告</button>
+            </div>
+            <p class="hint" style="margin-top:12px;line-height:1.7;">
+              停服流程：<b>发布公告</b> →（倒计时结束，用户自动看到维护页）→ 停主服务、部署新版本 →
+              <b>启动主服务</b>（维护自动结束，前端自动恢复）。<br />
+              若部署期间用户量少，也可直接点「立即进入维护模式」。主服务已停时本页仍可控（状态是文件，不依赖主服务）。
+            </p>
+          </div>
+        </section>
+
+        <!-- ============ 网站日志 ============ -->
+        <section id="panel-logs" class="panel">
+          <div class="card">
+            <div class="card-head">
+              <h3>实时概览</h3>
+              <span class="hint">来自 ERP 主服务的请求日志（「在线」= 近 5 分钟有请求）</span>
+              <label class="check-inline" style="margin-left:auto;"><input type="checkbox" id="logAuto" checked onchange="logAutoToggle()" /> 自动刷新 3s</label>
+              <button class="btn sm ghost" onclick="refreshLogs()">刷新</button>
+            </div>
+            <div class="stat-grid" id="logStats"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h3>🟢 当前在线</h3>
+              <span class="hint">按账号 + IP 归并，可据此判断此刻是否有人在用系统</span>
+            </div>
+            <div class="table-wrap"><table id="onlineTable"></table></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h3>📜 请求流水</h3>
+              <input id="logQ" class="log-search" placeholder="筛选：账号 / IP / 路径关键字" onkeydown="if(event.key==='Enter')loadLogs(true)" />
+              <label class="check-inline"><input type="checkbox" id="logErr" onchange="loadLogs(true)" /> 只看错误</label>
+              <select id="logMinutes" class="log-select" onchange="loadLogs(true)">
+                <option value="10">近 10 分钟</option>
+                <option value="60" selected>近 1 小时</option>
+                <option value="1440">近 24 小时</option>
+                <option value="0">全部时间</option>
+              </select>
+              <button class="btn sm" onclick="loadLogs(true)">查询</button>
+              <button class="btn sm ghost" onclick="exportLogs()">导出 CSV</button>
+              <button class="btn sm danger" onclick="clearLogs()">清空日志</button>
+            </div>
+            <div class="table-wrap"><table id="logTable"></table></div>
+            <div class="form-actions" style="display:flex;align-items:center;gap:10px;">
+              <span class="hint" id="logCount"></span>
+              <button class="btn sm ghost" onclick="logPage(-1)">上一页</button>
+              <button class="btn sm ghost" onclick="logPage(1)">下一页</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ 备份与恢复 ============ -->
+        <section id="panel-backup" class="panel">
+          <div class="card card-danger">
+            <div class="card-head">
+              <h3>⚡ 备份与应急抢救（后门）</h3>
+              <span class="hint">当 ERP 主账号无法登录 / 数据异常时，可在此创建备份、恢复备份或重置初始管理员登录私钥来抢救。<b>恢复备份会覆盖当前数据，请谨慎操作。</b></span>
+              <button class="btn sm ghost" style="margin-left:auto;" onclick="loadBackups()">刷新</button>
+            </div>
+            <div class="form-actions" style="margin-bottom:10px;">
+              <button class="btn primary" onclick="creBackup()">🗄 立即备份当前数据库</button>
+              <button class="btn danger" onclick="resetAdminLogin()">🆘 重置初始管理员登录私钥</button>
+            </div>
+            <div class="table-wrap"><table id="bkTable"></table></div>
+          </div>
+        </section>
+
+        <!-- ============ 数据清理 ============ -->
+        <section id="panel-clear" class="panel">
+          <div class="card card-danger">
+            <div class="card-head">
+              <h3>🧹 数据清理（细化清除）</h3>
+              <span class="hint">按分仓、按类别细化清除业务数据，如只清空某仓的入库信息或库存信息，不影响其他数据。<b>清除前会自动备份，操作不可撤销，请谨慎。</b></span>
+              <button class="btn sm ghost" style="margin-left:auto;" onclick="loadClearItems()">刷新</button>
+            </div>
+            <div class="form-grid" style="max-width:340px;">
+              <div class="field">
+                <label>目标分仓</label>
+                <select id="clWarehouse" onchange="loadClearItems()"></select>
+              </div>
+            </div>
+            <div id="clItems" class="clear-list"></div>
+            <div class="form-actions">
+              <label class="check-inline"><input type="checkbox" id="clBackup" checked /> 清除前自动备份数据库</label>
+            </div>
+            <div class="form-actions" style="display:flex; gap:8px; flex-wrap:wrap;">
+              <button class="btn sm ghost" onclick="toggleAllClear(true)">全选</button>
+              <button class="btn sm ghost" onclick="toggleAllClear(false)">全不选</button>
+              <button class="btn danger" onclick="runClear()">⚠ 执行清除所选数据</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
   </div>
 
   <!-- 私钥弹窗 -->

@@ -34,7 +34,16 @@ def migrate(engine: Engine, maker: sessionmaker) -> None:
             conn.execute(text("ALTER TABLE products ADD COLUMN workload FLOAT DEFAULT 0"))
         if "weight_kg" not in cols:
             conn.execute(text("ALTER TABLE products ADD COLUMN weight_kg FLOAT DEFAULT 0"))
+        if "stock_links" not in cols:
+            conn.execute(text("ALTER TABLE products ADD COLUMN stock_links JSON"))
         conn.commit()
+
+    # 库存流水：出库行 id（多扣减时一行出库明细对应多条流水，成本回写用）
+    with engine.connect() as conn:
+        smcols = [r[1] for r in conn.execute(text("PRAGMA table_info(stock_movements)")).fetchall()]
+        if smcols and "line_id" not in smcols:
+            conn.execute(text("ALTER TABLE stock_movements ADD COLUMN line_id INTEGER"))
+            conn.commit()
 
     # 用户表：SSH 指纹认证所需字段
     with engine.connect() as conn:
@@ -399,10 +408,58 @@ def _fifo_recompute_once(maker: sessionmaker, key: str) -> None:
         db.close()
 
 
+def ensure_schema(key: str) -> None:
+    """补齐缺失的表结构 + 新增列（不跑种子/回填）。
+
+    新增表/列上线时用：每个分仓是独立 db 文件，启动时逐个补建，避免老分仓库缺表缺列报错。
+    """
+    eng = get_engine(key)
+    Base.metadata.create_all(bind=eng)
+    ensure_columns(eng)
+
+
+# 付款状态相关新增列：所有分仓都要补（见 ensure_schema / migrate）
+_PAY_COLUMNS = (
+    ("pay_status", "VARCHAR(8) DEFAULT 'paid'"),
+    ("paid_at", "VARCHAR(10) DEFAULT ''"),
+)
+
+# 各表需要补齐的新增列（幂等）：{表名: ((列, DDL), ...)}
+_EXTRA_COLUMNS = {
+    "inbounds": _PAY_COLUMNS,
+    "outbounds": _PAY_COLUMNS,
+    "other_expenses": _PAY_COLUMNS,
+    "finance_records": _PAY_COLUMNS,
+    "warehouse_ins": _PAY_COLUMNS + (
+        # 随货包材结算：明细快照 + 成本合计
+        ("pack_items", "JSON"),
+        ("pack_cost", "FLOAT DEFAULT 0"),
+    ),
+    # 入仓品：关联结算（随货包材）清单，每袋用量
+    "warehouse_products": (("pack_items", "JSON"),),
+    # 出库行：代发标记（订单商品未关联库存大类 → 不扣库存，只记代发数量/成本）
+    "outbound_lines": (("is_dropship", "BOOLEAN DEFAULT 0"),),
+}
+
+
+def ensure_columns(engine: Engine) -> None:
+    """为已有表补充新增列（幂等）。老库默认视为「已付款」「非代发」，历史数据口径不变。"""
+    with engine.connect() as conn:
+        for table, columns in _EXTRA_COLUMNS.items():
+            cols = [r[1] for r in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()]
+            if not cols:  # 表还不存在（create_all 会建，无需补列）
+                continue
+            for col, ddl in columns:
+                if col not in cols:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
+        conn.commit()
+
+
 def init_warehouse(key: str, copy_users_from: str | None = None) -> None:
     """幂等初始化分仓：建表 + 迁移 + 单位/账号种子 + 回填。"""
     eng = get_engine(key)
     Base.metadata.create_all(bind=eng)
+    ensure_columns(eng)
     maker = get_sessionmaker(key)
     migrate(eng, maker)
     db = maker()

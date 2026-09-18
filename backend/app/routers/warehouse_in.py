@@ -24,7 +24,8 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Deduction, Product, User, WarehouseIn, WarehouseProduct
+from ..models import Deduction, Product, StockMovement, User, WarehouseIn, WarehouseProduct
+from ..services import fifo_state, fifo_take, pay_fields, recompute_product, unit_to_base
 
 router = APIRouter(prefix="/api/warehouse-in", tags=["warehouse-in"])
 
@@ -165,6 +166,16 @@ def get_warehouse_deduction(db: Session = Depends(get_db), user: User = Depends(
 # ---------------- 序列化 ----------------
 def _product_dict(db: Session, p: WarehouseProduct) -> dict:
     sp, _base_cost, _factor, unit_cost = _stock_info(db, p.stock_product_id)
+    pack_items = []
+    for it in (p.pack_items or []):
+        mp = db.get(Product, it.get("product_id")) if it.get("product_id") else None
+        pack_items.append({
+            "product_id": it.get("product_id"),
+            "quantity": it.get("quantity"),
+            "unit": it.get("unit") or "",
+            "name": mp.name if mp else "",
+            "category": mp.category if mp else "",
+        })
     return {
         "id": p.id, "name": p.name, "category": p.category, "sku": p.sku,
         "barcode": p.barcode, "box_spec": p.box_spec,
@@ -178,6 +189,7 @@ def _product_dict(db: Session, p: WarehouseProduct) -> dict:
         "bag_weight": p.bag_weight,  # 每袋净重（默认单位，如 公斤）
         "bag_cost": round((p.bag_weight or 0) * unit_cost, 4),  # 每袋商品成本
         "shelf_life": p.shelf_life, "remark": p.remark, "is_active": p.is_active,
+        "pack_items": pack_items,  # 关联结算（随货包材）清单（每袋用量）
     }
 
 
@@ -194,12 +206,22 @@ def _in_dict(db: Session, r: WarehouseIn) -> dict:
         "stock_default_unit": _stock_default_unit(sp),
         "bag_weight": r.bag_weight, "unit_cost": r.unit_cost,
         "cogs": r.cogs, "amount": r.amount, "freight_total": r.freight_total, "profit": r.profit,
+        "pack_items": r.pack_items or [],  # 随货包材结算快照
+        "pack_cost": r.pack_cost or 0.0,
         "date": r.date, "operator": r.operator, "remark": r.remark,
         "import_group": r.import_group,
+        "pay_status": getattr(r, "pay_status", "paid") or "paid",
+        "paid_at": getattr(r, "paid_at", "") or "",
     }
 
 
 # ---------------- 入仓品资料 ----------------
+class PackItemDef(BaseModel):
+    product_id: int
+    quantity: float
+    unit: str = "个"
+
+
 class ProductIn(BaseModel):
     name: str
     category: str = ""
@@ -213,6 +235,23 @@ class ProductIn(BaseModel):
     shelf_life: str = ""
     remark: str = ""
     is_active: bool = True
+    pack_items: list[PackItemDef] = []  # 关联结算（随货包材）清单，每袋用量
+
+
+def _clean_pack_items(db: Session, items: list[PackItemDef]) -> list[dict]:
+    """校验并规范化入仓品关联结算清单：商品必须存在、数量>0、单位有效，否则报错。"""
+    cleaned = []
+    for it in items:
+        if not it.product_id or not (it.quantity and it.quantity > 0):
+            raise HTTPException(400, "关联结算清单存在无效行（商品/数量需完整且大于 0）")
+        p = db.get(Product, it.product_id)
+        if not p:
+            raise HTTPException(400, f"关联结算商品ID {it.product_id} 不存在")
+        unit = (it.unit or "").strip() or p.default_unit or p.base_unit or "个"
+        if unit not in (p.conversions or {}):
+            raise HTTPException(400, f"关联结算商品「{p.name}」不支持单位「{unit}」")
+        cleaned.append({"product_id": it.product_id, "quantity": it.quantity, "unit": unit})
+    return cleaned
 
 
 @router.get("/products")
@@ -226,7 +265,8 @@ def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = 
     name = (data.name or "").strip()
     if not name:
         raise HTTPException(400, "入仓品名称不能为空")
-    p = WarehouseProduct(**{**data.model_dump(), "name": name})
+    pack_items = _clean_pack_items(db, data.pack_items)
+    p = WarehouseProduct(**{**data.model_dump(), "name": name, "pack_items": pack_items})
     db.add(p)
     db.commit()
     db.refresh(p)
@@ -241,9 +281,11 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
     name = (data.name or "").strip()
     if not name:
         raise HTTPException(400, "入仓品名称不能为空")
+    pack_items = _clean_pack_items(db, data.pack_items)
     for k, v in data.model_dump().items():
         setattr(p, k, v)
     p.name = name
+    p.pack_items = pack_items
     db.commit()
     db.refresh(p)
     return _product_dict(db, p)
@@ -276,6 +318,7 @@ class InboundIn(BaseModel):
     date: str
     operator: str = ""
     remark: str = ""
+    pay_status: str = "paid"  # paid 已付款（默认）/ unpaid 待付款（先进「待付款账单」）
 
 
 class InboundUpdate(BaseModel):
@@ -293,6 +336,7 @@ class InboundUpdate(BaseModel):
     bag_weight: float = 0.0
     date: str
     remark: str = ""
+    pay_status: str = "paid"
 
 
 def _gen_code(db: Session, date: str) -> str:
@@ -300,6 +344,82 @@ def _gen_code(db: Session, date: str) -> str:
         select(func.count()).select_from(WarehouseIn).where(WarehouseIn.code.like(f"RC{date}%"))
     )
     return f"RC{date}-{count + 1:03d}"
+
+
+def _settle_pack_items(db: Session, product: WarehouseProduct | None, quantity: float, cache: dict | None = None) -> tuple[list[dict], float]:
+    """按「每袋用量 × 入仓袋数」结算随货包材。返回 (明细快照, 包材成本合计)。
+
+    不落库；成本按 FIFO 结转（批次不足时回退参考成本）。同一结算过程共享 cache，
+    避免多次读取同一商品批次导致重复扣减。
+    """
+    items, total = [], 0.0
+    if not product:
+        return items, total
+    cache = cache if cache is not None else {}
+    for it in (product.pack_items or []):
+        pid = it.get("product_id")
+        m = db.get(Product, pid)
+        if not m:
+            continue
+        per = float(it.get("quantity") or 0)
+        qty = round(per * quantity, 6)
+        if qty <= 0:
+            continue
+        unit = (it.get("unit") or m.default_unit or m.base_unit or "个").strip() or "个"
+        if unit not in (m.conversions or {}):
+            continue
+        qty_base = unit_to_base(m, unit, qty)
+        if m.id not in cache:
+            cache[m.id] = fifo_state(db, m.id)
+        layers, base = cache[m.id]
+        cost = round(fifo_take(layers, base, qty_base, m.unit_cost or 0.0), 2)
+        items.append({
+            "product_id": m.id, "name": m.name, "unit": unit,
+            "quantity": qty, "quantity_base": round(qty_base, 6),
+            "unit_price": round(cost / qty, 6) if qty else 0.0,
+            "cost": cost,
+        })
+        total += cost
+    return items, round(total, 2)
+
+
+def _apply_pack_settlement(db: Session, rec: WarehouseIn) -> None:
+    """把随货包材结算落成库存流水（包材=包装消耗；人工/快递=正向工作量）并重算受影响商品。"""
+    affected: set[int] = set()
+    op = rec.operator or ""
+    for it in (rec.pack_items or []):
+        pid = it.get("product_id")
+        m = db.get(Product, pid)
+        if not m:
+            continue
+        is_service = m.category in ("人工", "快递")
+        db.add(
+            StockMovement(
+                product_id=pid,
+                move_type="work" if is_service else "pack_out",
+                quantity_base=(it.get("quantity_base") or 0) if is_service else -(it.get("quantity_base") or 0),
+                amount=it.get("cost") or 0.0,
+                ref_type="warehouse_in",
+                ref_id=rec.id,
+                date=rec.date,
+                operator=op,
+                remark=f"入仓随货包材 {rec.code}",
+            )
+        )
+        affected.add(pid)
+    for pid in affected:
+        recompute_product(db, pid)
+
+
+def _clear_pack_settlement(db: Session, rec_id: int) -> set[int]:
+    """删除某入仓记录的随货包材流水，返回受影响商品 id 集合（供调用方重算）。"""
+    affected: set[int] = set()
+    for m in db.execute(
+        select(StockMovement).where(StockMovement.ref_type == "warehouse_in", StockMovement.ref_id == rec_id)
+    ).scalars():
+        affected.add(m.product_id)
+        db.delete(m)
+    return affected
 
 
 def _create_record(db: Session, payload: dict, operator: str, import_group: str = "") -> WarehouseIn:
@@ -323,7 +443,9 @@ def _create_record(db: Session, payload: dict, operator: str, import_group: str 
     revenue = round(quantity * unit_price * (1 - deduction / 100), 2)
     cogs = round(quantity * bag_weight * unit_cost, 2)
     freight_total = round(quantity * freight, 2)
-    profit = round(revenue - cogs - freight_total, 2)
+    # 随货包材：每袋用量 × 袋数，成本按 FIFO 结转
+    pack_items, pack_cost = _settle_pack_items(db, product, quantity)
+    profit = round(revenue - cogs - freight_total - pack_cost, 2)
 
     rec = WarehouseIn(
         code=_gen_code(db, date),
@@ -345,14 +467,18 @@ def _create_record(db: Session, payload: dict, operator: str, import_group: str 
         cogs=cogs,
         amount=revenue,
         freight_total=freight_total,
+        pack_items=pack_items,
+        pack_cost=pack_cost,
         profit=profit,
         date=date,
         operator=(payload.get("operator") or "").strip() or operator,
         remark=(payload.get("remark") or "").strip(),
         import_group=import_group,
+        **pay_fields(payload, date),
     )
     db.add(rec)
     db.flush()
+    _apply_pack_settlement(db, rec)
     return rec
 
 
@@ -377,6 +503,7 @@ def list_inbounds(
         "amount": round(sum(r.amount or 0 for r in rows), 2),  # 收入
         "cogs": round(sum(r.cogs or 0 for r in rows), 2),      # 商品成本
         "freight": round(sum(r.freight_total or 0 for r in rows), 2),
+        "pack_cost": round(sum(r.pack_cost or 0 for r in rows), 2),  # 随货包材成本
         "profit": round(sum(r.profit or 0 for r in rows), 2),
         "quantity": round(sum(r.quantity or 0 for r in rows), 2),
     }
@@ -421,6 +548,8 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
     rec.freight = float(d.get("freight") or 0)
     rec.date = (d.get("date") or rec.date).strip() or rec.date
     rec.remark = (d.get("remark") or "").strip()
+    rec.pay_status = "unpaid" if (d.get("pay_status") or "").strip() == "unpaid" else "paid"
+    rec.paid_at = "" if rec.pay_status == "unpaid" else (rec.paid_at or rec.date)
     # 成本重算：关联库存商品/每袋净重变化时同步成本口径
     stock_product_id = product.stock_product_id if product else rec.stock_product_id
     sp, _base_cost, _factor, unit_cost = _stock_info(db, stock_product_id)
@@ -431,7 +560,13 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
     rec.amount = round(rec.quantity * rec.unit_price * (1 - (rec.deduction_percent or 0) / 100), 2)
     rec.cogs = round(rec.quantity * rec.bag_weight * rec.unit_cost, 2)
     rec.freight_total = round(rec.quantity * rec.freight, 2)
-    rec.profit = round(rec.amount - rec.cogs - rec.freight_total, 2)
+    # 随货包材：先清除旧结算流水，再按新入仓品/数量重算
+    old_affected = _clear_pack_settlement(db, rec.id)
+    rec.pack_items, rec.pack_cost = _settle_pack_items(db, product, quantity)
+    rec.profit = round(rec.amount - rec.cogs - rec.freight_total - rec.pack_cost, 2)
+    _apply_pack_settlement(db, rec)
+    for pid in old_affected:  # 从清单里移除的旧包材也要重算回库存
+        recompute_product(db, pid)
     db.commit()
     db.refresh(rec)
     return _in_dict(db, rec)
@@ -442,7 +577,10 @@ def delete_inbound(rid: int, db: Session = Depends(get_db), user: User = Depends
     rec = db.get(WarehouseIn, rid)
     if not rec:
         raise HTTPException(404, "入仓记录不存在")
+    affected = _clear_pack_settlement(db, rid)
     db.delete(rec)
+    for pid in affected:
+        recompute_product(db, pid)
     db.commit()
     return {"ok": True}
 
@@ -454,11 +592,15 @@ class BatchIds(BaseModel):
 @router.post("/batch-delete")
 def batch_delete(data: BatchIds, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     deleted = 0
+    affected: set[int] = set()
     for rid in data.ids:
         rec = db.get(WarehouseIn, rid)
         if rec:
+            affected |= _clear_pack_settlement(db, rid)
             db.delete(rec)
             deleted += 1
+    for pid in affected:
+        recompute_product(db, pid)
     db.commit()
     return {"ok": True, "deleted": deleted}
 

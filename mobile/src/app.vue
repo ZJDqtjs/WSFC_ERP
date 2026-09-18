@@ -1,4 +1,13 @@
 <template>
+  <!-- 停服公告滚动条：仅在管理员发布维护公告（倒计时）期间显示 -->
+  <div v-if="mtState.noticeOn" class="mt-notice" ref="noticeBarRef">
+    <span class="mt-notice-ico">⚠</span>
+    <div class="mt-notice-vp">
+      <div class="mt-notice-track"></div>
+    </div>
+  </div>
+
+  <div class="mt-wrap" :class="{ 'has-notice': mtState.noticeOn }">
   <!-- 二级页面：各自带 van-nav-bar，自行管理返回 -->
   <router-view v-if="!isTab" />
 
@@ -23,20 +32,95 @@
       <van-tabbar-item to="/mine" icon="manager-o">我的</van-tabbar-item>
     </van-tabbar>
   </template>
+  </div>
+
+  <!-- 系统维护页：公告倒计时归零 / 后端不可用时整屏显示，服务恢复后自动返回 -->
+  <div v-if="mtState.maskOn" class="mt-mask">
+    <div class="mt-box">
+      <div class="mt-ico">🛠</div>
+      <h2 class="mt-title">{{ maskTip.title }}</h2>
+      <p class="mt-sub">{{ maskTip.sub }}</p>
+      <p class="mt-info">{{ maskTip.info }}</p>
+      <div class="mt-foot">
+        <span class="mt-dot"></span>
+        <span>{{ mtState.recovering ? '服务已恢复，正在返回…' : '正在检测服务状态，恢复后自动返回…' }}</span>
+      </div>
+      <van-button block type="primary" @click="reloadPage">立即刷新</van-button>
+    </div>
+  </div>
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api from './api'
+import { mtState, maskText, noticeText } from './utils/maintenance'
 
 const route = useRoute()
 const isTab = computed(() => !!route.meta.tab)
 const title = computed(() => route.meta.title || '企业台账')
 
-// 分仓标识：切仓后 token 失效，需重新登录，故只需在进入时取一次
+// 停服公告 / 系统维护页（状态由 keyadmin「更新维护」下发，见 utils/maintenance.js）
+const noticeLine = computed(() => (mtState.noticeOn ? noticeText() : ''))
+const maskTip = computed(() => maskText())
+function reloadPage() { location.reload() }
+
+/* ---------- 公告滚动条：按宽度铺满，保证任何屏宽都在无缝滚动 ---------- */
+const NOTICE_SPEED = 55 // px/s，与屏宽无关
+const noticeBarRef = ref(null)
+let noticeSpans = []
+
+function buildNoticeTrack(text) {
+  const bar = noticeBarRef.value
+  if (!bar) return
+  const vp = bar.querySelector('.mt-notice-vp')
+  const track = bar.querySelector('.mt-notice-track')
+  if (!vp || !track) return
+  track.style.animation = 'none'
+  track.innerHTML = ''
+  const probe = document.createElement('span')
+  probe.className = 'mt-notice-txt'
+  probe.textContent = text
+  track.appendChild(probe)
+  const unitW = probe.getBoundingClientRect().width || 200
+  const vpW = vp.clientWidth || 1
+  // 一组铺 n 份，使一组宽度 ≥ 视口 + 一份宽度（位移一组后正好无缝）
+  const n = Math.max(1, Math.ceil((vpW + unitW) / unitW))
+  track.innerHTML = ''
+  noticeSpans = []
+  for (let g = 0; g < 2; g++) {
+    for (let i = 0; i < n; i++) {
+      const s = document.createElement('span')
+      s.className = 'mt-notice-txt'
+      s.textContent = text
+      noticeSpans.push(s)
+      track.appendChild(s)
+    }
+  }
+  const dur = Math.max(10, Math.round((n * unitW) / NOTICE_SPEED))
+  track.style.animation = `mtNotice ${dur}s linear infinite`
+}
+
+function syncNotice() {
+  if (!mtState.noticeOn) { noticeSpans = []; return }
+  const text = noticeText()
+  if (!noticeSpans.length) { nextTick(() => buildNoticeTrack(text)); return }
+  noticeSpans.forEach((s) => { s.textContent = text }) // 只改文字，动画不中断
+}
+
+watch(noticeLine, () => syncNotice(), { immediate: true })
+
+let noticeResizeTimer = null
+function onNoticeResize() {
+  if (!mtState.noticeOn) return
+  clearTimeout(noticeResizeTimer)
+  noticeResizeTimer = setTimeout(() => { noticeSpans = []; syncNotice() }, 300)
+}
+
+// 分仓标识：分仓随登录会话（切仓只重签自己的令牌、不会掉线），整页刷新后取一次即可
 const warehouse = ref('')
 onMounted(async () => {
+  window.addEventListener('resize', onNoticeResize) // 横竖屏切换后重铺公告文本
   try {
     const me = await api('/api/auth/me')
     if (me && me.warehouse && me.warehouse.name) warehouse.value = me.warehouse.name
@@ -136,9 +220,21 @@ body {
 .seg-item.active { background: #1989fa; color: #fff; font-weight: 600; }
 
 /* ---------- 弹层 / 选择器 ---------- */
-.sheet-body { padding: 14px 16px 24px; max-height: 74vh; overflow-y: auto; }
+/* 弹层主体自身滚动 + 底部按钮栏吸底：内容再长也不用滑到底才能点按钮 */
+.sheet-body {
+  padding: 14px 16px 10px;
+  height: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .sheet-title { font-weight: 600; font-size: 16px; text-align: center; margin-bottom: 12px; }
-.sheet-foot { display: flex; gap: 10px; padding: 12px 0 4px; }
+.sheet-foot {
+  display: flex; gap: 10px; padding: 12px 0 6px;
+  position: sticky; bottom: 0; z-index: 2;
+  background: #fff;
+  box-shadow: 0 -10px 12px -12px rgba(0, 0, 0, 0.35);
+}
 .sheet-foot .van-button { flex: 1; }
 .picker-item { display: flex; align-items: center; gap: 10px; padding: 11px 4px; border-bottom: 1px solid #f5f5f5; }
 .picker-item:active { background: #f5f6f7; }
@@ -148,4 +244,60 @@ body {
 .van-cell-group--inset { margin: 0 0 10px; }
 .van-field__label { font-size: 13px; }
 .van-toast { word-break: break-all; }
+
+/* ---------- 停服公告滚动条 ---------- */
+.mt-notice {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 3000;
+  display: flex; align-items: center; gap: 8px;
+  height: 34px; padding: 0 10px;
+  background: linear-gradient(90deg, #b45309, #f59e0b);
+  color: #fff; font-size: 12.5px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+}
+.mt-notice-ico { flex: none; font-size: 13px; }
+.mt-notice-vp { flex: 1; overflow: hidden; }
+.mt-notice-track {
+  display: inline-flex; white-space: nowrap; will-change: transform;
+  animation: mtNotice 20s linear infinite;
+}
+.mt-notice-txt { padding-right: 60px; }
+@keyframes mtNotice {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+/* 公告条是 fixed 的：内容整体下移，顶栏同步下移，避免被遮住 */
+.mt-wrap.has-notice { padding-top: 34px; }
+.mt-wrap.has-notice .m-header { top: 34px; }
+.mt-wrap.has-notice .van-nav-bar--fixed { top: 34px; }
+
+/* ---------- 系统维护页 ---------- */
+.mt-mask {
+  position: fixed; inset: 0; z-index: 5000;
+  display: flex; padding: 20px;
+  background: linear-gradient(135deg, #00174a 0%, #00337a 50%, #0067c0 100%);
+  /* 手机横屏 / 小屏下卡片过高时可滚动 */
+  overflow-y: auto; overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.mt-box {
+  margin: auto; width: 100%; max-width: 420px; flex-shrink: 0;
+  background: #fff; border-radius: 14px; padding: 30px 22px; text-align: center;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, .18);
+}
+.mt-ico { font-size: 38px; line-height: 1; }
+.mt-title { font-size: 19px; font-weight: 700; margin: 10px 0 8px; }
+.mt-sub { color: #646566; font-size: 13.5px; line-height: 1.7; }
+.mt-info { color: #323233; font-size: 13.5px; margin-top: 8px; }
+.mt-foot {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  color: #969799; font-size: 12px; margin: 18px 0 14px;
+}
+.mt-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: #1989fa;
+  animation: mtPulse 1.4s ease-in-out infinite;
+}
+@keyframes mtPulse {
+  0%, 100% { opacity: .35; transform: scale(.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
 </style>

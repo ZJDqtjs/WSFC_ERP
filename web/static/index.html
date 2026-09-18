@@ -7,6 +7,14 @@
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
+  <!-- 停服公告滚动条：仅在管理员发布维护公告（倒计时）期间显示 -->
+  <div class="notice-bar" id="noticeBar" style="display:none;">
+    <span class="notice-ico">⚠</span>
+    <div class="notice-viewport">
+      <div class="notice-track"></div>
+    </div>
+  </div>
+
   <!-- 内联 SVG 图标库（简约线性风格，随文字颜色变色） -->
   <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
     <symbol id="i-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></symbol>
@@ -38,8 +46,10 @@
     <symbol id="i-sliders" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></symbol>
     <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></symbol>
     <symbol id="i-coins" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/></symbol>
+    <symbol id="i-bill" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01"/><path d="M18 12h.01"/></symbol>
     <symbol id="i-paperclip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
     <symbol id="i-warehouse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 8.35V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8.35A2 2 0 0 1 3.26 6.5l8-3.2a2 2 0 0 1 1.48 0l8 3.2A2 2 0 0 1 22 8.35Z"/><path d="M6 18h12"/><path d="M6 14h12"/><rect width="12" height="12" x="6" y="10"/></symbol>
+    <symbol id="i-wallet" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></symbol>
   </svg>
   <div class="app" id="app">
     <!-- 左侧导航 -->
@@ -65,6 +75,8 @@
         <button class="nav-item" data-page="packrules"><span class="nav-ico"><svg class="ic"><use href="#i-link"/></svg></span>一单多货</button>
         <div class="nav-group">经营分析</div>
         <button class="nav-item" data-page="report"><span class="nav-ico"><svg class="ic"><use href="#i-chart"/></svg></span>财务报表</button>
+        <button class="nav-item" data-page="otherexp"><span class="nav-ico"><svg class="ic"><use href="#i-wallet"/></svg></span>其他开支</button>
+        <button class="nav-item" data-page="payables"><span class="nav-ico"><svg class="ic"><use href="#i-bill"/></svg></span>待付款账单<span class="badge" id="payNavBadge" style="display:none;margin-left:auto;background:#f97316;color:#fff;"></span></button>
         <div class="nav-group">数据工具</div>
         <button class="nav-item" data-page="fresh"><span class="nav-ico"><svg class="ic"><use href="#i-truck"/></svg></span>鲜货现采</button>
         <button class="nav-item" data-page="deduction"><span class="nav-ico"><svg class="ic"><use href="#i-coins"/></svg></span>扣点</button>
@@ -228,9 +240,26 @@
             <div class="field"><label>金额</label><input id="inAmount" readonly /></div>
             <div class="field"><label>供应商</label><input id="inSupplier" placeholder="供应商名称" /></div>
             <div class="field"><label>日期 *</label><input id="inDate" type="date" /></div>
-            <div class="field"><label>操作员</label><input id="inOperator" placeholder="谁操作的" /></div>
+            <div class="field"><label>操作员</label><input id="inOperator" readonly title="默认当前登录账号，不可修改" /></div>
+            <div class="field">
+              <label>付款状态</label>
+              <div class="pay-radios">
+                <label class="pay-radio on"><input type="radio" name="inPay" value="paid" checked onchange="payRadioSync(this)" /> 已付款</label>
+                <label class="pay-radio"><input type="radio" name="inPay" value="unpaid" onchange="payRadioSync(this)" /> 待付款</label>
+              </div>
+              <div class="field-hint">待付款：先进「待付款账单」，点「已支付」后才计入财务报表</div>
+            </div>
           </div>
-          <div class="field" style="margin-top:12px;"><label>备注</label><textarea id="inRemark" rows="1" placeholder="可选"></textarea></div>
+          <div class="field" style="margin-top:12px;">
+            <label>备注</label>
+            <textarea id="inRemark" rows="1" placeholder="可选" onpaste="pasteRemarkFiles('inRemark', event)"></textarea>
+            <div class="attach-bar">
+              <button type="button" class="btn sm secondary" onclick="$('inRemarkFile').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 图片 / 附件</button>
+              <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），可直接 Ctrl+V 粘贴</span>
+              <input type="file" id="inRemarkFile" multiple style="display:none;" onchange="uploadRemarkFiles('inRemark', this)" />
+            </div>
+            <div class="attach-list" id="inRemarkFiles"></div>
+          </div>
           <div id="inAlert" class="alert" style="display:none;"></div>
           <div class="form-actions"><button class="btn green" onclick="submitInbound()">✓ 确认入库</button></div>
         </div>
@@ -262,15 +291,32 @@
           <div class="form-grid">
             <div class="field"><label>日期 *</label><input id="outDate" type="date" /></div>
             <div class="field"><label>客户</label><input id="outCustomer" placeholder="客户名称" /></div>
-            <div class="field"><label>操作员</label><input id="outOperator" placeholder="谁操作的" /></div>
-            <div class="field"><label>备注</label><input id="outRemark" placeholder="可选" /></div>
+            <div class="field"><label>操作员</label><input id="outOperator" readonly title="默认当前登录账号，不可修改" /></div>
+            <div class="field">
+              <label>付款状态</label>
+              <div class="pay-radios">
+                <label class="pay-radio on"><input type="radio" name="outPay" value="paid" checked onchange="payRadioSync(this)" /> 已付款</label>
+                <label class="pay-radio"><input type="radio" name="outPay" value="unpaid" onchange="payRadioSync(this)" /> 待付款</label>
+              </div>
+              <div class="field-hint">待付款（未回款）：整单先进「待付款账单」，收款后才计入财务报表</div>
+            </div>
+            <div class="field" style="grid-column:1/-1;">
+              <label>备注</label>
+              <textarea id="outRemark" rows="1" placeholder="可选" onpaste="pasteRemarkFiles('outRemark', event)"></textarea>
+              <div class="attach-bar">
+                <button type="button" class="btn sm secondary" onclick="$('outRemarkFile').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 图片 / 附件</button>
+                <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），可直接 Ctrl+V 粘贴</span>
+                <input type="file" id="outRemarkFile" multiple style="display:none;" onchange="uploadRemarkFiles('outRemark', this)" />
+              </div>
+              <div class="attach-list" id="outRemarkFiles"></div>
+            </div>
           </div>
 
           <h4 class="block-title">销售商品行</h4>
           <div class="table-wrap">
             <table id="outSaleTable">
               <thead><tr>
-                <th style="width:26%;">商品</th><th>销售单位</th><th>数量</th><th>单价</th><th>折算</th><th>小计</th><th></th>
+                <th style="width:26%;">商品</th><th>销售单位</th><th>数量</th><th>单价</th><th>小计</th><th></th>
               </tr></thead>
               <tbody id="outSaleBody"></tbody>
             </table>
@@ -278,7 +324,10 @@
           <div class="toolbar" style="margin-top:12px;">
             <button class="btn secondary" onclick="addSaleRow()">＋ 添加商品行</button>
             <button class="btn" onclick="previewOutbound()">🔍 预览结算</button>
-            <span class="muted">自动带出泡沫箱 / 泡沫垫 / 打包费等关联结算项</span>
+            <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
+              <input type="checkbox" id="outAutoExpress" checked /> 自动计快递费
+            </label>
+            <span class="muted">自动带出泡沫箱 / 泡沫垫 / 打包费等关联结算项；勾选时再按整单毛重自动计快递费（不勾选则这笔不算快递费）</span>
           </div>
 
           <div id="outPreview" style="display:none;">
@@ -328,7 +377,7 @@
         <div class="card">
           <div class="card-head">
             <h3>入仓品资料</h3>
-            <span class="hint">按「袋」采购的备货商品（半加工等）：采购价为给「我」的收入单价；商品成本按「关联库存商品的单位成本 × 每袋净重」计算；运费可留空，后续维护</span>
+            <span class="hint">按「袋」采购的备货商品（半加工等）：采购价为给「我」的收入单价；商品成本按「关联库存商品的单位成本 × 每袋净重」计算；可配置「关联结算（随货包材）」，入仓时按每袋用量扣减包材库存并计入成本；运费可留空，后续维护</span>
             <div class="grow"></div>
             <button class="btn green" onclick="wprodEdit()"><svg class="ic"><use href="#i-plus"/></svg> 新增入仓品</button>
             <button class="btn secondary" onclick="loadWarehouseProducts()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
@@ -390,7 +439,7 @@
               <button class="seg-item" data-panel="og-labor" onclick="switchOgSeg(this)">人工</button>
               <button class="seg-item" data-panel="og-laborpack" onclick="switchOgSeg(this)">打包人工 + 耗材</button>
             </div>
-            <input id="ogSearch" placeholder="🔍 搜索商品..." oninput="renderOutGroup()" />
+            <input id="ogSearch" placeholder="🔍 搜索商品（可搜「代发」）..." oninput="renderOutGroup()" />
             <button class="btn secondary" onclick="renderOutGroup()">筛选</button>
             <div class="grow"></div>
             <button class="btn danger" onclick="deleteOutGroup()">🗑 删除本批（<span id="ogDelCount">0</span> 单）</button>
@@ -408,7 +457,7 @@
               <option value="">全部类型</option><option value="stock" selected>库存商品</option><option value="order">订单商品</option>
             </select>
             <select id="prodCategory" class="searchable" onchange="renderProducts()"><option value="">全部分类</option></select>
-            <input id="prodSearch" placeholder="🔍 搜索商品..." oninput="renderProducts()" />
+            <input id="prodSearch" placeholder="🔍 搜索商品 / 分类 / 规格 / 代发..." oninput="renderProducts()" />
             <div class="grow"></div>
             <button class="btn secondary" onclick="openUnitsModal()"><svg class="ic"><use href="#i-ruler"/></svg> 计量单位管理</button>
             <button class="btn secondary" onclick="pdataDownload('products_stock')"><svg class="ic"><use href="#i-download"/></svg> 导出库存JSON</button>
@@ -446,31 +495,263 @@
         </div>
       </section>
 
-      <!-- 财务报表 -->
+      <!-- 财务报表（查询常驻 + 分区 tab：汇总 / 支出 / 商品 / 流水） -->
       <section id="page-report" class="page">
         <div class="card">
-          <div class="card-head"><h3>财务利润报表</h3></div>
+          <div class="card-head">
+            <h3>财务利润报表</h3>
+            <!-- 报表口径开关：开启后不计入「其他开支」的款项，只看商品售卖利润（默认开启） -->
+            <label class="rep-switch" title="开启后本报表不计入「其他开支」的款项，只看商品售卖利润">
+              <input type="checkbox" id="excludeOtherChk" checked onchange="toggleExcludeOther(this)" />
+              <span>排除其他开支</span>
+            </label>
+            <span class="hint" id="repRangeHint"></span>
+            <div class="grow"></div>
+            <div class="seg" id="repScopeSeg" style="margin-bottom:0;">
+              <button class="seg-item" data-scope="all" onclick="repScope(this)">全仓总览</button>
+              <button class="seg-item active" data-scope="one" onclick="repScope(this)">单仓总览</button>
+            </div>
+          </div>
           <div class="toolbar">
             <input id="repDateFrom" type="date" /><span>-</span><input id="repDateTo" type="date" />
-            <input id="repSearch" placeholder="🔍 筛选财务流水..." oninput="loadReport()" />
             <button class="btn" onclick="loadReport()">查询</button>
             <button class="btn secondary" onclick="quickRange('today')">今天</button>
             <button class="btn secondary" onclick="quickRange('month')">本月</button>
             <button class="btn secondary" onclick="quickRange('all')">全部</button>
+            <div class="grow"></div>
+            <div class="seg" id="repSeg" style="margin-bottom:0;">
+              <button class="seg-item active" data-panel="rep-panel-summary" onclick="repTab(this)">汇总</button>
+              <button class="seg-item" data-panel="rep-panel-expense" onclick="repTab(this)">支出</button>
+              <button class="seg-item" data-panel="rep-panel-goods" onclick="repTab(this)">商品</button>
+              <button class="seg-item" data-panel="rep-panel-flow" onclick="repTab(this)">流水</button>
+            </div>
           </div>
+          <div class="toolbar" id="repWhBar">
+            <label class="muted">查看分仓</label>
+            <select id="repWhSel" onchange="repWhChange()"></select>
+            <span class="muted" id="repWhHint">默认是你当前所在分仓；换一个只是换看谁的数据，不会改变你的工作分仓</span>
+          </div>
+        </div>
+
+        <!-- 汇总 / 支出 / 商品 / 流水 四个分区：单仓总览看当前（或所选）分仓，全仓总览看各分仓合并合计 -->
+        <div id="rep-one">
+
+        <!-- 汇总 -->
+        <div id="rep-panel-summary">
           <div class="stat-grid" id="repStats"></div>
+          <div class="card">
+            <div class="card-head"><h3>销售成本构成</h3><span class="muted" id="repCostHint"></span></div>
+            <div id="repCostBreak"></div>
+          </div>
+
+          <!-- 全仓总览专有：全仓合计统计卡 + 各分仓收入 / 支出 / 利润 -->
+          <div id="rep-panel-all" style="display:none;">
+            <div class="stat-grid" id="repAllStats"></div>
+            <div class="card">
+              <div class="card-head">
+                <h3>各分仓收入 / 支出 / 利润</h3>
+                <span class="muted" id="repAllHint"></span>
+                <div class="grow"></div>
+                <button class="btn secondary" onclick="loadReport()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+              </div>
+              <div id="repAllWarn" class="alert warn" style="display:none;"></div>
+              <div class="table-wrap"><table id="repAllTable"></table></div>
+            </div>
+          </div>
         </div>
-        <div class="card">
-          <div class="card-head"><h3>销售成本构成</h3><span class="muted" id="repCostHint"></span></div>
-          <div id="repCostBreak"></div>
+
+        <!-- 支出（采购 + 其他开支 + 手工记账） -->
+        <div id="rep-panel-expense" style="display:none;">
+          <div class="card">
+            <div class="card-head">
+              <h3>支出汇总</h3>
+              <span class="muted" id="repFeeHint"></span>
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="goPage('otherexp')">去登记其他开支 →</button>
+            </div>
+            <div class="table-wrap"><table id="repExpSummary"></table></div>
+            <div id="repFeeBreak" style="margin-top:14px;"></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h3>支出统计</h3>
+              <span class="muted" id="repExpHint"></span>
+              <div class="grow"></div>
+              <div class="seg" id="repExpSeg" style="margin-bottom:0;">
+                <button class="seg-item active" data-panel="rep-exp-day" onclick="repExpSwitch(this)">按日</button>
+                <button class="seg-item" data-panel="rep-exp-month" onclick="repExpSwitch(this)">按月</button>
+              </div>
+            </div>
+            <div id="repExpWarn" class="alert warn" style="display:none;"></div>
+            <div id="rep-exp-day">
+              <div class="table-wrap"><table id="repExpDayTable"></table></div>
+            </div>
+            <div id="rep-exp-month" style="display:none;">
+              <div class="table-wrap"><table id="repExpMonthTable"></table></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h3>支出明细（逐笔）</h3>
+              <span class="muted">采购 / 其他开支 / 手工记账逐条列出，合计与「支出合计」一致</span>
+            </div>
+            <div class="toolbar">
+              <select id="repExpItemSrc" onchange="renderExpenseItemRows()">
+                <option value="">全部来源</option>
+                <option value="采购">采购（进货）</option>
+                <option value="其他开支">其他开支</option>
+                <option value="手工记账">手工记账</option>
+              </select>
+              <input id="repExpItemSearch" placeholder="🔍 筛选项目 / 备注 / 操作员..." oninput="renderExpenseItemRows()" />
+              <div class="grow"></div>
+              <span class="muted" id="repExpItemSum"></span>
+            </div>
+            <div class="table-wrap"><table id="repExpItemTable"></table></div>
+          </div>
         </div>
-        <div class="card">
-          <div class="card-head"><h3>商品销售明细</h3></div>
-          <div class="table-wrap"><table id="repProductTable"></table></div>
+
+        <!-- 商品 -->
+        <div id="rep-panel-goods" style="display:none;">
+          <div class="card">
+            <div class="card-head"><h3>商品销售明细</h3></div>
+            <div class="table-wrap"><table id="repProductTable"></table></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h3>出库明细：每天 × 每种规格卖了多少单</h3>
+              <span class="muted" id="repSpecHint"></span>
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="goPage('outbound')">去看出库记录 →</button>
+            </div>
+            <div class="table-wrap"><table id="repSpecTable"></table></div>
+          </div>
         </div>
+
+        <!-- 财务流水 -->
+        <div id="rep-panel-flow" style="display:none;">
+          <div class="card">
+            <div class="card-head">
+              <h3>财务流水</h3>
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="openFinanceModal()">＋ 手动记账</button>
+            </div>
+            <div class="toolbar"><input id="repSearch" placeholder="🔍 筛选分类/商品/备注/操作员..." oninput="loadReport()" /></div>
+            <div class="table-wrap"><table id="financeTable"></table></div>
+          </div>
+        </div>
+        </div>  <!-- /#rep-one 单仓总览 -->
+      </section>
+
+      <!-- 其他开支 -->
+      <section id="page-otherexp" class="page">
         <div class="card">
-          <div class="card-head"><h3>财务流水</h3><button class="btn secondary" onclick="openFinanceModal()">＋ 手动记账</button></div>
-          <div class="table-wrap"><table id="financeTable"></table></div>
+          <div class="card-head">
+            <h3><svg class="ic"><use href="#i-wallet"/></svg> 登记其他开支</h3>
+            <span class="hint">仓库/经营中的零散支出：网线费、安装费、机器费、样品费等。保存后计入财务报表「期间费用」，并从毛利中扣减得到净利（无需再到「手动记账」重复登记）</span>
+          </div>
+          <div class="form-grid">
+            <div class="field">
+              <label>费用类型 *</label>
+              <input id="oeCategory" list="oeCategoryList" placeholder="如：网线费" onkeydown="if(event.key==='Enter')oeSubmit()" />
+              <datalist id="oeCategoryList"></datalist>
+            </div>
+            <div class="field"><label>金额（元）*</label><input id="oeAmount" type="number" min="0" step="any" placeholder="0.00" onkeydown="if(event.key==='Enter')oeSubmit()" /></div>
+            <div class="field"><label>日期 *</label><input id="oeDate" type="date" /></div>
+            <div class="field"><label>操作员</label><input id="oeOperator" readonly title="默认当前登录账号，不可修改" /></div>
+            <div class="field">
+              <label>付款状态</label>
+              <div class="pay-radios">
+                <label class="pay-radio on"><input type="radio" name="oePay" value="paid" checked onchange="payRadioSync(this)" /> 已付款</label>
+                <label class="pay-radio"><input type="radio" name="oePay" value="unpaid" onchange="payRadioSync(this)" /> 待付款</label>
+              </div>
+              <div class="field-hint">待付款：登记后先进「待付款账单」，点「已支付」才计入期间费用</div>
+            </div>
+          </div>
+          <div class="field" style="margin-top:12px;">
+            <label>备注</label>
+            <textarea id="oeRemark" rows="1" placeholder="可选，如 收款方 / 用途 / 数量" onpaste="pasteRemarkFiles('oeRemark', event)"></textarea>
+            <div class="attach-bar">
+              <button type="button" class="btn sm secondary" onclick="$('oeRemarkFile').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 图片 / 附件</button>
+              <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），可直接 Ctrl+V 粘贴</span>
+              <input type="file" id="oeRemarkFile" multiple style="display:none;" onchange="uploadRemarkFiles('oeRemark', this)" />
+            </div>
+            <div class="attach-list" id="oeRemarkFiles"></div>
+          </div>
+          <div id="oeAlert" class="alert" style="display:none;"></div>
+          <div class="form-actions">
+            <button class="btn green" id="oeSaveBtn" onclick="oeSubmit()">✓ 保存开支</button>
+            <button class="btn secondary" onclick="oeResetForm()">清空</button>
+          </div>
+        </div>
+
+        <div class="stat-grid" id="oeStats"></div>
+
+        <div class="card">
+          <div class="card-head"><h3>开支统计</h3><span class="hint" id="oeStatsHint"></span></div>
+          <div class="toolbar">
+            <input id="oeDateFrom" type="date" /><span>-</span><input id="oeDateTo" type="date" />
+            <button class="btn" onclick="loadOtherExpensePage()">查询</button>
+            <button class="btn secondary" onclick="oeQuick('today')">今天</button>
+            <button class="btn secondary" onclick="oeQuick('week')">近7天</button>
+            <button class="btn secondary" onclick="oeQuick('month')">本月</button>
+            <button class="btn secondary" onclick="oeQuick('lastmonth')">上月</button>
+            <button class="btn secondary" onclick="oeQuick('all')">全部</button>
+          </div>
+          <div class="seg" id="oeSeg">
+            <button class="seg-item active" data-panel="oe-day" onclick="oeSwitchSeg(this)">按日统计</button>
+            <button class="seg-item" data-panel="oe-month" onclick="oeSwitchSeg(this)">按月统计</button>
+            <button class="seg-item" data-panel="oe-cat" onclick="oeSwitchSeg(this)">按类型统计</button>
+          </div>
+          <div id="oe-day">
+            <div id="oeChart"></div>
+            <div class="table-wrap"><table id="oeDayTable"></table></div>
+          </div>
+          <div id="oe-month" style="display:none;">
+            <div class="table-wrap"><table id="oeMonthTable"></table></div>
+          </div>
+          <div id="oe-cat" style="display:none;">
+            <div class="table-wrap"><table id="oeCatTable"></table></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>开支明细</h3><span class="hint" id="oeListHint"></span>
+            <div class="grow"></div>
+            <button class="btn secondary" onclick="loadOtherExpensePage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+          </div>
+          <div class="toolbar">
+            <select id="oeFilterCat" onchange="renderOtherExpenseList()"><option value="">全部类型</option></select>
+            <input id="oeSearch" placeholder="🔍 搜索类型 / 备注 / 操作员..." oninput="renderOtherExpenseList()" />
+            <div class="grow"></div>
+            <span class="muted" id="oeListSum"></span>
+          </div>
+          <div class="table-wrap"><table id="oeTable"></table></div>
+        </div>
+      </section>
+
+      <!-- 待付款账单：各处勾了「待付款」的单据汇总，点「已支付」后纳入财务报表 -->
+      <section id="page-payables" class="page">
+        <div class="stat-grid" id="payStats"></div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3><svg class="ic"><use href="#i-bill"/></svg> 待付款账单</h3>
+            <span class="hint" id="payHint">入库 / 入仓 / 出库 / 其他开支 / 手动记账 里勾了「待付款」的单据都汇总在这里；点「已支付」后按原日期纳入财务报表</span>
+            <div class="grow"></div>
+            <button class="btn secondary" onclick="loadPayablesPage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+          </div>
+          <div class="toolbar">
+            <div class="seg" id="paySeg" style="margin-bottom:0;">
+              <button class="seg-item active" data-view="unpaid" onclick="paySwitchView(this)">待结清</button>
+              <button class="seg-item" data-view="all" onclick="paySwitchView(this)">含最近已结清</button>
+            </div>
+            <input id="paySearch" placeholder="🔍 筛选 款项 / 单据 / 客户 / 操作员..." oninput="renderPayables()" />
+            <div class="grow"></div>
+            <span class="muted" id="paySum"></span>
+          </div>
+          <div id="payAlert" class="alert warn" style="display:none;"></div>
+          <div class="table-wrap"><table id="payTable"></table></div>
         </div>
       </section>
 
@@ -582,7 +863,7 @@
 
         <div class="settings-panel" data-panel="jushuitan" style="display:none;">
           <div class="card">
-            <div class="card-head"><h3>① 上传聚水潭销售出库单并自动新增关联</h3><span class="hint">自动新增不存在的订单商品并关键词关联库存商品；需维护关联请前往出库页「关联结算」</span></div>
+            <div class="card-head"><h3>① 上传聚水潭销售出库单并自动新增关联</h3><span class="hint">自动新增不存在的订单商品并关键词关联库存商品；明细维护见下方「③ 关联明细维护」</span></div>
             <div class="toolbar">
               <input type="file" id="mpFile" accept=".xlsx" />
               <button class="btn" onclick="parseJushuitan()">解析并自动新增</button>
@@ -601,6 +882,35 @@
               <button class="btn green" onclick="batchFromImport('jushuitan')">导入出库单（预览确认）</button>
             </div>
             <div id="mpImportResult"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>③ 关联明细维护</h3><span class="hint">查看每条「聚水潭商品名 → 系统商品」映射，可编辑 / 删除 / 手动新增；顶部统计关联结算（订单商品）占比</span></div>
+            <div id="mpMappingStats"></div>
+            <div class="toolbar">
+              <input id="mpSearch" placeholder="🔍 搜索聚水潭商品名 / 系统商品..." oninput="renderMappings()" />
+              <select id="mpFilter" onchange="renderMappings()">
+                <option value="">全部关联</option>
+                <option value="linked">已关联</option>
+                <option value="unlinked">未关联（待匹配）</option>
+                <option value="order">指向关联结算（订单商品）</option>
+                <option value="stock">指向库存商品</option>
+              </select>
+              <div class="grow"></div>
+              <button class="btn" onclick="mappingAdd()">＋ 手动新增关联</button>
+            </div>
+            <div class="table-wrap">
+              <table id="mpMappingTable">
+                <thead><tr>
+                  <th style="width:34%;">聚水潭商品名</th>
+                  <th>关联系统商品</th>
+                  <th>类型</th>
+                  <th>扣减库存商品</th>
+                  <th style="width:120px;"></th>
+                </tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
           </div>
         </div>
       </section>
@@ -722,6 +1032,20 @@
   </div>
 
   <div class="toast" id="toast"></div>
+
+  <!-- 系统维护页：停服倒计时归零 / 后端不可用时整屏显示，服务恢复后自动返回 -->
+  <div class="maintain-mask" id="maintainMask" style="display:none;">
+    <div class="maintain-box">
+      <div class="maintain-ico">🛠</div>
+      <h2 id="mtTitle">系统维护中</h2>
+      <p class="maintain-sub" id="mtSub">系统正在停机维护，请稍后再试。</p>
+      <div class="maintain-info" id="mtInfo"></div>
+      <div class="maintain-foot">
+        <span class="maintain-dot"></span><span id="mtFoot">正在检测服务状态，服务恢复后会自动返回…</span>
+      </div>
+      <button class="btn secondary" onclick="location.reload()">立即刷新</button>
+    </div>
+  </div>
 
   <script src="/app.js"></script>
 </body>

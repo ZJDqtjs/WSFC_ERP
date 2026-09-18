@@ -1,11 +1,21 @@
 """数据库连接层（分仓感知）。
 
 每个分仓一套独立 SQLite 数据库文件；「奥斯迪仓」(key=aosidi) 使用历史文件 data/erp.db，
-其余分仓使用 data/warehouses/{key}.db。get_db() 依赖在每次请求创建时按当前分仓绑定 session，
-切仓后新请求自动走新仓；当前分仓为服务端全局状态（进程内缓存 + data/warehouses.json 持久化）。
+其余分仓使用 data/warehouses/{key}.db。
+
+「当前分仓」是**请求级**状态：登录会话把自己的分仓写在会话令牌里（payload.wh），
+由 app.main.WarehouseScopeMiddleware 每请求解析后写入下面的上下文变量。因此每个用户各自
+持有自己的分仓——某人切仓只影响他自己，不会让其他在线用户的令牌失效（不再"全员掉线"）。
+
+请求外（进程启动、后台任务）没有请求上下文，一律使用「默认分仓」
+（data/warehouses.json 的 current；新登录会话从它起步）。
+
+例外：账号注册表 users 固定在默认仓（由 keyadmin 维护），登录与鉴权以它为准，
+业务数据才按当前分仓隔离。
 """
 import json
 import os
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 
@@ -124,42 +134,72 @@ def register_warehouse(key: str, name: str) -> dict:
     return wh
 
 
-_current_key_cache: str | None = None
+def key_exists(key: str) -> bool:
+    """分仓是否已注册（用于校验会话令牌里携带的分仓 key）。"""
+    return any(w["key"] == key for w in get_warehouses())
 
 
-def get_current_key() -> str:
-    global _current_key_cache
-    if _current_key_cache is None:
+# ---- 默认分仓：持久化在 warehouses.json 的 current，新登录会话从这里起步 ----
+_default_key_cache: str | None = None
+
+
+def get_default_key() -> str:
+    global _default_key_cache
+    if _default_key_cache is None:
         d = load_warehouses()
         keys = [w["key"] for w in d["list"]]
         if d.get("current") not in keys:  # 兜底：current 指向不存在仓
             d["current"] = keys[0] if keys else DEFAULT_WAREHOUSE_KEY
             save_warehouses(d)
-        _current_key_cache = d["current"]
-    return _current_key_cache
+        _default_key_cache = d["current"]
+    return _default_key_cache
 
 
 def set_current_key(key: str) -> None:
-    global _current_key_cache
+    """设置默认分仓（持久化）。
+
+    只影响「之后新登录的会话起点」，**不会**改变任何在线会话，也不影响业务接口的当前分仓
+    （业务接口按登录会话自己的分仓走）——所以以前"切仓把所有人登出"的问题不复存在。
+    """
+    global _default_key_cache
     d = load_warehouses()
     if key not in [w["key"] for w in d["list"]]:
         raise ValueError(f"分仓不存在: {key}")
     d["current"] = key
     save_warehouses(d)
-    _current_key_cache = key
+    _default_key_cache = key
 
 
-def current_warehouse_name() -> str:
-    k = get_current_key()
+# ---- 当前分仓：请求级，随登录会话；由 WarehouseScopeMiddleware 每请求设置 ----
+_request_key_var: ContextVar[str | None] = ContextVar("erp_request_warehouse", default=None)
+
+
+def set_request_key(key: str | None) -> None:
+    """设置本请求（本登录会话）的分仓；None = 无请求上下文/无有效会话，回退默认分仓。"""
+    _request_key_var.set(key)
+
+
+def get_current_key() -> str:
+    """当前分仓：请求内取该登录会话自己的分仓，请求外取默认分仓。"""
+    return _request_key_var.get() or get_default_key()
+
+
+def current_warehouse_name(key: str | None = None) -> str:
+    k = key or get_current_key()
     for w in get_warehouses():
         if w["key"] == k:
             return w.get("name", k)
     return k
 
 
+def resolve_key(wh: str = "") -> str:
+    """把请求里的 ?wh= 参数解析成分仓 key：有效则用它，否则用本登录会话的分仓。"""
+    return wh if (wh and key_exists(wh)) else get_current_key()
+
+
 # ---------------- Session 依赖 ----------------
 def get_db():
-    """当前分仓的会话（每次请求创建，切仓后新请求自动走新仓）。"""
+    """当前分仓的会话（每次请求创建；按登录会话的分仓，切仓后新请求自动走新仓）。"""
     db = get_sessionmaker(get_current_key())()
     try:
         yield db
@@ -174,3 +214,20 @@ def get_db_default():
         yield db
     finally:
         db.close()
+
+
+def get_db_wh(wh: str = ""):
+    """带 ?wh= 的分仓会话：用于报表「单仓总览」手动切换查看其他分仓。
+
+    只影响本次查询的**数据来源**，不改变你的工作分仓（不改令牌），因此看完不用切回来。
+    """
+    db = get_sessionmaker(resolve_key(wh))()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# ERP 登录/鉴权用的「账号注册表」会话：用户、私钥指纹、角色统一由 keyadmin 维护在默认仓。
+# 鉴权固定在注册表上，可避免「切到某仓后因该仓没有这个账号而被判 401 掉线」。
+get_user_db = get_db_default

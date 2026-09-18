@@ -27,6 +27,7 @@ class PackLine(BaseModel):
 
 class PreviewIn(BaseModel):
     lines: list[SaleLine]
+    auto_express: bool = True   # False = 不自动结算快递费（手动出库时删掉「快递费」行）
 
 
 class OutboundIn(BaseModel):
@@ -37,6 +38,10 @@ class OutboundIn(BaseModel):
     lines: list[SaleLine]
     pack_lines: list[PackLine] = Field(default=[])
     pack_fee_total: float | None = None
+    # False = 不自动结算快递费（手动出库时用户在预览里删掉了「快递费」行）；
+    # 批量导入/聚水潭等不传，保持按整单毛重自动计快递费的原行为
+    auto_express: bool = True
+    pay_status: str = "paid"  # paid 已付款/已回款（默认）/ unpaid 待付款（先进「待付款账单」）
 
 
 class BatchIds(BaseModel):
@@ -66,8 +71,12 @@ def _to_dict(o: Outbound) -> dict:
         "total_amount": o.total_amount,
         "total_cogs": o.total_cogs,
         "total_fee": o.total_fee,
+        "pay_status": getattr(o, "pay_status", "paid") or "paid",
+        "paid_at": getattr(o, "paid_at", "") or "",
         "gross_profit": round(o.total_amount - o.total_cogs, 2),
         "net_profit": round(o.total_amount - o.total_cogs - o.total_fee, 2),
+        # 是否含代发行（订单商品未关联库存大类：不扣库存，只记代发数量/成本）
+        "has_dropship": any(bool(getattr(l, "is_dropship", False)) for l in o.lines),
         "lines": [
             {
                 "product_id": l.product_id,
@@ -76,6 +85,7 @@ def _to_dict(o: Outbound) -> dict:
                 "sale_product_id": l.sale_product_id,
                 "sale_product_name": sale_names.get(l.sale_product_id, ""),
                 "spec": l.spec or "",
+                "is_dropship": bool(getattr(l, "is_dropship", False)),
                 "unit": l.unit,
                 "quantity": l.quantity,
                 "quantity_base": l.quantity_base,
@@ -95,7 +105,7 @@ def _to_dict(o: Outbound) -> dict:
 @router.post("/preview")
 def preview(data: PreviewIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     try:
-        return build_order(db, data.lines, [], None)
+        return build_order(db, data.lines, [], None, data.auto_express)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -116,7 +126,8 @@ def list_outbounds(date_from: str = "", date_to: str = "", g: str = "", db: Sess
 @router.post("")
 def create_outbound_api(data: OutboundIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     try:
-        rec, warnings = create_outbound(db, data.model_dump(), operator=user.name)
+        # 操作员固定为当前登录账号：忽略前端传入的 operator，避免被改成别人
+        rec, warnings = create_outbound(db, {**data.model_dump(), "operator": user.name}, operator=user.name)
     except ValueError as e:
         raise HTTPException(400, str(e))
     db.commit()

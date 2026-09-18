@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -9,9 +10,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .database import DEFAULT_WAREHOUSE_KEY, get_current_key
-from .initdb import init_warehouse
-from .routers import ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, outbound, pack_rules, product_data, products, report, warehouse_in, warehouses
+from .database import (
+    DEFAULT_WAREHOUSE_KEY,
+    get_default_key,
+    get_warehouses,
+    set_request_key,
+)
+from .initdb import ensure_schema, init_warehouse
+from .maintenance import on_service_start, record_request, should_record, start_activity_store
+from .routers import ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, maintenance, others, outbound, pack_rules, payables, product_data, products, report, uploads, warehouse_in, warehouses
 from .routers.backup import create_backup_file, load_config
 
 # 桌面 Web 前端目录（WSFC_ERP/web/static，前后端分离；SERVE_STATIC=1 时后端顺带托管）
@@ -28,6 +35,45 @@ UPLOAD_ROUTE = ROUTES.get("uploads", "/uploads").rstrip("/") or "/uploads"
 SERVE_STATIC = os.getenv("SERVE_STATIC", "0") in ("1", "true", "yes", "on")
 
 
+class WarehouseScopeMiddleware:
+    """把「当前分仓」从进程全局改为**请求级**：按登录 cookie 里的会话令牌解析本次请求属于哪个仓。
+
+    这是"一人切仓，全员被登出"的根因修复：分仓随会话走，服务端不再有全局当前仓，
+    谁的会话在哪个仓互不影响。请求结束即清空，绝不外泄到其他请求。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        from starlette.requests import Request as _Request
+
+        from .auth import COOKIE_NAME, token_warehouse
+
+        token = _Request(scope).cookies.get(COOKIE_NAME)
+        set_request_key(token_warehouse(token))
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            set_request_key(None)
+
+
+def _backup_all_warehouses() -> None:
+    """逐个分仓备份。
+
+    分仓改为"随登录会话"之后，服务端已不存在唯一的"当前仓"，因此自动备份必须覆盖全部
+    已注册分仓，否则只有默认仓有备份。
+    """
+    for w in get_warehouses():
+        try:
+            create_backup_file(w["key"])
+        except Exception as e:  # 单个仓失败不影响其他仓
+            print(f"[自动备份] {w.get('key')} 失败:", e)
+
+
 async def auto_backup_loop():
     """每 60 秒检查一次；开启自动备份且距上次备份超过间隔则执行备份。"""
     import time as _time
@@ -41,27 +87,29 @@ async def auto_backup_loop():
             continue
         interval = max(0.5, float(cfg.get("interval_hours", 2))) * 3600
         if _time.monotonic() - last >= interval:
-            try:
-                create_backup_file()
-            except Exception as e:  # 自动备份失败不影响主流程
-                print("[自动备份] 失败:", e)
+            _backup_all_warehouses()
             last = _time.monotonic()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 0) 网站活动日志后台写盘线程；同时「再次启动主服务 = 维护完成」，按约定自动结束维护模式
+    start_activity_store()
+    resumed = on_service_start()
+    if resumed:
+        print(f"[维护模式] 主服务已启动，自动结束「{resumed}」状态，恢复正常访问")
     # 1) 默认仓（奥斯迪）初始化（幂等）
     init_warehouse(DEFAULT_WAREHOUSE_KEY)
-    # 2) 恢复上次 current 仓：与默认不同时也初始化（防 db 文件在但表/种子缺失）
-    current = get_current_key()
-    if current != DEFAULT_WAREHOUSE_KEY:
-        init_warehouse(current)
-    # 3) 启动时若开启自动备份则立即生成一份（针对当前仓），此后按间隔由后台任务执行
+    # 2) 初始化默认分仓（新登录会话的起点）：与奥斯迪不同时也初始化（防 db 文件在但表/种子缺失）
+    default_key = get_default_key()
+    if default_key != DEFAULT_WAREHOUSE_KEY:
+        init_warehouse(default_key)
+    # 3) 其余分仓补齐表结构：各分仓是独立 db，新增表后需逐个补建，否则老分仓库会缺表
+    for w in get_warehouses():
+        ensure_schema(w["key"])
+    # 4) 启动时若开启自动备份则立即为各分仓各生成一份，此后按间隔由后台任务执行
     if load_config().get("enabled", True):
-        try:
-            create_backup_file()
-        except Exception as e:
-            print("[自动备份] 启动备份失败:", e)
+        _backup_all_warehouses()
     task = asyncio.create_task(auto_backup_loop())
     yield
     task.cancel()
@@ -76,6 +124,48 @@ async def normalize_api_route(request, call_next):
         request.scope["path"] = "/api" + request.scope["path"][len(API_ROUTE):]
     return await call_next(request)
 
+
+class AccessLogMiddleware:
+    """网站活动日志（keyadmin「网站日志」页）。
+
+    纯 ASGI 中间件：只包装 send 拿状态码，不缓冲/不读取响应体，因此对 SSE 流式输出
+    （AI 智能录入）与文件下载零干扰。记录动作仅为一次入队，落盘由后台线程批量完成。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        # 只记业务 API：静态文件由 nginx 托管；维护状态轮询太频繁，不计入
+        if not should_record(path, API_ROUTE):
+            await self.app(scope, receive, send)
+            return
+        from starlette.requests import Request as _Request
+
+        started = time.perf_counter()
+        status = 500
+
+        async def send_wrapper(message):
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            try:
+                record_request(
+                    _Request(scope), path, status, int((time.perf_counter() - started) * 1000)
+                )
+            except Exception:  # 记日志绝不拖垮业务请求
+                pass
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -84,6 +174,10 @@ app.add_middleware(
 )
 # gzip 压缩：移动端/公网体积大的 JSON 响应显著减小传输量（桌面内网提升有限，弱网收益大）
 app.add_middleware(GZipMiddleware, minimum_size=500)
+# 分仓随登录会话（请求级），必须早于业务路由生效
+app.add_middleware(WarehouseScopeMiddleware)
+# 访问日志放在最外层：统计端到端耗时，且不改动响应体
+app.add_middleware(AccessLogMiddleware)
 
 app.include_router(auth.router)
 app.include_router(products.router)
@@ -91,6 +185,8 @@ app.include_router(product_data.router)
 app.include_router(inbound.router)
 app.include_router(outbound.router)
 app.include_router(inventory.router)
+app.include_router(others.router)
+app.include_router(payables.router)   # 待付款账单（入库/入仓/出库/其他开支/手动记账 汇总）
 app.include_router(pack_rules.router)
 app.include_router(deductions.router)
 app.include_router(express.router)
@@ -98,9 +194,11 @@ app.include_router(report.router)
 app.include_router(imports.router)
 app.include_router(backup.router)
 app.include_router(ai.router)
+app.include_router(uploads.router)
 app.include_router(fresh.router)
 app.include_router(warehouse_in.router)
 app.include_router(warehouses.router)
+app.include_router(maintenance.router)   # 维护状态（免登录）：前端滚动公告 / 整屏维护页
 
 # AI 票据图片上传目录：记录备注可引用 /uploads/xxx.jpg 预览
 UPLOAD_DIR = Path(__file__).resolve().parent.parent / "data" / "uploads"

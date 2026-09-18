@@ -1,3 +1,21 @@
+<script>
+// 批量导入（含聚水潭）解析结果的跨页面单例状态：
+// <script setup> 的变量随页面卸载重建，用户「去新增商品」再返回会清空解析结果，
+// 放到模块作用域后返回时自动恢复，可直接「重新解析」。
+const batchStore = {
+  kind: 'inbound',
+  fileObj: null,
+  fileName: '',
+  orders: [],
+  items: [],
+  failed: [],
+  unmapped: [],
+  skip: {},
+  aiPlan: null,
+  aiSig: '',
+}
+</script>
+
 <template>
   <div class="sub-page">
     <van-nav-bar title="设置" left-arrow fixed placeholder @click-left="goBack" />
@@ -12,7 +30,7 @@
         <div class="card">
           <div class="card-title">切换分仓</div>
           <div class="muted" style="margin-bottom:8px;">
-            切换或新建分仓后，当前登录会失效，需用私钥重新登录。仅管理员可操作。
+            分仓只作用于你自己的登录：切换后立即生效、无需重新登录，也不会影响其他在线用户。仅管理员可操作。
           </div>
           <div v-for="w in warehouses" :key="w.key" class="list-item">
             <div class="row">
@@ -184,9 +202,41 @@
     <van-popup v-model:show="batchShow" position="bottom" round :style="{ height: '90%' }">
       <div class="sheet-body">
         <div class="sheet-title">{{ batchCfg.title }}</div>
+        <div class="row wrap" style="gap:8px;margin-bottom:8px;">
+          <van-button size="small" plain icon="upgrade" @click="pickFile">选择 Excel</van-button>
+          <van-button
+            v-if="batchKind === 'jushuitan' && batchFileObj"
+            size="small"
+            plain
+            icon="replay"
+            :loading="batchParsing"
+            @click="reparse"
+          >重新解析{{ batchFileName ? '（' + batchFileName + '）' : '' }}</van-button>
+        </div>
         <div v-if="batchParsing" class="empty">正在解析…</div>
 
-        <template v-if="batchOrders.length">
+        <!-- 聚水潭：不逐单展示，汇总相同商品名的总体预览 -->
+        <template v-if="batchKind === 'jushuitan' && batchOrders.length">
+          <div class="row" style="justify-content:space-between;margin-bottom:6px;">
+            <span class="bold">共 {{ batchOrders.length }} 单 · {{ aggProducts.length }} 种商品</span>
+            <span class="bold">合计 {{ fmtMoney(aggTotalAmount) }}</span>
+          </div>
+          <div v-for="(p, i) in aggProducts" :key="i" class="agg-row">
+            <div class="row">
+              <span class="grow ellipsis bold">{{ p.name }}</span>
+              <span class="muted">{{ p.orders }} 单</span>
+            </div>
+            <div class="row">
+              <span class="grow muted ellipsis">
+                单位 {{ p.unit || '—' }} · 总数量 {{ fmtNum(p.qty) }} · 均价 {{ fmtMoney(p.price) }} · 每单 {{ fmtMoney(p.perOrder) }}
+              </span>
+              <span class="bold">{{ fmtMoney(p.amount) }}</span>
+            </div>
+            <div v-if="p.deduct" class="muted" style="font-size:11px;">{{ p.deduct }}</div>
+          </div>
+        </template>
+
+        <template v-else-if="batchOrders.length">
           <div class="row" style="justify-content:space-between;margin-bottom:6px;">
             <span class="bold">解析出 {{ batchOrders.length }} 单</span>
             <van-button size="mini" plain @click="toggleBatchAll">{{ batchAllOn ? '全部取消' : '全部勾选' }}</van-button>
@@ -228,7 +278,44 @@
         </template>
 
         <div v-if="batchUnmapped.length" class="alert warn">
-          ⚠ 未关联商品：{{ batchUnmapped.slice(0, 8).join('、') }}{{ batchUnmapped.length > 8 ? ' 等' : '' }}
+          ⚠ 未关联商品 {{ batchUnmapped.length }} 个，可点「去新增商品」按该名称新建（保存后回来点「重新解析」即按名称自动匹配）：
+          <div class="unmapped-list">
+            <div v-for="c in batchUnmapped" :key="c" class="unmapped-item">
+              <span class="grow ellipsis">{{ c }}</span>
+              <van-button size="mini" plain type="primary" icon="plus" @click="goNewProduct(c)">去新增商品</van-button>
+            </div>
+          </div>
+          <div v-if="batchKind === 'jushuitan'" style="margin-top:8px;">
+            <van-button size="mini" plain type="primary" :loading="aiPreviewing" @click="aiAutoPreview">重新生成 AI 方案</van-button>
+          </div>
+        </div>
+
+        <!-- AI 自动新增方案（只试算，用户确认后才真正新增） -->
+        <div v-if="batchKind === 'jushuitan' && aiPreviewing" class="alert ok">🤖 AI 正在归并商品并生成新增方案…</div>
+        <div v-else-if="batchKind === 'jushuitan' && aiPlan" class="ai-plan">
+          <div class="bold">🤖 AI 自动新增方案（尚未写入，确认后才生效）</div>
+          <div class="muted">{{ aiPlan.message }}</div>
+          <div v-if="aiNewProducts.length" style="margin-top:6px;">
+            <b>将新增 {{ aiNewProducts.length }} 个库存大类</b>
+            <div class="muted">{{ aiNewProducts.map((x) => `${x.name}（${x.category}）`).join('、') }}</div>
+          </div>
+          <div v-if="(aiPlan.mappings || []).length" style="margin-top:6px;">
+            <b>将关联 {{ aiPlan.mappings.length }} 个商品名</b>
+            <div v-for="m in aiPlan.mappings" :key="m.code" class="muted ellipsis">{{ m.code }} → {{ m.target }}</div>
+          </div>
+          <div v-if="(aiPlan.leftover || []).length" style="margin-top:6px;">
+            <b>仍无法自动关联 {{ aiPlan.leftover.length }} 个</b>，请手动新增：
+            <div class="unmapped-list">
+              <div v-for="c in aiPlan.leftover" :key="c" class="unmapped-item">
+                <span class="grow ellipsis">{{ c }}</span>
+                <van-button size="mini" plain type="primary" icon="plus" @click="goNewProduct(c)">去新增商品</van-button>
+              </div>
+            </div>
+          </div>
+          <div class="row" style="gap:8px;margin-top:10px;">
+            <van-button block size="small" plain :loading="aiPreviewing" @click="aiAutoPreview">重新生成方案</van-button>
+            <van-button block size="small" type="primary" :loading="aiApplying" @click="aiApplyPlan">确认新增并重新解析</van-button>
+          </div>
         </div>
         <div v-if="batchSkipText" class="alert warn">⚠ 跳过：{{ batchSkipText }}</div>
         <div v-if="batchFailed.length" class="alert err">
@@ -256,7 +343,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api, { upload, downloadFile, downloadJson } from '../api'
-import { fmtMoney, num } from '../utils/format'
+import { fmtMoney, fmtNum, num } from '../utils/format'
 
 const route = useRoute()
 const router = useRouter()
@@ -293,30 +380,25 @@ async function loadWarehouses() {
   } catch (e) { showToast(e.message || '加载分仓失败') }
 }
 
-async function relogin() {
-  try { await api('/api/auth/logout', 'POST') } catch (e) {}
-  localStorage.removeItem('erp_authed')
-  location.href = import.meta.env.BASE_URL.replace(/\/$/, '') + '/login'
-}
-
 async function switchWh(w) {
-  try { await showConfirmDialog({ title: '切换分仓', message: `切换后当前登录会失效，需重新登录。确认切换到「${w.name}」？` }) } catch (e) { return }
+  try { await showConfirmDialog({ title: '切换分仓', message: `仅把你的登录切到「${w.name}」，其他在线用户不受影响，也无需重新登录。确认切换？` }) } catch (e) { return }
   try {
     await api('/api/warehouses/switch', 'POST', { key: w.key })
-    showToast('已切换，请重新登录')
-    setTimeout(relogin, 600)
+    showToast(`已切换到 ${w.name}`)
+    // 分仓只随本会话生效：直接刷新页面重新加载数据，登录状态保持
+    setTimeout(() => location.reload(), 600)
   } catch (e) { showToast(e.message || '切换失败') }
 }
 
 async function createWh() {
   const name = newWhName.value.trim()
   if (!name) { showToast('请输入分仓名称'); return }
-  try { await showConfirmDialog({ title: '新建分仓', message: `将新建「${name}」并切换过去（会复制当前仓用户），随后需重新登录。确认？` }) } catch (e) { return }
+  try { await showConfirmDialog({ title: '新建分仓', message: `将新建「${name}」并把你的登录切过去（会复制你当前所在仓的用户）。无需重新登录，也不影响其他在线用户。确认？` }) } catch (e) { return }
   whSaving.value = true
   try {
     await api('/api/warehouses', 'POST', { name })
-    showToast('已创建并切换，请重新登录')
-    setTimeout(relogin, 600)
+    showToast(`已创建并切换到 ${name}`)
+    setTimeout(() => location.reload(), 600)
   } catch (e) { showToast(e.message || '创建失败') }
   whSaving.value = false
 }
@@ -500,17 +582,21 @@ const BATCH_CFG = {
     itemKey: 'orders',
   },
 }
-const batchKind = ref('inbound')
+const batchKind = ref(batchStore.kind)
 const batchShow = ref(false)
 const batchParsing = ref(false)
 const batchSaving = ref(false)
-const batchOrders = ref([])
-const batchItems = ref([])
-const batchFailed = ref([])
-const batchUnmapped = ref([])
-const batchSkip = ref({})
+const batchOrders = ref(batchStore.orders)
+const batchItems = ref(batchStore.items)
+const batchFailed = ref(batchStore.failed)
+const batchUnmapped = ref(batchStore.unmapped)
+const batchSkip = ref(batchStore.skip)
 const batchMsg = ref('')
-let pendingFile = null
+const batchFileObj = ref(batchStore.fileObj) // 最近一次选择的文件，供「重新解析」
+const batchFileName = ref(batchStore.fileName)
+const aiPlan = ref(batchStore.aiPlan)
+const aiPreviewing = ref(false)
+const aiApplying = ref(false)
 
 const batchCfg = computed(() => BATCH_CFG[batchKind.value])
 const batchAllOn = computed(() => batchOrders.value.length > 0 && batchOrders.value.every((o) => o._on))
@@ -518,20 +604,85 @@ const batchItemsAllOn = computed(() => batchItems.value.length > 0 && batchItems
 const batchSkipText = computed(() =>
   Object.entries(batchSkip.value).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}单`).join('、')
 )
+const aiNewProducts = computed(() => ((aiPlan.value && aiPlan.value.products) || []).filter((x) => x.is_new))
+
+// 汇总相同商品名（同单位）：订单数 / 总数量 / 均价 / 每单金额 / 总金额
+const aggProducts = computed(() => {
+  const map = new Map()
+  batchOrders.value.forEach((o) => {
+    (o.lines || []).forEach((l) => {
+      const key = `${l.product_name || ''}\u0000${l.unit || ''}`
+      let g = map.get(key)
+      if (!g) { g = { name: l.product_name, unit: l.unit, deduct: '', docs: new Set(), qty: 0, amount: 0 }; map.set(key, g) }
+      g.docs.add(o.doc_no || '')
+      g.qty += num(l.quantity)
+      g.amount += num(l.amount)
+      if (!g.deduct && l.deduct) g.deduct = l.deduct
+    })
+  })
+  return [...map.values()].map((g) => {
+    const n = g.docs.size
+    return {
+      name: g.name, unit: g.unit, deduct: g.deduct, orders: n, qty: g.qty, amount: g.amount,
+      price: g.qty ? g.amount / g.qty : 0, perOrder: n ? g.amount / n : 0,
+    }
+  }).sort((a, b) => b.amount - a.amount)
+})
+const aggTotalAmount = computed(() => aggProducts.value.reduce((s, x) => s + x.amount, 0))
+
+// 写回模块级单例，供离开页面（去新增商品）后返回时恢复
+function syncBatch() {
+  batchStore.kind = batchKind.value
+  batchStore.orders = batchOrders.value
+  batchStore.items = batchItems.value
+  batchStore.failed = batchFailed.value
+  batchStore.unmapped = batchUnmapped.value
+  batchStore.skip = batchSkip.value
+  batchStore.aiPlan = aiPlan.value
+  batchStore.fileObj = batchFileObj.value
+  batchStore.fileName = batchFileName.value
+}
+function resetBatch(kind) {
+  batchKind.value = kind
+  batchFileObj.value = null
+  batchFileName.value = ''
+  batchOrders.value = []
+  batchItems.value = []
+  batchFailed.value = []
+  batchUnmapped.value = []
+  batchSkip.value = {}
+  aiPlan.value = null
+  batchStore.aiSig = ''
+  syncBatch()
+}
 
 function startBatch(kind) {
+  if (batchStore.kind !== kind) resetBatch(kind) // 切换导入类型时清空上次结果
   batchKind.value = kind
+  // 有上次解析结果（例如刚从「新增商品」返回）：直接打开预览，可重新解析或另选文件
+  if (batchOrders.value.length || batchItems.value.length || batchUnmapped.value.length) {
+    batchShow.value = true
+    return
+  }
+  pickFile()
+}
+function pickFile() {
   const el = document.createElement('input')
   el.type = 'file'
   el.accept = '.xlsx'
   el.onchange = async () => {
     const f = el.files && el.files[0]
     if (!f) return
-    pendingFile = f
+    batchFileObj.value = f
+    batchFileName.value = f.name
     batchShow.value = true
     await runParse(f)
   }
   el.click()
+}
+async function reparse() {
+  if (!batchFileObj.value) { showToast('请先选择 Excel 文件'); return }
+  await runParse(batchFileObj.value)
 }
 
 async function runParse(f) {
@@ -542,6 +693,7 @@ async function runParse(f) {
   batchUnmapped.value = []
   batchSkip.value = {}
   batchMsg.value = ''
+  aiPlan.value = null
   try {
     const r = await upload(batchCfg.value.preview, f)
     const key = batchCfg.value.itemKey
@@ -553,9 +705,52 @@ async function runParse(f) {
     batchFailed.value = r.failed || []
     batchUnmapped.value = r.unmapped_codes || []
     batchSkip.value = r.skip || {}
+    syncBatch()
     if (!batchOrders.value.length && !batchItems.value.length) showToast('未解析出可提交的数据')
+    // 聚水潭：解析后自动试算 AI 新增方案（不落库），交给用户确认；同一批未关联只自动试算一次
+    if (batchKind.value === 'jushuitan' && batchUnmapped.value.length) {
+      const sig = batchUnmapped.value.slice().sort().join('\u0001')
+      if (sig !== batchStore.aiSig) { batchStore.aiSig = sig; aiAutoPreview() }
+    }
   } catch (e) { showToast('解析失败：' + e.message) }
   batchParsing.value = false
+}
+
+/* 未关联商品 → 新页面打开「新增商品」并按该名称预填 */
+function goNewProduct(code) {
+  batchShow.value = false
+  router.push({ path: '/products', query: { new: code } })
+}
+
+/* 只试算不落库：AI 归并库存大类，把方案展示给用户确认 */
+async function aiAutoPreview() {
+  const codes = batchUnmapped.value.filter(Boolean)
+  if (!codes.length) { showToast('没有可关联的商品名'); return }
+  aiPreviewing.value = true
+  try {
+    const r = await api('/api/mappings/ai-suggest', 'POST', { source: 'jushuitan', codes, apply: false })
+    aiPlan.value = r
+  } catch (e) {
+    aiPlan.value = null
+    showToast('AI 自动解析失败：' + e.message)
+  }
+  syncBatch()
+  aiPreviewing.value = false
+}
+
+/* 用户确认后：真正新增库存大类 + 建立编码关联，然后重新解析出库单 */
+async function aiApplyPlan() {
+  const codes = batchUnmapped.value.filter(Boolean)
+  if (!codes.length) { showToast('没有可关联的商品名'); return }
+  aiApplying.value = true
+  try {
+    const r = await api('/api/mappings/ai-suggest', 'POST', { source: 'jushuitan', codes, apply: true })
+    showToast(r.message || 'AI 关联完成')
+    aiPlan.value = null
+    batchStore.aiSig = '' // 允许重新解析后按新的未关联集合再自动试算
+    if (batchFileObj.value) await runParse(batchFileObj.value)
+  } catch (e) { showToast('AI 关联失败：' + e.message) }
+  aiApplying.value = false
 }
 
 function toggleBatchAll() {
@@ -602,8 +797,7 @@ async function confirmBatch() {
     batchMsg.value = `✓ 已创建 ${r.created} 个${kind === 'inbound' ? '入库' : '出库'}单${r.failed_count ? `，失败 ${r.failed_count}` : ''}`
     if (r.warnings && r.warnings.length) batchMsg.value += `；⚠ ${r.warnings.join('；')}`
     showToast('提交完成')
-    batchOrders.value = []
-    batchItems.value = []
+    resetBatch(batchKind.value) // 清空并同步模块级状态，避免下次进入还看到旧结果
   } catch (e) { showToast('提交失败：' + e.message) }
   batchSaving.value = false
 }
@@ -678,5 +872,13 @@ onMounted(() => {
 .alert.ok { background: #f0f9eb; color: #07c160; }
 .alert.warn { background: #fffbe8; color: #ed6a0c; }
 .alert.err { background: #fff1f0; color: #ee0a24; }
+.unmapped-list { margin-top: 6px; }
+.unmapped-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.unmapped-item .ellipsis { font-size: 12px; }
+.ai-plan { background: #f7f8fa; border-radius: 8px; padding: 10px; margin-top: 8px; font-size: 12px; }
+.agg-row { padding: 8px 0; border-bottom: 1px solid #f5f5f5; }
+.agg-row:last-child { border-bottom: none; }
+.agg-row .bold { font-size: 13.5px; }
+.agg-row .muted { font-size: 12px; }
 code { background: #f2f3f5; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
 </style>

@@ -55,8 +55,11 @@ class Product(Base):
     # 订单商品 → 库存商品 的关联（解耦）
     stock_product_id: Mapped[int | None] = mapped_column(
         ForeignKey("products.id"), nullable=True, index=True
-    )  # 关联的库存商品（大类）
+    )  # 关联的库存商品（大类）；多关联时为首项（兼容旧逻辑/扣点分类）
     multiplier: Mapped[float] = mapped_column(Float, default=1.0)  # 1单订单商品 = multiplier × 库存商品默认单位
+    # 订单商品 → 库存商品 的**多扣减关联**：[{product_id, multiplier}, ...]
+    # 卖 1 单该订单商品时依次扣减这些库存商品（如 礼盒 = 苹果1斤 + 梨1斤）；空 = 代发（不扣库存）
+    stock_links: Mapped[list] = mapped_column(JSON, default=list)
 
     # 缓存聚合（由库存流水重算）
     stock: Mapped[float] = mapped_column(Float, default=0.0)
@@ -84,6 +87,9 @@ class Inbound(Base):
     operator: Mapped[str] = mapped_column(String(32), default="")
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
     remark: Mapped[str] = mapped_column(String(255), default="")
+    # 付款状态：paid 已付款（默认，直接进报表）/ unpaid 待付款（先进「待付款账单」，点「已支付」后才进报表）
+    pay_status: Mapped[str] = mapped_column(String(8), default="paid")
+    paid_at: Mapped[str] = mapped_column(String(10), default="")  # 标记已支付那天（YYYY-MM-DD）
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     product: Mapped[Product] = relationship()
@@ -106,6 +112,9 @@ class Outbound(Base):
     total_amount: Mapped[float] = mapped_column(Float, default=0.0)  # 销售收入
     total_cogs: Mapped[float] = mapped_column(Float, default=0.0)  # 商品成本+包装材料成本
     total_fee: Mapped[float] = mapped_column(Float, default=0.0)  # 人工/打包等固定费用
+    # 付款状态：paid 已付款/已回款（默认，整单进报表）/ unpaid 待付款（未回款，整单先进待付款账单，不进报表）
+    pay_status: Mapped[str] = mapped_column(String(8), default="paid")
+    paid_at: Mapped[str] = mapped_column(String(10), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     lines: Mapped[list["OutboundLine"]] = relationship(
@@ -133,6 +142,8 @@ class OutboundLine(Base):
     cogs: Mapped[float] = mapped_column(Float, default=0.0)  # 该行成本
     gross_sales: Mapped[float] = mapped_column(Float, default=0.0)  # 扣点前销售金额（原始金额，未扣店铺扣点）
     pack_fee: Mapped[float] = mapped_column(Float, default=0.0)  # 该行固定费用(sale 行)
+    # 代发（订单商品未关联库存大类）：不扣任何库存，只记代发数量与代发成本
+    is_dropship: Mapped[bool] = mapped_column(Boolean, default=False)
 
     outbound: Mapped[Outbound] = relationship(back_populates="lines")
     product: Mapped[Product] = relationship()
@@ -150,6 +161,9 @@ class StockMovement(Base):
     amount: Mapped[float] = mapped_column(Float, default=0.0)  # 入库金额 / 出库成本
     ref_type: Mapped[str] = mapped_column(String(16), default="")  # inbound / outbound / manual
     ref_id: Mapped[int] = mapped_column(Integer, nullable=True)
+    # 出库行 id（仅出库产生的流水）：一行出库明细可能对应多条流水（订单商品关联多个库存商品），
+    # 供 FIFO 成本重算精确回写到对应出库行；空 = 旧数据（按顺序一一对应）
+    line_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     date: Mapped[str] = mapped_column(String(10), index=True)
     operator: Mapped[str] = mapped_column(String(32), default="")
     remark: Mapped[str] = mapped_column(String(255), default="")
@@ -173,9 +187,33 @@ class FinanceRecord(Base):
     remark: Mapped[str] = mapped_column(String(255), default="")
     ref_type: Mapped[str] = mapped_column(String(16), default="")
     ref_id: Mapped[int] = mapped_column(Integer, nullable=True)
+    # 付款状态：由来源单据（入库/出库/其他开支）带过来，或有手动记账时自己设
+    pay_status: Mapped[str] = mapped_column(String(8), default="paid")
+    paid_at: Mapped[str] = mapped_column(String(10), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     product: Mapped[Product | None] = relationship()
+
+
+class OtherExpense(Base):
+    """其他开支：仓库/经营中发生的零散支出（网线费、安装费、机器费、样品费等）。
+
+    独立于 FinanceRecord（财务流水）：这里只按「费用类型 + 日期」记账，用于经营分析页的
+    按日/按月/按类型统计；财务报表把它并入「期间费用」，从毛利中扣减得到净利。
+    """
+
+    __tablename__ = "other_expenses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    category: Mapped[str] = mapped_column(String(32), index=True)  # 费用类型：网线费/安装费/机器费/样品费…
+    amount: Mapped[float] = mapped_column(Float, default=0.0)  # 金额（元，正数）
+    date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
+    remark: Mapped[str] = mapped_column(String(255), default="")
+    operator: Mapped[str] = mapped_column(String(32), default="")
+    # 付款状态：paid 已付款（默认，直接进报表）/ unpaid 待付款（先进「待付款账单」）
+    pay_status: Mapped[str] = mapped_column(String(8), default="paid")
+    paid_at: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
 class User(Base):
@@ -279,6 +317,9 @@ class WarehouseProduct(Base):
     shelf_life: Mapped[str] = mapped_column(String(32), default="")  # 保质期，如 半年/一年
     remark: Mapped[str] = mapped_column(String(255), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 关联结算（随货包材）：**每袋**入仓品配套消耗的包材清单 [{product_id, quantity, unit}]。
+    # 入仓时按「每袋用量 × 入仓袋数」结算：扣减包材库存并计入入仓成本（口径同出库的 pack_items）。
+    pack_items: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
@@ -287,6 +328,8 @@ class WarehouseIn(Base):
 
     amount = 数量 × (采购价 + 运费)；采购价/运费均为快照，后续可在系统单独维护。
     可按「采购单号 + 配送中心」保留入仓明细，供导入《入仓配送明细》常温贴单使用。
+    pack_items / pack_cost：入仓时按入仓品「关联结算（随货包材）」结算出来的包材明细快照与成本合计，
+    计入毛利（毛利 = 收入 − 商品成本 − 运费 − 包材成本），并同步扣减包材库存。
     """
 
     __tablename__ = "warehouse_ins"
@@ -314,11 +357,17 @@ class WarehouseIn(Base):
     cogs: Mapped[float] = mapped_column(Float, default=0.0)  # 商品成本
     amount: Mapped[float] = mapped_column(Float, default=0.0)  # 收入合计（=数量×采购价）
     freight_total: Mapped[float] = mapped_column(Float, default=0.0)  # 运费合计
-    profit: Mapped[float] = mapped_column(Float, default=0.0)  # 毛利 = 收入 - 商品成本 - 运费
+    # 随货包材结算快照 + 成本：pack_items=[{product_id,name,unit,quantity,quantity_base,cost}]，pack_cost 为合计
+    pack_items: Mapped[list] = mapped_column(JSON, default=list)
+    pack_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    profit: Mapped[float] = mapped_column(Float, default=0.0)  # 毛利 = 收入 - 商品成本 - 运费 - 包材成本
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
     operator: Mapped[str] = mapped_column(String(32), default="")
     remark: Mapped[str] = mapped_column(String(255), default="")
     import_group: Mapped[str] = mapped_column(String(32), default="")  # 导入批次号，空=手动
+    # 付款状态：paid 已付款（默认）/ unpaid 待付款（先进「待付款账单」）
+    pay_status: Mapped[str] = mapped_column(String(8), default="paid")
+    paid_at: Mapped[str] = mapped_column(String(10), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     product: Mapped[WarehouseProduct | None] = relationship()

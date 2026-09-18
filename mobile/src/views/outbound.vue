@@ -1,3 +1,20 @@
+<script>
+// 批量导入的跨页面状态（模块级单例）：
+// <script setup> 里的变量随页面卸载而重建，用户「去新增商品」再返回会清空解析结果；
+// 放到模块作用域后，返回时自动恢复上次解析结果与 AI 方案，无需重新选文件。
+const batchState = {
+  kind: 'outbound',
+  fileObj: null, // 最近一次选择的 File，供「重新解析」
+  fileName: '',
+  orders: [],
+  failed: [],
+  unmapped: [],
+  skip: {},
+  aiPlan: null,
+  aiSig: '',
+}
+</script>
+
 <template>
   <div>
     <div class="seg">
@@ -16,8 +33,9 @@
         <van-cell-group inset>
           <van-field v-model="form.date" label="日期" type="date" />
           <van-field v-model="form.customer" label="客户" placeholder="可留空" />
-          <van-field v-model="form.operator" label="操作员" placeholder="谁操作的" />
-          <van-field v-model="form.remark" label="备注" placeholder="可留空" />
+          <OperatorField v-model="form.operator" />
+          <PayStatusField v-model="form.pay_status" hint="待付款（未回款）：整单先进「待付款账单」，收款后才计入财务报表" />
+          <AttachmentField v-model="form.remark" />
         </van-cell-group>
 
         <div class="divider"></div>
@@ -94,13 +112,22 @@
           <div class="stat success"><div class="label">净利</div><div class="value">{{ fmtMoney(totals.net) }}</div></div>
         </div>
         <div class="muted" style="margin-top:6px;">
-          结转成本含商品成本、包装耗材与快递费；毛利 = 收入 − 成本。合计成本 {{ fmtMoney(totals.cogs) }}。
+          结转成本含商品成本、包装耗材{{ autoExpress ? '与快递费' : '' }}；毛利 = 收入 − 成本。合计成本 {{ fmtMoney(totals.cogs) }}。
+          <template v-if="!autoExpress">已关闭自动计快递费，本单不算快递费。</template>
         </div>
 
         <van-button block round type="success" style="margin-top:12px;" :loading="saving" @click="submit">确认出库</van-button>
       </div>
 
       <div v-else class="card">
+        <div class="form-row">
+          <span class="lbl">自动计快递费</span>
+          <div class="grow"></div>
+          <van-switch v-model="autoExpress" size="20" />
+        </div>
+        <div class="muted" style="margin-bottom:8px;">
+          按整单毛重自动结算快递费；不需要就关掉（在预览里删掉「快递费」行也会自动关掉）。
+        </div>
         <van-button block round type="primary" :loading="previewing" @click="doPreview">预览结算</van-button>
         <div class="muted" style="margin-top:8px;">建议先预览：会带出泡沫箱 / 泡沫垫 / 打包费等关联结算项与库存预警。</div>
       </div>
@@ -146,7 +173,7 @@
               {{ e.records.length }} 单 · {{ e.products }} 种商品
               {{ e.multiRule ? ' · 规则：' + e.multiRule : '' }}
             </div>
-            <div v-else-if="e.rec.remark" class="item-meta">{{ e.rec.remark }}</div>
+            <RemarkView v-else-if="e.rec.remark" :remark="e.rec.remark" />
             <div class="row" style="gap:8px;margin-top:6px;">
               <van-button v-if="e.isGroup" size="mini" plain type="primary" @click="openGroup(e)">查看批次明细</van-button>
               <van-button v-else size="mini" plain @click="toggleDetail(e)">{{ detailId === e.rec.id ? '收起明细' : '查看明细' }}</van-button>
@@ -193,15 +220,44 @@
       <div class="sheet-body">
         <div class="sheet-title">{{ batchCfg.title }}</div>
         <div class="muted" style="margin-bottom:10px;">{{ batchCfg.hint }}</div>
-        <div class="row" style="gap:8px;margin-bottom:10px;">
+        <div class="row wrap" style="gap:8px;margin-bottom:10px;">
           <van-button v-if="batchCfg.tpl" size="small" plain type="primary" icon="down" @click="downloadTpl">下载模板</van-button>
           <van-button size="small" plain icon="upgrade" @click="batchFile && batchFile.click()">选择 Excel</van-button>
+          <van-button
+            v-if="batchKind === 'jushuitan' && batchFileObj"
+            size="small"
+            plain
+            icon="replay"
+            :loading="batchParsing"
+            @click="reparse"
+          >重新解析{{ batchFileName ? '（' + batchFileName + '）' : '' }}</van-button>
         </div>
         <input ref="batchFile" type="file" accept=".xlsx" style="display:none" @change="parseBatch" />
 
         <div v-if="batchParsing" class="empty">正在解析…</div>
 
-        <template v-if="batchOrders.length">
+        <!-- 聚水潭：不逐单展示，汇总相同商品名的总体预览 -->
+        <template v-if="batchKind === 'jushuitan' && batchOrders.length">
+          <div class="row" style="justify-content:space-between;margin-bottom:6px;">
+            <span class="bold">共 {{ batchOrders.length }} 单 · {{ aggProducts.length }} 种商品</span>
+            <span class="bold">合计 {{ fmtMoney(aggTotalAmount) }}</span>
+          </div>
+          <div v-for="(p, i) in aggProducts" :key="i" class="agg-row">
+            <div class="row">
+              <span class="grow ellipsis bold">{{ p.name }}</span>
+              <span class="muted">{{ p.orders }} 单</span>
+            </div>
+            <div class="row">
+              <span class="grow muted ellipsis">
+                单位 {{ p.unit || '—' }} · 总数量 {{ fmtNum(p.qty) }} · 均价 {{ fmtMoney(p.price) }} · 每单 {{ fmtMoney(p.perOrder) }}
+              </span>
+              <span class="bold">{{ fmtMoney(p.amount) }}</span>
+            </div>
+            <div v-if="p.deduct" class="muted" style="font-size:11px;">{{ p.deduct }}</div>
+          </div>
+        </template>
+
+        <template v-else-if="batchOrders.length">
           <div class="row" style="justify-content:space-between;margin-bottom:6px;">
             <span class="bold">解析出 {{ batchOrders.length }} 单</span>
             <van-button size="mini" plain @click="toggleBatchAll">{{ batchAllOn ? '全部取消' : '全部勾选' }}</van-button>
@@ -223,9 +279,43 @@
         </template>
 
         <div v-if="batchUnmapped.length" class="alert warn">
-          ⚠ 未关联商品：{{ batchUnmapped.join('、') }}
+          ⚠ 未关联商品 {{ batchUnmapped.length }} 个，可点「去新增商品」按该名称新建（保存后回来点「重新解析」即按名称自动匹配）：
+          <div class="unmapped-list">
+            <div v-for="c in batchUnmapped" :key="c" class="unmapped-item">
+              <span class="grow ellipsis">{{ c }}</span>
+              <van-button size="mini" plain type="primary" icon="plus" @click="goNewProduct(c)">去新增商品</van-button>
+            </div>
+          </div>
           <div v-if="batchKind === 'jushuitan'" style="margin-top:8px;">
-            <van-button size="mini" plain type="primary" :loading="aiMapping" @click="aiAutoMap">AI 自动新增并关联，重新解析</van-button>
+            <van-button size="mini" plain type="primary" :loading="aiPreviewing" @click="aiAutoPreview">重新生成 AI 方案</van-button>
+          </div>
+        </div>
+
+        <!-- AI 自动新增方案（只试算，用户确认后才真正新增） -->
+        <div v-if="batchKind === 'jushuitan' && aiPreviewing" class="alert ok">🤖 AI 正在归并商品并生成新增方案…</div>
+        <div v-else-if="batchKind === 'jushuitan' && aiPlan" class="ai-plan">
+          <div class="bold">🤖 AI 自动新增方案（尚未写入，确认后才生效）</div>
+          <div class="muted">{{ aiPlan.message }}</div>
+          <div v-if="aiNewProducts.length" style="margin-top:6px;">
+            <b>将新增 {{ aiNewProducts.length }} 个库存大类</b>
+            <div class="muted">{{ aiNewProducts.map((x) => `${x.name}（${x.category}）`).join('、') }}</div>
+          </div>
+          <div v-if="(aiPlan.mappings || []).length" style="margin-top:6px;">
+            <b>将关联 {{ aiPlan.mappings.length }} 个商品名</b>
+            <div v-for="m in aiPlan.mappings" :key="m.code" class="muted ellipsis">{{ m.code }} → {{ m.target }}</div>
+          </div>
+          <div v-if="(aiPlan.leftover || []).length" style="margin-top:6px;">
+            <b>仍无法自动关联 {{ aiPlan.leftover.length }} 个</b>，请手动新增：
+            <div class="unmapped-list">
+              <div v-for="c in aiPlan.leftover" :key="c" class="unmapped-item">
+                <span class="grow ellipsis">{{ c }}</span>
+                <van-button size="mini" plain type="primary" icon="plus" @click="goNewProduct(c)">去新增商品</van-button>
+              </div>
+            </div>
+          </div>
+          <div class="row" style="gap:8px;margin-top:10px;">
+            <van-button block size="small" plain :loading="aiPreviewing" @click="aiAutoPreview">重新生成方案</van-button>
+            <van-button block size="small" type="primary" :loading="aiApplying" @click="aiApplyPlan">确认新增并重新解析</van-button>
           </div>
         </div>
         <div v-if="batchSkipText" class="alert warn">⚠ 跳过：{{ batchSkipText }}</div>
@@ -250,6 +340,11 @@ import { useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api, { upload, downloadFile } from '../api'
 import ProductPicker from '../components/ProductPicker.vue'
+import AttachmentField from '../components/AttachmentField.vue'
+import RemarkView from '../components/RemarkView.vue'
+import OperatorField from '../components/OperatorField.vue'
+import PayStatusField from '../components/PayStatusField.vue'
+import { ensureUserName } from '../utils/user'
 import { fmtMoney, fmtNum, num, defaultUnit, unitFactor, priceOf, todayStr } from '../utils/format'
 
 const router = useRouter()
@@ -257,12 +352,14 @@ const tab = ref('new')
 const refreshing = ref(false)
 
 /* ---------- 新增 ---------- */
-const form = reactive({ date: todayStr(), customer: '', operator: '', remark: '' })
+const form = reactive({ date: todayStr(), customer: '', operator: '', remark: '', pay_status: 'paid' })
 const rows = ref([newRow()])
 const saving = ref(false)
 const previewing = ref(false)
 const preview = ref(null)
 const packFeeTotal = ref('0')
+// 是否按整单毛重自动结算快递费（关掉就不加快递费行；预览里删掉「快递费」行也会自动关掉）
+const autoExpress = ref(true)
 
 function newRow() {
   return { product_id: '', name: '', unit: '', qty: '1', price: '0', _factor: 1, _base_unit: '', _product: null }
@@ -285,7 +382,7 @@ async function doPreview() {
   if (!lines.length) { showToast('请至少添加一行销售商品'); return }
   previewing.value = true
   try {
-    const r = await api('/api/outbounds/preview', 'POST', { lines })
+    const r = await api('/api/outbounds/preview', 'POST', { lines, auto_express: autoExpress.value })
     preview.value = r
     packFeeTotal.value = String(r.total_fee != null ? r.total_fee : 0)
   } catch (e) { showToast('预览失败：' + e.message) }
@@ -315,6 +412,13 @@ function packLineCost(pl) {
   return packLineUnitPrice(pl) * num(pl.quantity)
 }
 function removePackLine(i) {
+  const pl = (preview.value.pack_lines || [])[i]
+  const p = pl && PRODUCTS.value.find((x) => x.id === pl.product_id)
+  // 删掉「快递费」行 → 同步关闭自动计快递费，否则重新预览/提交时又被自动算上
+  if (p && p.category === '快递') {
+    autoExpress.value = false
+    showToast('已关闭自动计快递费，本单不算快递费')
+  }
   preview.value.pack_lines.splice(i, 1)
   calcPreview()
 }
@@ -347,12 +451,16 @@ async function submit() {
       lines,
       pack_lines: packLines,
       pack_fee_total: num(packFeeTotal.value),
+      auto_express: autoExpress.value,   // 与预览一致：关掉就不再自动加快递费
+      pay_status: form.pay_status,
     })
     const warns = (r.warnings || []).length ? '\n⚠ ' + r.warnings.join('；') : ''
-    showToast('出库成功' + warns)
+    showToast('出库成功' + (form.pay_status === 'unpaid' ? '（待付款，已进待付款账单）' : '') + warns)
     clearRows()
     form.customer = ''
     form.remark = ''
+    form.pay_status = 'paid'
+    autoExpress.value = true   // 复位：下一笔仍默认自动计快递费
     loadList()
   } catch (e) { showToast('出库失败：' + e.message) }
   saving.value = false
@@ -543,30 +651,84 @@ const BATCH_CFG = {
     tpl: '',
     preview: '/api/jushuitan/import/preview',
     confirm: '/api/jushuitan/import/confirm',
-    hint: '上传聚水潭导出的「销售出库单_*.xlsx」，自动识别商品并按件数×每件规格结算。需先在「设置 → 聚水潭关联」把商品名关联到系统商品。',
+    hint: '上传聚水潭导出的「销售出库单_*.xlsx」，自动识别商品并按件数×每件规格结算。先解析预览（自动试算 AI 新增方案），确认后才出库。未关联商品可点「去新增商品」新建，或一键确认 AI 自动新增。',
   },
 }
-const batchKind = ref('outbound')
+const batchKind = ref(batchState.kind)
 const batchShow = ref(false)
-const batchFile = ref(null)
+const batchFile = ref(null)                 // 隐藏的 file input
+const batchFileObj = ref(batchState.fileObj) // 最近一次选择的文件，供「重新解析」
+const batchFileName = ref(batchState.fileName)
 const batchParsing = ref(false)
 const batchSaving = ref(false)
-const batchOrders = ref([])
-const batchFailed = ref([])
-const batchUnmapped = ref([])
-const batchSkip = ref({})
-const aiMapping = ref(false)
+const batchOrders = ref(batchState.orders)
+const batchFailed = ref(batchState.failed)
+const batchUnmapped = ref(batchState.unmapped)
+const batchSkip = ref(batchState.skip)
+const aiPlan = ref(batchState.aiPlan)
+const aiPreviewing = ref(false)
+const aiApplying = ref(false)
 
 const batchCfg = computed(() => BATCH_CFG[batchKind.value])
 const batchAllOn = computed(() => batchOrders.value.length > 0 && batchOrders.value.every((o) => o._on))
 const batchSkipText = computed(() =>
   Object.entries(batchSkip.value).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}单`).join('、')
 )
+const aiNewProducts = computed(() => ((aiPlan.value && aiPlan.value.products) || []).filter((x) => x.is_new))
+
+// 汇总相同商品名（同单位）：订单数 / 总数量 / 均价 / 每单金额 / 总金额
+const aggProducts = computed(() => {
+  const map = new Map()
+  batchOrders.value.forEach((o) => {
+    (o.lines || []).forEach((l) => {
+      const key = `${l.product_name || ''}\u0000${l.unit || ''}`
+      let g = map.get(key)
+      if (!g) { g = { name: l.product_name, unit: l.unit, deduct: '', docs: new Set(), qty: 0, amount: 0 }; map.set(key, g) }
+      g.docs.add(o.doc_no || '')
+      g.qty += num(l.quantity)
+      g.amount += num(l.amount)
+      if (!g.deduct && l.deduct) g.deduct = l.deduct
+    })
+  })
+  return [...map.values()].map((g) => {
+    const n = g.docs.size
+    return {
+      name: g.name, unit: g.unit, deduct: g.deduct, orders: n, qty: g.qty, amount: g.amount,
+      price: g.qty ? g.amount / g.qty : 0, perOrder: n ? g.amount / n : 0,
+    }
+  }).sort((a, b) => b.amount - a.amount)
+})
+const aggTotalAmount = computed(() => aggProducts.value.reduce((s, x) => s + x.amount, 0))
+
+// 把当前解析状态写回模块级单例，供离开页面（去新增商品）后返回时恢复
+function syncBatch() {
+  batchState.kind = batchKind.value
+  batchState.orders = batchOrders.value
+  batchState.failed = batchFailed.value
+  batchState.unmapped = batchUnmapped.value
+  batchState.skip = batchSkip.value
+  batchState.aiPlan = aiPlan.value
+  batchState.fileObj = batchFileObj.value
+  batchState.fileName = batchFileName.value
+}
 
 async function openBatch(kind) {
+  if (batchState.kind !== kind) resetBatch(kind) // 切换导入类型时清空上次结果
   batchKind.value = kind
   batchShow.value = true
   await ensureProducts()
+}
+function resetBatch(kind) {
+  batchKind.value = kind
+  batchFileObj.value = null
+  batchFileName.value = ''
+  batchOrders.value = []
+  batchFailed.value = []
+  batchUnmapped.value = []
+  batchSkip.value = {}
+  aiPlan.value = null
+  batchState.aiSig = ''
+  syncBatch()
 }
 function downloadTpl() { downloadFile(batchCfg.value.tpl, `${batchKind.value}_template.xlsx`).catch((e) => showToast(e.message)) }
 
@@ -574,18 +736,34 @@ async function parseBatch(e) {
   const f = e.target.files && e.target.files[0]
   e.target.value = ''
   if (!f) return
+  batchFileObj.value = f
+  batchFileName.value = f.name
+  await runParse(f)
+}
+async function reparse() {
+  if (!batchFileObj.value) { showToast('请先选择 Excel 文件'); return }
+  await runParse(batchFileObj.value)
+}
+async function runParse(f) {
   batchParsing.value = true
   batchOrders.value = []
   batchFailed.value = []
   batchUnmapped.value = []
   batchSkip.value = {}
+  aiPlan.value = null
   try {
     const r = await upload(batchCfg.value.preview, f)
     batchOrders.value = (r.orders || []).map((o) => ({ ...o, _on: true }))
     batchFailed.value = r.failed || []
     batchUnmapped.value = r.unmapped_codes || []
     batchSkip.value = r.skip || {}
+    syncBatch()
     if (!batchOrders.value.length) showToast('未解析出可出库的单据')
+    // 聚水潭：解析后自动试算 AI 新增方案（不落库），把方案交给用户确认；同一批未关联只自动试算一次
+    if (batchKind.value === 'jushuitan' && batchUnmapped.value.length) {
+      const sig = batchUnmapped.value.slice().sort().join('\u0001')
+      if (sig !== batchState.aiSig) { batchState.aiSig = sig; aiAutoPreview() }
+    }
   } catch (err) { showToast('解析失败：' + err.message) }
   batchParsing.value = false
 }
@@ -595,15 +773,41 @@ function toggleBatchAll() {
   batchOrders.value.forEach((o) => { o._on = v })
 }
 
-async function aiAutoMap() {
+/* 未关联商品 → 新页面打开「新增商品」并按该名称预填 */
+function goNewProduct(code) {
+  batchShow.value = false
+  router.push({ path: '/products', query: { new: code } })
+}
+
+/* 只试算不落库：AI 归并库存大类，把方案展示给用户确认 */
+async function aiAutoPreview() {
   const codes = batchUnmapped.value.filter(Boolean)
   if (!codes.length) { showToast('没有可关联的商品名'); return }
-  aiMapping.value = true
+  aiPreviewing.value = true
   try {
-    const r = await api('/api/mappings/ai-suggest', 'POST', { source: 'jushuitan', codes })
+    const r = await api('/api/mappings/ai-suggest', 'POST', { source: 'jushuitan', codes, apply: false })
+    aiPlan.value = r
+  } catch (e) {
+    aiPlan.value = null
+    showToast('AI 自动解析失败：' + e.message)
+  }
+  syncBatch()
+  aiPreviewing.value = false
+}
+
+/* 用户确认后：真正新增库存大类 + 建立编码关联，然后重新解析出库单 */
+async function aiApplyPlan() {
+  const codes = batchUnmapped.value.filter(Boolean)
+  if (!codes.length) { showToast('没有可关联的商品名'); return }
+  aiApplying.value = true
+  try {
+    const r = await api('/api/mappings/ai-suggest', 'POST', { source: 'jushuitan', codes, apply: true })
     showToast(r.message || 'AI 关联完成')
+    aiPlan.value = null
+    batchState.aiSig = '' // 允许重新解析后按新的未关联集合再自动试算
+    if (batchFileObj.value) await runParse(batchFileObj.value)
   } catch (e) { showToast('AI 关联失败：' + e.message) }
-  aiMapping.value = false
+  aiApplying.value = false
 }
 
 async function confirmBatch() {
@@ -630,7 +834,7 @@ async function confirmBatch() {
     if (r.failed_count) msg += `，失败 ${r.failed_count}`
     showToast(msg)
     batchShow.value = false
-    batchOrders.value = []
+    resetBatch(batchKind.value) // 清空并同步模块级状态，避免下次进入还看到旧结果
     const dates = orders.map((o) => o.date).filter(Boolean).sort()
     if (dates.length) { filter.from = dates[0]; filter.to = dates[dates.length - 1] }
     tab.value = 'list'
@@ -639,7 +843,11 @@ async function confirmBatch() {
   batchSaving.value = false
 }
 
-onMounted(() => { ensureProducts(); loadList() })
+onMounted(async () => {
+  ensureProducts()
+  form.operator = await ensureUserName()   // 操作员固定为当前登录账号
+  loadList()
+})
 onActivated(() => { if (tab.value === 'list') loadList() })
 </script>
 
@@ -655,6 +863,15 @@ onActivated(() => { if (tab.value === 'list') loadList() })
 .alert { border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-top: 8px; }
 .alert.warn { background: #fffbe8; color: #ed6a0c; }
 .alert.err { background: #fff1f0; color: #ee0a24; }
+.alert.ok { background: #f0f9eb; color: #07c160; }
+.unmapped-list { margin-top: 6px; }
+.unmapped-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.unmapped-item .ellipsis { font-size: 12px; }
+.ai-plan { background: #f7f8fa; border-radius: 8px; padding: 10px; margin-top: 8px; font-size: 12px; }
+.agg-row { padding: 8px 0; border-bottom: 1px solid #f5f5f5; }
+.agg-row:last-child { border-bottom: none; }
+.agg-row .bold { font-size: 13.5px; }
+.agg-row .muted { font-size: 12px; }
 .detail-box { background: #f7f8fa; border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
 .detail-line { padding: 5px 0; border-bottom: 1px solid #ececec; font-size: 13px; }
 .detail-line:last-child { border-bottom: none; }

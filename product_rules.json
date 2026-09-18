@@ -48,9 +48,7 @@
     "product_name": "快递费"
   },
 
-  "accounts": [
-    { "username": "admin1", "password": "admin1", "name": "管理员", "role": "admin" }
-  ],
+  "accounts": [],
 
   "code_mappings": [
     { "source": "jushuitan", "external_code": "京鲜生七彩花生2斤", "product_name": "京鲜生七彩花生2斤", "score": 1.0 }
