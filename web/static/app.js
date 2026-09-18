@@ -5457,12 +5457,163 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+/* =============== 停服公告 / 系统维护页 =============== */
+/* 状态由私钥管理后台（keyadmin「更新维护」）写入，经 GET /api/maintenance/status 下发：
+   - announce    ：顶部滚动提示「还有 X 分钟停机维护」并倒计时，归零自动进维护页
+   - maintenance ：整屏维护页，服务恢复（主服务再次启动）后自动返回
+   - 接口 5xx / 不可达（主服务已停）：同样进维护页，恢复后自动返回 */
+const MT_STATE = {
+  timer: null, tick: null, misses: 0, maskOn: false, recovering: false,
+  remaining: 0, eta: 0, message: "",
+};
+function mtEls() {
+  return {
+    bar: document.getElementById("noticeBar"),
+    mask: document.getElementById("maintainMask"),
+    text: document.getElementById("noticeText"),
+    text2: document.getElementById("noticeText2"),
+  };
+}
+async function mtFetchStatus() {
+  const ctl = new AbortController();
+  const to = setTimeout(() => ctl.abort(), 8000);
+  try {
+    const res = await fetch(routePath("/api/maintenance/status"), { cache: "no-store", signal: ctl.signal });
+    if (!res.ok) return { ok: false, status: res.status };
+    return { ok: true, data: await res.json() };
+  } catch (e) {
+    return { ok: false, status: 0 };
+  } finally {
+    clearTimeout(to);
+  }
+}
+function mtStopTick() {
+  if (MT_STATE.tick) { clearInterval(MT_STATE.tick); MT_STATE.tick = null; }
+}
+function mtPollInterval(ms) {
+  if (MT_STATE.timer) clearInterval(MT_STATE.timer);
+  MT_STATE.timer = setInterval(mtCheck, ms);
+}
+function mtNoticeText() {
+  const sec = Math.max(0, Math.floor(MT_STATE.remaining));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  const eta = MT_STATE.eta ? `（预计维护 ${MT_STATE.eta} 分钟完成）` : "";
+  const head = MT_STATE.message ? `${MT_STATE.message}　` : "";
+  if (sec <= 0) return `${head}系统即将停机维护${eta}，请立即保存当前工作并退出，以免数据丢失。`;
+  const left = m > 0 ? `${m} 分 ${String(s).padStart(2, "0")} 秒` : `${s} 秒`;
+  return `${head}系统将于 ${left} 后停机维护${eta}，请及时保存当前工作并退出，以免数据丢失。`;
+}
+function mtShowNotice() {
+  const { bar, text, text2 } = mtEls();
+  if (!bar) return;
+  const t = mtNoticeText();
+  if (text) text.textContent = t;
+  if (text2) text2.textContent = t;
+  bar.style.display = "flex";
+  document.body.classList.add("notice-on");
+  requestAnimationFrame(() => {
+    const track = bar.querySelector(".notice-track");
+    const vp = bar.querySelector(".notice-viewport");
+    if (!track || !vp) return;
+    // 文案较短时不滚动（滚动会显得内容空转）
+    track.style.animation = track.scrollWidth / 2 > vp.clientWidth + 4 ? "" : "none";
+  });
+}
+function mtHideNotice() {
+  const { bar } = mtEls();
+  if (bar) bar.style.display = "none";
+  document.body.classList.remove("notice-on");
+}
+function mtEnterMaintenance(opts) {
+  opts = opts || {};
+  mtStopTick();
+  mtHideNotice();
+  const { mask } = mtEls();
+  if (!mask) return;
+  const title = document.getElementById("mtTitle");
+  const sub = document.getElementById("mtSub");
+  const info = document.getElementById("mtInfo");
+  const foot = document.getElementById("mtFoot");
+  if (opts.offline) {
+    title.textContent = "系统暂时不可用";
+    sub.textContent = "系统正在进行维护，请稍后再试。";
+    info.innerHTML = "页面会自动检测服务状态，恢复后自动返回，无需手动刷新。";
+  } else {
+    title.textContent = "系统维护中";
+    sub.textContent = opts.message || "系统正在停机维护，给您带来不便敬请谅解。";
+    info.innerHTML = opts.eta ? `预计维护时长约 <b>${opts.eta} 分钟</b>，请稍后重新访问。` : "请稍后重新访问。";
+  }
+  if (foot) foot.textContent = "正在检测服务状态，服务恢复后会自动返回…";
+  mask.style.display = "flex";
+  MT_STATE.maskOn = true;
+  MT_STATE.recovering = false;
+  mtPollInterval(3000); // 维护中加快检测频率
+}
+function mtRecover() {
+  if (MT_STATE.recovering) return;
+  MT_STATE.recovering = true;
+  mtStopTick();
+  const foot = document.getElementById("mtFoot");
+  if (foot) foot.textContent = "服务已恢复，正在返回系统…";
+  setTimeout(() => location.reload(), 1200);
+}
+function mtStartCountdown(st) {
+  MT_STATE.remaining = st.remaining_seconds || 0;
+  MT_STATE.eta = st.eta_minutes || 0;
+  MT_STATE.message = st.message || "";
+  mtShowNotice();
+  if (MT_STATE.tick) return;
+  MT_STATE.tick = setInterval(() => {
+    MT_STATE.remaining -= 1;
+    if (MT_STATE.remaining <= 0) {
+      mtStopTick();
+      mtCheck(); // 以服务端为准：到期服务端会返回 maintenance
+      return;
+    }
+    mtShowNotice();
+  }, 1000);
+}
+async function mtCheck() {
+  const r = await mtFetchStatus();
+  if (!r.ok) {
+    MT_STATE.misses += 1;
+    // 502/503/504：后端已停（典型停服场景）→ 立刻上维护页；网络抖动则连续 2 次再上
+    if (!MT_STATE.maskOn && (r.status >= 500 || MT_STATE.misses >= 2)) {
+      mtEnterMaintenance({ offline: true });
+    }
+    return;
+  }
+  MT_STATE.misses = 0;
+  const st = r.data || {};
+  const mode = st.mode || "off";
+  if (mode === "maintenance") {
+    mtEnterMaintenance({ eta: st.eta_minutes, message: st.message });
+    return;
+  }
+  if (mode === "announce" && (st.remaining_seconds || 0) > 0) {
+    if (MT_STATE.maskOn) { mtRecover(); return; } // 维护计划被取消，直接返回
+    mtPollInterval(15000);
+    mtStartCountdown(st);
+    return;
+  }
+  if (MT_STATE.maskOn) { mtRecover(); return; }
+  mtStopTick();
+  mtHideNotice();
+}
+function startMaintenanceWatch() {
+  if (MT_STATE.timer) return;
+  mtPollInterval(15000);
+  mtCheck();
+}
+
 /* ---------- 初始化 ---------- */
 (async function init() {
   try {
     const cfg = await fetch("/config.json", { cache: "no-store" }).then((r) => r.json());
     Object.assign(ROUTES, cfg.routes || {});
   } catch (e) {}
+  startMaintenanceWatch(); // 停服公告 / 系统维护页：先于登录检测，维护中不暴露登录界面
   showLogin();
   try {
     const me = await api("/api/auth/me");

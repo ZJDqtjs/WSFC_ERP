@@ -1114,6 +1114,10 @@ td.num, th.num {
   display: flex; 
   align-items: center; 
   justify-content: center;
+  /* 窗口高度不足（小屏 / 高缩放 / 横屏）时整屏可滚动，登录按钮永远点得到 */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -1134,6 +1138,9 @@ td.num, th.num {
   box-shadow: var(--shadow-lg); 
   animation: pop 0.3s cubic-bezier(0.1, 0, 0.2, 0);
   border: 1px solid var(--border);
+  /* 空间够时自动居中；空间不够时贴顶，配合遮罩滚动不会出现「顶部被裁且滚不上去」 */
+  margin: auto;
+  flex-shrink: 0;
 }
 
 .login-brand { 
@@ -1185,6 +1192,109 @@ td.num, th.num {
 .toast.show { 
   opacity: 1; 
   transform: translateX(-50%) translateY(0); 
+}
+
+/* ============ 停服公告滚动条 ============ */
+.notice-bar {
+  position: fixed; 
+  top: 0; left: 0; right: 0; 
+  z-index: 900;
+  display: flex; 
+  align-items: center; 
+  gap: 10px;
+  height: 40px; 
+  padding: 0 14px;
+  background: linear-gradient(90deg, #b45309 0%, #d97706 55%, #f59e0b 100%);
+  color: #fff; 
+  font-size: 13.5px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+}
+
+.notice-ico { flex-shrink: 0; font-size: 15px; }
+
+.notice-viewport { flex: 1; overflow: hidden; }
+
+.notice-track {
+  display: inline-flex; 
+  white-space: nowrap;
+  will-change: transform;
+  animation: noticeScroll 24s linear infinite;
+}
+
+.notice-text { padding-right: 90px; font-weight: 500; }
+
+@keyframes noticeScroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+body.notice-on .app { padding-top: 40px; }
+
+/* 公告条是 fixed 的，侧边栏需同步下移，避免被遮住或撑出滚动条 */
+body.notice-on .sidebar { top: 40px; height: calc(100vh - 40px); }
+
+body.notice-on .login-mask { padding-top: 40px; }
+
+/* ============ 系统维护页 ============ */
+.maintain-mask {
+  position: fixed; 
+  inset: 0; 
+  z-index: 3000;
+  display: flex; 
+  align-items: center; 
+  justify-content: center;
+  padding: 24px;
+  background: linear-gradient(135deg, #00174a 0%, #00337a 50%, #0067c0 100%);
+  /* 手机横屏 / 小窗口下维护卡片过高时可滚动 */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (prefers-color-scheme: dark) {
+  .maintain-mask { background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 50%, #2d2d2d 100%); }
+}
+
+.maintain-box {
+  background: var(--card); 
+  border-radius: var(--radius-lg); 
+  padding: 40px 36px;
+  width: 100%; 
+  max-width: 520px; 
+  text-align: center;
+  box-shadow: var(--shadow-lg);
+  margin: auto;
+  flex-shrink: 0;
+}
+
+.maintain-ico { font-size: 44px; line-height: 1; margin-bottom: 12px; }
+
+.maintain-box h2 { font-size: 22px; margin-bottom: 10px; }
+
+.maintain-sub { color: var(--text-secondary); font-size: 14px; line-height: 1.7; }
+
+.maintain-info { margin-top: 14px; font-size: 14px; color: var(--text); }
+
+.maintain-info b { color: var(--primary); }
+
+.maintain-foot {
+  display: flex; 
+  align-items: center; 
+  justify-content: center; 
+  gap: 8px;
+  margin: 20px 0 18px; 
+  color: var(--muted); 
+  font-size: 12.5px;
+}
+
+.maintain-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--primary);
+  animation: mtPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes mtPulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
 }
 
 /* ============ 杂项 ============ */

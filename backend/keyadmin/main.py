@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import maintenance as mt
 from app.auth import ensure_seed_users, verify_password
 from app.clear_data import (
     CLEAR_ITEMS,
@@ -464,6 +465,104 @@ def clear_execute_endpoint(data: ClearIn, _: bool = Depends(_require)):
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, f"清除失败：{e}")
+
+
+# ============================================================
+#  更新维护：停服公告 / 维护模式
+#  状态写入 data/maintenance.json，ERP 主服务读取后经 /api/maintenance/status 下发给前端：
+#    announce    → 前端顶部滚动提示「还有 X 分钟停服」并倒计时，到点自动切维护页
+#    maintenance → 前端整屏「系统维护中」，直到主服务再次启动或在此手动结束
+# ============================================================
+class MaintenanceIn(BaseModel):
+    lead_minutes: int = 10
+    eta_minutes: int = 30
+    message: str = ""
+    auto_resume_on_start: bool = True
+
+
+@app.get("/api/maintenance")
+def maintenance_state(_: bool = Depends(_require)):
+    """当前维护状态（含倒计时剩余秒数与实际生效模式）。"""
+    return mt.admin_state()
+
+
+@app.post("/api/maintenance/announce")
+def maintenance_announce(data: MaintenanceIn, _: bool = Depends(_require)):
+    """发布停服公告并开始倒计时（提前 lead_minutes 分钟通知用户）。"""
+    return mt.start_announce(
+        data.lead_minutes, data.eta_minutes, data.message, data.auto_resume_on_start
+    )
+
+
+@app.post("/api/maintenance/start")
+def maintenance_start(data: MaintenanceIn, _: bool = Depends(_require)):
+    """立即进入维护模式（不给倒计时，前端马上显示维护页）。"""
+    return mt.start_maintenance(data.eta_minutes, data.message, data.auto_resume_on_start)
+
+
+@app.post("/api/maintenance/cancel")
+def maintenance_cancel(_: bool = Depends(_require)):
+    """结束维护 / 取消公告，恢复正常访问。"""
+    return mt.cancel_maintenance()
+
+
+# ============================================================
+#  网站日志：谁在访问、请求了什么、有没有报错
+#  数据来自 ERP 主服务写入的 data/activity.db（独立库，与业务数据无关）
+# ============================================================
+mt.activity.ensure_table()  # keyadmin 先于主服务启动时也能正常读（并自动建表）
+
+
+@app.get("/api/activity/summary")
+def activity_summary(minutes: int = 5, _: bool = Depends(_require)):
+    """概览：近 N 分钟在线人数 / 今日请求量 / 错误数 / 平均耗时 + 在线明细。"""
+    return mt.activity.summary(minutes=minutes)
+
+
+@app.get("/api/activity/logs")
+def activity_logs(
+    limit: int = 200,
+    offset: int = 0,
+    q: str = "",
+    only_error: bool = False,
+    minutes: int = 0,
+    _: bool = Depends(_require),
+):
+    """请求流水（倒序）；q 可在账号/IP/路径/UA 中模糊匹配。"""
+    return mt.activity.query(
+        limit=limit, offset=offset, keyword=q, only_error=only_error, minutes=minutes
+    )
+
+
+@app.delete("/api/activity/logs")
+def activity_clear(_: bool = Depends(_require)):
+    return {"ok": True, "deleted": mt.activity.clear()}
+
+
+@app.get("/api/activity/export")
+def activity_export(minutes: int = 0, _: bool = Depends(_require)):
+    """导出最近日志为 CSV（带 BOM，Excel 直接打开不乱码）。"""
+    import csv
+    import io
+
+    from fastapi.responses import StreamingResponse
+
+    rows = mt.activity.query(limit=1000, minutes=minutes)["items"]
+    buf = io.StringIO()
+    buf.write("\ufeff")
+    writer = csv.writer(buf)
+    writer.writerow(["时间", "账号", "IP", "方法", "路径", "查询串", "状态码", "耗时(ms)", "分仓", "User-Agent"])
+    for r in rows:
+        writer.writerow([
+            r["time"], r["username"] or "", r["ip"], r["method"], r["path"],
+            r["query"], r["status"], r["ms"], r["warehouse"], r["ua"],
+        ])
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="activity.csv"'},
+    )
 
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="keyadmin_static")

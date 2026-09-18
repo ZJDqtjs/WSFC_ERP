@@ -7,6 +7,17 @@
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
+  <!-- 停服公告滚动条：仅在管理员发布维护公告（倒计时）期间显示 -->
+  <div class="notice-bar" id="noticeBar" style="display:none;">
+    <span class="notice-ico">⚠</span>
+    <div class="notice-viewport">
+      <div class="notice-track">
+        <span class="notice-text" id="noticeText"></span>
+        <span class="notice-text" id="noticeText2"></span>
+      </div>
+    </div>
+  </div>
+
   <!-- 内联 SVG 图标库（简约线性风格，随文字颜色变色） -->
   <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
     <symbol id="i-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></symbol>
@@ -1024,6 +1035,20 @@
   </div>
 
   <div class="toast" id="toast"></div>
+
+  <!-- 系统维护页：停服倒计时归零 / 后端不可用时整屏显示，服务恢复后自动返回 -->
+  <div class="maintain-mask" id="maintainMask" style="display:none;">
+    <div class="maintain-box">
+      <div class="maintain-ico">🛠</div>
+      <h2 id="mtTitle">系统维护中</h2>
+      <p class="maintain-sub" id="mtSub">系统正在停机维护，请稍后再试。</p>
+      <div class="maintain-info" id="mtInfo"></div>
+      <div class="maintain-foot">
+        <span class="maintain-dot"></span><span id="mtFoot">正在检测服务状态，服务恢复后会自动返回…</span>
+      </div>
+      <button class="btn secondary" onclick="location.reload()">立即刷新</button>
+    </div>
+  </div>
 
   <script src="/app.js"></script>
 </body>

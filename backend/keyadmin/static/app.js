@@ -1,8 +1,24 @@
 /* 私钥管理工具 - 前端逻辑 */
 const $ = (id) => document.getElementById(id);
 let KEY_USERS = [];
+let MAINT = null;        // 最近一次维护状态
+let MAINT_TICK = null;   // 维护倒计时定时器
+let MAINT_FORM_INIT = false;
+let LOG_TIMER = null;    // 网站日志自动刷新定时器
+let LOG_OFFSET = 0;
+let LOG_TOTAL = 0;
+let CUR_PANEL = "login";
+const LOG_PAGE = 100;
 
-function toast(msg, ms = 2400) {
+const PANEL_TITLES = {
+  login: "登录管理",
+  maint: "更新维护",
+  logs: "网站日志",
+  backup: "备份与恢复",
+  clear: "数据清理",
+};
+
+function toast(msg, ms = 2600) {
   const t = $("toast");
   t.textContent = msg;
   t.classList.add("show");
@@ -48,6 +64,19 @@ function gateErr(msg) {
 async function logout() {
   try { await api("/api/logout", "POST"); } catch (e) {}
   location.reload();
+}
+
+/* ---------- 侧边栏分区切换 ---------- */
+function switchPanel(panel) {
+  CUR_PANEL = panel;
+  document.querySelectorAll(".side-item").forEach((b) => b.classList.toggle("active", b.dataset.panel === panel));
+  document.querySelectorAll(".panel").forEach((s) => s.classList.toggle("active", s.id === "panel-" + panel));
+  $("pageTitle").textContent = PANEL_TITLES[panel] || "";
+  if (panel === "maint") loadMaint();
+  if (panel === "logs") refreshLogs();
+  if (panel === "backup") loadBackups();
+  if (panel === "clear" && !$("clWarehouse").options.length) loadClearWarehouses();
+  logAutoToggle();
 }
 
 /* ---------- 生成私钥 ---------- */
@@ -133,6 +162,205 @@ async function syncUsers() {
     toast(r.note || "已同步");
     loadUsers();
   } catch (e) { toast("同步失败：" + e.message); }
+}
+
+/* =============== 更新维护（停服公告 / 维护模式） =============== */
+function fmtCountdown(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return m > 0 ? `${m} 分 ${String(s).padStart(2, "0")} 秒` : `${s} 秒`;
+}
+function maintMode(st) {
+  return st.effective_mode || st.mode || "off";
+}
+function maintBadge(mode) {
+  if (mode === "maintenance") return { cls: "maint-badge on", text: "⛔ 维护中" };
+  if (mode === "announce") return { cls: "maint-badge warn", text: "📢 停服公告中" };
+  return { cls: "maint-badge off", text: "🟢 正常服务" };
+}
+async function loadMaint() {
+  try { MAINT = await api("/api/maintenance"); }
+  catch (e) { toast("加载维护状态失败：" + e.message); return; }
+  if (!MAINT_FORM_INIT) {
+    MAINT_FORM_INIT = true;
+    if (MAINT.lead_minutes) $("mtLead").value = MAINT.lead_minutes;
+    if (MAINT.eta_minutes) $("mtEta").value = MAINT.eta_minutes;
+    $("mtMsg").value = MAINT.message || "";
+    $("mtAutoResume").checked = MAINT.auto_resume_on_start !== false;
+  }
+  renderMaint();
+  if (MAINT_TICK) { clearInterval(MAINT_TICK); MAINT_TICK = null; }
+  if (maintMode(MAINT) === "announce" && (MAINT.remaining_seconds || 0) > 0) {
+    MAINT_TICK = setInterval(() => {
+      MAINT.remaining_seconds -= 1;
+      if (MAINT.remaining_seconds <= 0) {
+        clearInterval(MAINT_TICK); MAINT_TICK = null;
+        loadMaint();
+        return;
+      }
+      renderMaint();
+    }, 1000);
+  }
+}
+function renderMaint() {
+  if (!MAINT) return;
+  const mode = maintMode(MAINT);
+  const b = maintBadge(mode);
+  const eta = MAINT.eta_minutes || 0;
+  let detail = "";
+  if (mode === "announce") {
+    detail = `用户端顶部正在滚动提示：<b>还有 ${fmtCountdown(MAINT.remaining_seconds)} 停机维护</b>，预计维护 ${eta} 分钟。倒计时结束自动进入维护页。`;
+  } else if (mode === "maintenance") {
+    detail = `用户端已显示「系统维护中」整屏页面，预计 ${eta} 分钟后恢复。${MAINT.auto_resume_on_start ? "再次启动主服务会自动结束维护。" : "需在此手动点「结束维护」。"}`;
+  } else {
+    detail = "系统正常对外服务。发布公告后可提前通知用户停服时间。";
+  }
+  if (MAINT.message) detail += `<br />公告文案：${esc(MAINT.message)}`;
+  const el = $("maintStatus");
+  if (el) {
+    el.innerHTML = `<span class="${b.cls}">${b.text}</span><div class="ms-detail">${detail}</div>`;
+  }
+  const hint = $("topHint");
+  if (hint) {
+    hint.innerHTML = mode === "off"
+      ? "当前状态：正常服务"
+      : mode === "announce"
+        ? `当前状态：<b style="color:#ed6a0c;">停服倒计时 ${fmtCountdown(MAINT.remaining_seconds)}</b>`
+        : '当前状态：<b style="color:#d13438;">维护中</b>';
+  }
+}
+function maintForm() {
+  return {
+    lead_minutes: Math.max(1, parseInt($("mtLead").value, 10) || 10),
+    eta_minutes: Math.max(1, parseInt($("mtEta").value, 10) || 30),
+    message: $("mtMsg").value.trim(),
+    auto_resume_on_start: $("mtAutoResume").checked,
+  };
+}
+async function maintAnnounce() {
+  const f = maintForm();
+  if (!confirm(
+    `确认发布停服公告？\n\n· ${f.lead_minutes} 分钟后开始停服维护\n· 预计维护时长 ${f.eta_minutes} 分钟\n\n` +
+    "用户端顶部将滚动提示并倒计时，倒计时结束自动显示维护页。"
+  )) return;
+  try {
+    MAINT = await api("/api/maintenance/announce", "POST", f);
+    MAINT_FORM_INIT = true;
+    toast("公告已发布，开始倒计时");
+    renderMaint();
+  } catch (e) { toast("发布失败：" + e.message); }
+}
+async function maintStart() {
+  const f = maintForm();
+  if (!confirm(`确认立即进入维护模式？\n\n用户端会立刻显示「系统维护中」，预计 ${f.eta_minutes} 分钟完成。`)) return;
+  try {
+    MAINT = await api("/api/maintenance/start", "POST", f);
+    MAINT_FORM_INIT = true;
+    toast("已进入维护模式");
+    renderMaint();
+  } catch (e) { toast("操作失败：" + e.message); }
+}
+async function maintCancel() {
+  if (!confirm("确认结束维护 / 取消公告，恢复正常访问？")) return;
+  try {
+    MAINT = await api("/api/maintenance/cancel", "POST");
+    MAINT_FORM_INIT = false;
+    toast("已恢复正常访问");
+    renderMaint();
+  } catch (e) { toast("操作失败：" + e.message); }
+}
+
+/* =============== 网站日志 =============== */
+function statusCls(code) {
+  if (!code) return "st-bad";
+  if (code >= 500) return "st-bad";
+  if (code >= 400) return "st-warn";
+  return "st-ok";
+}
+function logAutoToggle() {
+  if (LOG_TIMER) { clearInterval(LOG_TIMER); LOG_TIMER = null; }
+  if (CUR_PANEL === "logs" && $("logAuto").checked) {
+    LOG_TIMER = setInterval(() => { refreshLogs(true); }, 3000);
+  }
+}
+async function refreshLogs(silent) {
+  await loadLogSummary(silent);
+  await loadLogs(false, silent);
+}
+async function loadLogSummary(silent) {
+  let s;
+  try { s = await api("/api/activity/summary?minutes=5"); }
+  catch (e) { if (!silent) toast("加载概览失败：" + e.message); return; }
+  const box = $("logStats");
+  if (box) {
+    box.innerHTML = `
+      <div class="stat"><div class="stat-v">${s.online_people}</div><div class="stat-l">当前在线（账号/IP）</div></div>
+      <div class="stat"><div class="stat-v">${s.online_ips}</div><div class="stat-l">活跃 IP 数</div></div>
+      <div class="stat"><div class="stat-v">${s.today_requests}</div><div class="stat-l">今日请求数</div></div>
+      <div class="stat"><div class="stat-v ${s.today_errors ? "danger" : ""}">${s.today_errors}</div><div class="stat-l">今日错误数</div></div>
+      <div class="stat"><div class="stat-v">${s.avg_ms} ms</div><div class="stat-l">今日平均响应</div></div>
+      <div class="stat"><div class="stat-v">${s.total_rows}</div><div class="stat-l">日志总数</div></div>
+    `;
+  }
+  const t = $("onlineTable");
+  if (!t) return;
+  const rows = s.online || [];
+  t.innerHTML = `<thead><tr><th>账号</th><th>IP</th><th>最近活动</th><th>近 5 分钟请求</th><th>最近访问</th></tr></thead><tbody>` +
+    (rows.length ? rows.map((o) => `<tr>
+      <td><b>${esc(o.username)}</b></td>
+      <td class="mono">${esc(o.ip) || "—"}</td>
+      <td class="muted">${esc(o.last_time)}</td>
+      <td>${o.requests}</td>
+      <td class="mono path-cell" title="${esc(o.last_path)}">${esc(o.last_path)}</td>
+    </tr>`).join("") : `<tr><td colspan="5" class="empty">近 5 分钟没有任何访问（无人使用系统）</td></tr>`) + `</tbody>`;
+}
+async function loadLogs(reset, silent) {
+  if (reset) LOG_OFFSET = 0;
+  const q = $("logQ").value.trim();
+  const only = $("logErr").checked;
+  const minutes = $("logMinutes").value;
+  let r;
+  try {
+    r = await api(
+      `/api/activity/logs?limit=${LOG_PAGE}&offset=${LOG_OFFSET}` +
+      `&q=${encodeURIComponent(q)}&only_error=${only}&minutes=${minutes}`
+    );
+  } catch (e) { if (!silent) toast("加载日志失败：" + e.message); return; }
+  LOG_TOTAL = r.total || 0;
+  const t = $("logTable");
+  const items = r.items || [];
+  t.innerHTML = `<thead><tr>
+    <th>时间</th><th>账号</th><th>IP</th><th>方法</th><th>路径</th><th>状态</th><th>耗时</th>
+  </tr></thead><tbody>` +
+    (items.length ? items.map((x) => `<tr>
+      <td class="muted">${esc(x.time)}</td>
+      <td>${x.username ? `<b>${esc(x.username)}</b>` : '<span class="muted">未登录</span>'}</td>
+      <td class="mono">${esc(x.ip)}</td>
+      <td class="mono">${esc(x.method)}</td>
+      <td class="mono path-cell" title="${esc(x.path + (x.query ? "?" + x.query : ""))}">${esc(x.path)}${x.query ? `<span class="muted">?${esc(x.query.slice(0, 40))}</span>` : ""}</td>
+      <td class="${statusCls(x.status)}">${x.status || "—"}</td>
+      <td class="muted">${x.ms} ms</td>
+    </tr>`).join("") : `<tr><td colspan="7" class="empty">没有符合条件的日志</td></tr>`) + `</tbody>`;
+  const start = LOG_TOTAL ? LOG_OFFSET + 1 : 0;
+  $("logCount").textContent = `共 ${LOG_TOTAL} 条，显示 ${start}-${Math.min(LOG_OFFSET + LOG_PAGE, LOG_TOTAL)} 条`;
+}
+function logPage(dir) {
+  const next = LOG_OFFSET + dir * LOG_PAGE;
+  if (next < 0 || (dir > 0 && next >= LOG_TOTAL)) return;
+  LOG_OFFSET = next;
+  loadLogs(false);
+}
+function exportLogs() {
+  window.location.href = `/api/activity/export?minutes=${$("logMinutes").value}`;
+}
+async function clearLogs() {
+  if (!confirm("确认清空全部网站访问日志？该操作不可撤销。")) return;
+  try {
+    const r = await api("/api/activity/logs", "DELETE");
+    toast(`已清空 ${r.deleted} 条日志`);
+    refreshLogs();
+  } catch (e) { toast("清空失败：" + e.message); }
 }
 
 /* ---------- 备份与应急抢救（后门） ---------- */
@@ -284,7 +512,8 @@ function copyKey() {
       $("admin").style.display = "";
       await loadUsers();
       loadBackups();
-      loadClearWarehouses();
+      loadMaint();   // 顶栏实时显示「正常 / 倒计时 / 维护中」，后台每 5 秒同步一次
+      setInterval(() => { if (CUR_PANEL !== "maint") loadMaint(); }, 5000);
     }
     // 未通过门禁则保持密码框
   } catch (e) {}

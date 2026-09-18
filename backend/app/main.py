@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -16,7 +17,8 @@ from .database import (
     set_request_key,
 )
 from .initdb import ensure_schema, init_warehouse
-from .routers import ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, others, outbound, pack_rules, payables, product_data, products, report, uploads, warehouse_in, warehouses
+from .maintenance import on_service_start, record_request, should_record, start_activity_store
+from .routers import ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, maintenance, others, outbound, pack_rules, payables, product_data, products, report, uploads, warehouse_in, warehouses
 from .routers.backup import create_backup_file, load_config
 
 # 桌面 Web 前端目录（WSFC_ERP/web/static，前后端分离；SERVE_STATIC=1 时后端顺带托管）
@@ -91,6 +93,11 @@ async def auto_backup_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 0) 网站活动日志后台写盘线程；同时「再次启动主服务 = 维护完成」，按约定自动结束维护模式
+    start_activity_store()
+    resumed = on_service_start()
+    if resumed:
+        print(f"[维护模式] 主服务已启动，自动结束「{resumed}」状态，恢复正常访问")
     # 1) 默认仓（奥斯迪）初始化（幂等）
     init_warehouse(DEFAULT_WAREHOUSE_KEY)
     # 2) 初始化默认分仓（新登录会话的起点）：与奥斯迪不同时也初始化（防 db 文件在但表/种子缺失）
@@ -117,6 +124,48 @@ async def normalize_api_route(request, call_next):
         request.scope["path"] = "/api" + request.scope["path"][len(API_ROUTE):]
     return await call_next(request)
 
+
+class AccessLogMiddleware:
+    """网站活动日志（keyadmin「网站日志」页）。
+
+    纯 ASGI 中间件：只包装 send 拿状态码，不缓冲/不读取响应体，因此对 SSE 流式输出
+    （AI 智能录入）与文件下载零干扰。记录动作仅为一次入队，落盘由后台线程批量完成。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        # 只记业务 API：静态文件由 nginx 托管；维护状态轮询太频繁，不计入
+        if not should_record(path, API_ROUTE):
+            await self.app(scope, receive, send)
+            return
+        from starlette.requests import Request as _Request
+
+        started = time.perf_counter()
+        status = 500
+
+        async def send_wrapper(message):
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            try:
+                record_request(
+                    _Request(scope), path, status, int((time.perf_counter() - started) * 1000)
+                )
+            except Exception:  # 记日志绝不拖垮业务请求
+                pass
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -127,6 +176,8 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=500)
 # 分仓随登录会话（请求级），必须早于业务路由生效
 app.add_middleware(WarehouseScopeMiddleware)
+# 访问日志放在最外层：统计端到端耗时，且不改动响应体
+app.add_middleware(AccessLogMiddleware)
 
 app.include_router(auth.router)
 app.include_router(products.router)
@@ -147,6 +198,7 @@ app.include_router(uploads.router)
 app.include_router(fresh.router)
 app.include_router(warehouse_in.router)
 app.include_router(warehouses.router)
+app.include_router(maintenance.router)   # 维护状态（免登录）：前端滚动公告 / 整屏维护页
 
 # AI 票据图片上传目录：记录备注可引用 /uploads/xxx.jpg 预览
 UPLOAD_DIR = Path(__file__).resolve().parent.parent / "data" / "uploads"
