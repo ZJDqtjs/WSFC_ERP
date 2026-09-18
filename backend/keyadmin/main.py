@@ -76,10 +76,11 @@ app = FastAPI(title="私钥管理工具")
 
 
 # ---------- 门禁：账号 + 口令，并对来源 IP 做失败限流 ----------
-# 口令有两个来源，任一匹配即通过（两者都要求账号名对得上）：
-#   1) 本机私有配置 config.local.json 的 accounts（与后端 app/config.py 共用同一份配置，改完重启即生效），
-#      只有 role=admin 的条目才能开门禁；
-#   2) 数据库里 role=admin 且已设口令的账号（兼容历史数据；配置里没写 accounts 时不会把自己锁在门外）。
+# 口令来源有优先级（都要求账号名对得上）：
+#   1) 只要 config.local.json 的 accounts 里写了 role=admin 的账号，就**以配置为唯一依据**，
+#      库里残留的旧口令不再是一把备用钥匙（否则改了配置、库里旧口令仍能登录）；
+#   2) 配置里一个管理员都没写时，才回退到库里 role=admin 且已设口令的账号
+#      —— 老部署/配置为空时不会把自己锁在门外。
 _LOGIN_MAX_FAILS = 5        # 同一来源连续失败多少次后锁定
 _LOGIN_LOCK_SECONDS = 300   # 锁定时长（秒）
 _login_fails: dict[str, tuple[int, float]] = {}
@@ -111,18 +112,20 @@ def _login_record_fail(ip: str) -> None:
 
 
 def _admin_password_ok(db: Session, username: str, password: str) -> bool:
-    """门禁校验：账号 + 口令（口令来源见上方注释）。"""
+    """门禁校验：账号 + 口令（口令来源与优先级见上方注释）。"""
     username = (username or "").strip()
     if not username or not password:
         return False
 
-    # 1) 本机私有配置里的管理员
-    for acc in seed_accounts():
-        if acc.get("role") == "admin" and acc.get("username") == username:
-            if acc.get("password") and hmac.compare_digest(acc["password"], password):
-                return True
+    # 1) 配置里写了管理员 => 只认配置
+    admins = [a for a in seed_accounts() if a.get("role") == "admin" and a.get("password")]
+    if admins:
+        return any(
+            a["username"] == username and hmac.compare_digest(a["password"], password)
+            for a in admins
+        )
 
-    # 2) 数据库里的管理员（role=admin 且已设口令）
+    # 2) 配置里没写管理员 => 兼容回退到库里已有口令的管理员
     user = db.scalar(select(User).where(User.username == username))
     if user and user.role == "admin" and user.password_hash:
         return verify_password(password, user.password_hash)

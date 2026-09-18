@@ -32,8 +32,9 @@ async function api(path, method = "GET", body) {
   const opt = { method, headers: {} };
   if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
   const res = await fetch(path, opt);
-  if (res.status === 401) {
-    // 会话过期回到门禁
+  if (res.status === 401 && path !== "/api/login") {
+    // 会话过期回到门禁；登录接口自身的 401 是"账号或密码错误"，
+    // 不能刷新页面，否则会把用户已填的账号和密码清空
     location.reload();
     throw new Error("未验证");
   }
