@@ -48,7 +48,9 @@ def stock_deductions(db: Session, order_product: Product, qty_base_in_order: flo
     - 仅配置了旧的单关联字段（stock_product_id + multiplier）时按单关联扣减；
     - **订单商品无任何关联**：视为**代发**（别人代发，自己不出货），返回空列表，不扣任何库存，
       只在出库明细里记代发数量与代发成本；
-    - 库存商品（大类）直接销售：未关联时扣减自身库存（原有行为不变）。
+    - **库存商品（大类）直接出现在销售行上（无关联结算清单）：不再兜底扣自身库存**，
+      返回空列表。大类的扣减必须由「关联结算」（订单商品/小类）显式建立；
+      调用方（见 build_order）应在此情形报错，要求用户先补关联，而不是默默改账。
     """
     items: list[tuple[Product, float]] = []
 
@@ -68,9 +70,9 @@ def stock_deductions(db: Session, order_product: Product, qty_base_in_order: flo
         sp = db.get(Product, order_product.stock_product_id)
         if sp:
             _add(sp, order_product.multiplier or 1.0)
-    if not items and (order_product.product_type or "stock") != "order":
-        # 库存商品（大类）直接销售：按其自身基础单位数量扣减（不做默认单位折算，保持原行为）
-        items.append((order_product, qty_base_in_order))
+    # 库存商品（大类）无关联时**不再兜底扣自身库存**：
+    # 大类在商品编辑页不允许配置关联（关联是小类的事），若平台商品名直接落到大类，
+    # 旧逻辑会默默扣掉大类库存、账实不符。现改为返回空，由 build_order 报错要求补关联结算。
     return items
 
 
@@ -569,6 +571,15 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
         # 扣减目标：一单多货规则如指定库存大类则按其扣减；否则按订单商品关联的库存商品（大类）；
         # 订单商品未关联库存大类 = 代发：不扣任何库存，只记代发数量与代发成本。
         deds = _deductions_with_override(db, p, qty_base, ov_sp, ov_mult)
+        if not deds and (p.product_type or "stock") == "stock":
+            # 库存大类没有「关联结算清单」（大类在商品编辑页不能配关联，关联属于订单小类）：
+            # 旧逻辑会兜底扣大类自身库存 —— 属于默默改账，已去掉，改为直接报错，
+            # 让用户到「关联结算」新建订单商品（小类）并关联该大类，或在「关联明细」把平台商品名指到该小类。
+            raise ValueError(
+                f"商品「{p.name}」是库存大类、没有关联结算清单，未扣减库存："
+                f"请先在「关联结算」新增对应的订单商品（小类）并关联该库存大类"
+                f"（或在「关联明细」把平台商品名指到该小类）后重新导入"
+            )
         is_dropship = not deds
         ded_info: list[dict] = []
         if is_dropship:

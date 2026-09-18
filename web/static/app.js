@@ -5793,13 +5793,17 @@ async function runBatchModal(kind) {
   const file = ($("bmFile") && $("bmFile").files[0]) || window.__BM_FILE__;
   if (!file) { toast("请先选择 Excel 文件"); return; }
   if (kind === "jushuitan") window.__BM_FILE__ = file; // 供 AI 关联后一键重新解析
-  const box = $("bmResult");
-  box.innerHTML = `<div class="alert ok">⏳ 正在解析…</div>`;
+  // 结果预览会把 modalBox 内容整体替换掉，此时 #bmResult 已不存在（旧代码在这里抛错 → 点「重新解析」没反应），
+  // 故进度提示回退到弹窗主体。
+  const box = $("bmResult") || $("modalBox");
+  if (box) box.innerHTML = `<div class="alert ok">⏳ 正在解析…（同一文件）</div>`;
   try {
     const r = await apiUpload(cfg.preview, file);
     if (kind === "inbound") renderInboundReview(kind, r);
     else renderDraftReview(kind, r);
-  } catch (e) { box.innerHTML = `<div class="alert err">解析失败：${esc(e.message)}</div>`; }
+  } catch (e) {
+    if (box) box.innerHTML = `<div class="alert err">解析失败：${esc(e.message)}</div>`;
+  }
 }
 function renderDraftReview(kind, r) {
   const orders = r.orders || [];
@@ -5812,9 +5816,13 @@ function renderDraftReview(kind, r) {
     if (kind === "jushuitan") {
       // 每个未关联商品名都带「去新增商品」按钮：新标签页打开「商品」页并按该名称预填新增弹窗。
       // AI 自动新增在页面渲染后自动试算（不落库），把方案展示出来，用户确认后才真正新增。
+      const unmapDetail = {};
+      (r.unmapped || []).forEach((u) => { unmapDetail[u.external_code] = u; });
+      const hasStockOnly = (r.unmapped || []).some((u) => u.stock_product_name);
       warn += `<div class="alert warn">
         <div>⚠ 未关联商品 <b>${r.unmapped_codes.length}</b> 个。可点「去新增商品」在新标签页按该名称新建商品（保存后回到本页点「↻ 重新解析」即按名称自动匹配），或等下方 AI 方案出来后一键新增：</div>
-        <div class="unmapped-list">${r.unmapped_codes.map((c) => unmappedChip(c)).join("")}</div>
+        ${hasStockOnly ? `<div class="muted" style="font-size:12px;margin:4px 0;">带「缺关联结算小类」标签的，是平台商品名只匹配到了库存大类（未扣任何库存）—— 新建订单小类并关联该大类后重新解析即可正常结算。</div>` : ""}
+        <div class="unmapped-list">${r.unmapped_codes.map((c) => unmappedChip(c, unmapDetail[c])).join("")}</div>
         <div id="bmAiBox"></div>
       </div>`;
     } else {
@@ -5952,8 +5960,13 @@ function openProductTab(name) {
   const w = window.open(url, "_blank");
   if (!w) toast("浏览器拦截了新标签页，请允许弹出窗口");
 }
-function unmappedChip(code) {
-  return `<span class="unmapped-chip"><span class="unmapped-name">${esc(code)}</span>` +
+function unmappedChip(code, info) {
+  // info.reason / info.stock_product_name 由后端带回：平台商品名只匹配到库存大类（无关联结算清单）
+  const why = info && info.stock_product_name
+    ? `<span class="muted" style="font-size:12px;">缺关联结算小类（只匹配到大类：${esc(info.stock_product_name)}）</span>`
+    : "";
+  const title = info && info.reason ? ` title="${esc(info.reason)}"` : "";
+  return `<span class="unmapped-chip"${title}><span class="unmapped-name">${esc(code)}</span>${why}` +
     `<button class="btn sm secondary" data-name="${esc(code)}" onclick="openProductTab(this.dataset.name)">` +
     `<svg class="ic"><use href="#i-plus"/></svg> 去新增商品</button></span>`;
 }
@@ -5977,11 +5990,43 @@ async function aiAutoPreview(kind) {
   box.innerHTML = `<div class="alert ok">🤖 AI 正在自动归并这些商品并生成新增方案…（通常数秒，请稍候）</div>`;
   try {
     const r = await api("/api/mappings/ai-suggest", "POST", { source: "jushuitan", codes, apply: false });
+    if (!PRODUCTS.length) { try { PRODUCTS = await api("/api/products"); } catch (e) { /* 下拉候选拉不到不影响方案展示 */ } }
     renderAiPlan(box, kind, r);
   } catch (e) {
     box.innerHTML = `<div class="alert err">AI 自动解析失败：${esc(e.message)}
       <div style="margin-top:8px;"><button class="btn sm secondary" onclick="aiAutoPreview('${kind}')">重试</button></div></div>`;
   }
+}
+/* 目标库存大类候选（可搜索）：现有库存大类 + AI 建议新建的大类名 */
+function aiStockOptions(selectedId, newName) {
+  const EXCL = ["包材", "人工", "快递"];
+  const stocks = (PRODUCTS || []).filter((p) => p.product_type === "stock" && !EXCL.includes(p.category));
+  let html = "";
+  if (newName) {
+    html += `<option value="new:${esc(newName)}" data-name="${esc(newName)}" selected>➕ 新建：${esc(newName)}</option>`;
+  }
+  html += stocks.map((p) => `<option value="${p.id}" data-name="${esc(p.name)}"${p.id === selectedId ? " selected" : ""}>` +
+    `${esc(p.name)}${p.default_unit ? `（${esc(p.default_unit)}）` : ""}</option>`).join("");
+  return html;
+}
+/* 读取用户在方案表里改过的「目标大类 / 每单扣减倍数」 */
+function collectAiPlanEdits() {
+  const rows = [...document.querySelectorAll("#bmAiBox .ai-plan tbody tr[data-code]")];
+  if (!rows.length) return null;
+  return rows.map((tr) => {
+    const sel = tr.querySelector("select.ai-target");
+    const v = sel ? String(sel.value || "") : "";
+    const isNew = v.startsWith("new:");
+    const opt = sel && sel.selectedOptions.length ? sel.selectedOptions[0] : null;
+    const mult = parseFloat(tr.querySelector("input.ai-mult")?.value);
+    return {
+      code: tr.dataset.code,
+      stock_product_id: isNew ? null : (Number(v) || null),
+      target: isNew ? v.slice(4) : ((opt && opt.dataset.name) || (opt ? opt.textContent : "")),
+      target_new: isNew,
+      multiplier: isNaN(mult) ? 0 : mult,
+    };
+  });
 }
 /* 展示 AI 方案（新增哪些库存大类 / 关联去向 / 仍无法关联的），等用户确认 */
 function renderAiPlan(box, kind, r) {
@@ -5994,15 +6039,23 @@ function renderAiPlan(box, kind, r) {
       `<div class="unmapped-list">${leftover.map((c) => unmappedChip(c)).join("")}</div></div>`;
     return;
   }
-  const mapsTable = maps.map((m) => `<tr><td>${esc(m.code)}</td><td class="muted">→</td><td><b>${esc(m.target)}</b></td></tr>`).join("");
+  const mapsTable = maps.map((m) => `<tr data-code="${esc(m.code)}">
+      <td>${esc(m.code)}</td>
+      <td class="muted">→</td>
+      <td><select class="searchable ai-target">${aiStockOptions(m.stock_product_id, m.target_new ? m.target : "")}</select></td>
+      <td class="num" style="white-space:nowrap;"><input class="ai-mult" type="number" step="0.01" min="0" value="${esc(String(m.multiplier))}" style="width:86px;" /> <span class="muted">${esc(m.unit || "")}</span></td>
+      <td class="muted">${m.order_exists ? "更新小类" : "新建小类"}</td>
+    </tr>`).join("");
+  window.__AI_PLAN__ = r;   // 确认时原样回传，照用户所见新增（不再问一次大模型）
   box.innerHTML = `<div class="ai-plan">
     <div class="ai-plan-head">🤖 AI 自动新增方案（尚未写入，确认后才生效）</div>
     <div class="muted" style="font-size:12.5px;margin-bottom:8px;">${esc(r.message || "")}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px;">下面两列都可以改：<b>关联到</b>点一下可选其他库存大类（支持输入搜索，含 AI 建议新建的），<b>每单扣减</b>填 1 单该商品扣多少库存默认单位。</div>
     ${news.length ? `<div class="ai-plan-sec"><b>将新增 ${news.length} 个库存大类</b>（其余匹配到已有大类）
       <ul class="ai-plan-list">${news.map((x) => `<li>${esc(x.name)} <span class="muted">· ${esc(x.category)}</span></li>`).join("")}</ul></div>` : ""}
-    ${maps.length ? `<div class="ai-plan-sec"><b>将关联 ${maps.length} 个商品名</b>
-      <div class="table-wrap" style="max-height:220px;overflow:auto;"><table class="subtable" style="width:100%;">
-        <thead><tr><th>未关联商品名</th><th></th><th>关联到</th></tr></thead><tbody>${mapsTable}</tbody></table></div></div>` : ""}
+    ${maps.length ? `<div class="ai-plan-sec"><b>将关联 ${maps.length} 个商品名</b>（建/更新为订单商品「小类」，按其规格倍数扣减对应大类库存）
+      <div class="table-wrap" style="max-height:260px;overflow:auto;"><table class="subtable" style="width:100%;">
+        <thead><tr><th>未关联商品名</th><th></th><th>关联到（库存大类，可改）</th><th>每单扣减（可改）</th><th>订单小类</th></tr></thead><tbody>${mapsTable}</tbody></table></div></div>` : ""}
     ${leftover.length ? `<div class="ai-plan-sec"><b>仍无法自动关联 ${leftover.length} 个</b>，请手动补充
       <div class="unmapped-list">${leftover.map((c) => unmappedChip(c)).join("")}</div></div>` : ""}
     <div class="modal-foot" style="margin:0;padding-top:10px;">
@@ -6010,6 +6063,7 @@ function renderAiPlan(box, kind, r) {
       <button class="btn green" onclick="aiApplyPlan('${kind}')">✓ 确认新增并重新解析</button>
     </div>
   </div>`;
+  bindSearchable(box);   // 目标大类下拉变成「点击选择 / 输入筛选」
 }
 /* 用户确认后：真正新增库存大类 + 建立编码关联，然后重新解析出库单 */
 async function aiApplyPlan(kind) {
@@ -6019,10 +6073,20 @@ async function aiApplyPlan(kind) {
   const btn = document.querySelector("#bmAiBox .btn.green");
   if (btn) { btn.disabled = true; btn.textContent = "⏳ 正在新增…"; }
   try {
-    const r = await api("/api/mappings/ai-suggest", "POST", { source: "jushuitan", codes, apply: true });
+    const edits = collectAiPlanEdits();   // 用户可能改过目标大类 / 倍数，以页面上的为准
+    const plan = window.__AI_PLAN__
+      ? { ...window.__AI_PLAN__, mappings: edits || window.__AI_PLAN__.mappings, edited: !!edits }
+      : null;
+    const r = await api("/api/mappings/ai-suggest", "POST", {
+      source: "jushuitan", codes, apply: true, plan,
+    });
     const add = (r.created_products || []).map((p) => p.name).join("、");
+    const addOrder = (r.created_orders || []).map((p) => p.name).join("、");
     toast(r.message || "AI 关联完成");
-    if (box) box.innerHTML = `<div class="alert ok">✅ ${esc(r.message)}${add ? "（新建：" + esc(add) + "）" : ""}</div>`;
+    if (box) box.innerHTML = `<div class="alert ok">✅ ${esc(r.message)}` +
+      `${add ? `<div class="muted" style="font-size:12px;margin-top:4px;">新增大类：${esc(add)}</div>` : ""}` +
+      `${addOrder ? `<div class="muted" style="font-size:12px;">新建订单小类：${esc(addOrder)}</div>` : ""}</div>`;
+    window.__AI_PLAN__ = null;
     __AI_AUTO_SIG__ = ""; // 允许重新解析后按新的未关联集合再自动试算
     setTimeout(() => { if (window.__BM_FILE__) runBatchModal(kind); }, 400);
   } catch (e) {

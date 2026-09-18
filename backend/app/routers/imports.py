@@ -818,6 +818,21 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                     su, sq = parse_jst_spec(ext_name)
                     d["spec"] = f"{fmt_qty(sq)} {su}/件" if su and sq else ""
                 continue
+            if (p.product_type or "stock") == "stock":
+                # 平台商品名只匹配到「库存大类」⇒ 这一行没有关联结算清单（大类在商品编辑页不允许配关联）。
+                # 旧逻辑会兜底扣掉大类自身库存（已去掉），这里也**不算解析失败**，而是与「未关联商品」
+                # 走同一套流程：汇总进待匹配列表 → 前端渲染「去新增商品」按钮并自动跑 AI 归并方案，
+                # 用户建好订单小类（关联该大类）后点「↻ 重新解析」即可正常结算。
+                unmapped_codes.add(ext_name)
+                d = unmapped_detail.setdefault(ext_name, {"external_code": ext_name, "count": 0})
+                d["count"] += 1
+                if d["count"] == 1:
+                    su, sq = parse_jst_spec(ext_name)
+                    d["spec"] = f"{fmt_qty(sq)} {su}/件" if su and sq else ""
+                    d["reason"] = f"只匹配到库存大类「{p.name}」，缺少关联结算的订单小类"
+                    d["stock_product_id"] = p.id
+                    d["stock_product_name"] = p.name
+                continue
             unit, per_item = pick_jst_unit(p, ext_name)
             if unit is None or per_item is None:
                 failed.append({"doc": o["doc_no"], "reason": f"「{ext_name}」未配置每件重量换算（如 1个=1000克 或 每件2斤），请在商品管理中补充换算后重试"})
@@ -1632,6 +1647,9 @@ class AiMappingsIn(BaseModel):
     # apply=False 时只做「试算」：调用大模型归并库存大类并给出关联方案，但不落库，
     # 由前端把方案展示给用户，用户确认后再以 apply=True 二次调用真正新增。
     apply: bool = True
+    # 用户已确认的方案（试算时返回，原样回传）：带上它落库就不再问一次大模型，
+    # 既快又保证「照你所见新增」，避免两次调用大模型结果不一致。
+    plan: dict | None = None
 
 
 # “AI 自动关联”：请大模型为一批未关联的聚水潭出库商品名归并出「库存大类」并分类，
@@ -1684,77 +1702,208 @@ def _create_ai_stock(db: Session, name: str, category: str) -> tuple[Product, bo
     return p, True
 
 
-def _apply_ai_mappings(db: Session, names: list[str], products: list[dict]) -> dict:
-    """依据 AI 归并结果创建库存大类并写入编码关联；把每个外部名挂到“名称是其子串”的最长大类。"""
-    stock_by_name: dict[str, Product] = {}
-    created_products: list[dict] = []
-    for pr in products:
-        pname = str(pr.get("name") or "").strip()
-        if not pname:
-            continue
-        p, is_new = _create_ai_stock(db, pname, str(pr.get("category") or "").strip())
-        stock_by_name[pname] = p
-        if is_new:
-            created_products.append({"name": p.name, "product_id": p.id})
-    # 每个外部名关联到“名称是其子串”且最长的库存大类
-    mapped, leftover = 0, []
-    for name in names:
-        best = max((n for n in stock_by_name if n and n in name), key=len, default=None)
-        if best is None:
-            leftover.append(name)
-            continue
-        m = db.scalar(select(CodeMapping).where(
-            CodeMapping.source == "jushuitan", CodeMapping.external_code == name))
-        if m:
-            m.product_id = stock_by_name[best].id
-            m.updated_at = datetime.now()
-        else:
-            db.add(CodeMapping(source="jushuitan", external_code=name,
-                               external_name=name, product_id=stock_by_name[best].id))
-        mapped += 1
-    db.commit()
-    msg = f"新增 {len(created_products)} 个库存大类，已关联 {mapped}/{len(names)} 个商品名。"
-    if leftover:
-        msg += f"仍有 {len(leftover)} 个无法自动关联：{'、'.join(leftover)}，请手动到「编码关联」补充。"
-    return {
-        "ok": True, "created_products": created_products, "mapped": mapped,
-        "total": len(names), "leftover": leftover, "message": msg,
-    }
+def _ai_stock_stub(name: str, category: str = "") -> Product:
+    """未落库的库存大类占位对象：与 _create_ai_stock 同一套单位/换算，用于先算扣减倍数。"""
+    return Product(
+        name=name, category=category or "商品", product_type="stock",
+        base_unit="克", default_unit="公斤",
+        conversions={"克": 1, "斤": 500, "公斤": 1000, "千克": 1000},
+    )
 
 
-def _preview_ai_mappings(db: Session, names: list[str], products: list[dict]) -> dict:
-    """只试算不落库：返回 AI 归并出的库存大类（标注是否新建）与每个外部名的关联去向。"""
-    stock_names: list[str] = []
-    items: list[dict] = []
+def _ai_plan(db: Session, names: list[str], products: list[dict]) -> tuple[list[dict], list[dict], list[str]]:
+    """为每个外部商品名算出「订单商品（小类）→ 关联哪个库存大类、按几倍扣减」的方案。
+
+    返回 (库存大类清单, 每个商品名的方案, 无法自动归属的商品名)。
+
+    ⚠️ 必须落到**订单商品（小类）**并带倍数：平台名直接映射到库存大类会让出库行没有
+    「关联结算」（大类不允许配关联），解析时会被判为未关联。倍数由 _spec_multiplier 按
+    名字里的规格算，如「新鲜西兰苔4.5斤」+ 默认单位「公斤」→ 2.25（4.5斤 = 2.25 公斤）。
+
+    库存大类的选取顺序：
+      1) 已存在的库存大类，其名称是外部商品名的子串（取最长的，如「新鲜天麻大果2斤8-10个」→「天麻大果」）；
+      2) AI 归并出的、名称是外部商品名子串的大类（没有同名商品则按该名称新建）；
+      3) 都匹配不到 → 交给用户手动处理。
+    """
+    ai_items: list[dict] = []
     seen: set[str] = set()
     for pr in products:
         pname = str(pr.get("name") or "").strip()
         if not pname or pname in seen:
             continue
         seen.add(pname)
-        existing = db.scalar(select(Product).where(Product.name == pname))
-        stock_names.append(pname)
-        items.append({
+        ex = db.scalar(select(Product).where(Product.name == pname, Product.product_type == "stock"))
+        ai_items.append({
             "name": pname,
             "category": _CAT_NORM.get(str(pr.get("category") or "").strip(), "商品"),
-            "is_new": existing is None,
-            "product_id": existing.id if existing else None,
+            "product_id": ex.id if ex else None,
         })
-    mappings, leftover = [], []
+
+    plans: list[dict] = []
+    leftover: list[str] = []
+    need_new: dict[str, str] = {}   # 待新建的大类名 → 分类
     for name in names:
-        best = max((n for n in stock_names if n and n in name), key=len, default=None)
-        if best is None:
+        stock = _match_stock(db, name)
+        if stock is not None and stock.product_type != "stock":
+            stock = None
+        target_new = False
+        if stock is None:
+            picked = max((a["name"] for a in ai_items if a["name"] and a["name"] in name),
+                         key=len, default=None)
+            if picked:
+                hit = next(a for a in ai_items if a["name"] == picked)
+                if hit["product_id"]:
+                    stock = db.get(Product, hit["product_id"])
+                else:
+                    stock = _ai_stock_stub(picked, hit["category"])
+                    need_new[picked] = hit["category"]
+                    target_new = True
+        if stock is None:
             leftover.append(name)
+            continue
+        unit = stock.default_unit or stock.base_unit
+        mult = _spec_multiplier(stock, name)
+        plans.append({
+            "code": name,
+            "target": stock.name,                      # 目标库存大类
+            "target_new": target_new,                  # 该大类是否需要新建
+            "stock_product_id": stock.id,              # 未落库时为 None
+            "multiplier": mult,                        # 1 单该商品扣多少「库存默认单位」
+            "unit": unit,
+            "spec": f"每单约 {fmt_qty(mult)}{unit}",
+            "order_exists": bool(db.scalar(select(Product).where(
+                Product.name == name, Product.product_type == "order"))),
+        })
+
+    for a in ai_items:
+        a["is_new"] = a["name"] in need_new    # 只新建真正被引用到的大类
+    return ai_items, plans, leftover
+
+
+def _apply_ai_mappings(db: Session, names: list[str], products: list[dict],
+                       overrides: dict[str, dict] | None = None) -> dict:
+    """落库：建库存大类（仅被引用到的）+ 为每个平台商品名建**订单商品（小类）**并关联大类与倍数，
+    最后把编码关联指到该小类（这样出库解析走「关联结算」，不会再被判为未关联）。
+
+    overrides：用户在方案表里改过的行 {商品名: {"target": 大类名, "target_new": bool,
+    "stock_product_id": id|None, "multiplier": 倍数}}，优先于自动计算的结果。
+    """
+    ai_items, plans, leftover = _ai_plan(db, names, products)
+    overrides = overrides or {}
+
+    # 用户改过的行：目标大类 / 倍数以用户的选择为准
+    for pl in plans:
+        ov = overrides.get(pl["code"])
+        if not ov:
+            continue
+        tid = ov.get("stock_product_id")
+        tname = str(ov.get("target") or "").strip()
+        if tid:
+            sp = db.get(Product, int(tid))
+            if sp is None or sp.product_type != "stock":
+                raise HTTPException(400, f"「{pl['code']}」的目标必须是库存大类")
+            pl["target"] = sp.name
+            pl["target_new"] = False
+            pl["stock_product_id"] = sp.id
+            pl["unit"] = sp.default_unit or sp.base_unit
+        elif tname:
+            pl["target"] = tname
+            pl["target_new"] = True
+            pl["stock_product_id"] = None
+        mult_raw = ov.get("multiplier")
+        if mult_raw not in (None, ""):
+            try:
+                mult = float(mult_raw)
+            except (TypeError, ValueError):
+                mult = 0.0
+            if mult > 0:
+                pl["multiplier"] = round(mult, 6)
+        pl["spec"] = f"每单约 {fmt_qty(pl['multiplier'])}{pl['unit']}"
+
+    # ⚠️ 只新建「最终方案里真正会用到、且还不存在」的库存大类。
+    # 用户在方案表里把某行目标改成了已有大类时，AI 原本建议新建的那个大类**不能再建**，
+    # 否则会出现用户没同意、也用不到的多余大类（如把「红皮土豆5斤200g+」改指「红皮土豆大果」后仍建出「红皮土豆」）。
+    created_products: list[dict] = []
+    stock_id_by_name: dict[str, int] = {}
+    for pl in plans:
+        tname = pl.get("target") or ""
+        if not tname or pl.get("stock_product_id"):
+            continue
+        if tname in stock_id_by_name:
+            continue
+        existing = db.scalar(select(Product).where(
+            Product.name == tname, Product.product_type == "stock"))
+        if existing:
+            pl["stock_product_id"] = existing.id
+            pl["target_new"] = False
+            continue
+        cat = next((a["category"] for a in ai_items if a["name"] == tname), "商品")
+        p, is_new = _create_ai_stock(db, tname, cat)
+        stock_id_by_name[tname] = p.id
+        if is_new:
+            created_products.append({"name": p.name, "product_id": p.id})
+    for a in ai_items:
+        if a["name"] in stock_id_by_name:
+            a["product_id"] = stock_id_by_name[a["name"]]
+
+    created_orders: list[dict] = []
+    mapped = 0
+    for pl in plans:
+        stock = None
+        if pl["stock_product_id"]:
+            stock = db.get(Product, pl["stock_product_id"])
+        if stock is None:
+            sid = stock_id_by_name.get(pl["target"])
+            stock = db.get(Product, sid) if sid else None
+        if stock is None:
+            stock = db.scalar(select(Product).where(
+                Product.name == pl["target"], Product.product_type == "stock"))
+        if stock is None:
+            leftover.append(pl["code"])
+            continue
+        order_p = db.scalar(select(Product).where(
+            Product.name == pl["code"], Product.product_type == "order"))
+        if order_p is None:
+            order_p = _auto_create_order(db, pl["code"], stock)
+            created_orders.append({"name": order_p.name, "product_id": order_p.id})
+        # 关联结算（含倍数）：新老小类都按当前规格刷新
+        order_p.stock_product_id = stock.id
+        order_p.multiplier = pl["multiplier"]
+        order_p.stock_links = [{"product_id": stock.id, "multiplier": pl["multiplier"]}]
+        m = db.scalar(select(CodeMapping).where(
+            CodeMapping.source == "jushuitan", CodeMapping.external_code == pl["code"]))
+        if m:
+            m.product_id = order_p.id
+            m.updated_at = datetime.now()
         else:
-            mappings.append({"code": name, "target": best})
-    new_cnt = sum(1 for it in items if it["is_new"])
-    msg = f"计划新增 {new_cnt} 个库存大类，关联 {len(mappings)}/{len(names)} 个商品名。"
+            db.add(CodeMapping(source="jushuitan", external_code=pl["code"],
+                               external_name=pl["code"], product_id=order_p.id))
+        mapped += 1
+    db.commit()
+    msg = (f"新增 {len(created_products)} 个库存大类、{len(created_orders)} 个订单商品（小类），"
+           f"已为 {mapped}/{len(names)} 个平台商品名建立关联结算（按规格倍数扣减对应大类库存）。")
+    if leftover:
+        msg += f"仍有 {len(leftover)} 个无法自动关联：{'、'.join(leftover)}，请手动到「关联明细」补充。"
+    return {
+        "ok": True, "created_products": created_products, "created_orders": created_orders,
+        "products": ai_items, "mappings": plans, "mapped": mapped,
+        "total": len(names), "leftover": leftover, "message": msg,
+    }
+
+
+def _preview_ai_mappings(db: Session, names: list[str], products: list[dict]) -> dict:
+    """只试算不落库：返回将新建的库存大类、每个平台商品名的「关联结算」方案（含倍数）与无法自动归属的名。"""
+    ai_items, plans, leftover = _ai_plan(db, names, products)
+    new_cnt = sum(1 for a in ai_items if a["is_new"])
+    order_new = sum(1 for p in plans if not p["order_exists"])
+    msg = (f"计划新增 {new_cnt} 个库存大类、{order_new} 个订单商品（小类），"
+           f"为 {len(plans)}/{len(names)} 个平台商品名建立关联结算（按规格倍数扣减对应大类库存）。")
     if leftover:
         msg += f"仍有 {len(leftover)} 个无法自动关联：{'、'.join(leftover)}，请手动补充。"
     return {
-        "ok": True, "dry_run": True, "products": items, "mappings": mappings,
-        "created_products": [], "mapped": len(mappings), "total": len(names),
-        "leftover": leftover, "message": msg,
+        "ok": True, "dry_run": True, "products": ai_items, "mappings": plans,
+        "created_products": [], "created_orders": [],
+        "mapped": len(plans), "total": len(names), "leftover": leftover, "message": msg,
     }
 
 
@@ -1767,19 +1916,31 @@ def ai_suggest_mappings(data: AiMappingsIn, db: Session = Depends(get_db), user:
     names = list(dict.fromkeys(n.strip() for n in (data.codes or []) if n and n.strip()))
     if not names:
         raise HTTPException(400, "没有需要关联的商品名")
-    cfg = _llm_config()
-    if not cfg.get("api_key"):
-        raise HTTPException(400, "未配置 LLM（product_rules.json 的 llm 段），无法使用 AI 自动关联")
-    try:
-        parsed = _extract_json(_chat(cfg, AI_SUGGEST_SYSTEM_PROMPT, _ai_mapping_user_msg(names)))
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(502, f"AI 归并库存大类失败：{type(e).__name__}: {e}")
-    products = parsed.get("products") or []
+    overrides = None
+    if data.apply and data.plan:
+        # 用户已确认的方案：直接照它落库，不再问一次大模型
+        products = data.plan.get("products") or []
+        if data.plan.get("edited"):
+            # 用户在方案表里改过目标大类 / 倍数 → 以他改的为准
+            overrides = {
+                str(m.get("code")): m
+                for m in (data.plan.get("mappings") or [])
+                if m.get("code")
+            }
+    else:
+        cfg = _llm_config()
+        if not cfg.get("api_key"):
+            raise HTTPException(400, "未配置 LLM（product_rules.json 的 llm 段），无法使用 AI 自动关联")
+        try:
+            parsed = _extract_json(_chat(cfg, AI_SUGGEST_SYSTEM_PROMPT, _ai_mapping_user_msg(names)))
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(502, f"AI 归并库存大类失败：{type(e).__name__}: {e}")
+        products = parsed.get("products") or []
     if not data.apply:
         return _preview_ai_mappings(db, names, products)
-    res = _apply_ai_mappings(db, names, products)
+    res = _apply_ai_mappings(db, names, products, overrides)
     res["dry_run"] = False
     return res
 
