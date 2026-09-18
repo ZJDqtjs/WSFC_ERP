@@ -1,7 +1,8 @@
 """私钥管理工具：独立的登录密钥生成与账号管理后台。
 
 - 单独端口、单独启动脚本（项目根 keyadmin.py），不随 ERP 一起启动。
-- 打开即进入管理界面；首次使用需输入管理员密码（config.local.json 中 accounts 的管理员口令）。
+- 打开即进入管理界面；首次使用需输入「管理员账号 + 密码」，校验来源见 _admin_password_ok，
+  并对来源 IP 做失败限流，避免被在线爆破。
 - 复用 ERP 的用户表与密钥算法；私钥生成/重新生成时仅一次返回。
 """
 import base64
@@ -29,6 +30,7 @@ from app.clear_data import (
     preview as clear_preview,
     warehouse_choices,
 )
+from app.config import seed_accounts
 from app.routers.backup import _list_backups, _safe_path, create_backup_file
 from app.database import (
     DATA_DIR, DB_PATH, DEFAULT_WAREHOUSE_KEY, get_db_default as get_db,
@@ -73,10 +75,58 @@ def _verify_token(token: str | None) -> bool:
 app = FastAPI(title="私钥管理工具")
 
 
-def _admin_password_ok(db: Session, password: str) -> bool:
-    """任一管理员账号密码匹配即通过门禁。"""
-    admins = db.scalars(select(User).where(User.role == "admin")).all()
-    return any(a.password_hash and verify_password(password, a.password_hash) for a in admins)
+# ---------- 门禁：账号 + 口令，并对来源 IP 做失败限流 ----------
+# 口令有两个来源，任一匹配即通过（两者都要求账号名对得上）：
+#   1) 本机私有配置 config.local.json 的 accounts（与后端 app/config.py 共用同一份配置，改完重启即生效），
+#      只有 role=admin 的条目才能开门禁；
+#   2) 数据库里 role=admin 且已设口令的账号（兼容历史数据；配置里没写 accounts 时不会把自己锁在门外）。
+_LOGIN_MAX_FAILS = 5        # 同一来源连续失败多少次后锁定
+_LOGIN_LOCK_SECONDS = 300   # 锁定时长（秒）
+_login_fails: dict[str, tuple[int, float]] = {}
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _login_locked_left(ip: str) -> int:
+    """剩余锁定秒数；0 表示未锁定（未触发锁定时会保留失败计数）。"""
+    rec = _login_fails.get(ip)
+    if not rec:
+        return 0
+    _fails, until = rec
+    if until <= 0:
+        return 0
+    left = int(until - time.time())
+    if left > 0:
+        return left
+    _login_fails.pop(ip, None)  # 锁定期已过，清零重来
+    return 0
+
+
+def _login_record_fail(ip: str) -> None:
+    fails = _login_fails.get(ip, (0, 0.0))[0] + 1
+    until = time.time() + _LOGIN_LOCK_SECONDS if fails >= _LOGIN_MAX_FAILS else 0.0
+    _login_fails[ip] = (fails, until)
+
+
+def _admin_password_ok(db: Session, username: str, password: str) -> bool:
+    """门禁校验：账号 + 口令（口令来源见上方注释）。"""
+    username = (username or "").strip()
+    if not username or not password:
+        return False
+
+    # 1) 本机私有配置里的管理员
+    for acc in seed_accounts():
+        if acc.get("role") == "admin" and acc.get("username") == username:
+            if acc.get("password") and hmac.compare_digest(acc["password"], password):
+                return True
+
+    # 2) 数据库里的管理员（role=admin 且已设口令）
+    user = db.scalar(select(User).where(User.username == username))
+    if user and user.role == "admin" and user.password_hash:
+        return verify_password(password, user.password_hash)
+    return False
 
 
 def _require(request: Request, db: Session = Depends(get_db)):
@@ -129,6 +179,7 @@ def sync_users_to_all() -> int:
 
 
 class LoginIn(BaseModel):
+    username: str
     password: str
 
 
@@ -158,9 +209,15 @@ def _serialize(u: User) -> dict:
 
 
 @app.post("/api/login")
-def login(data: LoginIn, response: Response, db: Session = Depends(get_db)):
-    if not _admin_password_ok(db, data.password):
-        raise HTTPException(401, "管理密码错误")
+def login(data: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
+    ip = _client_ip(request)
+    left = _login_locked_left(ip)
+    if left:
+        raise HTTPException(429, f"失败次数过多，请 {left} 秒后再试")
+    if not _admin_password_ok(db, data.username, data.password):
+        _login_record_fail(ip)
+        raise HTTPException(401, "账号或密码错误")
+    _login_fails.pop(ip, None)
     response.set_cookie(
         COOKIE, _make_token(), max_age=SESSION_MAX_AGE, httponly=True, path="/", samesite="lax"
     )

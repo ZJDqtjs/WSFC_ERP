@@ -13,8 +13,14 @@
       <div class="gate-title">私钥管理工具</div>
       <p class="gate-sub">登录密钥生成 · 账号管理 · 维护与日志</p>
       <div class="field">
+        <label>管理员账号</label>
+        <input id="gateUser" placeholder="请输入管理员账号" autocomplete="username"
+               onkeydown="if(event.key==='Enter')document.getElementById('gatePass').focus()" />
+      </div>
+      <div class="field">
         <label>管理员密码</label>
-        <input id="gatePass" type="password" placeholder="请输入管理员密码" onkeydown="if(event.key==='Enter')gateLogin()" />
+        <input id="gatePass" type="password" placeholder="请输入管理员密码" autocomplete="current-password"
+               onkeydown="if(event.key==='Enter')gateLogin()" />
       </div>
       <div id="gateErr" class="alert err" style="display:none;"></div>
       <button class="btn primary" style="width:100%;" onclick="gateLogin()">进 入</button>

@@ -47,10 +47,12 @@ async function api(path, method = "GET", body) {
 
 /* ---------- 门禁 ---------- */
 async function gateLogin() {
+  const username = $("gateUser").value.trim();
   const password = $("gatePass").value;
+  if (!username) { gateErr("请输入管理员账号"); return; }
   if (!password) { gateErr("请输入管理员密码"); return; }
   try {
-    await api("/api/login", "POST", { password });
+    await api("/api/login", "POST", { username, password });
     location.reload();
   } catch (e) {
     gateErr(e.message);
