@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import login_guard as guard
 from app import maintenance as mt
 from app.auth import ensure_seed_users, verify_password
 from app.clear_data import (
@@ -75,42 +76,14 @@ def _verify_token(token: str | None) -> bool:
 app = FastAPI(title="私钥管理工具")
 
 
-# ---------- 门禁：账号 + 口令，并对来源 IP 做失败限流 ----------
+# ---------- 门禁：账号 + 口令 ----------
 # 口令来源有优先级（都要求账号名对得上）：
 #   1) 只要 config.local.json 的 accounts 里写了 role=admin 的账号，就**以配置为唯一依据**，
 #      库里残留的旧口令不再是一把备用钥匙（否则改了配置、库里旧口令仍能登录）；
 #   2) 配置里一个管理员都没写时，才回退到库里 role=admin 且已设口令的账号
 #      —— 老部署/配置为空时不会把自己锁在门外。
-_LOGIN_MAX_FAILS = 5        # 同一来源连续失败多少次后锁定
-_LOGIN_LOCK_SECONDS = 300   # 锁定时长（秒）
-_login_fails: dict[str, tuple[int, float]] = {}
-
-
-def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
-
-
-def _login_locked_left(ip: str) -> int:
-    """剩余锁定秒数；0 表示未锁定（未触发锁定时会保留失败计数）。"""
-    rec = _login_fails.get(ip)
-    if not rec:
-        return 0
-    _fails, until = rec
-    if until <= 0:
-        return 0
-    left = int(until - time.time())
-    if left > 0:
-        return left
-    _login_fails.pop(ip, None)  # 锁定期已过，清零重来
-    return 0
-
-
-def _login_record_fail(ip: str) -> None:
-    fails = _login_fails.get(ip, (0, 0.0))[0] + 1
-    until = time.time() + _LOGIN_LOCK_SECONDS if fails >= _LOGIN_MAX_FAILS else 0.0
-    _login_fails[ip] = (fails, until)
-
-
+# 失败分级锁定（3 次→等 1 分钟、再 3 次→3 分钟……）统一由 app/login_guard.py 提供，
+# 与业务主系统共用同一份状态文件，因此可以在这里直接解锁主系统被锁的账号。
 def _admin_password_ok(db: Session, username: str, password: str) -> bool:
     """门禁校验：账号 + 口令（口令来源与优先级见上方注释）。"""
     username = (username or "").strip()
@@ -212,15 +185,24 @@ def _serialize(u: User) -> dict:
 
 
 @app.post("/api/login")
-def login(data: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
-    ip = _client_ip(request)
-    left = _login_locked_left(ip)
-    if left:
-        raise HTTPException(429, f"失败次数过多，请 {left} 秒后再试")
-    if not _admin_password_ok(db, data.username, data.password):
-        _login_record_fail(ip)
+def login(data: LoginIn, response: Response, db: Session = Depends(get_db)):
+    """门禁登录；连续失败按 app/login_guard.py 的分级规则锁定该账号。"""
+    username = (data.username or "").strip()
+    if username:
+        left = guard.locked_left(guard.SCOPE_KEYADMIN, username)
+        if left:
+            raise HTTPException(429, f"账号已锁定，请 {guard.humanize(left)} 后再试")
+
+    if not _admin_password_ok(db, username, data.password):
+        wait = guard.record_fail(guard.SCOPE_KEYADMIN, username) if username else 0
+        if wait:
+            raise HTTPException(
+                429,
+                f"连续失败次数过多，账号已锁定 {guard.humanize(wait)}，请稍后再试",
+            )
         raise HTTPException(401, "账号或密码错误")
-    _login_fails.pop(ip, None)
+
+    guard.reset(guard.SCOPE_KEYADMIN, username)
     response.set_cookie(
         COOKIE, _make_token(), max_age=SESSION_MAX_AGE, httponly=True, path="/", samesite="lax"
     )
@@ -231,6 +213,28 @@ def login(data: LoginIn, request: Request, response: Response, db: Session = Dep
 def logout(response: Response):
     response.delete_cookie(COOKIE, path="/")
     return {"ok": True}
+
+
+class UnlockIn(BaseModel):
+    username: str = ""
+    scope: str = guard.SCOPE_KEYADMIN   # keyadmin | erp
+
+
+@app.get("/api/locks")
+def locks(_: bool = Depends(_require)):
+    """当前处于登录锁定状态的账号（本工具 / 业务主系统）。"""
+    return {
+        guard.SCOPE_KEYADMIN: guard.locked_list(guard.SCOPE_KEYADMIN),
+        guard.SCOPE_ERP: guard.locked_list(guard.SCOPE_ERP),
+    }
+
+
+@app.post("/api/unlock")
+def unlock(data: UnlockIn, _: bool = Depends(_require)):
+    """手动解除登录锁定：用户名留空 = 清空该系统全部锁定。"""
+    scope = guard.SCOPE_ERP if data.scope == guard.SCOPE_ERP else guard.SCOPE_KEYADMIN
+    cleared = guard.clear(scope, data.username.strip())
+    return {"ok": True, "scope": scope, "cleared": cleared}
 
 
 @app.get("/api/session")

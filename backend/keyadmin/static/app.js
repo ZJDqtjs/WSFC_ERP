@@ -69,6 +69,33 @@ async function logout() {
   location.reload();
 }
 
+/* ---------- 登录锁定查看 / 手动解锁 ---------- */
+/* 失败分级锁定由后端 app/login_guard.py 统一维护（主系统与工具共用一份状态文件），
+   这里只是给管理员一个"忘记密码被锁死"时的解锁入口。 */
+function fmtLocks(list) {
+  if (!list.length) return "（无）";
+  return list.map((x) => `${x.username}：剩 ${x.left_text}，已连续失败 ${x.fails} 次`).join("\n");
+}
+async function showLocks() {
+  try {
+    const d = await api("/api/locks");
+    alert(`【业务主系统】\n${fmtLocks(d.erp)}\n\n【私钥管理工具】\n${fmtLocks(d.keyadmin)}`);
+  } catch (e) {
+    toast("读取锁定状态失败：" + e.message);
+  }
+}
+async function unlockLogin(scope) {
+  const label = scope === "erp" ? "业务主系统" : "私钥管理工具";
+  const name = prompt(`解除【${label}】的登录锁定。\n\n输入用户名解除单个账号；留空则解除该系统全部账号：`);
+  if (name === null) return;
+  try {
+    const d = await api("/api/unlock", "POST", { scope, username: name.trim() });
+    toast(d.cleared ? `已解除 ${d.cleared} 个账号的锁定` : "该账号当前没有被锁定");
+  } catch (e) {
+    toast("解锁失败：" + e.message);
+  }
+}
+
 /* ---------- 侧边栏分区切换 ---------- */
 function switchPanel(panel) {
   CUR_PANEL = panel;

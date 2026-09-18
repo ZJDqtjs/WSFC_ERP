@@ -76,6 +76,9 @@
               <h3>已创建账号 / 密钥</h3>
               <span class="hint">重新生成会使旧私钥立即失效；删除后该用户无法再登录。账号/私钥会自动同步到所有分仓</span>
               <button class="btn sm ghost" style="margin-left:auto;" onclick="syncUsers()">↻ 同步到各分仓</button>
+              <button class="btn sm ghost" onclick="showLocks()">🔒 锁定状态</button>
+              <button class="btn sm ghost" onclick="unlockLogin('erp')">🔓 解锁主系统</button>
+              <button class="btn sm ghost" onclick="unlockLogin('keyadmin')">🔓 解锁本工具</button>
               <button class="btn sm ghost" onclick="loadUsers()">刷新</button>
             </div>
             <div class="table-wrap"><table id="kuTable"></table></div>

@@ -56,10 +56,10 @@
 
 `POST /api/auth/login`
 
-请求：
+请求（**私钥登录**，`private_key` 为 Ed25519 私钥文件全文）：
 
 ```json
-{ "username": "admin1", "password": "admin1" }
+{ "username": "xiaowan", "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n..." }
 ```
 
 响应 200：
@@ -67,9 +67,25 @@
 ```json
 {
   "ok": true,
-  "user": { "id": 1, "username": "admin1", "name": "管理员", "role": "admin" }
+  "user": { "id": 2, "username": "xiaowan", "name": "小万", "role": "admin" },
+  "warehouse": { "key": "default", "name": "奥斯迪" }
 }
 ```
+
+**登录失败分级锁定**（按账号独立计数，规则见 `backend/app/login_guard.py`；Web 端与移动端 PWA 共用）：
+
+| 累计失败次数 | 需要等待 |
+| --- | --- |
+| 3 | 1 分钟 |
+| 6 | 3 分钟 |
+| 9 | 5 分钟 |
+| 12 | 1 小时 |
+| 15 及之后每满 3 次 | 24 小时 |
+
+- 触发锁定时返回 `429`，`detail` 形如 `账号已锁定，请 3 分钟后再试`
+- 锁定期内**即使私钥正确也一律拒绝**，直到倒计时结束
+- **登录成功立即清零**，回到起始状态
+- 状态存于 `backend/data/login_locks.json`（重启服务不会清零），管理员可在私钥管理工具中查看并手动解锁
 
 响应头会带 `Set-Cookie`（登录成功才下发）。
 
