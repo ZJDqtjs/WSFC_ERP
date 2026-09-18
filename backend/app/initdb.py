@@ -439,6 +439,12 @@ _EXTRA_COLUMNS = {
     "warehouse_products": (("pack_items", "JSON"),),
     # 出库行：代发标记（订单商品未关联库存大类 → 不扣库存，只记代发数量/成本）
     "outbound_lines": (("is_dropship", "BOOLEAN DEFAULT 0"),),
+    # 商品：关联的库存商品清单（订单商品关联多个库存商品扣减 / 成本回写用）
+    # ⚠️ 新增列必须登记在这里：非默认分仓启动时只跑 ensure_schema（即本表），不跑 migrate()。
+    #    这两列当初只加在 migrate() 里，导致 wh01 等分仓缺列，/api/products 等接口 500（表现为"数据全没了"）。
+    "products": (("stock_links", "JSON"),),
+    # 库存流水：出库行 id（一单多货时一行出库明细对应多条流水）
+    "stock_movements": (("line_id", "INTEGER"),),
 }
 
 
