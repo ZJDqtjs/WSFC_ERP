@@ -581,12 +581,18 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
                 f"（或在「关联明细」把平台商品名指到该小类）后重新导入"
             )
         is_dropship = not deds
+        # 包邮：商品自身勾了「包邮」，或其扣减的任一库存大类勾了「包邮」→ 该行不计入计费毛重。
+        # 整单全是包邮商品时 express_weight 为 0，不会生成「快递费(自动)」行；混合单只为不包邮的部分计运费。
+        line_free = bool(getattr(p, "free_shipping", False)) or any(
+            bool(getattr(sp, "free_shipping", False)) for sp, _ in deds
+        )
         ded_info: list[dict] = []
         if is_dropship:
             # 代发：商品由别人发出，本仓不扣库存；代发成本按商品「参考成本（每基础单位）」计（未填则 0，并给出提示）。
             # 快递费：代发商品若填了「单件净重」（weight_kg），仍按净重结算快递费（有的代发只包货不包邮）；
             # 没填净重就不计（视为代发方包邮）。
-            express_weight += line_weight_kg(p, qty_base)
+            if not line_free:
+                express_weight += line_weight_kg(p, qty_base)
             cogs = round(qty_base * (p.unit_cost or 0.0), 2)
             if not (p.unit_cost or 0.0):
                 warnings.append(f"「{p.name}」是代发商品（未关联库存大类）但没填「参考成本」，代发成本按 0 计")
@@ -609,7 +615,8 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
                 })
             if line_net_kg <= 0:
                 line_net_kg = line_weight_kg(p, qty_base)
-            express_weight += line_net_kg
+            if not line_free:
+                express_weight += line_net_kg
             cogs = round(cogs, 2)
         if fee is None:
             fee = p.pack_fee
@@ -621,7 +628,7 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
                 "stock_product_id": deds[0][0].id if deds else p.id,
                 "stock_product_name": deds[0][0].name if deds else p.name,
                 "deduction_base": deds[0][1] if deds else 0.0,
-                "deductions": ded_info, "is_dropship": is_dropship,
+                "deductions": ded_info, "is_dropship": is_dropship, "free_shipping": line_free,
                 "unit_price": price, "amount": amount, "cogs": cogs, "pack_fee": fee, "gross_sales": gross_sales,
                 "line_type": "sale", "spec": spec,
             }

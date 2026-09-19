@@ -3026,6 +3026,7 @@ function openProductModal(pid = 0, prefillName = "") {
       <label>固定费用（每单，如人工打包费，元）</label>
       <input id="pPackFee" type="number" step="any" value="${p?.pack_fee || 0}" />
     </div>
+    <label style="display:flex;gap:6px;align-items:center;margin-top:10px;"><input type="checkbox" id="pFreeShip" ${p?.free_shipping ? "checked" : ""}/> 包邮（出库不计快递费：该商品的运费不再自动结算）</label>
     ${p ? `<label style="display:flex;gap:6px;align-items:center;margin-top:10px;"><input type="checkbox" id="pActive" ${p.is_active ? "checked" : ""}/> 启用该商品</label>` : ""}
     <div class="modal-foot">
       ${p ? `<button class="btn danger" onclick="deleteProduct(${p.id})" style="margin-right:auto;">删除</button>` : ""}
@@ -3149,6 +3150,7 @@ async function saveProduct(pid) {
     stock_product_id: stockLinks.length ? stockLinks[0].product_id : null,
     multiplier: stockLinks.length ? stockLinks[0].multiplier : 1,
     stock_links: stockLinks,
+    free_shipping: $("pFreeShip") ? $("pFreeShip").checked : false,
     is_active: $("pActive") ? $("pActive").checked : true,
   };
   if (!payload.name.trim()) { toast("请填写商品名称"); return; }
