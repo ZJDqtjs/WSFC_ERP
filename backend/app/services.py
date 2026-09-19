@@ -208,6 +208,20 @@ def get_or_create_express_product(db: Session) -> Product:
     return p
 
 
+def _movement_rows(db: Session, product_id: int):
+    """读取某商品的库存流水（只取 FIFO 重放需要的列，不实例化 ORM 对象）。
+
+    大商品流水上千条，而 recompute_product / fifo_state 在一次批量导入里会被调用上千次，
+    ORM 实例化开销会占到大头（实测 300 单导入里约 95 万次对象构造、占近 30% 时间）。
+    """
+    return db.execute(
+        select(
+            StockMovement.id, StockMovement.move_type, StockMovement.quantity_base,
+            StockMovement.amount, StockMovement.ref_type, StockMovement.ref_id,
+        ).where(StockMovement.product_id == product_id).order_by(StockMovement.id)
+    ).all()
+
+
 def _fifo_replay(moves, fallback: float = 0.0) -> tuple[float, float, list, float, dict]:
     """按「先进先出(FIFO)」重放库存流水，计算库存量、库存价值、剩余批次与每次出库成本。
 
@@ -230,6 +244,17 @@ def _fifo_replay(moves, fallback: float = 0.0) -> tuple[float, float, list, floa
     stock = 0.0
     base = 0.0
     out_costs: dict[int, float] = {}
+    # 现存批次价值：增量维护（入库/出库时加减），成本重估(avg/cost)改了单价才置脏、用时重算。
+    # 原实现每次入库都 sum(全部批次) → 入出库各上千条时是 O(n²)（实测 300 单要 230 秒）。
+    layers_value = 0.0
+    layers_dirty = False
+
+    def _layers_value() -> float:
+        nonlocal layers_value, layers_dirty
+        if layers_dirty:
+            layers_value = sum(l[0] * l[1] for l in layers)
+            layers_dirty = False
+        return layers_value
     for m in moves:
         qty = m.quantity_base or 0.0
         if m.move_type == "ucost":  # 成本单价(参考成本)调整：仅作记录
@@ -244,10 +269,11 @@ def _fifo_replay(moves, fallback: float = 0.0) -> tuple[float, float, list, floa
                 for l in layers:
                     l[1] = max(l[1] + delta, 0.0)
                 base = max(base + delta, 0.0)
+                layers_dirty = True  # 单价被改过，批次价值需重算
             continue
         if qty >= 0:  # 入库 / 盘点增加
             if qty > 0:
-                cur_value = sum(l[0] * l[1] for l in layers)
+                cur_value = _layers_value()
                 unit = (m.amount / qty) if m.amount else ((cur_value / stock) if stock > 1e-9 else base)
                 unit = max(unit, 0.0)
                 base = unit
@@ -263,6 +289,7 @@ def _fifo_replay(moves, fallback: float = 0.0) -> tuple[float, float, list, floa
                         backorders.popleft()
                 if rest > 1e-9:
                     layers.append([rest, unit])
+                    layers_value += rest * unit
             stock += qty
             continue
         # 出库 / 包装消耗 / 盘点减少：先进先出扣减
@@ -273,6 +300,7 @@ def _fifo_replay(moves, fallback: float = 0.0) -> tuple[float, float, list, floa
             l = layers[0]
             take = l[0] if l[0] < remain else remain
             cost += take * l[1]
+            layers_value -= take * l[1]
             l[0] -= take
             remain -= take
             if l[0] <= 1e-9:
@@ -285,10 +313,7 @@ def _fifo_replay(moves, fallback: float = 0.0) -> tuple[float, float, list, floa
             backorders.append([remain, assumed, m.id])
         stock -= out
         out_costs[m.id] = out_costs.get(m.id, 0.0) + cost
-    value = 0.0
-    for l in layers:
-        value += l[0] * l[1]
-    return stock, value, list(layers), base, out_costs
+    return stock, _layers_value(), list(layers), base, out_costs
 
 
 def _sync_outbound_cogs(db: Session, outbound_id: int) -> None:
@@ -343,25 +368,27 @@ def recompute_product(db: Session, product_id: int) -> Product:
     """
     product = db.get(Product, product_id)
     db.flush()  # 确保本事务中新写入的流水在重算前可见
-    moves = list(
-        db.execute(
-            select(StockMovement)
-            .where(StockMovement.product_id == product_id)
-            .order_by(StockMovement.id)
-        ).scalars()
-    )
+    moves = _movement_rows(db, product_id)
     stock, value, _layers, base, out_costs = _fifo_replay(moves, fallback=product.unit_cost or 0.0)
     # 出库/包装消耗行回写 FIFO 结转成本（库存流水是成本的源数据），并同步出库单行成本与总成本。
     # 只同步「成本确实发生变化」的那几单（通常是超卖回补涉及的少数单），避免批量导入时 O(N²) 全量重写。
+    changed: list[tuple[int, float]] = []
     affected_outbounds: set[int] = set()
     for m in moves:
         if m.id not in out_costs:
             continue
         new_amount = out_costs[m.id]
         if abs((m.amount or 0.0) - new_amount) > 1e-9:
-            m.amount = new_amount
+            changed.append((m.id, new_amount))
             if m.ref_type == "outbound" and m.ref_id:
                 affected_outbounds.add(m.ref_id)
+    if changed:
+        # 只有值变化的那几条按 ORM 写回（保持与旧实现同一写法；条数通常为 0~几条）
+        amt_by_id = dict(changed)
+        for m in db.execute(
+            select(StockMovement).where(StockMovement.id.in_(list(amt_by_id)))
+        ).scalars():
+            m.amount = amt_by_id[m.id]
     for oid in affected_outbounds:
         _sync_outbound_cogs(db, oid)
     # 库存均价 = 剩余批次加权均价；无剩余批次时用兜底成本（保证无库存/负库存商品仍有成本参与利润与报表）
@@ -381,13 +408,7 @@ def recompute_product(db: Session, product_id: int) -> Product:
 def fifo_state(db: Session, product_id: int) -> tuple[deque, float]:
     """取商品当前 FIFO 剩余批次与兜底成本（供出库前预估结转成本，不落库、不修改数据）。"""
     p = db.get(Product, product_id)
-    moves = list(
-        db.execute(
-            select(StockMovement)
-            .where(StockMovement.product_id == product_id)
-            .order_by(StockMovement.id)
-        ).scalars()
-    )
+    moves = _movement_rows(db, product_id)
     _, _, layers, base, _ = _fifo_replay(moves, fallback=(p.unit_cost if p else 0.0) or 0.0)
     return deque([list(l) for l in layers]), base
 
@@ -745,9 +766,13 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
     }
 
 
-def create_outbound(db: Session, payload: dict, operator: str = "", import_group: str = "") -> tuple[Outbound, list]:
+def create_outbound(db: Session, payload: dict, operator: str = "", import_group: str = "",
+                    defer_recompute: bool = False, affected_out: list | None = None) -> tuple[Outbound, list]:
     """创建出库/销售单（含明细、库存流水、财务记录、成本重算）。返回 (单, 预警)。
+
     import_group：批量导入批次号，空表示手动单条。
+    defer_recompute=True 时不在本单内重算商品成本，而是把受影响的商品 id 追加到 affected_out，
+    由调用方（批量导入）在整批写完后统一重算一次 —— 避免每单都全量重放流水。
     """
     lines = payload["lines"]
     order = build_order(
@@ -860,7 +885,11 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
                 **pay,   # 挂账状态随出库单
             )
         )
-    for pid in affected:
-        recompute_product(db, pid)
+    if defer_recompute:
+        if affected_out is not None:
+            affected_out.extend(affected)
+    else:
+        for pid in affected:
+            recompute_product(db, pid)
     db.flush()
     return rec, order["warnings"]

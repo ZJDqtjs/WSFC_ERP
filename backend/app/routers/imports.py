@@ -23,6 +23,7 @@ from ..services import (
     create_outbound,
     default_conversions,
     fmt_qty,
+    recompute_product,
     resolve_product,
     unit_to_base,
 )
@@ -520,6 +521,7 @@ def _confirm_orders(db: Session, user: User, orders: list[DraftOrder]) -> dict:
     """按用户确认后的草稿创建出库单（自动结转成本与关联商品）。同一批导入共用一个批次号，方便在出库列表合并展示。"""
     group = f"imp{uuid.uuid4().hex[:10]}"
     created, warnings, failed = 0, [], []
+    pending_recompute: list[int] = []
     for o in orders:
         if not o.lines:
             continue
@@ -541,6 +543,8 @@ def _confirm_orders(db: Session, user: User, orders: list[DraftOrder]) -> dict:
                 },
                 operator=user.name,
                 import_group=group,
+                defer_recompute=True,          # 整批写完再统一重算（同一商品只算一次）
+                affected_out=pending_recompute,
             )
             db.flush()
             created += 1
@@ -548,6 +552,9 @@ def _confirm_orders(db: Session, user: User, orders: list[DraftOrder]) -> dict:
                 warnings.append(f"{rec.code}: {w}")
         except Exception as e:
             failed.append({"doc": o.doc_no, "reason": str(e)})
+    # 统一重算受影响商品（去重）：避免每单都对同一商品全量重放流水（原为 O(单数 × 流水数)）
+    for pid in dict.fromkeys(pending_recompute):
+        recompute_product(db, pid)
     db.commit()
     return {"ok": True, "created": created, "failed": failed, "warnings": warnings, "failed_count": len(failed)}
 
