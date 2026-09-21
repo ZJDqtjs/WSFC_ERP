@@ -50,6 +50,9 @@ GLOBAL_DEFAULTS: dict[str, Any] = {
     "max_retries": 3,
     "io_date_field": "io_date",
     "filename_template": "销售出库单_{start:%Y%m%d}_{authorize_co_id}.xlsx",
+    # 需要人工介入时的通知：站内弹窗 + 可选 webhook（企业微信/钉钉机器人、Server酱、Bark 都能收）
+    "notify_webhook": "",
+    "notify_users": [],     # 登录后弹窗提醒的账号名单；留空 = 所有管理员
 }
 
 # 每个分仓的默认值
@@ -66,6 +69,7 @@ WH_DEFAULTS: dict[str, Any] = {
     "last_run": {},
     "runs": [],
     "done_slots": [],
+    "pending": [],          # 需要人工介入的待办（商品资料待补全 / 验证码 / 导出失败）
 }
 
 MAX_RUNS = 50  # 每个分仓保留的执行记录条数
@@ -153,6 +157,7 @@ def wh_of(d: dict[str, Any] | None, key: str) -> dict[str, Any]:
     out["last_run"] = raw.get("last_run") if isinstance(raw.get("last_run"), dict) else {}
     out["runs"] = raw.get("runs") if isinstance(raw.get("runs"), list) else []
     out["done_slots"] = [s for s in (raw.get("done_slots") or []) if isinstance(s, str)]
+    out["pending"] = [t for t in (raw.get("pending") or []) if isinstance(t, dict) and t.get("id")]
     out["enabled"] = _clean_bool(out.get("enabled"))
     out["auto_import"] = _clean_bool(out.get("auto_import"), True)
     out["skip_imported"] = _clean_bool(out.get("skip_imported"), True)
@@ -173,6 +178,10 @@ def patch_globals(patch: dict[str, Any]) -> dict[str, Any]:
         for k, lo, hi in (("min_interval", 0.0, 600.0), ("timeout", 5.0, 600.0), ("max_retries", 1.0, 10.0)):
             if k in patch and patch[k] not in (None, ""):
                 d[k] = _clean_num(patch[k], GLOBAL_DEFAULTS[k], lo, hi)
+        if "notify_webhook" in patch and patch["notify_webhook"] is not None:
+            d["notify_webhook"] = _clean_str(patch["notify_webhook"], 500)
+        if "notify_users" in patch and patch["notify_users"] is not None:
+            d["notify_users"] = [_clean_str(x, 64) for x in patch["notify_users"] if _clean_str(x, 64)]
         save(d)
         return globals_of(d)
 
@@ -196,9 +205,9 @@ def patch_wh(key: str, patch: dict[str, Any]) -> dict[str, Any]:
             ]
         if "schedule" in patch and patch["schedule"] is not None:
             cur["schedule"] = [_clean_str(s, 48) for s in patch["schedule"] if _clean_str(s, 48)]
-        # 运行时数据（执行记录 / 定时点标记）不参与本次写入，但要原样带回去，否则会被覆盖掉
-        runtime = {k: cur[k] for k in ("last_run", "runs", "done_slots") if k in cur}
-        for k in ("last_run", "runs", "done_slots"):
+        # 运行时数据（执行记录 / 定时点标记 / 待办）不参与本次写入，但要原样带回去，否则会被覆盖掉
+        runtime = {k: cur[k] for k in ("last_run", "runs", "done_slots", "pending") if k in cur}
+        for k in ("last_run", "runs", "done_slots", "pending"):
             cur.pop(k, None)
         cur.update(runtime)
         d.setdefault("warehouses", {})[key] = cur
@@ -260,6 +269,93 @@ def prune_slots(day: str) -> None:
                 changed = True
         if changed:
             save(d)
+
+
+def globals_view(d: dict[str, Any] | None = None) -> dict[str, Any]:
+    """全局配置（含通知设置，非口令类），供前端编辑。"""
+    g = globals_of(d)
+    g["notify_webhook"] = _clean_str(g.get("notify_webhook"), 500)
+    g["notify_users"] = [_clean_str(x, 64) for x in (g.get("notify_users") or []) if _clean_str(x, 64)]
+    return g
+
+
+# ---------------------------------------------------------------- 待办（人工介入）
+MAX_PENDING = 20          # 一个分仓最多保留的未完成待办数
+MAX_PENDING_ITEMS = 200   # 单个待办里最多列出的明细条数
+
+
+def pending_open(key: str) -> list[dict[str, Any]]:
+    """该分仓未完成的待办（新→旧）。"""
+    return [t for t in wh_of(load(), key).get("pending") or [] if t.get("status", "open") == "open"]
+
+
+def upsert_pending(key: str, task: dict[str, Any]) -> dict[str, Any]:
+    """写入/更新一条待办。
+
+    同一个「类型 + 文件」的待办会就地更新（避免同一次失败反复产生多条），
+    并把原有的人工填写内容（如已填的验证码）保留下来。
+    """
+    with LOCK:
+        d = load()
+        wh = d.setdefault("warehouses", {}).setdefault(key, {})
+        items = [t for t in (wh.get("pending") or []) if isinstance(t, dict)]
+        if len(task.get("items") or []) > MAX_PENDING_ITEMS:
+            task["items"] = task["items"][:MAX_PENDING_ITEMS]
+        old = next((t for t in items
+                    if t.get("type") == task.get("type") and t.get("files") == task.get("files")), None)
+        if old:
+            keep = {k: old[k] for k in ("id", "verify_code", "cookie", "created_at") if old.get(k)}
+            old.update(task)
+            old.update(keep)
+            task = old
+        else:
+            task.setdefault("created_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            items.insert(0, task)
+        wh["pending"] = items[:MAX_PENDING]
+        save(d)
+        return task
+
+
+def pending_verify_code(key: str) -> str:
+    """待办里人工填的验证码（供自动续登时带上）。取最新一条。"""
+    for t in pending_open(key):
+        code = _clean_str(t.get("verify_code"), 32)
+        if code:
+            return code
+    return ""
+
+
+def close_pending(key: str, task_id: str, *, status: str = "done", note: str = "") -> dict[str, Any] | None:
+    """把一条待办标记为已完成/已忽略。"""
+    with LOCK:
+        d = load()
+        wh = d.setdefault("warehouses", {}).setdefault(key, {})
+        found = None
+        for t in wh.get("pending") or []:
+            if isinstance(t, dict) and t.get("id") == task_id:
+                t["status"] = status
+                t["closed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                if note:
+                    t["close_note"] = note
+                found = t
+        if found:
+            save(d)
+        return found
+
+
+def patch_pending_item(key: str, task_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+    """更新待办里的少量字段（如人工填的验证码 / Cookie）。"""
+    with LOCK:
+        d = load()
+        wh = d.setdefault("warehouses", {}).setdefault(key, {})
+        found = None
+        for t in wh.get("pending") or []:
+            if isinstance(t, dict) and t.get("id") == task_id:
+                t.update({k: v for k, v in patch.items() if k not in ("id", "status")})
+                found = t
+        if found:
+            save(d)
+        return found
 
 
 def public_globals(d: dict[str, Any] | None = None) -> dict[str, Any]:

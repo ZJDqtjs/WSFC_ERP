@@ -23,13 +23,13 @@ from typing import Any
 
 from sqlalchemy import select
 
-from ..database import DATA_DIR, get_sessionmaker, get_warehouses
+from ..database import DATA_DIR, get_current_key, get_sessionmaker, get_warehouses
 from ..models import Outbound, User
 from . import settings as st
 from .client import BASE_URL, JstSession, NotLoggedIn
 from .config import JstConfig, parse_datetime, parse_schedule, resolve_window
 from .exporter import EXPORT_PAGE_PATH, SALEOUT_PATH, PAGE_QUERY, ExportError, Exporter
-from .login import LoginError, login, parse_warehouses
+from .login import CaptchaRequired, LoginError, login, parse_warehouses
 
 log = logging.getLogger("jst")
 
@@ -121,6 +121,8 @@ def _build_config(key: str, target_co_id: str, out_dir: Path) -> JstConfig:
         max_retries=int(g.get("max_retries") or 3),
         schedule=_safe_schedule(wh.get("schedule") or []),
         filename_template=g.get("filename_template") or "销售出库单_{start:%Y%m%d}_{authorize_co_id}.xlsx",
+        # 待办里人工填过验证码就带上（Cookie 失效重新登录时用）
+        verify_code=st.pending_verify_code(key),
     )
 
 
@@ -216,7 +218,8 @@ def _relogin(g: dict[str, Any]):
         return None
     from .login import build_relogin
 
-    base = build_relogin(account, password, g.get("cookie") or "", timeout=float(g.get("timeout") or 120))
+    base = build_relogin(account, password, g.get("cookie") or "", timeout=float(g.get("timeout") or 120),
+                         verify_code=st.pending_verify_code(get_current_key()))
     if base is None:
         return None
 
@@ -280,6 +283,8 @@ def import_file(key: str, path: Path, operator: str = "", skip_imported: bool = 
             "failed": (failed or []) + (res.get("failed") or []),
             "warnings": res.get("warnings") or [],
             "unmapped": sorted(unmapped_codes or []),
+            # 未关联商品的明细（含出现次数、规格、原因与候选商品），供「待办」页直接补关联
+            "unmapped_detail": unmapped_list or [],
             "unmatched_multi": len(unmatched_multi or []),
             "operator": getattr(user, "name", "") or "",
         }
@@ -318,6 +323,11 @@ def run_once(
         "message": "",
         "stats": {},
     }
+    # 提前声明：异常分支要用它们生成「待办」
+    rng: tuple[datetime, datetime] | None = None
+    files: list[Path] = []
+    targets: list[dict[str, Any]] = []
+    wh: dict[str, Any] = {}
     try:
         d = st.load()
         wh = st.wh_of(d, key)
@@ -337,7 +347,6 @@ def run_once(
         result["window"] = f"{rng[0]:%Y-%m-%d %H:%M} ~ {rng[1]:%Y-%m-%d %H:%M}"
 
         out_dir = export_dir(key)
-        files: list[Path] = []
         for t in targets:
             co_id = str(t.get("co_id"))
             name = t.get("name") or co_id
@@ -352,6 +361,7 @@ def run_once(
         if should_import:
             agg: dict[str, Any] = {"orders": 0, "created": 0, "duplicate_skipped": 0, "failed": [], "unmapped": set()}
             status_skipped: dict[str, int] = {}
+            detail: dict[str, dict] = {}
             for f in files:
                 _set_state(step=f"正在导入 {f.name} …")
                 stt = import_file(key, f, operator=wh.get("operator") or "", skip_imported=wh.get("skip_imported", True))
@@ -360,22 +370,41 @@ def run_once(
                 agg["duplicate_skipped"] += stt.get("duplicate_skipped", 0)
                 agg["failed"] += stt.get("failed") or []
                 agg["unmapped"] |= set(stt.get("unmapped") or [])
+                for it in stt.get("unmapped_detail") or []:
+                    code = it.get("external_code") or ""
+                    if not code:
+                        continue
+                    cur = detail.setdefault(code, dict(it))
+                    if cur is not it:
+                        cur["count"] = int(cur.get("count") or 0) + int(it.get("count") or 0)
                 for k, v in (stt.get("status_skipped") or {}).items():
                     status_skipped[k] = status_skipped.get(k, 0) + int(v or 0)
             agg["unmapped"] = sorted(agg["unmapped"])
+            agg["unmapped_detail"] = sorted(detail.values(), key=lambda x: -int(x.get("count") or 0))
             agg["status_skipped"] = status_skipped
             result["stats"] = agg
             result["ok"] = True
             result["message"] = (
                 f"导出 {len(files)} 个文件，新建出库单 {agg['created']} 张"
                 + (f"，跳过重复 {agg['duplicate_skipped']} 张" if agg["duplicate_skipped"] else "")
-                + (f"，未关联商品 {len(agg['unmapped'])} 种" if agg["unmapped"] else "")
+                + (f"，未关联商品 {len(agg['unmapped'])} 种（已生成待办，补完关联后可一键重跑）" if agg["unmapped"] else "")
                 + (f"，失败 {len(agg['failed'])} 条" if agg["failed"] else "")
             )
+            if agg["unmapped"]:
+                result["pending_id"] = _open_unmapped_task(key, files, rng, targets, agg)
         else:
             result["ok"] = True
             result["message"] = f"已导出 {len(files)} 个文件（按设置未自动导入）"
-    except (ExportError, NotLoggedIn, LoginError, ValueError) as e:
+    except CaptchaRequired as e:
+        result["message"] = str(e)
+        result["need"] = "captcha"
+        result["pending_id"] = _open_captcha_task(key, str(e), files, rng, targets, reason="captcha")
+    except NotLoggedIn as e:
+        # Cookie 失效且没有账号密码可续登：同样交给「待办」——填验证码重新登录，或直接粘贴浏览器 Cookie
+        result["message"] = str(e)
+        result["need"] = "captcha"
+        result["pending_id"] = _open_captcha_task(key, str(e), files, rng, targets, reason="not_logged_in")
+    except (ExportError, LoginError, ValueError) as e:
         result["message"] = str(e)
     except Exception as e:  # noqa: BLE001 - 任何异常都要落到执行记录里，不能只进日志
         log.exception("自动出库执行失败")
@@ -396,6 +425,210 @@ def _wh_name(key: str) -> str:
         if w.get("key") == key:
             return w.get("name") or key
     return key
+
+
+# ---------------------------------------------------------------- 待办（人工介入）
+def _pending_id(kind: str) -> str:
+    return f"pt-{kind}-{datetime.now():%Y%m%d%H%M%S}"
+
+
+def _range_text(rng: tuple[datetime, datetime] | None) -> str:
+    return f"{rng[0]:%Y-%m-%d %H:%M} ~ {rng[1]:%Y-%m-%d %H:%M}" if rng else ""
+
+
+def _range_iso(rng: tuple[datetime, datetime] | None) -> list[str]:
+    return [rng[0].strftime("%Y-%m-%d %H:%M:%S"), rng[1].strftime("%Y-%m-%d %H:%M:%S")] if rng else []
+
+
+def _task_base(key: str, kind: str, message: str, files: list[Path], rng, targets) -> dict[str, Any]:
+    return {
+        "id": _pending_id(kind),
+        "type": kind,
+        "message": message,
+        "files": [f.name for f in files],
+        "file_paths": [str(f) for f in files],
+        "window": _range_text(rng),
+        "range": _range_iso(rng),
+        "targets": [{"co_id": str(t.get("co_id")), "name": t.get("name") or ""} for t in (targets or [])],
+        "items": [],
+        "status": "open",
+    }
+
+
+def _open_unmapped_task(key: str, files: list[Path], rng, targets, agg: dict[str, Any]) -> str:
+    """有未关联商品 → 生成待办：补完关联后可一键重跑（只重新导入已下载的文件）。"""
+    items = agg.get("unmapped_detail") or []
+    task = _task_base(
+        key, "unmapped",
+        f"有 {len(agg.get('unmapped') or [])} 种聚水潭商品还没关联系统商品；"
+        f"在待办里补完关联后点「完成并重新导入」即可把剩下的单建出来",
+        files, rng, targets,
+    )
+    task["items"] = items
+    task = st.upsert_pending(key, task)
+    _notify(key, task)
+    return task["id"]
+
+
+def _open_captcha_task(key: str, message: str, files: list[Path], rng, targets, *, reason: str) -> str:
+    """导出/登录需要人工介入（验证码 / Cookie 失效）→ 生成待办。"""
+    task = _task_base(key, "captcha", message, files, rng, targets)
+    task["reason"] = reason
+    task = st.upsert_pending(key, task)
+    _notify(key, task)
+    return task["id"]
+
+
+def _notify(key: str, task: dict[str, Any]) -> None:
+    """待办通知：站内（登录后弹窗，前端自己拉 /pending）一定有；另可选 webhook 推到手机。
+
+    webhook 一次把几种常见字段都发出去，兼容：企业微信/钉钉机器人（msgtype+text.content）、
+    Server酱/Bark（title+desp）。没配 webhook 就只记日志（站内照样能看到）。
+    """
+    text = f"【ERP 自动出库待办】{_wh_name(key)}：{task.get('message')}"
+    log.warning("%s", text)
+    url = (st.globals_view().get("notify_webhook") or "").strip()
+    if not url:
+        return
+
+    def _post() -> None:
+        try:
+            from ._http import httpx
+
+            payload = {
+                "msgtype": "text", "text": {"content": text},
+                "title": "ERP 自动出库待办", "desp": text, "message": text,
+                "warehouse": key, "task_id": task.get("id"),
+            }
+            with httpx.Client(timeout=10) as c:
+                c.post(url, json=payload)
+            log.info("待办已推送到 webhook")
+        except Exception as e:  # noqa: BLE001 - 推送失败不影响主流程
+            log.warning("待办 webhook 推送失败：%s", e)
+
+    threading.Thread(target=_post, daemon=True).start()
+
+
+def _save_mappings(key: str, mappings: list[dict[str, Any]]) -> int:
+    """保存「聚水潭商品名 → 系统商品」关联（与「聚水潭关联」页用的是同一张表）。"""
+    from sqlalchemy import select as _select
+
+    from ..models import CodeMapping
+
+    db = get_sessionmaker(key)()
+    saved = 0
+    try:
+        for m in mappings or []:
+            code = str(m.get("external_code") or "").strip()
+            pid = m.get("product_id")
+            if not code or not pid:
+                continue
+            row = db.scalar(_select(CodeMapping).where(
+                CodeMapping.source == "jushuitan", CodeMapping.external_code == code))
+            if row:
+                row.product_id = int(pid)
+                row.updated_at = datetime.now()
+            else:
+                db.add(CodeMapping(source="jushuitan", external_code=code, external_name=code,
+                                   product_id=int(pid)))
+            saved += 1
+        db.commit()
+    finally:
+        db.close()
+    return saved
+
+
+def reimport_files(key: str, paths: list[str], operator: str = "", skip_imported: bool = True) -> dict[str, Any]:
+    """只重新导入已下载的文件（不再去聚水潭导一遍）。"""
+    agg: dict[str, Any] = {"orders": 0, "created": 0, "duplicate_skipped": 0, "failed": [], "unmapped": set()}
+    detail: dict[str, dict] = {}
+    for p in paths or []:
+        f = Path(p)
+        if not f.exists():
+            continue
+        _set_state(step=f"正在重新导入 {f.name} …")
+        stt = import_file(key, f, operator=operator, skip_imported=skip_imported)
+        agg["orders"] += stt.get("orders", 0)
+        agg["created"] += stt.get("created", 0)
+        agg["duplicate_skipped"] += stt.get("duplicate_skipped", 0)
+        agg["failed"] += stt.get("failed") or []
+        agg["unmapped"] |= set(stt.get("unmapped") or [])
+        for it in stt.get("unmapped_detail") or []:
+            code = it.get("external_code") or ""
+            if code and code not in detail:
+                detail[code] = it
+    agg["unmapped"] = sorted(agg["unmapped"])
+    agg["unmapped_detail"] = sorted(detail.values(), key=lambda x: -int(x.get("count") or 0))
+    agg["files"] = [Path(p).name for p in paths or [] if Path(p).exists()]
+    return agg
+
+
+def resolve_pending(key: str, task_id: str, *, mappings: list[dict[str, Any]] | None = None,
+                    verify_code: str = "", cookie: str = "", user_name: str = "") -> dict[str, Any]:
+    """处理一条待办：保存关联 / 记录验证码或 Cookie → 自动重跑 → 更新或关闭待办。
+
+    重跑策略：
+    - unmapped（商品资料待补全）：只重新导入待办里记着的文件，不去聚水潭再导一次；
+    - captcha（验证码 / Cookie 失效）：带着新验证码或 Cookie 整轮重跑（需要重新导出）。
+    """
+    task = next((t for t in st.wh_of(st.load(), key).get("pending") or [] if t.get("id") == task_id), None)
+    if not task:
+        raise ValueError("待办不存在或已被处理")
+
+    saved = _save_mappings(key, mappings or [])
+    if verify_code:
+        st.patch_pending_item(key, task_id, {"verify_code": verify_code.strip()})
+    if cookie:
+        st.set_cookie(cookie.strip())  # 全局 Cookie，所有分仓共用
+        st.patch_pending_item(key, task_id, {"cookie_saved": True})
+
+    wh = st.wh_of(st.load(), key)
+    rng: tuple[datetime, datetime] | None = None
+    if task.get("range"):
+        try:
+            rng = (parse_datetime(task["range"][0]), parse_datetime(task["range"][1]))
+        except Exception:  # noqa: BLE001 - 存档时间坏掉就退回按规则算
+            rng = None
+
+    if task.get("type") == "unmapped" and task.get("file_paths"):
+        # 只重新导入：自己拿锁（run_once 会自己拿，不能在这里拿，否则死锁）
+        if not _JOB_LOCK.acquire(blocking=False):
+            return {"ok": False, "message": "已有一轮自动出库在跑，请稍后再点「完成」", "mappings_saved": saved}
+        try:
+            _set_state(running=True, warehouse=key, trigger=f"待办重试·{user_name or '手动'}",
+                       step="重新导入", started_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            agg = reimport_files(key, task["file_paths"], operator=wh.get("operator") or "",
+                                 skip_imported=wh.get("skip_imported", True))
+            res: dict[str, Any] = {
+                "ok": bool(agg["created"]) or not agg["unmapped"],
+                "message": f"重新导入完成：新建出库单 {agg['created']} 张"
+                          + (f"，还有 {len(agg['unmapped'])} 种商品未关联" if agg["unmapped"]
+                             else "，未关联商品已全部解决"),
+                "window": task.get("window") or "",
+                "files": agg.get("files") or [],
+                "stats": {k: (sorted(v) if isinstance(v, set) else v) for k, v in agg.items()},
+            }
+        finally:
+            _set_state(running=False, step="", warehouse="", trigger="")
+            _JOB_LOCK.release()
+    else:
+        # 整轮重跑（run_once 内部会拿锁、写执行记录）
+        res = run_once(key, target_co_ids=[str(t.get("co_id")) for t in task.get("targets") or []],
+                       start=rng[0] if rng else None, end=rng[1] if rng else None,
+                       trigger=f"待办重试·{user_name or '手动'}")
+
+    stats = res.get("stats") or {}
+    left = sorted(stats.get("unmapped") or []) if task.get("type") == "unmapped" else []
+    if res.get("ok") and not left:
+        st.close_pending(key, task_id, status="done",
+                         note=f"已保存 {saved} 条关联；{res.get('message') or ''}")
+    elif left:
+        upd = dict(task)
+        upd["items"] = stats.get("unmapped_detail") or []
+        upd["message"] = f"还有 {len(left)} 种聚水潭商品未关联，补完后可继续重跑"
+        st.upsert_pending(key, upd)
+    log.info("待办 %s 处理结果：%s", task_id, res.get("message"))
+    return {**res, "mappings_saved": saved, "pending_left": len(left), "task_id": task_id}
 
 
 # ---------------------------------------------------------------- 定时调度

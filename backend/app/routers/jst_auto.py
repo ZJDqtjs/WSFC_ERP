@@ -58,6 +58,20 @@ class GlobalSettingsIn(BaseModel):
     io_date_field: str = ""
     filename_template: str = ""
     clear_cookie: bool = False
+    notify_webhook: str = ""        # 待办 webhook（企业微信/钉钉机器人、Server酱、Bark 都能收）
+    notify_users: list[str] | None = None   # 登录后弹窗提醒的账号名单，空 = 所有管理员
+
+
+class MappingItemIn(BaseModel):
+    external_code: str
+    product_id: int | None = None
+
+
+class ResolvePendingIn(BaseModel):
+    mappings: list[MappingItemIn] = []   # 商品资料待补全：聚水潭商品名 → 系统商品
+    verify_code: str = ""                # 需要验证码时：人工填的验证码
+    cookie: str = ""                     # 或直接粘贴浏览器里的 Cookie（最稳）
+    note: str = ""
 
 
 class SaveIn(BaseModel):
@@ -102,8 +116,10 @@ def get_settings(user: User = Depends(get_current_user)):
     d = st.load()
     wh = st.wh_of(d, key)
     name = next((w.get("name") or key for w in get_warehouses() if w.get("key") == key), key)
+    pending = st.pending_open(key)
     return {
-        "globals": st.public_globals(d),
+        "globals": {**st.public_globals(d), "notify_webhook": st.globals_view(d).get("notify_webhook", ""),
+                    "notify_users": st.globals_view(d).get("notify_users", [])},
         "warehouse": {**wh, "key": key, "name": name},
         "warehouse_key": key,
         "warehouse_name": name,
@@ -113,6 +129,9 @@ def get_settings(user: User = Depends(get_current_user)):
         "next_runs": st.next_runs(wh.get("schedule") or []),
         "status": runner.status(),
         "last_run": wh.get("last_run") or {},
+        "pending": [{"id": t.get("id"), "type": t.get("type"), "message": t.get("message"),
+                     "created_at": t.get("created_at")} for t in pending],
+        "pending_count": len(pending),
     }
 
 
@@ -138,6 +157,9 @@ def save_settings(data: SaveIn, user: User = Depends(get_current_user)):
             patch["cookie"] = g["cookie"]
         elif g.get("clear_cookie"):
             patch["cookie"] = ""
+        patch["notify_webhook"] = g.get("notify_webhook", "")
+        if g.get("notify_users") is not None:
+            patch["notify_users"] = g["notify_users"]
         st.patch_globals(patch)
     if data.warehouse is not None:
         _validate_wh(data.warehouse)
@@ -208,3 +230,95 @@ def history(limit: int = 20, _: User = Depends(get_current_user)):
     key = get_current_key()
     runs = st.wh_of(st.load(), key).get("runs") or []
     return {"runs": runs[: max(1, min(limit, 50))]}
+
+
+# ---------------------------------------------------------------- 待办（人工介入）
+def _public_task(t: dict) -> dict:
+    """给前端看的待办内容（不返回 Cookie，只返回是否已填过验证码）。"""
+    return {
+        "id": t.get("id"),
+        "type": t.get("type"),
+        "reason": t.get("reason", ""),
+        "message": t.get("message", ""),
+        "created_at": t.get("created_at", ""),
+        "files": t.get("files") or [],
+        "window": t.get("window", ""),
+        "targets": t.get("targets") or [],
+        "items": t.get("items") or [],
+        "has_verify_code": bool(t.get("verify_code")),
+        "status": t.get("status", "open"),
+    }
+
+
+def _wh_label(key: str) -> str:
+    return next((w.get("name") or key for w in get_warehouses() if w.get("key") == key), key)
+
+
+@router.get("/pending")
+def pending_list(user: User = Depends(get_current_user)):
+    """当前分仓的待办（商品资料待补全 / 需要验证码 / 导出失败）。
+
+    站内通知就靠它：前端登录后拉一次，有待办且当前账号在提醒名单里就弹窗。
+    """
+    key = get_current_key()
+    g = st.globals_view()
+    tasks = st.pending_open(key)
+    users = [x for x in (g.get("notify_users") or []) if x]
+    notify = (user.name in users) if users else (user.role == "admin")
+    return {
+        "warehouse": key,
+        "warehouse_name": _wh_label(key),
+        "count": len(tasks),
+        "tasks": [_public_task(t) for t in tasks],
+        "notify": notify,
+        "notify_users": users,
+        "notify_webhook": g.get("notify_webhook") or "",
+        "running": bool(runner.status().get("running")),
+    }
+
+
+def _run_resolve(key: str, task_id: str, **kw) -> None:
+    """后台线程里跑重跑流程（失败只记日志，避免线程里异常被吞掉）。"""
+    try:
+        res = runner.resolve_pending(key, task_id, **kw)
+        print(f"[自动出库] 待办 {task_id} 处理完成：{res.get('message')}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[自动出库] 待办 {task_id} 处理失败：{type(e).__name__}: {e}")
+
+
+@router.post("/pending/{task_id}/resolve")
+def pending_resolve(task_id: str, data: ResolvePendingIn, user: User = Depends(get_current_user)):
+    """完成一条待办：保存商品关联 / 记录验证码或 Cookie，然后自动重跑。"""
+    key = get_current_key()
+    if not any(t.get("id") == task_id for t in st.pending_open(key)):
+        raise HTTPException(404, "待办不存在或已被处理")
+    if not (data.mappings or data.verify_code or data.cookie):
+        raise HTTPException(400, "没有可提交的内容：请至少选择商品关联，或填写验证码 / Cookie")
+    state = runner.status()
+    if state.get("running"):
+        raise HTTPException(409, f"已有一轮在执行中（{state.get('warehouse')} · {state.get('step')}），等它结束后再提交")
+
+    threading.Thread(
+        target=_run_resolve,
+        args=(key, task_id),
+        kwargs={
+            "mappings": [m.model_dump() for m in data.mappings],
+            "verify_code": data.verify_code,
+            "cookie": data.cookie,
+            "user_name": user.name,
+        },
+        name=f"jst-pending-{task_id}",
+        daemon=True,
+    ).start()
+    return {"ok": True, "started": True,
+            "message": "已提交，正在自动重跑（可点「刷新状态」看进度）"}
+
+
+@router.post("/pending/{task_id}/dismiss")
+def pending_dismiss(task_id: str, user: User = Depends(get_current_user)):
+    """忽略一条待办（不再提醒；不影响已导入的数据）。"""
+    key = get_current_key()
+    t = st.close_pending(key, task_id, status="dismissed", note=f"由 {user.name} 忽略")
+    if not t:
+        raise HTTPException(404, "待办不存在")
+    return {"ok": True, "task": _public_task(t)}

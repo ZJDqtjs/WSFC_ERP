@@ -330,6 +330,7 @@ function goPage(name) {
   });
   document.querySelectorAll(".page").forEach((x) => x.classList.remove("active"));
   const page = $("page-" + name);
+  if (!page) return;   // 老书签/失效深链（如 #/eva）不再报错
   page.classList.add("active");
   const loaders = {
     home: loadDashboard, stock: loadStock, inbound: initInbound, outbound: initOutbound,
@@ -3552,6 +3553,7 @@ function initOutbound() {
   if (!$("outDate").value) $("outDate").value = today();
   if (!$("outSaleBody").children.length) addSaleRow();
   loadOutbounds();
+  renderJstPending();   // 顺手刷新「待办处理」卡片（没有待办会自动隐藏）
 }
 function addSaleRow() {
   const id = ++outSaleRowId;
@@ -5412,6 +5414,9 @@ function renderJstStatus(st, last) {
         <span class="muted" style="margin-left:6px;">出库记录默认只看今天，记得把日期改到这天</span></div>`;
     }
   }
+  if (JST_PENDING_N) {
+    jump = `<div style="margin-top:6px;"><button class="btn sm danger" onclick="jstScrollPending()">⚠ 有 ${JST_PENDING_N} 项待办要处理 → 去处理</button></div>` + jump;
+  }
   const box = $("jstRunStatus");
   if (box) box.innerHTML = (lines.map((l) => `<div>${esc(l)}</div>`).join("") || "<div>还没有执行记录</div>") + jump;
 }
@@ -5463,6 +5468,9 @@ function fillJstAuto(d) {
   if ($("jstOperator")) $("jstOperator").value = wh.operator || "";
   if ($("jstAutoImport")) $("jstAutoImport").checked = wh.auto_import !== false;
   if ($("jstSkipImported")) $("jstSkipImported").checked = wh.skip_imported !== false;
+  if ($("jstNotifyWebhook")) $("jstNotifyWebhook").value = g.notify_webhook || "";
+  if ($("jstNotifyUsers")) $("jstNotifyUsers").value = (g.notify_users || []).join(",");
+  JST_PENDING_N = JST_AUTO.pending_count || 0;   // 状态区据此显示「去处理」按钮
   renderJstTargets(wh.targets || []);
   jstWindowChanged();
   jstSetText("jstNextRuns", (JST_AUTO.next_runs || []).length
@@ -5496,6 +5504,8 @@ async function saveJstAuto(opts) {
       io_date_field: g.io_date_field || "io_date",
       filename_template: g.filename_template || "",
       clear_cookie: !!o.clearCookie,
+      notify_webhook: ($("jstNotifyWebhook")?.value || "").trim(),
+      notify_users: ($("jstNotifyUsers")?.value || "").split(",").map((s) => s.trim()).filter(Boolean),
     },
     warehouse: {
       enabled: !!$("jstEnabled")?.checked,
@@ -5579,6 +5589,199 @@ async function loadJstHistory() {
         </tr>`;
       }).join("") : `<tr><td colspan="7" class="empty">还没有执行记录</td></tr>`) + `</tbody>`;
   } catch (e) { /* 忽略：历史读不到不影响设置 */ }
+}
+
+/* =============== 待办处理（挂在「设置 → 自动出库设置」页里，不单开侧边栏） ===============
+   自动出库需要人工介入的两类事：新商品没规则匹配（补关联）、聚水潭要验证码（填码/贴 Cookie）。 */
+let EVA_TASKS = [];
+let JST_PENDING_N = 0;          // 当前分仓待办数（设置页状态区据此提示）
+let JST_PENDING_POPPED = false; // 本次登录只弹一次
+
+/* 出库页那个「待办处理」按钮的状态：有待办时变红并显示条数 */
+function jstPendingBtnState() {
+  const b = $("jstPendingBtn");
+  if (!b) return;
+  const n = JST_PENDING_N;
+  b.className = n ? "btn danger" : "btn secondary";
+  b.textContent = n ? `⚠ 待办处理（${n}）` : "待办处理";
+  b.title = n
+    ? `${n} 项待办要处理：新商品没规则匹配 / 聚水潭要验证码，点这里处理`
+    : "暂无待办；聚水潭遇到新商品没规则匹配、或需要验证码时会在这里处理";
+}
+
+/* 打开待办弹层（出库页按钮、登录弹窗「去处理」、自动出库设置页的提示都走这里） */
+async function openJstPending() {
+  const d = await checkJstPending(false);
+  EVA_TASKS = (d && d.tasks) || [];
+  $("modalBox").classList.add("wide");
+  openModal(`<h3>待办处理 <span class="muted">${EVA_TASKS.length ? `（${EVA_TASKS.length} 项待处理）` : ""}</span>
+      <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="hint" style="margin-bottom:10px;">自动出库 / 导入聚水潭出库单时遇到「新商品没有规则匹配」「聚水潭要验证码」都在这里处理；
+      处理完点各项下面的按钮，系统会自动接着重跑（商品资料类只重新导入已下载的文件，不再去聚水潭导一遍）。</div>
+    <div id="jstPendingList"></div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="openJstPending()">刷新</button>
+      <button class="btn" onclick="closeModal()">关闭</button>
+    </div>`);
+  renderEvaTasks(EVA_TASKS);
+  if (d && d.running) startJstPoll();
+}
+/* 兼容旧调用名（状态区提示、登录弹窗「去处理」） */
+function jstScrollPending() { openJstPending(); }
+
+function evaProductOptions() {
+  return ['<option value="">（选择系统商品…）</option>']
+    .concat((PRODUCTS || []).filter((p) => p.is_active !== false).map((p) =>
+      `<option value="${p.id}">${esc(p.name)}（${p.product_type === "order" ? "订单" : "库存"} · ${esc(p.category || "—")}）</option>`))
+    .join("");
+}
+
+/* 候选商品一键选进下拉框 */
+function evaSuggest(btn, pid) {
+  const sel = btn.closest("tr") ? btn.closest("tr").querySelector("select.eva-pick") : null;
+  if (sel) { sel.value = String(pid); toast("已选中候选商品，记得点「完成并重新导入」"); }
+}
+
+/* 收集这条待办里用户选好的关联 */
+function evaCollect(tid) {
+  const box = $("eva-body-" + tid);
+  if (!box) return [];
+  return [...box.querySelectorAll("select.eva-pick")]
+    .map((s) => ({ external_code: s.dataset.code, product_id: s.value ? +s.value : null }))
+    .filter((m) => m.external_code && m.product_id);
+}
+
+function evaUnmappedCard(t) {
+  const opts = evaProductOptions();
+  const rows = (t.items || []).map((it) => {
+    const sug = (it.suggest || []).slice(0, 3).map((s) =>
+      `<button class="btn sm ghost" style="margin:2px 4px 0 0;" onclick="evaSuggest(this, ${s.product_id})">${esc(s.name)}${s.score ? `（${Math.round(s.score * 100)}%）` : ""}</button>`).join("");
+    return `<tr>
+      <td><b>${esc(it.external_code)}</b>
+        ${it.spec ? `<div class="muted" style="font-size:11px;">规格 ${esc(it.spec)}</div>` : ""}
+        ${it.reason ? `<div class="muted" style="font-size:11px;">${esc(it.reason)}</div>` : ""}</td>
+      <td class="num">${it.count || 0}</td>
+      <td>
+        <select class="searchable eva-pick" data-code="${esc(it.external_code)}" style="min-width:240px;">${opts}</select>
+        ${sug ? `<div class="field-hint">候选：${sug}</div>` : ""}
+      </td>
+    </tr>`;
+  }).join("");
+  return `<div class="card" style="border:1px solid var(--amber, #f59e0b);">
+    <div class="card-head">
+      <h3>🆕 商品资料待补全（${(t.items || []).length} 种）</h3>
+      <span class="hint">${esc(t.message)}</span>
+    </div>
+    <div id="eva-body-${t.id}">
+      <div class="table-wrap"><table>
+        <thead><tr><th style="width:42%;">聚水潭商品名</th><th class="num" style="width:80px;">出现次数</th><th>关联到系统商品</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="3" class="empty">没有明细</td></tr>`}</tbody>
+      </table></div>
+    </div>
+    <div class="toolbar" style="margin-top:10px;">
+      <button class="btn green" onclick="evaResolve('${t.id}')">✔ 完成并重新导入</button>
+      <button class="btn secondary" onclick="location.hash='#/settings?tab=jushuitan';">去「聚水潭关联」维护</button>
+      <button class="btn sm ghost" onclick="evaDismiss('${t.id}')">忽略</button>
+      <span class="muted">区间 ${esc(t.window || "")} · 文件 ${esc((t.files || []).join("、"))} · ${esc(t.created_at || "")}</span>
+    </div>
+  </div>`;
+}
+
+function evaCaptchaCard(t) {
+  const reason = t.reason === "not_logged_in" ? "聚水潭登录态失效" : "聚水潭要求验证码 / 二次校验";
+  return `<div class="card" style="border:1px solid var(--red, #dc2626);">
+    <div class="card-head">
+      <h3>🔐 ${reason}</h3>
+      <span class="hint">${esc(t.message)}</span>
+    </div>
+    <div class="form-grid">
+      <div class="field">
+        <label>验证码${t.has_verify_code ? "（已填过一次，可重填）" : ""}</label>
+        <input id="evaCode-${t.id}" placeholder="聚水潭发来的验证码" />
+      </div>
+      <div class="field">
+        <label>或粘贴浏览器 Cookie（最稳，推荐）</label>
+        <textarea id="evaCookie-${t.id}" rows="2" placeholder="浏览器登录 erp321 → F12 → Network → 任一请求 → 复制 Cookie 整段粘这里"></textarea>
+        <div class="field-hint">粘贴 Cookie 不用等验证码，提交后立刻带着它重新导出</div>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn green" onclick="evaResolve('${t.id}')">提交并重试</button>
+      <button class="btn sm ghost" onclick="evaDismiss('${t.id}')">忽略</button>
+      <span class="muted">区间 ${esc(t.window || "")} · 目标分仓 ${esc((t.targets || []).map((x) => x.name || x.co_id).join("、"))} · ${esc(t.created_at || "")}</span>
+    </div>
+  </div>`;
+}
+
+function renderEvaTasks(tasks) {
+  const box = $("jstPendingList");
+  if (!box) return;
+  if (!tasks.length) {
+    box.innerHTML = `<div class="empty">当前没有待办 🎉　自动出库正常时这里是空的。</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="alert warn">有 ${tasks.length} 项待处理，处理完点各项下面的按钮，系统会自动接着重跑。</div>` +
+    tasks.map((t) => (t.type === "unmapped" ? evaUnmappedCard(t) : evaCaptchaCard(t))).join("");
+  try { bindSearchable(box); } catch (e) {}
+}
+
+/* 刷新待办：更新按钮上的条数；弹层开着就顺带刷新里面的内容 */
+async function renderJstPending() {
+  if (!PRODUCTS.length) { try { PRODUCTS = await api("/api/products"); } catch (e) {} }
+  const d = await checkJstPending(false);   // 里面会同步按钮状态
+  EVA_TASKS = (d && d.tasks) || [];
+  renderEvaTasks(EVA_TASKS);                // 弹层没开时 $("jstPendingList") 不存在，自动跳过
+  if (d && d.running) startJstPoll();
+}
+
+async function evaResolve(tid) {
+  const task = (EVA_TASKS || []).find((t) => t.id === tid);
+  if (!task) { toast("待办已变化，请刷新后重试"); return; }
+  const payload = { mappings: [], verify_code: "", cookie: "", note: "" };
+  if (task.type === "unmapped") {
+    payload.mappings = evaCollect(tid);
+    if (!payload.mappings.length && !confirm("还没选任何商品关联，仍要按现有配置重跑一次吗？")) return;
+  } else {
+    payload.verify_code = ($("evaCode-" + tid)?.value || "").trim();
+    payload.cookie = ($("evaCookie-" + tid)?.value || "").trim();
+    if (!payload.verify_code && !payload.cookie) { toast("请填验证码，或粘贴浏览器 Cookie"); return; }
+  }
+  try {
+    const r = await api(`/api/jst-auto/pending/${encodeURIComponent(tid)}/resolve`, "POST", payload);
+    toast(r.message || "已提交，正在重跑");
+    startJstPoll();
+    setTimeout(() => { renderJstPending(); checkJstPending(false); }, 2500);
+  } catch (e) { toast("提交失败：" + e.message); }
+}
+
+async function evaDismiss(tid) {
+  if (!confirm("忽略这条待办？不再提醒（已导入的数据不受影响）")) return;
+  try {
+    await api(`/api/jst-auto/pending/${encodeURIComponent(tid)}/dismiss`, "POST");
+    toast("已忽略");
+    renderJstPending(); checkJstPending(false);
+  } catch (e) { toast("操作失败：" + e.message); }
+}
+
+/* 登录后/打开设置页时检查待办：有就弹窗提醒（站内，不依赖短信或邮箱） */
+async function checkJstPending(popup) {
+  try {
+    const d = await api("/api/jst-auto/pending");
+    JST_PENDING_N = d.count || 0;
+    jstPendingBtnState();   // 同步出库页那个按钮（有待办时变红显示条数）
+    if (popup !== false && JST_PENDING_N && d.notify && !JST_PENDING_POPPED) {
+      JST_PENDING_POPPED = true;
+      const kinds = [...new Set(d.tasks.map((t) => (t.type === "unmapped" ? "商品资料待补全" : "聚水潭要验证码")))];
+      openModal(`<h3>有 ${JST_PENDING_N} 项待办要处理 <button class="close" onclick="closeModal()">✕</button></h3>
+        <div class="muted">${esc(d.warehouse_name)}：${esc(kinds.join(" / "))}</div>
+        <ul style="margin:10px 0 0 20px;line-height:1.8;">${d.tasks.slice(0, 5).map((t) => `<li>${esc(t.message)}</li>`).join("")}</ul>
+        <div class="modal-foot">
+          <button class="btn secondary" onclick="closeModal()">稍后处理</button>
+          <button class="btn primary" onclick="closeModal(); jstScrollPending();">去处理（设置 → 自动出库设置）</button>
+        </div>`);
+    }
+    return d;
+  } catch (e) { return null; }
 }
 
 /* =============== 库存流水 =============== */
@@ -6039,6 +6242,7 @@ function startMaintenanceWatch() {
   syncExcludeOtherHint();   // 报表页「排除其他开支」开关按本机偏好回显（默认开启）
   loadDashboard();
   applyHashRoute(); // 支持深链：登录后跳转到指定二级页
+  checkJstPending(); // 自动出库待办（商品资料待补全 / 需要验证码）：有就弹窗提醒
 })();
 
 /* =============== 批量导入 =============== */
@@ -6517,6 +6721,7 @@ async function submitDraftOrders(kind, orders) {
       $("outDateTo").value = ds[ds.length - 1];
     }
     loadOutbounds(); loadStock();
+    renderJstPending();   // 导入完立刻刷新「待办处理」（有新商品没关联 / 要验证码时马上就能看到）
   } catch (e) { toast("确认出库失败：" + e.message); }
   finally { window.__CONFIRMING__ = false; }
 }

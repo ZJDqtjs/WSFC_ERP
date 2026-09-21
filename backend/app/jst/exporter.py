@@ -72,7 +72,8 @@ def make_relogin(cfg: JstConfig, on_cookie: Callable[[str], None] | None = None)
 
     未配置账号密码时返回 None，此时 Cookie 失效只能人工处理。
     """
-    base = build_relogin(cfg.account, cfg.password, cfg.cookie, timeout=cfg.timeout)
+    base = build_relogin(cfg.account, cfg.password, cfg.cookie, timeout=cfg.timeout,
+                         verify_code=getattr(cfg, "verify_code", "") or "")
     if base is None:
         return None
 

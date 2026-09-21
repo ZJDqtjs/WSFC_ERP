@@ -164,6 +164,8 @@ class JstConfig:
     schedule: list[Schedule] = field(default_factory=list)
     filename_template: str = "销售出库单_{start:%Y%m%d}_{authorize_co_id}.xlsx"
     keep_raw_name: bool = False
+    # 人工在「待办」里填的验证码：Cookie 失效需要重新登录时带上它（空 = 不用）
+    verify_code: str = ""
 
     @property
     def can_relogin(self) -> bool:

@@ -289,6 +289,7 @@
           <div class="card-head">
             <h3>新增出库 / 销售单</h3><span class="hint">卖商品自动结转关联包装材料与打包费</span>
             <button class="btn" style="margin-left:auto;" onclick="openBatchModal('jushuitan')"><svg class="ic"><use href="#i-download"/></svg> 导入聚水潭出库单</button>
+            <button class="btn secondary" id="jstPendingBtn" onclick="openJstPending()" title="聚水潭新商品没规则匹配 / 需要验证码时，在这里处理">待办处理</button>
             <button class="btn secondary" onclick="openBatchModal('outbound')"><svg class="ic"><use href="#i-out"/></svg> 批量出库</button>
           </div>
           <div class="form-grid">
@@ -942,6 +943,18 @@
               <label>Cookie（可选）</label>
               <textarea id="jstCookie" rows="2" placeholder="留空 = 用账号密码自动登录；也可粘贴浏览器里 erp321 的 Cookie"></textarea>
               <div class="field-hint" id="jstCookieHint"></div>
+            </div>
+            <div class="form-grid">
+              <div class="field">
+                <label>待办通知 webhook（可选）</label>
+                <input id="jstNotifyWebhook" placeholder="企业微信 / 钉钉机器人、Server酱、Bark 的地址" />
+                <div class="field-hint">出现待办（新商品没规则 / 要验证码）时往这里推一条消息，方便手机上收到；留空则只在登录后弹窗提醒</div>
+              </div>
+              <div class="field">
+                <label>弹窗提醒的账号</label>
+                <input id="jstNotifyUsers" placeholder="如 小王,老孔；留空 = 所有管理员" />
+                <div class="field-hint">这些账号登录后会弹窗提醒有待办</div>
+              </div>
             </div>
             <div class="toolbar">
               <button class="btn green" onclick="saveJstAuto()"><svg class="ic"><use href="#i-save"/></svg> 保存设置</button>

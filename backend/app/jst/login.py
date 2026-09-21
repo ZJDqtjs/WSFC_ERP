@@ -50,6 +50,10 @@ class LoginError(RuntimeError):
     """登录失败（账号密码错误、被风控拦截等）。"""
 
 
+class CaptchaRequired(LoginError):
+    """聚水潭要求验证码 / 二次安全校验 —— 这是需要人工介入的情况（归到「待办」里让用户填）。"""
+
+
 @dataclass(frozen=True)
 class Warehouse:
     co_id: str
@@ -78,11 +82,13 @@ def login(
     device_id: str | None = None,
     client_id: str | None = None,
     timeout: float = 60.0,
+    verify_code: str = "",
 ) -> str:
-    """用账号密码换一套新的 Cookie，失败抛 LoginError。
+    """用账号密码换一套新的 Cookie，失败抛 LoginError（需要验证码时抛 CaptchaRequired）。
 
     device_id / client_id 对应浏览器的 j_d_3 / v_d_144 设备指纹；
     实测缺失或随机值都能登录成功，传进来只是让新 Cookie 与旧的一致。
+    verify_code 是人工从聚水潭那边拿到的验证码（在「待办」里填），填了就随登录带上。
     """
     if not account or not password:
         raise LoginError("未配置账号或密码，无法自动登录")
@@ -91,7 +97,7 @@ def login(
         "data": {
             "account": account,
             "password": password,
-            "verifyCode": "",
+            "verifyCode": (verify_code or "").strip(),
             "j_d_3": device_id or "",
             "v_d_144": client_id or "",
             "isApp": False,
@@ -106,12 +112,16 @@ def login(
         body = resp.json()
 
         code = body.get("code")
+        msg = f"登录失败（code={code}）：{_CODE_MSG.get(code, body.get('msg') or '未知错误')}"
+        if code in (10003, 301105, 301109):
+            # 触发验证码/二次校验：属于"要人工介入"的情况，交给「待办」流程
+            raise CaptchaRequired(msg)
         if code != 0:
-            raise LoginError(f"登录失败（code={code}）：{_CODE_MSG.get(code, body.get('msg') or '未知错误')}")
+            raise LoginError(msg)
 
         data = body.get("data") or {}
         if data.get("hasRisk") or data.get("idaasHasRisk"):
-            raise LoginError(f"登录被风控拦截（hasRisk={data.get('hasRisk')}），需要人工在浏览器登录后粘贴 Cookie")
+            raise CaptchaRequired(f"登录被风控拦截（hasRisk={data.get('hasRisk')}）：需要在待办里填一次验证码，或到浏览器登录后把 Cookie 粘进来")
 
         cookie = cookie_from_jar(client.cookies.jar, device_id=device_id, client_id=client_id)
 
@@ -139,7 +149,8 @@ def device_id_from_cookie(cookie: str) -> tuple[str | None, str | None]:
     return fields.get("j_d_3") or None, fields.get("v_d_144") or None
 
 
-def build_relogin(account: str, password: str, old_cookie: str = "", *, timeout: float = 60.0):
+def build_relogin(account: str, password: str, old_cookie: str = "", *, timeout: float = 60.0,
+                  verify_code: str = ""):
     """生成给 JstSession 用的续登回调；未配置账号密码时返回 None。"""
     if not account or not password:
         return None
@@ -147,6 +158,7 @@ def build_relogin(account: str, password: str, old_cookie: str = "", *, timeout:
     device_id, client_id = device_id_from_cookie(old_cookie)
 
     def _relogin() -> str:
-        return login(account, password, device_id=device_id, client_id=client_id, timeout=timeout)
+        return login(account, password, device_id=device_id, client_id=client_id, timeout=timeout,
+                     verify_code=verify_code)
 
     return _relogin
