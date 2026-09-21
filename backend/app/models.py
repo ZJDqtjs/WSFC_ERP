@@ -46,6 +46,9 @@ class Product(Base):
     sale_price: Mapped[float] = mapped_column(Float, default=0.0)  # 默认售价(每基础单位)
     unit_cost: Mapped[float] = mapped_column(Float, default=0.0)  # 参考成本/采购单价(每基础单位)
     weight_kg: Mapped[float] = mapped_column(Float, default=0.0)  # 单件毛重(kg/默认单位)，用于自动计算快递费
+    # 包邮：该商品出库时不参与快递费结算（订单商品勾了它、或其关联的库存大类勾了，都算包邮）；
+    # 整单所有销售行都是包邮时不会生成「快递费(自动)」行。
+    free_shipping: Mapped[bool] = mapped_column(Boolean, default=False)
     conversions: Mapped[dict] = mapped_column(JSON, default=dict)  # {单位: 换算到基础单位的系数}
     # 销售关联商品/包装清单：[{product_id, quantity, unit}]
     pack_items: Mapped[list] = mapped_column(JSON, default=list)

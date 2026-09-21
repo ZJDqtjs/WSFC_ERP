@@ -197,6 +197,9 @@
               <select id="mvProduct" class="searchable"><option value="0">全部商品</option></select>
               <input id="mvDateFrom" type="date" /><span>-</span><input id="mvDateTo" type="date" />
               <input id="mvSearch" placeholder="🔍 筛选流水..." oninput="loadMovements()" />
+              <label class="check-inline" title="把同一商品、同一扣减量的出库行合并成一行（显示单数与合计出库量）">
+                <input type="checkbox" id="mvMergeOut" checked onchange="loadMovements()" /> 合并出库
+              </label>
               <button class="btn" onclick="loadMovements()">查询</button>
             </div>
             <div id="mvChart"></div>

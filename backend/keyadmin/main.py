@@ -1,7 +1,8 @@
 """私钥管理工具：独立的登录密钥生成与账号管理后台。
 
 - 单独端口、单独启动脚本（项目根 keyadmin.py），不随 ERP 一起启动。
-- 打开即进入管理界面；首次使用需输入管理员密码（config.local.json 中 accounts 的管理员口令）。
+- 打开即进入管理界面；首次使用需输入「管理员账号 + 密码」，校验来源见 _admin_password_ok，
+  并对来源 IP 做失败限流，避免被在线爆破。
 - 复用 ERP 的用户表与密钥算法；私钥生成/重新生成时仅一次返回。
 """
 import base64
@@ -20,6 +21,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import login_guard as guard
 from app import maintenance as mt
 from app.auth import ensure_seed_users, verify_password
 from app.clear_data import (
@@ -29,10 +31,11 @@ from app.clear_data import (
     preview as clear_preview,
     warehouse_choices,
 )
-from app.routers.backup import _list_backups, _safe_path, create_backup_file
+from app.config import seed_accounts
+from app.routers.backup import _belongs, _list_backups, _safe_path, create_backup_file
 from app.database import (
-    DATA_DIR, DB_PATH, DEFAULT_WAREHOUSE_KEY, get_db_default as get_db,
-    get_sessionmaker, get_warehouses,
+    DATA_DIR, DEFAULT_WAREHOUSE_KEY, get_db_default as get_db,
+    get_sessionmaker, get_warehouses, warehouse_db_path,
 )
 from app.keys import generate_keypair
 from app.models import User
@@ -73,10 +76,33 @@ def _verify_token(token: str | None) -> bool:
 app = FastAPI(title="私钥管理工具")
 
 
-def _admin_password_ok(db: Session, password: str) -> bool:
-    """任一管理员账号密码匹配即通过门禁。"""
-    admins = db.scalars(select(User).where(User.role == "admin")).all()
-    return any(a.password_hash and verify_password(password, a.password_hash) for a in admins)
+# ---------- 门禁：账号 + 口令 ----------
+# 口令来源有优先级（都要求账号名对得上）：
+#   1) 只要 config.local.json 的 accounts 里写了 role=admin 的账号，就**以配置为唯一依据**，
+#      库里残留的旧口令不再是一把备用钥匙（否则改了配置、库里旧口令仍能登录）；
+#   2) 配置里一个管理员都没写时，才回退到库里 role=admin 且已设口令的账号
+#      —— 老部署/配置为空时不会把自己锁在门外。
+# 失败分级锁定（3 次→等 1 分钟、再 3 次→3 分钟……）统一由 app/login_guard.py 提供，
+# 与业务主系统共用同一份状态文件，因此可以在这里直接解锁主系统被锁的账号。
+def _admin_password_ok(db: Session, username: str, password: str) -> bool:
+    """门禁校验：账号 + 口令（口令来源与优先级见上方注释）。"""
+    username = (username or "").strip()
+    if not username or not password:
+        return False
+
+    # 1) 配置里写了管理员 => 只认配置
+    admins = [a for a in seed_accounts() if a.get("role") == "admin" and a.get("password")]
+    if admins:
+        return any(
+            a["username"] == username and hmac.compare_digest(a["password"], password)
+            for a in admins
+        )
+
+    # 2) 配置里没写管理员 => 兼容回退到库里已有口令的管理员
+    user = db.scalar(select(User).where(User.username == username))
+    if user and user.role == "admin" and user.password_hash:
+        return verify_password(password, user.password_hash)
+    return False
 
 
 def _require(request: Request, db: Session = Depends(get_db)):
@@ -129,6 +155,7 @@ def sync_users_to_all() -> int:
 
 
 class LoginIn(BaseModel):
+    username: str
     password: str
 
 
@@ -159,8 +186,23 @@ def _serialize(u: User) -> dict:
 
 @app.post("/api/login")
 def login(data: LoginIn, response: Response, db: Session = Depends(get_db)):
-    if not _admin_password_ok(db, data.password):
-        raise HTTPException(401, "管理密码错误")
+    """门禁登录；连续失败按 app/login_guard.py 的分级规则锁定该账号。"""
+    username = (data.username or "").strip()
+    if username:
+        left = guard.locked_left(guard.SCOPE_KEYADMIN, username)
+        if left:
+            raise HTTPException(429, f"账号已锁定，请 {guard.humanize(left)} 后再试")
+
+    if not _admin_password_ok(db, username, data.password):
+        wait = guard.record_fail(guard.SCOPE_KEYADMIN, username) if username else 0
+        if wait:
+            raise HTTPException(
+                429,
+                f"连续失败次数过多，账号已锁定 {guard.humanize(wait)}，请稍后再试",
+            )
+        raise HTTPException(401, "账号或密码错误")
+
+    guard.reset(guard.SCOPE_KEYADMIN, username)
     response.set_cookie(
         COOKIE, _make_token(), max_age=SESSION_MAX_AGE, httponly=True, path="/", samesite="lax"
     )
@@ -171,6 +213,28 @@ def login(data: LoginIn, response: Response, db: Session = Depends(get_db)):
 def logout(response: Response):
     response.delete_cookie(COOKIE, path="/")
     return {"ok": True}
+
+
+class UnlockIn(BaseModel):
+    username: str = ""
+    scope: str = guard.SCOPE_KEYADMIN   # keyadmin | erp
+
+
+@app.get("/api/locks")
+def locks(_: bool = Depends(_require)):
+    """当前处于登录锁定状态的账号（本工具 / 业务主系统）。"""
+    return {
+        guard.SCOPE_KEYADMIN: guard.locked_list(guard.SCOPE_KEYADMIN),
+        guard.SCOPE_ERP: guard.locked_list(guard.SCOPE_ERP),
+    }
+
+
+@app.post("/api/unlock")
+def unlock(data: UnlockIn, _: bool = Depends(_require)):
+    """手动解除登录锁定：用户名留空 = 清空该系统全部锁定。"""
+    scope = guard.SCOPE_ERP if data.scope == guard.SCOPE_ERP else guard.SCOPE_KEYADMIN
+    cleared = guard.clear(scope, data.username.strip())
+    return {"ok": True, "scope": scope, "cleared": cleared}
 
 
 @app.get("/api/session")
@@ -333,30 +397,69 @@ def delete_user(
 # ============================================================
 #  备份与应急抢救（后门）：ERP 主进程登录失效 / 数据异常时，
 #  可在本私钥管理后台直接备份 / 恢复数据库，或重置初始管理员登录私钥。
+#  ⚠️ 备份按分仓隔离：每个分仓是独立的 db 文件，备份/恢复/删除都必须带上分仓 key；
+#     恢复与删除都会校验备份文件名属于该分仓，杜绝跨仓覆盖（如把奥斯迪的备份灌进 wh01）。
 # ============================================================
+class BackupIn(BaseModel):
+    key: str | None = None
+
+
 class RestoreBackupIn(BaseModel):
     name: str
+    key: str | None = None
+
+
+def _rescue_key(key: str | None) -> str:
+    """校验并归一化抢救目标分仓 key（缺省默认仓）。"""
+    k = (key or "").strip() or DEFAULT_WAREHOUSE_KEY
+    if k not in {w["key"] for w in get_warehouses()}:
+        raise HTTPException(404, f"分仓不存在：{k}")
+    return k
+
+
+def _rescue_payload(key: str) -> dict:
+    """抢救面板数据：当前分仓信息 + 全部分仓选项 + 该分仓的备份列表。
+
+    注意：分仓名嵌在 warehouse.name 里，不能平铺成 name —— 否则会覆盖接口返回的
+    备份文件名（name），导致前端拿到分仓名去恢复。
+    """
+    name = next((w.get("name") or w["key"] for w in get_warehouses() if w["key"] == key), key)
+    return {
+        "key": key,
+        "warehouse": {"key": key, "name": name},
+        "warehouses": warehouse_choices(),
+        "backups": _list_backups(key),
+    }
 
 
 @app.get("/api/backups")
-def rescue_list_backups(_: bool = Depends(_require)):
-    return {"backups": _list_backups(DEFAULT_WAREHOUSE_KEY)}
+def rescue_list_backups(key: str | None = None, _: bool = Depends(_require)):
+    """列出指定分仓（缺省默认仓）的备份文件。"""
+    return _rescue_payload(_rescue_key(key))
 
 
 @app.post("/api/backup")
-def rescue_create_backup(_: bool = Depends(_require)):
-    name = create_backup_file(DEFAULT_WAREHOUSE_KEY)
-    return {"ok": True, "name": name, "backups": _list_backups(DEFAULT_WAREHOUSE_KEY)}
+def rescue_create_backup(data: BackupIn | None = None, _: bool = Depends(_require)):
+    """为指定分仓（缺省默认仓）创建备份文件。"""
+    k = _rescue_key(data.key if data else None)
+    name = create_backup_file(k)
+    return {"ok": True, "name": name, **_rescue_payload(k)}
 
 
 @app.post("/api/backup/restore")
 def rescue_restore_backup(data: RestoreBackupIn, _: bool = Depends(_require)):
-    """用备份文件覆盖当前数据库（含 WAL 一致性）。恢复后旧登录令牌失效，需重新登录。"""
+    """用备份文件覆盖**指定分仓**的数据库（含 WAL 一致性），其他分仓不受影响。
+
+    备份文件名必须属于该分仓，否则拒绝，避免跨仓灌数据。恢复后该仓需重新登录。
+    """
+    k = _rescue_key(data.key)
+    if not _belongs(data.name, k):
+        raise HTTPException(400, "备份文件不属于所选分仓，拒绝恢复")
     src_path = _safe_path(data.name)
     if not src_path.exists():
         raise HTTPException(404, "备份文件不存在")
     src = sqlite3.connect(str(src_path))
-    dst = sqlite3.connect(str(DB_PATH))
+    dst = sqlite3.connect(str(warehouse_db_path(k)))
     try:
         src.backup(dst)
     except Exception as e:
@@ -364,16 +467,20 @@ def rescue_restore_backup(data: RestoreBackupIn, _: bool = Depends(_require)):
     finally:
         dst.close()
         src.close()
-    return {"ok": True, "restored": data.name, "backups": _list_backups()}
+    return {"ok": True, "restored": data.name, **_rescue_payload(k)}
 
 
 @app.delete("/api/backup/{name}")
-def rescue_delete_backup(name: str, _: bool = Depends(_require)):
+def rescue_delete_backup(name: str, key: str | None = None, _: bool = Depends(_require)):
+    """删除**指定分仓**的备份文件。"""
+    k = _rescue_key(key)
+    if not _belongs(name, k):
+        raise HTTPException(400, "备份文件不属于所选分仓，拒绝删除")
     src_path = _safe_path(name)
     if not src_path.exists():
         raise HTTPException(404, "备份文件不存在")
     src_path.unlink()
-    return {"ok": True, "backups": _list_backups()}
+    return {"ok": True, **_rescue_payload(k)}
 
 
 @app.post("/api/rescue/reset-admin")

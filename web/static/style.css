@@ -1452,7 +1452,31 @@ body.notice-on .login-mask { padding-top: 40px; }
 
 /* ============ 库存流水柱状图 ============ */
 #mvChart { margin-bottom: 12px; }
-.mv-chart-title { font-size: 13px; color: var(--text-muted, #8a8f98); margin-bottom: 8px; }
+.mv-block + .mv-block { margin-top: 16px; }
+.mv-chart-title {
+  font-size: 13px;
+  color: var(--text-muted, #8a8f98);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+/* 单位徽标：不同分组的量不可相加，单位必须一眼可见 */
+.mv-unit-chip {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text, #1f2328);
+  background: var(--bg-subtle, #f2f4f7);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+.mv-legend { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.mv-legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-left: 6px; }
+.mv-legend i.up { background: var(--green, #16a34a); }
+.mv-legend i.down { background: var(--red, #dc2626); }
+.mv-note { font-size: 12px; color: var(--text-muted, #8a8f98); margin-top: 8px; }
 .mv-chart {
   display: flex;
   align-items: flex-end;
@@ -1476,6 +1500,8 @@ body.notice-on .login-mask { padding-top: 40px; }
   margin-bottom: 2px;
   white-space: nowrap;
 }
+.mv-val.up { color: var(--green, #16a34a); }
+.mv-val.down { color: var(--red, #dc2626); }
 .mv-track {
   height: 160px;
   width: 70%;
@@ -1493,6 +1519,20 @@ body.notice-on .login-mask { padding-top: 40px; }
 }
 .mv-bar.down { background: var(--red, #dc2626); }
 .mv-bar.zero { background: var(--border-light, #e5e7eb); }
+/* 上下分向柱：上半绿=入库（贴中线向上），下半红=出库（贴中线向下） */
+.mv-pos, .mv-neg {
+  height: 82px;
+  width: 70%;
+  display: flex;
+  background: rgba(0, 0, 0, 0.03);
+}
+.mv-pos { align-items: flex-end; border-radius: 3px 3px 0 0; }
+.mv-neg { align-items: flex-start; border-radius: 0 0 3px 3px; border-top: 1px solid var(--border, #e5e7eb); }
+.mv-pos .mv-bar { border-radius: 3px 3px 0 0; }
+.mv-neg .mv-bar { border-radius: 0 0 3px 3px; }
+/* 上下分向的柱：无数据时不要留下 2px 小色条（.mv-bar 默认 min-height:2px 给单向下方的图用） */
+.mv-pos .mv-bar, .mv-neg .mv-bar { min-height: 0; }
+tr.mv-merged td { background: rgba(220, 38, 38, 0.03); }
 .mv-x {
   font-size: 9px;
   color: #999;

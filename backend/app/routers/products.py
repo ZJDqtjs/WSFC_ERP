@@ -44,6 +44,7 @@ class ProductIn(BaseModel):
     sale_price: float = 0.0
     unit_cost: float = 0.0
     weight_kg: float = 0.0  # 单件毛重(kg/默认单位)
+    free_shipping: bool = False  # 包邮：出库不计快递费（订单商品勾它，或其关联的库存大类勾它，都算包邮）
     conversions: dict[str, float] = {}
     pack_items: list[PackItem] = []
     pack_fee: float = 0.0
@@ -88,6 +89,7 @@ def _to_dict(p: Product, db: Session | None = None) -> dict:
         "sale_price": p.sale_price,
         "unit_cost": p.unit_cost,
         "weight_kg": p.weight_kg or 0,
+        "free_shipping": bool(p.free_shipping),
         "conversions": p.conversions or {},
         "pack_items": p.pack_items or [],
         "pack_fee": p.pack_fee,
@@ -224,6 +226,7 @@ def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = 
         sale_price=data.sale_price,
         unit_cost=data.unit_cost,
         weight_kg=data.weight_kg,
+        free_shipping=data.free_shipping,
         conversions=conversions,
         pack_items=[item.model_dump() for item in data.pack_items],
         pack_fee=data.pack_fee,
@@ -268,6 +271,7 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
     p.sale_price = data.sale_price
     p.unit_cost = data.unit_cost
     p.weight_kg = data.weight_kg
+    p.free_shipping = data.free_shipping
     p.conversions = data.conversions or default_conversions(data.base_unit)
     p.pack_items = [item.model_dump() for item in data.pack_items]
     p.pack_fee = data.pack_fee
@@ -305,6 +309,7 @@ class BatchProductUpdate(BaseModel):
     sale_price: float | None = None
     unit_cost: float | None = None
     pack_fee: float | None = None
+    free_shipping: bool | None = None
 
 
 def _product_referenced(db: Session, pid: int) -> bool:
@@ -370,6 +375,8 @@ def batch_update_products(data: BatchProductUpdate, db: Session = Depends(get_db
             p.unit_cost = data.unit_cost
         if data.pack_fee is not None:
             p.pack_fee = data.pack_fee
+        if data.free_shipping is not None:
+            p.free_shipping = data.free_shipping
         updated += 1
     db.commit()
     return {"ok": True, "updated": updated}

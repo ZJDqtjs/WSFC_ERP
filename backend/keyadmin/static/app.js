@@ -32,8 +32,9 @@ async function api(path, method = "GET", body) {
   const opt = { method, headers: {} };
   if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
   const res = await fetch(path, opt);
-  if (res.status === 401) {
-    // 会话过期回到门禁
+  if (res.status === 401 && path !== "/api/login") {
+    // 会话过期回到门禁；登录接口自身的 401 是"账号或密码错误"，
+    // 不能刷新页面，否则会把用户已填的账号和密码清空
     location.reload();
     throw new Error("未验证");
   }
@@ -47,10 +48,12 @@ async function api(path, method = "GET", body) {
 
 /* ---------- 门禁 ---------- */
 async function gateLogin() {
+  const username = $("gateUser").value.trim();
   const password = $("gatePass").value;
+  if (!username) { gateErr("请输入管理员账号"); return; }
   if (!password) { gateErr("请输入管理员密码"); return; }
   try {
-    await api("/api/login", "POST", { password });
+    await api("/api/login", "POST", { username, password });
     location.reload();
   } catch (e) {
     gateErr(e.message);
@@ -64,6 +67,33 @@ function gateErr(msg) {
 async function logout() {
   try { await api("/api/logout", "POST"); } catch (e) {}
   location.reload();
+}
+
+/* ---------- 登录锁定查看 / 手动解锁 ---------- */
+/* 失败分级锁定由后端 app/login_guard.py 统一维护（主系统与工具共用一份状态文件），
+   这里只是给管理员一个"忘记密码被锁死"时的解锁入口。 */
+function fmtLocks(list) {
+  if (!list.length) return "（无）";
+  return list.map((x) => `${x.username}：剩 ${x.left_text}，已连续失败 ${x.fails} 次`).join("\n");
+}
+async function showLocks() {
+  try {
+    const d = await api("/api/locks");
+    alert(`【业务主系统】\n${fmtLocks(d.erp)}\n\n【私钥管理工具】\n${fmtLocks(d.keyadmin)}`);
+  } catch (e) {
+    toast("读取锁定状态失败：" + e.message);
+  }
+}
+async function unlockLogin(scope) {
+  const label = scope === "erp" ? "业务主系统" : "私钥管理工具";
+  const name = prompt(`解除【${label}】的登录锁定。\n\n输入用户名解除单个账号；留空则解除该系统全部账号：`);
+  if (name === null) return;
+  try {
+    const d = await api("/api/unlock", "POST", { scope, username: name.trim() });
+    toast(d.cleared ? `已解除 ${d.cleared} 个账号的锁定` : "该账号当前没有被锁定");
+  } catch (e) {
+    toast("解锁失败：" + e.message);
+  }
 }
 
 /* ---------- 侧边栏分区切换 ---------- */
@@ -363,10 +393,29 @@ async function clearLogs() {
   } catch (e) { toast("清空失败：" + e.message); }
 }
 
-/* ---------- 备份与应急抢救（后门） ---------- */
+/* ---------- 备份与应急抢救（后门，按分仓隔离） ---------- */
+function bkWarehouseKey() {
+  const sel = $("bkWarehouse");
+  return sel ? (sel.value || "") : "";
+}
+function bkWarehouseName() {
+  const sel = $("bkWarehouse");
+  if (!sel || !sel.selectedOptions.length) return bkWarehouseKey();
+  return sel.selectedOptions[0].textContent || bkWarehouseKey();
+}
+function renderBkWarehouses(list, current) {
+  const sel = $("bkWarehouse");
+  if (!sel || sel.options.length || !(list || []).length) return;
+  sel.innerHTML = list.map((w) =>
+    `<option value="${esc(w.key)}">${esc(w.name)}（${esc(w.key)}）</option>`
+  ).join("");
+  if (current) sel.value = current;
+}
 async function loadBackups() {
+  const key = bkWarehouseKey();
   try {
-    const r = await api("/api/backups");
+    const r = await api("/api/backups" + (key ? `?key=${encodeURIComponent(key)}` : ""));
+    renderBkWarehouses(r.warehouses, r.key);
     const rows = r.backups || [];
     const t = $("bkTable");
     t.innerHTML = `<thead><tr><th>文件名</th><th>大小</th><th>备份时间</th><th>操作</th></tr></thead><tbody>` +
@@ -378,29 +427,33 @@ async function loadBackups() {
           <button class="btn sm danger" onclick="restoreBackup('${esc(b.name)}')">恢复</button>
           <button class="btn sm ghost" onclick="delBackup('${esc(b.name)}')">删除</button>
         </td>
-      </tr>`).join("") : `<tr><td colspan="4" class="empty">暂无备份文件（data/backups）</td></tr>`) + `</tbody>`;
+      </tr>`).join("") : `<tr><td colspan="4" class="empty">分仓「${esc((r.warehouse && r.warehouse.name) || r.key || "")}」暂无备份文件（data/backups）</td></tr>`) + `</tbody>`;
   } catch (e) { toast("加载备份失败：" + e.message); }
 }
 async function creBackup() {
+  const key = bkWarehouseKey();
   try {
-    const r = await api("/api/backup", "POST");
-    toast("已创建备份：" + r.name);
+    const r = await api("/api/backup", "POST", { key });
+    toast(`已为「${bkWarehouseName()}」创建备份：` + r.name);
     loadBackups();
   } catch (e) { toast("备份失败：" + e.message); }
 }
 async function restoreBackup(name) {
-  if (!confirm(`确认用备份「${name}」覆盖当前数据库？\n恢复后当前未保存的数据将丢失，且所有人需重新登录。`)) return;
+  const key = bkWarehouseKey();
+  const wh = bkWarehouseName();
+  if (!confirm(`确认用备份「${name}」覆盖分仓「${wh}」的数据库？\n只影响该分仓；恢复后该仓未保存的数据将丢失，且该仓需重新登录。`)) return;
   try {
-    const r = await api("/api/backup/restore", "POST", { name });
-    toast("已恢复备份：" + (r.restored || name));
+    const r = await api("/api/backup/restore", "POST", { name, key });
+    toast(`已恢复「${wh}」的备份：` + (r.restored || name));
     loadBackups();
     loadUsers();
   } catch (e) { toast("恢复失败：" + e.message); }
 }
 async function delBackup(name) {
-  if (!confirm(`确认删除备份「${name}」？`)) return;
+  const key = bkWarehouseKey();
+  if (!confirm(`确认删除分仓「${bkWarehouseName()}」的备份「${name}」？`)) return;
   try {
-    await api(`/api/backup/${encodeURIComponent(name)}`, "DELETE");
+    await api(`/api/backup/${encodeURIComponent(name)}?key=${encodeURIComponent(key)}`, "DELETE");
     toast("已删除备份");
     loadBackups();
   } catch (e) { toast("删除失败：" + e.message); }

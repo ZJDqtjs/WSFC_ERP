@@ -3026,6 +3026,7 @@ function openProductModal(pid = 0, prefillName = "") {
       <label>固定费用（每单，如人工打包费，元）</label>
       <input id="pPackFee" type="number" step="any" value="${p?.pack_fee || 0}" />
     </div>
+    <label style="display:flex;gap:6px;align-items:center;margin-top:10px;"><input type="checkbox" id="pFreeShip" ${p?.free_shipping ? "checked" : ""}/> 包邮（出库不计快递费：该商品的运费不再自动结算）</label>
     ${p ? `<label style="display:flex;gap:6px;align-items:center;margin-top:10px;"><input type="checkbox" id="pActive" ${p.is_active ? "checked" : ""}/> 启用该商品</label>` : ""}
     <div class="modal-foot">
       ${p ? `<button class="btn danger" onclick="deleteProduct(${p.id})" style="margin-right:auto;">删除</button>` : ""}
@@ -3149,6 +3150,7 @@ async function saveProduct(pid) {
     stock_product_id: stockLinks.length ? stockLinks[0].product_id : null,
     multiplier: stockLinks.length ? stockLinks[0].multiplier : 1,
     stock_links: stockLinks,
+    free_shipping: $("pFreeShip") ? $("pFreeShip").checked : false,
     is_active: $("pActive") ? $("pActive").checked : true,
   };
   if (!payload.name.trim()) { toast("请填写商品名称"); return; }
@@ -5354,12 +5356,20 @@ async function refreshPayBadge() {
 async function loadMovements() {
   const pid = $("mvProduct").value || "0";
   const from = $("mvDateFrom").value, to = $("mvDateTo").value;
-  let rows = await api(`/api/movements?product_id=${pid}&date_from=${from || ""}&date_to=${to || ""}`);
-  renderMvChart(rows, +pid);
+  const qs = `product_id=${pid}&date_from=${from || ""}&date_to=${to || ""}`;
+  // 图表用后端聚合接口（明细接口有 limit(500)，直接拿它画图会漏数）
+  const [rows, chart] = await Promise.all([
+    api(`/api/movements?${qs}`),
+    api(`/api/movements/chart?${qs}`),
+  ]);
+  renderMvChart(chart);
   const kw = ($("mvSearch")?.value || "").trim().toLowerCase();
   if (kw) rows = rows.filter((m) => [m.date, m.product_name, m.remark, m.operator].join(" ").toLowerCase().includes(kw));
+  // 出库行按「每单扣减量」合并（同一商品同一扣减量合成一行：多少单、合计出库多少）
+  const mergeOut = $("mvMergeOut") ? $("mvMergeOut").checked : true;
+  const view = mergeOut ? mergeOutboundRows(rows) : rows;
   const t = $("mvTable");
-  rows = applyTableSort(t, rows);
+  const sorted = applyTableSort(t, view);
   const typeBadge = { in: '<span class="badge in">入库</span>', out: '<span class="badge out">出库</span>', pack_out: '<span class="badge pack">包装消耗</span>', work: '<span class="badge income">工作量</span>', adjust: '<span class="badge adjust">盘点</span>', cost: '<span class="badge adjust">均价重估</span>', avg: '<span class="badge adjust">均价重估</span>', ucost: '<span class="badge adjust">成本单价</span>' };
   t.innerHTML = `<thead><tr>
     <th data-key="date">时间${sortArrow("mvTable", "date")}</th>
@@ -5369,55 +5379,152 @@ async function loadMovements() {
     <th data-key="amount" class="num">金额${sortArrow("mvTable", "amount")}</th>
     <th data-key="operator">操作员${sortArrow("mvTable", "operator")}</th>
     <th>备注</th></tr></thead><tbody>` +
-    rows.map((m) => {
+    sorted.map((m) => {
+      const mg = m._merged;
       const v = m.quantity_display != null ? m.quantity_display : m.quantity_base;
       const unit = m.unit || "";
-      return `<tr>
-      <td class="mono">${m.date}</td>
+      // 变动列：合并行显示「每单扣减量 × 单数 = 合计」
+      const changeCell = mg
+        ? `<td class="num mono" style="color:var(--red)">-${fmtNum(Math.abs(mg.per))} ${esc(unit)}/单 × ${mg.count} 单`
+          + `<div style="font-weight:600;">合计 -${fmtNum(Math.abs(mg.total))} ${esc(unit)}</div></td>`
+        : `<td class="num mono" style="color:${v >= 0 ? "var(--green)" : "var(--red)"}">${v >= 0 ? "+" : ""}${fmtNum(v)} ${esc(unit)}</td>`;
+      const typeCell = mg
+        ? `${typeBadge.out}<div class="muted" style="font-size:11px;">×${mg.count} 单</div>`
+        : (typeBadge[m.move_type] || m.move_type);
+      const noteCell = mg
+        ? `<span class="muted">已合并 ${mg.count} 笔${mg.days > 1 ? `（跨 ${mg.days} 天）` : ""}</span>`
+          + `<div class="muted" style="font-size:11px;" title="${esc(mg.codes.join("、"))}${mg.more ? `（另有 ${mg.more} 单）` : ""}">`
+          + `${esc(mg.codes.slice(0, 3).join("、"))}${mg.codes.length > 3 ? " …" : ""}</div>`
+        : `<span class="muted">${esc(m.remark)}</span>`;
+      return `<tr${mg ? ' class="mv-merged"' : ""}>
+      <td class="mono">${esc(m.date)}</td>
       <td>${esc(m.product_name)}</td>
-      <td>${typeBadge[m.move_type] || m.move_type}</td>
-      <td class="num mono" style="color:${v >= 0 ? "var(--green)" : "var(--red)"}">${v >= 0 ? "+" : ""}${fmtNum(v)} ${esc(unit)}</td>
+      <td>${typeCell}</td>
+      ${changeCell}
       <td class="num mono">${fmtMoney(m.amount)}</td>
       <td>${esc(m.operator) || "—"}</td>
-      <td class="muted">${esc(m.remark)}</td></tr>`;
+      <td>${noteCell}</td></tr>`;
     }).join("") + `</tbody>`;
-  if (!rows.length) t.innerHTML = `<tr><td colspan="7" class="empty">暂无流水</td></tr>`;
-  t._rows = rows;
+  if (!view.length) t.innerHTML = `<tr><td colspan="7" class="empty">暂无流水</td></tr>`;
+  t._rows = view;
   t._render = loadMovements;
 }
 
-/* 近一个月库存变动柱状图：按日聚合净变动（单商品用默认单位，全部商品用基础单位） */
-function renderMvChart(rows, pid) {
+/* 出库行合并：同一商品 + 同一「每单扣减量」的行合成一条
+   （如「-2.25 公斤/单 × 12 单，合计 -27.00 公斤」），非出库行原样保留。 */
+function mergeOutboundRows(rows) {
+  const groups = new Map();
+  const rest = [];
+  rows.forEach((m) => {
+    if (m.move_type !== "out") { rest.push(m); return; }
+    const v = m.quantity_display != null ? m.quantity_display : m.quantity_base;
+    const key = `${m.product_id}|${m.product_name}|${m.unit || ""}|${v}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = {
+        product_id: m.product_id, product_name: m.product_name, unit: m.unit || "", per: v,
+        count: 0, total: 0, amount: 0, dates: new Set(), operators: new Set(), codes: [],
+      };
+      groups.set(key, g);
+    }
+    g.count += 1;
+    g.total += v;
+    g.amount += m.amount || 0;
+    g.dates.add(m.date);
+    if (m.operator) g.operators.add(m.operator);
+    const hit = (m.remark || "").match(/(CK\S+)/);
+    if (hit && !g.codes.includes(hit[1])) g.codes.push(hit[1]);
+  });
+  const merged = [...groups.values()].map((g) => {
+    const dates = [...g.dates].sort();
+    return {
+      date: dates.length > 1 ? `${dates[0]} ~ ${dates[dates.length - 1]}` : dates[0],
+      product_id: g.product_id, product_name: g.product_name, move_type: "out",
+      quantity_display: g.per, unit: g.unit, quantity_base: g.total, amount: g.amount,
+      operator: [...g.operators].join("、"), remark: g.codes.join("、"),
+      _merged: {
+        count: g.count, per: g.per, total: g.total, unit: g.unit, days: dates.length,
+        codes: g.codes.slice(0, 12), more: Math.max(0, g.codes.length - 12),
+      },
+    };
+  });
+  return rest.concat(merged);
+}
+
+/* 库存变动柱状图：数据来自 /api/movements/chart（后端按「日期 × 单位」聚合）。
+   单商品 → 一组（该商品默认单位，如 公斤）；
+   全部商品 → 每个展示单位一组（重量类后端已统一折算成公斤，个 / 瓶等计数单位各自一组）。
+   单位不同就不能相加，所以每组各自成图、独立刻度，并在图上醒目地标出单位；
+   只有零星几天有变动、占比也很小的单位不单独绘图，改为在图下用文字列出。 */
+const MV_FLAT_DAYS = 2; // 非零天数 ≤ 此值且占比很小的单位不单独绘图（画不出趋势）
+const MV_FLAT_SHARE = 0.05;
+const MV_WAN = 10000;
+
+/* 是否值得单独画一张图：每组独立刻度，所以关键看「有没有趋势」而不是「量大量小」 */
+function mvHasTrend(s, grand) {
+  const active = s.days.filter((d) => d.in || d.out).length;
+  return active > MV_FLAT_DAYS || (s.total_in + s.total_out) / grand >= MV_FLAT_SHARE;
+}
+
+/* 柱顶数字用「万 / 亿」缩写，避免 9px 字号下长数字挤在一起（完整值见悬停提示） */
+function fmtQtyShort(v) {
+  v = Number(v) || 0;
+  const a = Math.abs(v);
+  if (a >= 1e8) return (v / 1e8).toFixed(a >= 1e9 ? 0 : 1).replace(/\.0$/, "") + "亿";
+  if (a >= MV_WAN) return (v / MV_WAN).toFixed(a >= 1e6 ? 0 : 1).replace(/\.0$/, "") + "万";
+  return fmtNum(Math.round(v));
+}
+
+/* 一组柱：上半绿=入库（贴中线向上）、下半红=出库（贴中线向下），柱顶标当天净变动。
+   上下共用同一刻度（取两向最大值），所以入库远大于出库时红柱看着短——这是真实的量级差，
+   在标题里标出两侧峰值，避免误读为「没有出库」。 */
+function mvColumns(days, unit) {
+  const max = Math.max(1, ...days.map((d) => Math.max(d.in || 0, d.out || 0)));
+  const h = (v) => (v > 0 ? Math.max(2, Math.round((v / max) * 100)) : 0);
+  return days.map((d) => {
+    const net = (d.in || 0) - (d.out || 0);
+    const cls = net > 0 ? "up" : net < 0 ? "down" : "flat";
+    const label = net ? (net > 0 ? "+" : "-") + fmtQtyShort(Math.abs(net)) : "";
+    const tip = `${d.date}：入库 +${fmtNum(d.in)} ${unit} / 出库 -${fmtNum(d.out)} ${unit}`
+      + ` / 净 ${net >= 0 ? "+" : "-"}${fmtNum(Math.abs(net))} ${unit}`;
+    return `<div class="mv-col" title="${esc(tip)}">
+        <span class="mv-val ${cls}">${label}</span>
+        <div class="mv-pos"><div class="mv-bar" style="height:${h(d.in)}%"></div></div>
+        <div class="mv-neg"><div class="mv-bar down" style="height:${h(d.out)}%"></div></div>
+        <div class="mv-x">${d.date.slice(5)}</div></div>`;
+  }).join("");
+}
+
+function renderMvChart(chart) {
   const box = $("mvChart");
   if (!box) return;
-  const from = $("mvDateFrom").value, to = $("mvDateTo").value;
-  const useDisp = !!pid; // 选中具体商品时按默认单位展示
-  const byDate = {};
-  rows.forEach((m) => {
-    const v = useDisp ? (m.quantity_display != null ? m.quantity_display : m.quantity_base) : m.quantity_base;
-    byDate[m.date] = (byDate[m.date] || 0) + v;
-  });
-  const end = to ? new Date(to + "T00:00:00") : new Date();
-  const start = from ? new Date(from + "T00:00:00") : new Date(end.getTime() - 29 * 86400000);
-  const days = [];
-  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    days.push({ ds, v: byDate[ds] || 0 });
+  const series = (chart && chart.series) || [];
+  if (!series.length) {
+    box.innerHTML = `<div class="mv-chart-title">该区间没有库存变动流水</div>`;
+    return;
   }
-  if (days.length > 62) days.splice(0, days.length - 62); // 防止日期范围过大
-  const p = useDisp ? PRODUCTS.find((x) => x.id === pid) : null;
-  const unit = p ? (p.default_unit || p.base_unit) : "基础单位";
-  const max = Math.max(1, ...days.map((d) => Math.abs(d.v)));
-  box.innerHTML = `<div class="mv-chart-title">近${days.length}天库存变动趋势（${unit}，绿=净入库/红=净出库）</div><div class="mv-chart">` +
-    days.map((d) => {
-      const h = Math.max(2, Math.round(Math.abs(d.v) / max * 100));
-      const cls = d.v > 0 ? "up" : d.v < 0 ? "down" : "zero";
-      const label = d.v ? (d.v > 0 ? "+" : "") + fmtNum(d.v) : "";
-      return `<div class="mv-col" title="${d.ds}：${d.v ? (d.v > 0 ? "+" : "") + fmtNum(d.v) : "0"} ${unit}">
-        <span class="mv-val">${label}</span>
-        <div class="mv-track"><div class="mv-bar ${cls}" style="height:${h}%"></div></div>
-        <div class="mv-x">${d.ds.slice(5)}</div></div>`;
-    }).join("") + `</div>`;
+  const grand = series.reduce((s, x) => s + x.total_in + x.total_out, 0) || 1;
+  let mains = series.filter((s) => mvHasTrend(s, grand));
+  let flat = series.filter((s) => !mvHasTrend(s, grand));
+  if (!mains.length) { mains = [series[0]]; flat = series.slice(1); } // 极端情况兜底
+
+  const head = (s) => {
+    const peakIn = Math.max(0, ...s.days.map((d) => d.in || 0));
+    const peakOut = Math.max(0, ...s.days.map((d) => d.out || 0));
+    return `<div class="mv-chart-title">
+        <span class="mv-unit-chip">单位：${esc(s.unit)}</span>
+        <span class="mv-legend"><i class="up"></i>入库<i class="down"></i>出库</span>
+        <span class="muted">柱顶=当天净变动 · 峰值 入 ${fmtQtyShort(peakIn)} / 出 ${fmtQtyShort(peakOut)}（上下同一刻度）</span>
+      </div>`;
+  };
+  box.innerHTML =
+    mains.map((s) => `<div class="mv-block">${head(s)}<div class="mv-chart">${mvColumns(s.days, s.unit)}</div></div>`).join("")
+    + (flat.length
+      ? `<div class="mv-note">另有 ${flat.map((s) => `${esc(s.unit)}：入 ${fmtNum(s.total_in)} / 出 ${fmtNum(s.total_out)}`).join("、")}`
+        + `（只有零星几天有变动，未单独绘图，明细见下表）</div>`
+      : "")
+    + `<div class="mv-note muted">区间 ${esc(chart.date_from)} ~ ${esc(chart.date_to)}`
+    + `；口径：只统计真实库存进出（不含人工/快递工作量、成本流水）</div>`;
 }
 
 /* =============== 工作量统计（人工打包） =============== */
@@ -5793,13 +5900,17 @@ async function runBatchModal(kind) {
   const file = ($("bmFile") && $("bmFile").files[0]) || window.__BM_FILE__;
   if (!file) { toast("请先选择 Excel 文件"); return; }
   if (kind === "jushuitan") window.__BM_FILE__ = file; // 供 AI 关联后一键重新解析
-  const box = $("bmResult");
-  box.innerHTML = `<div class="alert ok">⏳ 正在解析…</div>`;
+  // 结果预览会把 modalBox 内容整体替换掉，此时 #bmResult 已不存在（旧代码在这里抛错 → 点「重新解析」没反应），
+  // 故进度提示回退到弹窗主体。
+  const box = $("bmResult") || $("modalBox");
+  if (box) box.innerHTML = `<div class="alert ok">⏳ 正在解析…（同一文件）</div>`;
   try {
     const r = await apiUpload(cfg.preview, file);
     if (kind === "inbound") renderInboundReview(kind, r);
     else renderDraftReview(kind, r);
-  } catch (e) { box.innerHTML = `<div class="alert err">解析失败：${esc(e.message)}</div>`; }
+  } catch (e) {
+    if (box) box.innerHTML = `<div class="alert err">解析失败：${esc(e.message)}</div>`;
+  }
 }
 function renderDraftReview(kind, r) {
   const orders = r.orders || [];
@@ -5812,9 +5923,13 @@ function renderDraftReview(kind, r) {
     if (kind === "jushuitan") {
       // 每个未关联商品名都带「去新增商品」按钮：新标签页打开「商品」页并按该名称预填新增弹窗。
       // AI 自动新增在页面渲染后自动试算（不落库），把方案展示出来，用户确认后才真正新增。
+      const unmapDetail = {};
+      (r.unmapped || []).forEach((u) => { unmapDetail[u.external_code] = u; });
+      const hasStockOnly = (r.unmapped || []).some((u) => u.stock_product_name);
       warn += `<div class="alert warn">
         <div>⚠ 未关联商品 <b>${r.unmapped_codes.length}</b> 个。可点「去新增商品」在新标签页按该名称新建商品（保存后回到本页点「↻ 重新解析」即按名称自动匹配），或等下方 AI 方案出来后一键新增：</div>
-        <div class="unmapped-list">${r.unmapped_codes.map((c) => unmappedChip(c)).join("")}</div>
+        ${hasStockOnly ? `<div class="muted" style="font-size:12px;margin:4px 0;">带「缺关联结算小类」标签的，是平台商品名只匹配到了库存大类（未扣任何库存）—— 新建订单小类并关联该大类后重新解析即可正常结算。</div>` : ""}
+        <div class="unmapped-list">${r.unmapped_codes.map((c) => unmappedChip(c, unmapDetail[c])).join("")}</div>
         <div id="bmAiBox"></div>
       </div>`;
     } else {
@@ -5952,8 +6067,13 @@ function openProductTab(name) {
   const w = window.open(url, "_blank");
   if (!w) toast("浏览器拦截了新标签页，请允许弹出窗口");
 }
-function unmappedChip(code) {
-  return `<span class="unmapped-chip"><span class="unmapped-name">${esc(code)}</span>` +
+function unmappedChip(code, info) {
+  // info.reason / info.stock_product_name 由后端带回：平台商品名只匹配到库存大类（无关联结算清单）
+  const why = info && info.stock_product_name
+    ? `<span class="muted" style="font-size:12px;">缺关联结算小类（只匹配到大类：${esc(info.stock_product_name)}）</span>`
+    : "";
+  const title = info && info.reason ? ` title="${esc(info.reason)}"` : "";
+  return `<span class="unmapped-chip"${title}><span class="unmapped-name">${esc(code)}</span>${why}` +
     `<button class="btn sm secondary" data-name="${esc(code)}" onclick="openProductTab(this.dataset.name)">` +
     `<svg class="ic"><use href="#i-plus"/></svg> 去新增商品</button></span>`;
 }
@@ -5977,11 +6097,43 @@ async function aiAutoPreview(kind) {
   box.innerHTML = `<div class="alert ok">🤖 AI 正在自动归并这些商品并生成新增方案…（通常数秒，请稍候）</div>`;
   try {
     const r = await api("/api/mappings/ai-suggest", "POST", { source: "jushuitan", codes, apply: false });
+    if (!PRODUCTS.length) { try { PRODUCTS = await api("/api/products"); } catch (e) { /* 下拉候选拉不到不影响方案展示 */ } }
     renderAiPlan(box, kind, r);
   } catch (e) {
     box.innerHTML = `<div class="alert err">AI 自动解析失败：${esc(e.message)}
       <div style="margin-top:8px;"><button class="btn sm secondary" onclick="aiAutoPreview('${kind}')">重试</button></div></div>`;
   }
+}
+/* 目标库存大类候选（可搜索）：现有库存大类 + AI 建议新建的大类名 */
+function aiStockOptions(selectedId, newName) {
+  const EXCL = ["包材", "人工", "快递"];
+  const stocks = (PRODUCTS || []).filter((p) => p.product_type === "stock" && !EXCL.includes(p.category));
+  let html = "";
+  if (newName) {
+    html += `<option value="new:${esc(newName)}" data-name="${esc(newName)}" selected>➕ 新建：${esc(newName)}</option>`;
+  }
+  html += stocks.map((p) => `<option value="${p.id}" data-name="${esc(p.name)}"${p.id === selectedId ? " selected" : ""}>` +
+    `${esc(p.name)}${p.default_unit ? `（${esc(p.default_unit)}）` : ""}</option>`).join("");
+  return html;
+}
+/* 读取用户在方案表里改过的「目标大类 / 每单扣减倍数」 */
+function collectAiPlanEdits() {
+  const rows = [...document.querySelectorAll("#bmAiBox .ai-plan tbody tr[data-code]")];
+  if (!rows.length) return null;
+  return rows.map((tr) => {
+    const sel = tr.querySelector("select.ai-target");
+    const v = sel ? String(sel.value || "") : "";
+    const isNew = v.startsWith("new:");
+    const opt = sel && sel.selectedOptions.length ? sel.selectedOptions[0] : null;
+    const mult = parseFloat(tr.querySelector("input.ai-mult")?.value);
+    return {
+      code: tr.dataset.code,
+      stock_product_id: isNew ? null : (Number(v) || null),
+      target: isNew ? v.slice(4) : ((opt && opt.dataset.name) || (opt ? opt.textContent : "")),
+      target_new: isNew,
+      multiplier: isNaN(mult) ? 0 : mult,
+    };
+  });
 }
 /* 展示 AI 方案（新增哪些库存大类 / 关联去向 / 仍无法关联的），等用户确认 */
 function renderAiPlan(box, kind, r) {
@@ -5994,15 +6146,23 @@ function renderAiPlan(box, kind, r) {
       `<div class="unmapped-list">${leftover.map((c) => unmappedChip(c)).join("")}</div></div>`;
     return;
   }
-  const mapsTable = maps.map((m) => `<tr><td>${esc(m.code)}</td><td class="muted">→</td><td><b>${esc(m.target)}</b></td></tr>`).join("");
+  const mapsTable = maps.map((m) => `<tr data-code="${esc(m.code)}">
+      <td>${esc(m.code)}</td>
+      <td class="muted">→</td>
+      <td><select class="searchable ai-target">${aiStockOptions(m.stock_product_id, m.target_new ? m.target : "")}</select></td>
+      <td class="num" style="white-space:nowrap;"><input class="ai-mult" type="number" step="0.01" min="0" value="${esc(String(m.multiplier))}" style="width:86px;" /> <span class="muted">${esc(m.unit || "")}</span></td>
+      <td class="muted">${m.order_exists ? "更新小类" : "新建小类"}</td>
+    </tr>`).join("");
+  window.__AI_PLAN__ = r;   // 确认时原样回传，照用户所见新增（不再问一次大模型）
   box.innerHTML = `<div class="ai-plan">
     <div class="ai-plan-head">🤖 AI 自动新增方案（尚未写入，确认后才生效）</div>
     <div class="muted" style="font-size:12.5px;margin-bottom:8px;">${esc(r.message || "")}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px;">下面两列都可以改：<b>关联到</b>点一下可选其他库存大类（支持输入搜索，含 AI 建议新建的），<b>每单扣减</b>填 1 单该商品扣多少库存默认单位。</div>
     ${news.length ? `<div class="ai-plan-sec"><b>将新增 ${news.length} 个库存大类</b>（其余匹配到已有大类）
       <ul class="ai-plan-list">${news.map((x) => `<li>${esc(x.name)} <span class="muted">· ${esc(x.category)}</span></li>`).join("")}</ul></div>` : ""}
-    ${maps.length ? `<div class="ai-plan-sec"><b>将关联 ${maps.length} 个商品名</b>
-      <div class="table-wrap" style="max-height:220px;overflow:auto;"><table class="subtable" style="width:100%;">
-        <thead><tr><th>未关联商品名</th><th></th><th>关联到</th></tr></thead><tbody>${mapsTable}</tbody></table></div></div>` : ""}
+    ${maps.length ? `<div class="ai-plan-sec"><b>将关联 ${maps.length} 个商品名</b>（建/更新为订单商品「小类」，按其规格倍数扣减对应大类库存）
+      <div class="table-wrap" style="max-height:260px;overflow:auto;"><table class="subtable" style="width:100%;">
+        <thead><tr><th>未关联商品名</th><th></th><th>关联到（库存大类，可改）</th><th>每单扣减（可改）</th><th>订单小类</th></tr></thead><tbody>${mapsTable}</tbody></table></div></div>` : ""}
     ${leftover.length ? `<div class="ai-plan-sec"><b>仍无法自动关联 ${leftover.length} 个</b>，请手动补充
       <div class="unmapped-list">${leftover.map((c) => unmappedChip(c)).join("")}</div></div>` : ""}
     <div class="modal-foot" style="margin:0;padding-top:10px;">
@@ -6010,6 +6170,7 @@ function renderAiPlan(box, kind, r) {
       <button class="btn green" onclick="aiApplyPlan('${kind}')">✓ 确认新增并重新解析</button>
     </div>
   </div>`;
+  bindSearchable(box);   // 目标大类下拉变成「点击选择 / 输入筛选」
 }
 /* 用户确认后：真正新增库存大类 + 建立编码关联，然后重新解析出库单 */
 async function aiApplyPlan(kind) {
@@ -6019,10 +6180,20 @@ async function aiApplyPlan(kind) {
   const btn = document.querySelector("#bmAiBox .btn.green");
   if (btn) { btn.disabled = true; btn.textContent = "⏳ 正在新增…"; }
   try {
-    const r = await api("/api/mappings/ai-suggest", "POST", { source: "jushuitan", codes, apply: true });
+    const edits = collectAiPlanEdits();   // 用户可能改过目标大类 / 倍数，以页面上的为准
+    const plan = window.__AI_PLAN__
+      ? { ...window.__AI_PLAN__, mappings: edits || window.__AI_PLAN__.mappings, edited: !!edits }
+      : null;
+    const r = await api("/api/mappings/ai-suggest", "POST", {
+      source: "jushuitan", codes, apply: true, plan,
+    });
     const add = (r.created_products || []).map((p) => p.name).join("、");
+    const addOrder = (r.created_orders || []).map((p) => p.name).join("、");
     toast(r.message || "AI 关联完成");
-    if (box) box.innerHTML = `<div class="alert ok">✅ ${esc(r.message)}${add ? "（新建：" + esc(add) + "）" : ""}</div>`;
+    if (box) box.innerHTML = `<div class="alert ok">✅ ${esc(r.message)}` +
+      `${add ? `<div class="muted" style="font-size:12px;margin-top:4px;">新增大类：${esc(add)}</div>` : ""}` +
+      `${addOrder ? `<div class="muted" style="font-size:12px;">新建订单小类：${esc(addOrder)}</div>` : ""}</div>`;
+    window.__AI_PLAN__ = null;
     __AI_AUTO_SIG__ = ""; // 允许重新解析后按新的未关联集合再自动试算
     setTimeout(() => { if (window.__BM_FILE__) runBatchModal(kind); }, 400);
   } catch (e) {
