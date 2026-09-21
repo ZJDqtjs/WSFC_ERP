@@ -348,6 +348,7 @@ function switchSettingsTab(panel) {
   if (panel === "pdata") loadPdataPage();
   else if (panel === "backup") loadBackupPage();
   else if (panel === "jushuitan") loadMappingPage();
+  else if (panel === "jstauto") loadJstAutoPage();
 }
 async function loadSettingsPage() { switchSettingsTab("pdata"); }
 /* 支持通过地址栏 hash 深链到二级页（用于「未关联商品」跳转新标签手动新增商品）
@@ -5350,6 +5351,234 @@ function renderPayBadge(t) {
 }
 async function refreshPayBadge() {
   try { const d = await api("/api/payables"); renderPayBadge(d.total || {}); } catch (e) { /* 忽略：不影响主流程 */ }
+}
+
+/* =============== 自动出库设置（聚水潭定时导出 + 导入当前分仓） =============== */
+let JST_AUTO = null;         // 最近一次读到的设置
+let JST_WH_OPTS = new Map(); // co_id -> 聚水潭分仓名（拉取到的 + 已保存的）
+let JST_POLL = null;         // 运行状态轮询
+
+function jstSetText(id, text) { const el = $(id); if (el) el.textContent = text; }
+function jstNum(id, dft) { const v = Number($(id)?.value); return Number.isFinite(v) && v > 0 ? v : dft; }
+
+/* 聚水潭分仓多选：选项 = 已保存的 + 拉取到的（已保存的勾选状态保留） */
+function renderJstTargets(saved) {
+  const sel = $("jstTargets");
+  if (!sel) return;
+  (saved || []).forEach((t) => { if (t && t.co_id && !JST_WH_OPTS.has(String(t.co_id))) JST_WH_OPTS.set(String(t.co_id), t.name || String(t.co_id)); });
+  const picked = new Set((saved || []).map((t) => String(t.co_id)));
+  sel.innerHTML = [...JST_WH_OPTS.entries()].map(
+    ([co, name]) => `<option value="${esc(co)}" data-name="${esc(name)}"${picked.has(co) ? " selected" : ""}>${esc(name)}（${esc(co)}）</option>`
+  ).join("") || `<option value="" disabled>先点「拉取聚水潭分仓列表」</option>`;
+}
+
+function jstWindowChanged() {
+  const fixedFrom = $("jstFixedFrom")?.value || "", fixedTo = $("jstFixedTo")?.value || "";
+  jstSetText("jstWindowHelp", fixedFrom && fixedTo ? "　⚠ 已填固定区间，将覆盖上面的时间段规则" : "");
+}
+
+function renderJstStatus(st, last) {
+  const lines = [];
+  if (st && st.scheduler === false) {
+    lines.push("⚠ 定时调度未启动：重启一次后端服务即可恢复（手动「立即执行一次」不受影响）");
+  }
+  if (st && st.running) {
+    lines.push(`⏳ 正在执行：${st.warehouse || ""} · ${st.step || ""}（${st.started_at || ""} 开始，触发：${st.trigger || ""}）`);
+  }
+  const r = (st && st.last && st.last.message) ? st.last : last;
+  if (r && r.message) {
+    lines.push(`${r.ok ? "✅" : "❌"} 最近一次（${r.at || ""} · ${r.trigger || ""}）：${r.message}`);
+    if (r.window) lines.push(`　　区间：${r.window}`);
+    if (r.files && r.files.length) lines.push(`　　文件：${r.files.join("、")}`);
+    const s = r.stats || {};
+    if (s.unmapped && s.unmapped.length) {
+      lines.push(`　　未关联商品 ${s.unmapped.length} 种：${s.unmapped.slice(0, 6).join("、")}${s.unmapped.length > 6 ? " …" : ""}（到「聚水潭关联」页补关联）`);
+    }
+    if (s.failed && s.failed.length) {
+      lines.push(`　　失败 ${s.failed.length} 条：${s.failed.slice(0, 3).map((f) => `${f.doc || ""} ${f.reason || ""}`).join("；")}`);
+    }
+  }
+  // 出库记录列表默认只筛「今天」，而自动出库常导昨天/前几天的单，容易被误判成"没建单"：
+  // 这里按本次导出区间给一个直达按钮（区间结束是次日 00:00，展示时回退一天）。
+  const rng = String((r && r.window) || "").match(/(\d{4}-\d{2}-\d{2})[^~]*~\s*(\d{4}-\d{2}-\d{2})/);
+  let jump = "";
+  if (rng) {
+    const end = new Date(rng[2] + "T00:00:00");
+    end.setDate(end.getDate() - 1);
+    const endStr = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}`;
+    if (endStr >= rng[1]) {
+      jump = `<div style="margin-top:6px;">
+        <button class="btn sm" onclick="gotoOutbounds('${rng[1]}','${endStr}')">▸ 去出库记录看这批单（${rng[1]} ~ ${endStr}）</button>
+        <span class="muted" style="margin-left:6px;">出库记录默认只看今天，记得把日期改到这天</span></div>`;
+    }
+  }
+  const box = $("jstRunStatus");
+  if (box) box.innerHTML = (lines.map((l) => `<div>${esc(l)}</div>`).join("") || "<div>还没有执行记录</div>") + jump;
+}
+
+/* 跳到出库记录页并把日期筛选设成本次导出区间（否则默认只看今天，看不到昨天的单） */
+function gotoOutbounds(from, to) {
+  if ($("outDateFrom")) $("outDateFrom").value = from;
+  if ($("outDateTo")) $("outDateTo").value = to;
+  goPage("outbound");
+}
+
+function startJstPoll() {
+  stopJstPoll();
+  JST_POLL = setInterval(async () => {
+    try {
+      const st = await api("/api/jst-auto/status");
+      renderJstStatus(st, {});
+      if (!st.running) { stopJstPoll(); loadJstHistory(); }
+    } catch (e) { stopJstPoll(); } // 轮询失败就停掉，避免刷屏报错
+  }, 3000);
+}
+function stopJstPoll() { if (JST_POLL) { clearInterval(JST_POLL); JST_POLL = null; } }
+
+function fillJstAuto(d) {
+  JST_AUTO = d || {};
+  const g = JST_AUTO.globals || {};
+  const wh = JST_AUTO.warehouse || {};
+  jstSetText("jstWhName", JST_AUTO.warehouse_name || JST_AUTO.warehouse_key || "—");
+  jstSetText("jstWhName2", JST_AUTO.warehouse_name || JST_AUTO.warehouse_key || "—");
+  if ($("jstAccount")) $("jstAccount").value = g.account || "";
+  if ($("jstPassword")) { $("jstPassword").value = ""; $("jstPassword").placeholder = g.has_password ? "已设置（留空 = 不修改）" : "留空 = 不修改"; }
+  if ($("jstOwner")) $("jstOwner").value = g.owner_co_id || "";
+  if ($("jstMinInterval")) $("jstMinInterval").value = g.min_interval ?? 10;
+  if ($("jstTimeout")) $("jstTimeout").value = g.timeout ?? 120;
+  if ($("jstRetries")) $("jstRetries").value = g.max_retries ?? 3;
+  if ($("jstCookie")) $("jstCookie").value = "";
+  jstSetText("jstCookieHint", g.has_cookie
+    ? `已保存 Cookie（${g.cookie_len} 字符），留空 = 继续用它；点「清空 Cookie」可删除`
+    : "还没保存 Cookie：填好账号密码保存后，执行时会自动登录并把 Cookie 存下来");
+  const sel = $("jstWindow");
+  if (sel && !sel.options.length) {
+    sel.innerHTML = (JST_AUTO.windows || []).map((w) => `<option value="${esc(w.value)}">${esc(w.label)}</option>`).join("");
+  }
+  if (sel && wh.window) sel.value = wh.window;
+  if ($("jstEnabled")) $("jstEnabled").checked = !!wh.enabled;
+  if ($("jstFixedFrom")) $("jstFixedFrom").value = String(wh.fixed_from || "").replace(" ", "T").slice(0, 16);
+  if ($("jstFixedTo")) $("jstFixedTo").value = String(wh.fixed_to || "").replace(" ", "T").slice(0, 16);
+  if ($("jstSchedule")) $("jstSchedule").value = (wh.schedule || []).join(",");
+  if ($("jstOperator")) $("jstOperator").value = wh.operator || "";
+  if ($("jstAutoImport")) $("jstAutoImport").checked = wh.auto_import !== false;
+  if ($("jstSkipImported")) $("jstSkipImported").checked = wh.skip_imported !== false;
+  renderJstTargets(wh.targets || []);
+  jstWindowChanged();
+  jstSetText("jstNextRuns", (JST_AUTO.next_runs || []).length
+    ? `下次执行：${JST_AUTO.next_runs.join("、")}`
+    : (wh.enabled ? "⚠ 已启用定时但没填执行时间，不会自动跑" : "未启用定时（仍可手动执行）"));
+  renderJstStatus(JST_AUTO.status || {}, JST_AUTO.last_run || {});
+  if ((JST_AUTO.status || {}).running) startJstPoll(); else loadJstHistory();
+}
+
+async function loadJstAutoPage() {
+  stopJstPoll();
+  try {
+    fillJstAuto(await api("/api/jst-auto/settings"));
+  } catch (e) { toast("加载自动出库设置失败：" + e.message); }
+}
+
+async function saveJstAuto(opts) {
+  const o = opts || {};
+  if (o.clearCookie && !confirm("确认清空已保存的聚水潭 Cookie？（下次执行会用账号密码重新登录）")) return;
+  const g = (JST_AUTO && JST_AUTO.globals) || {};
+  const sel = $("jstTargets");
+  const payload = {
+    globals: {
+      account: ($("jstAccount")?.value || "").trim(),
+      password: $("jstPassword")?.value || "",
+      cookie: ($("jstCookie")?.value || "").trim(),
+      owner_co_id: ($("jstOwner")?.value || "").trim(),
+      min_interval: jstNum("jstMinInterval", 10),
+      timeout: jstNum("jstTimeout", 120),
+      max_retries: jstNum("jstRetries", 3),
+      io_date_field: g.io_date_field || "io_date",
+      filename_template: g.filename_template || "",
+      clear_cookie: !!o.clearCookie,
+    },
+    warehouse: {
+      enabled: !!$("jstEnabled")?.checked,
+      targets: [...(sel?.selectedOptions || [])]
+        .filter((x) => x.value)
+        .map((x) => ({ co_id: x.value, name: x.dataset.name || x.textContent })),
+      window: $("jstWindow")?.value || "yesterday",
+      fixed_from: ($("jstFixedFrom")?.value || "").replace("T", " "),
+      fixed_to: ($("jstFixedTo")?.value || "").replace("T", " "),
+      schedule: ($("jstSchedule")?.value || "").split(",").map((s) => s.trim()).filter(Boolean),
+      auto_import: !!$("jstAutoImport")?.checked,
+      skip_imported: !!$("jstSkipImported")?.checked,
+      operator: ($("jstOperator")?.value || "").trim(),
+    },
+  };
+  try {
+    fillJstAuto(await api("/api/jst-auto/settings", "POST", payload));
+    toast(o.clearCookie ? "已清空 Cookie" : "已保存自动出库设置");
+  } catch (e) { toast("保存失败：" + e.message); }
+}
+
+async function checkJstLogin() {
+  jstSetText("jstCheckResult", "检查中…（聚水潭有限速，可能要十几秒）");
+  try {
+    const r = await api("/api/jst-auto/check", "POST");
+    jstSetText("jstCheckResult", (r.ok ? "✅ " : "❌ ") + (r.message || ""));
+  } catch (e) { jstSetText("jstCheckResult", "❌ " + e.message); }
+}
+
+async function loadJstWarehouseOptions() {
+  jstSetText("jstCheckResult", "正在拉取聚水潭分仓列表…");
+  try {
+    const r = await api("/api/jst-auto/jst-warehouses", "POST");
+    if (!r.ok) { jstSetText("jstCheckResult", "❌ " + (r.message || "拉取失败")); return; }
+    const cur = [...($("jstTargets")?.selectedOptions || [])].map((x) => ({ co_id: x.value, name: x.dataset.name || x.textContent }));
+    (r.warehouses || []).forEach((w) => JST_WH_OPTS.set(String(w.co_id), w.name));
+    renderJstTargets(cur);
+    jstSetText("jstCheckResult", `✅ 拉到 ${(r.warehouses || []).length} 个聚水潭分仓；勾选后点「保存设置」`);
+  } catch (e) { jstSetText("jstCheckResult", "❌ " + e.message); }
+}
+
+async function runJstAuto(dry) {
+  if (dry && !confirm("只导出试跑：会真的去聚水潭导出文件，但不会在本分仓建出库单。继续？")) return;
+  if (!dry && !confirm("立即执行：按当前设置导出并直接在本分仓建出库单。继续？")) return;
+  try {
+    const r = await api("/api/jst-auto/run", "POST", { do_import: !dry });
+    toast(r.message || "已开始执行");
+    renderJstStatus({ running: true, warehouse: r.warehouse, step: "已启动", trigger: dry ? "手动试跑" : "手动", started_at: new Date().toLocaleString() }, {});
+    startJstPoll();
+  } catch (e) { toast("启动失败：" + e.message); }
+}
+
+async function refreshJstStatus() {
+  try {
+    const st = await api("/api/jst-auto/status");
+    renderJstStatus(st, {});
+    if (st.running) startJstPoll(); else loadJstHistory();
+  } catch (e) { toast("读取状态失败：" + e.message); }
+}
+
+async function loadJstHistory() {
+  const t = $("jstHistoryTable");
+  if (!t) return;
+  try {
+    const d = await api("/api/jst-auto/history?limit=20");
+    const rows = d.runs || [];
+    t.innerHTML = `<thead><tr>
+        <th>时间</th><th>触发</th><th>结果</th><th>导出区间</th>
+        <th class="num">建单</th><th class="num">跳过重复</th><th>文件 / 说明</th>
+      </tr></thead><tbody>` +
+      (rows.length ? rows.map((r) => {
+        const s = r.stats || {};
+        return `<tr>
+          <td class="mono">${esc(r.at || "")}</td>
+          <td>${esc(r.trigger || "")}</td>
+          <td>${r.ok ? '<span class="badge in">成功</span>' : '<span class="badge out">失败</span>'}</td>
+          <td class="mono">${esc(r.window || "")}</td>
+          <td class="num">${s.created != null ? s.created : "—"}</td>
+          <td class="num">${s.duplicate_skipped != null ? s.duplicate_skipped : "—"}</td>
+          <td>${esc(r.message || "")}${(r.files || []).length ? `<div class="muted mono" style="font-size:11px;">${esc(r.files.join("、"))}</div>` : ""}</td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="7" class="empty">还没有执行记录</td></tr>`) + `</tbody>`;
+  } catch (e) { /* 忽略：历史读不到不影响设置 */ }
 }
 
 /* =============== 库存流水 =============== */

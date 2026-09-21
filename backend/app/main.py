@@ -18,7 +18,7 @@ from .database import (
 )
 from .initdb import ensure_schema, init_warehouse
 from .maintenance import on_service_start, record_request, should_record, start_activity_store
-from .routers import ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, maintenance, others, outbound, pack_rules, payables, product_data, products, report, uploads, warehouse_in, warehouses
+from .routers import ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, jst_auto, maintenance, others, outbound, pack_rules, payables, product_data, products, report, uploads, warehouse_in, warehouses
 from .routers.backup import create_backup_file, load_config
 
 # 桌面 Web 前端目录（WSFC_ERP/web/static，前后端分离；SERVE_STATIC=1 时后端顺带托管）
@@ -111,6 +111,14 @@ async def lifespan(app: FastAPI):
     if load_config().get("enabled", True):
         _backup_all_warehouses()
     task = asyncio.create_task(auto_backup_loop())
+    # 5) 自动出库（聚水潭）定时调度：守护线程，每 20 秒检查一次到点未执行的分仓
+    try:
+        from .jst.runner import start_scheduler
+
+        start_scheduler()
+        print("[自动出库] 定时调度已启动（每 20 秒检查一次到点的分仓）")
+    except Exception as e:  # noqa: BLE001 - 调度起不来不该阻止服务启动
+        print("[自动出库] 定时调度启动失败:", e)
     yield
     task.cancel()
 
@@ -185,6 +193,7 @@ app.include_router(product_data.router)
 app.include_router(inbound.router)
 app.include_router(outbound.router)
 app.include_router(inventory.router)
+app.include_router(jst_auto.router)  # 自动出库设置（聚水潭销售出库单定时导出并导入）
 app.include_router(others.router)
 app.include_router(payables.router)   # 待付款账单（入库/入仓/出库/其他开支/手动记账 汇总）
 app.include_router(pack_rules.router)
