@@ -5360,8 +5360,11 @@ async function loadMovements() {
   renderMvChart(rows, +pid);
   const kw = ($("mvSearch")?.value || "").trim().toLowerCase();
   if (kw) rows = rows.filter((m) => [m.date, m.product_name, m.remark, m.operator].join(" ").toLowerCase().includes(kw));
+  // 出库行按「每单扣减量」合并（同一商品同一扣减量合成一行：多少单、合计出库多少）
+  const mergeOut = $("mvMergeOut") ? $("mvMergeOut").checked : true;
+  const view = mergeOut ? mergeOutboundRows(rows) : rows;
   const t = $("mvTable");
-  rows = applyTableSort(t, rows);
+  const sorted = applyTableSort(t, view);
   const typeBadge = { in: '<span class="badge in">入库</span>', out: '<span class="badge out">出库</span>', pack_out: '<span class="badge pack">包装消耗</span>', work: '<span class="badge income">工作量</span>', adjust: '<span class="badge adjust">盘点</span>', cost: '<span class="badge adjust">均价重估</span>', avg: '<span class="badge adjust">均价重估</span>', ucost: '<span class="badge adjust">成本单价</span>' };
   t.innerHTML = `<thead><tr>
     <th data-key="date">时间${sortArrow("mvTable", "date")}</th>
@@ -5371,24 +5374,80 @@ async function loadMovements() {
     <th data-key="amount" class="num">金额${sortArrow("mvTable", "amount")}</th>
     <th data-key="operator">操作员${sortArrow("mvTable", "operator")}</th>
     <th>备注</th></tr></thead><tbody>` +
-    rows.map((m) => {
+    sorted.map((m) => {
+      const mg = m._merged;
       const v = m.quantity_display != null ? m.quantity_display : m.quantity_base;
       const unit = m.unit || "";
-      return `<tr>
-      <td class="mono">${m.date}</td>
+      // 变动列：合并行显示「每单扣减量 × 单数 = 合计」
+      const changeCell = mg
+        ? `<td class="num mono" style="color:var(--red)">-${fmtNum(Math.abs(mg.per))} ${esc(unit)}/单 × ${mg.count} 单`
+          + `<div style="font-weight:600;">合计 -${fmtNum(Math.abs(mg.total))} ${esc(unit)}</div></td>`
+        : `<td class="num mono" style="color:${v >= 0 ? "var(--green)" : "var(--red)"}">${v >= 0 ? "+" : ""}${fmtNum(v)} ${esc(unit)}</td>`;
+      const typeCell = mg
+        ? `${typeBadge.out}<div class="muted" style="font-size:11px;">×${mg.count} 单</div>`
+        : (typeBadge[m.move_type] || m.move_type);
+      const noteCell = mg
+        ? `<span class="muted">已合并 ${mg.count} 笔${mg.days > 1 ? `（跨 ${mg.days} 天）` : ""}</span>`
+          + `<div class="muted" style="font-size:11px;" title="${esc(mg.codes.join("、"))}${mg.more ? `（另有 ${mg.more} 单）` : ""}">`
+          + `${esc(mg.codes.slice(0, 3).join("、"))}${mg.codes.length > 3 ? " …" : ""}</div>`
+        : `<span class="muted">${esc(m.remark)}</span>`;
+      return `<tr${mg ? ' class="mv-merged"' : ""}>
+      <td class="mono">${esc(m.date)}</td>
       <td>${esc(m.product_name)}</td>
-      <td>${typeBadge[m.move_type] || m.move_type}</td>
-      <td class="num mono" style="color:${v >= 0 ? "var(--green)" : "var(--red)"}">${v >= 0 ? "+" : ""}${fmtNum(v)} ${esc(unit)}</td>
+      <td>${typeCell}</td>
+      ${changeCell}
       <td class="num mono">${fmtMoney(m.amount)}</td>
       <td>${esc(m.operator) || "—"}</td>
-      <td class="muted">${esc(m.remark)}</td></tr>`;
+      <td>${noteCell}</td></tr>`;
     }).join("") + `</tbody>`;
-  if (!rows.length) t.innerHTML = `<tr><td colspan="7" class="empty">暂无流水</td></tr>`;
-  t._rows = rows;
+  if (!view.length) t.innerHTML = `<tr><td colspan="7" class="empty">暂无流水</td></tr>`;
+  t._rows = view;
   t._render = loadMovements;
 }
 
-/* 近一个月库存变动柱状图：按日聚合净变动（单商品用默认单位，全部商品用基础单位） */
+/* 出库行合并：同一商品 + 同一「每单扣减量」的行合成一条
+   （如「-2.25 公斤/单 × 12 单，合计 -27.00 公斤」），非出库行原样保留。 */
+function mergeOutboundRows(rows) {
+  const groups = new Map();
+  const rest = [];
+  rows.forEach((m) => {
+    if (m.move_type !== "out") { rest.push(m); return; }
+    const v = m.quantity_display != null ? m.quantity_display : m.quantity_base;
+    const key = `${m.product_id}|${m.product_name}|${m.unit || ""}|${v}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = {
+        product_id: m.product_id, product_name: m.product_name, unit: m.unit || "", per: v,
+        count: 0, total: 0, amount: 0, dates: new Set(), operators: new Set(), codes: [],
+      };
+      groups.set(key, g);
+    }
+    g.count += 1;
+    g.total += v;
+    g.amount += m.amount || 0;
+    g.dates.add(m.date);
+    if (m.operator) g.operators.add(m.operator);
+    const hit = (m.remark || "").match(/(CK\S+)/);
+    if (hit && !g.codes.includes(hit[1])) g.codes.push(hit[1]);
+  });
+  const merged = [...groups.values()].map((g) => {
+    const dates = [...g.dates].sort();
+    return {
+      date: dates.length > 1 ? `${dates[0]} ~ ${dates[dates.length - 1]}` : dates[0],
+      product_id: g.product_id, product_name: g.product_name, move_type: "out",
+      quantity_display: g.per, unit: g.unit, quantity_base: g.total, amount: g.amount,
+      operator: [...g.operators].join("、"), remark: g.codes.join("、"),
+      _merged: {
+        count: g.count, per: g.per, total: g.total, unit: g.unit, days: dates.length,
+        codes: g.codes.slice(0, 12), more: Math.max(0, g.codes.length - 12),
+      },
+    };
+  });
+  return rest.concat(merged);
+}
+
+/* 库存变动柱状图：按日聚合，上半绿色=入库、下半红色=出库，柱上标当天净变动(+/-)
+   （单商品用默认单位，全部商品用基础单位） */
 function renderMvChart(rows, pid) {
   const box = $("mvChart");
   if (!box) return;
@@ -5397,27 +5456,31 @@ function renderMvChart(rows, pid) {
   const byDate = {};
   rows.forEach((m) => {
     const v = useDisp ? (m.quantity_display != null ? m.quantity_display : m.quantity_base) : m.quantity_base;
-    byDate[m.date] = (byDate[m.date] || 0) + v;
+    const g = byDate[m.date] || (byDate[m.date] = { inQ: 0, outQ: 0 });
+    if (v >= 0) g.inQ += v; else g.outQ -= v;
   });
   const end = to ? new Date(to + "T00:00:00") : new Date();
   const start = from ? new Date(from + "T00:00:00") : new Date(end.getTime() - 29 * 86400000);
   const days = [];
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
     const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    days.push({ ds, v: byDate[ds] || 0 });
+    const g = byDate[ds] || { inQ: 0, outQ: 0 };
+    days.push({ ds, inQ: g.inQ, outQ: g.outQ, net: g.inQ - g.outQ });
   }
   if (days.length > 62) days.splice(0, days.length - 62); // 防止日期范围过大
   const p = useDisp ? PRODUCTS.find((x) => x.id === pid) : null;
   const unit = p ? (p.default_unit || p.base_unit) : "基础单位";
-  const max = Math.max(1, ...days.map((d) => Math.abs(d.v)));
-  box.innerHTML = `<div class="mv-chart-title">近${days.length}天库存变动趋势（${unit}，绿=净入库/红=净出库）</div><div class="mv-chart">` +
+  const max = Math.max(1, ...days.map((d) => Math.max(d.inQ, d.outQ)));
+  const h = (v) => (v > 0 ? Math.max(2, Math.round(v / max * 100)) : 0);
+  box.innerHTML = `<div class="mv-chart-title">近${days.length}天库存变动趋势（${unit}，上半绿=入库 / 下半红=出库，柱顶为当天净变动）</div><div class="mv-chart">` +
     days.map((d) => {
-      const h = Math.max(2, Math.round(Math.abs(d.v) / max * 100));
-      const cls = d.v > 0 ? "up" : d.v < 0 ? "down" : "zero";
-      const label = d.v ? (d.v > 0 ? "+" : "") + fmtNum(d.v) : "";
-      return `<div class="mv-col" title="${d.ds}：${d.v ? (d.v > 0 ? "+" : "") + fmtNum(d.v) : "0"} ${unit}">
-        <span class="mv-val">${label}</span>
-        <div class="mv-track"><div class="mv-bar ${cls}" style="height:${h}%"></div></div>
+      const label = d.net ? (d.net > 0 ? "+" : "-") + fmtNum(Math.abs(d.net)) : "";
+      const color = d.net > 0 ? "var(--green)" : d.net < 0 ? "var(--red)" : "#999";
+      const tip = `${d.ds}：入库 +${fmtNum(d.inQ)} / 出库 -${fmtNum(d.outQ)} / 净 ${d.net >= 0 ? "+" : "-"}${fmtNum(Math.abs(d.net))} ${unit}`;
+      return `<div class="mv-col" title="${tip}">
+        <span class="mv-val" style="color:${color}">${label}</span>
+        <div class="mv-pos"><div class="mv-bar" style="height:${h(d.inQ)}%"></div></div>
+        <div class="mv-neg"><div class="mv-bar down" style="height:${h(d.outQ)}%"></div></div>
         <div class="mv-x">${d.ds.slice(5)}</div></div>`;
     }).join("") + `</div>`;
 }
