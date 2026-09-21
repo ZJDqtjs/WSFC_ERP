@@ -448,8 +448,18 @@ _EXTRA_COLUMNS = {
 }
 
 
+# 按来源查/删单据关联数据时的高频索引（幂等补建）：SQLite 不会为外键自动建索引，
+# stock_movements / finance_records 的 (ref_type, ref_id) 与 outbound_lines.outbound_id
+# 之前都是全表扫描——删除一张单要扫一遍流水表，批量删几百单就慢得离谱。
+_EXTRA_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_stock_movements_ref ON stock_movements(ref_type, ref_id)",
+    "CREATE INDEX IF NOT EXISTS idx_finance_records_ref ON finance_records(ref_type, ref_id)",
+    "CREATE INDEX IF NOT EXISTS idx_outbound_lines_outbound ON outbound_lines(outbound_id)",
+)
+
+
 def ensure_columns(engine: Engine) -> None:
-    """为已有表补充新增列（幂等）。老库默认视为「已付款」「非代发」，历史数据口径不变。"""
+    """为已有表补充新增列与常用索引（幂等）。老库默认视为「已付款」「非代发」，历史数据口径不变。"""
     with engine.connect() as conn:
         for table, columns in _EXTRA_COLUMNS.items():
             cols = [r[1] for r in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()]
@@ -458,6 +468,8 @@ def ensure_columns(engine: Engine) -> None:
             for col, ddl in columns:
                 if col not in cols:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
+        for ddl in _EXTRA_INDEXES:
+            conn.execute(text(ddl))
         conn.commit()
 
 

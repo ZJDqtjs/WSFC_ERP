@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..auth import get_current_user
 from ..database import get_db
 from ..models import FinanceRecord, Outbound, OutboundLine, Product, StockMovement, User
-from ..services import build_order, create_outbound, recompute_product
+from ..services import build_order, create_outbound, purge_outbounds, recompute_product
 
 router = APIRouter(prefix="/api/outbounds", tags=["outbound"])
 
@@ -157,21 +157,6 @@ def delete_outbound(oid: int, db: Session = Depends(get_db), user: User = Depend
 
 @router.post("/batch-delete")
 def batch_delete_outbounds(data: BatchIds, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    deleted, missing = 0, 0
-    for oid in data.ids:
-        rec = db.get(Outbound, oid)
-        if not rec:
-            missing += 1
-            continue
-        affected = {l.product_id for l in rec.lines}
-        for m in db.execute(select(StockMovement).where(StockMovement.ref_type == "outbound", StockMovement.ref_id == oid)).scalars():
-            affected.add(m.product_id)  # 库存流水实际扣在哪个商品（含库存大类/包材/人工）就重算哪个
-            db.delete(m)
-        for f in db.execute(select(FinanceRecord).where(FinanceRecord.ref_type == "outbound", FinanceRecord.ref_id == oid)).scalars():
-            db.delete(f)
-        db.delete(rec)
-        for pid in affected:
-            recompute_product(db, pid)
-        deleted += 1
+    deleted, missing, _affected = purge_outbounds(db, data.ids)
     db.commit()
     return {"ok": True, "deleted": deleted, "missing": missing}

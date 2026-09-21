@@ -4,7 +4,7 @@ import math
 import os
 from collections import deque
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .models import FinanceRecord, Inbound, Outbound, OutboundLine, Product, StockMovement, Unit
@@ -403,6 +403,95 @@ def recompute_product(db: Session, product_id: int) -> Product:
         product.stock_value = 0.0
     db.flush()
     return product
+
+
+# ---------------- 单据批量删除 ----------------
+# SQLite 单条 SQL 的变量数有上限，ids 分批处理，避免一次删几千单时 in_() 参数过多。
+_DELETE_CHUNK = 400
+
+
+def _chunks(seq: list, size: int = _DELETE_CHUNK):
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
+
+
+def _bulk_delete_ref(db: Session, model, ref_type: str, ref_ids: list[int]) -> None:
+    """按来源(ref_type + ref_id)批量删除流水，stock_movements / finance_records 共用。"""
+    if not ref_ids:
+        return
+    db.execute(
+        delete(model)
+        .where(model.ref_type == ref_type, model.ref_id.in_(ref_ids))
+        .execution_options(synchronize_session=False)
+    )
+
+
+def purge_outbounds(db: Session, ids: list[int]) -> tuple[int, int, set[int]]:
+    """批量删除出库单（主单 + 明细 + 库存流水 + 财务流水），返回 (deleted, missing, 受影响商品集合)。
+
+    旧实现逐单 `get` + lazy load 明细 + 逐单对每个受影响商品全量重放 FIFO，删几百单时是
+    O(单数 × 商品数 × 该商品流水数)——出库单几乎每单都含人工/包材/快递等热门商品，
+    每个热门商品会被反复全量重算，实测一次批量删除要 114 秒。
+    这里改为：查询与删除按批合并成常数次 SQL，受影响商品去重后只在最后各重算一次。
+    调用方负责 db.commit()；本函数内部已 flush 并完成 FIFO 重算。
+    """
+    uniq = list(dict.fromkeys(int(i) for i in ids))
+    existing: list[int] = []
+    affected: set[int] = set()
+    for part in _chunks(uniq):
+        existing += db.execute(select(Outbound.id).where(Outbound.id.in_(part))).scalars().all()
+        affected |= set(
+            db.execute(select(OutboundLine.product_id).where(OutboundLine.outbound_id.in_(part))).scalars()
+        )
+        # 库存流水实际扣在哪个商品（含库存大类/包材/人工）就重算哪个
+        affected |= set(
+            db.execute(
+                select(StockMovement.product_id).where(
+                    StockMovement.ref_type == "outbound", StockMovement.ref_id.in_(part)
+                )
+            ).scalars()
+        )
+    for part in _chunks(existing):
+        _bulk_delete_ref(db, StockMovement, "outbound", part)
+        _bulk_delete_ref(db, FinanceRecord, "outbound", part)
+        db.execute(
+            delete(OutboundLine).where(OutboundLine.outbound_id.in_(part)).execution_options(synchronize_session=False)
+        )
+        db.execute(delete(Outbound).where(Outbound.id.in_(part)).execution_options(synchronize_session=False))
+    db.flush()  # 删除落库后 FIFO 重放才看得到最新流水
+    for pid in affected:
+        if pid is not None:
+            recompute_product(db, pid)
+    return len(existing), len(uniq) - len(existing), affected
+
+
+def purge_inbounds(db: Session, ids: list[int]) -> tuple[int, int, set[int]]:
+    """批量删除入库单（主单 + 库存流水 + 财务流水），返回 (deleted, missing, 受影响商品集合)。
+
+    与 purge_outbounds 同一思路：批量查询/删除 + 受影响商品去重后只重算一次。
+    """
+    uniq = list(dict.fromkeys(int(i) for i in ids))
+    existing: list[int] = []
+    affected: set[int] = set()
+    for part in _chunks(uniq):
+        existing += db.execute(select(Inbound.id).where(Inbound.id.in_(part))).scalars().all()
+        affected |= set(db.execute(select(Inbound.product_id).where(Inbound.id.in_(part))).scalars())
+        affected |= set(
+            db.execute(
+                select(StockMovement.product_id).where(
+                    StockMovement.ref_type == "inbound", StockMovement.ref_id.in_(part)
+                )
+            ).scalars()
+        )
+    for part in _chunks(existing):
+        _bulk_delete_ref(db, StockMovement, "inbound", part)
+        _bulk_delete_ref(db, FinanceRecord, "inbound", part)
+        db.execute(delete(Inbound).where(Inbound.id.in_(part)).execution_options(synchronize_session=False))
+    db.flush()
+    for pid in affected:
+        if pid is not None:
+            recompute_product(db, pid)
+    return len(existing), len(uniq) - len(existing), affected
 
 
 def fifo_state(db: Session, product_id: int) -> tuple[deque, float]:

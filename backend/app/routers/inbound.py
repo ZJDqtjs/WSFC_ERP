@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..auth import get_current_user
 from ..database import get_db
 from ..models import FinanceRecord, Inbound, Product, StockMovement, User
-from ..services import create_inbound, recompute_product
+from ..services import create_inbound, purge_inbounds, recompute_product
 
 router = APIRouter(prefix="/api/inbounds", tags=["inbound"])
 
@@ -95,19 +95,6 @@ def delete_inbound(rid: int, db: Session = Depends(get_db), user: User = Depends
 
 @router.post("/batch-delete")
 def batch_delete_inbounds(data: BatchIds, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    deleted, missing = 0, 0
-    for rid in data.ids:
-        rec = db.get(Inbound, rid)
-        if not rec:
-            missing += 1
-            continue
-        pid = rec.product_id
-        for m in db.execute(select(StockMovement).where(StockMovement.ref_type == "inbound", StockMovement.ref_id == rid)).scalars():
-            db.delete(m)
-        for f in db.execute(select(FinanceRecord).where(FinanceRecord.ref_type == "inbound", FinanceRecord.ref_id == rid)).scalars():
-            db.delete(f)
-        db.delete(rec)
-        recompute_product(db, pid)
-        deleted += 1
+    deleted, missing, _affected = purge_inbounds(db, data.ids)
     db.commit()
     return {"ok": True, "deleted": deleted, "missing": missing}
