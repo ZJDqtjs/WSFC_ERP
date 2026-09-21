@@ -5356,8 +5356,13 @@ async function refreshPayBadge() {
 async function loadMovements() {
   const pid = $("mvProduct").value || "0";
   const from = $("mvDateFrom").value, to = $("mvDateTo").value;
-  let rows = await api(`/api/movements?product_id=${pid}&date_from=${from || ""}&date_to=${to || ""}`);
-  renderMvChart(rows, +pid);
+  const qs = `product_id=${pid}&date_from=${from || ""}&date_to=${to || ""}`;
+  // 图表用后端聚合接口（明细接口有 limit(500)，直接拿它画图会漏数）
+  const [rows, chart] = await Promise.all([
+    api(`/api/movements?${qs}`),
+    api(`/api/movements/chart?${qs}`),
+  ]);
+  renderMvChart(chart);
   const kw = ($("mvSearch")?.value || "").trim().toLowerCase();
   if (kw) rows = rows.filter((m) => [m.date, m.product_name, m.remark, m.operator].join(" ").toLowerCase().includes(kw));
   // 出库行按「每单扣减量」合并（同一商品同一扣减量合成一行：多少单、合计出库多少）
@@ -5446,43 +5451,80 @@ function mergeOutboundRows(rows) {
   return rest.concat(merged);
 }
 
-/* 库存变动柱状图：按日聚合，上半绿色=入库、下半红色=出库，柱上标当天净变动(+/-)
-   （单商品用默认单位，全部商品用基础单位） */
-function renderMvChart(rows, pid) {
+/* 库存变动柱状图：数据来自 /api/movements/chart（后端按「日期 × 单位」聚合）。
+   单商品 → 一组（该商品默认单位，如 公斤）；
+   全部商品 → 每个展示单位一组（重量类后端已统一折算成公斤，个 / 瓶等计数单位各自一组）。
+   单位不同就不能相加，所以每组各自成图、独立刻度，并在图上醒目地标出单位；
+   只有零星几天有变动、占比也很小的单位不单独绘图，改为在图下用文字列出。 */
+const MV_FLAT_DAYS = 2; // 非零天数 ≤ 此值且占比很小的单位不单独绘图（画不出趋势）
+const MV_FLAT_SHARE = 0.05;
+const MV_WAN = 10000;
+
+/* 是否值得单独画一张图：每组独立刻度，所以关键看「有没有趋势」而不是「量大量小」 */
+function mvHasTrend(s, grand) {
+  const active = s.days.filter((d) => d.in || d.out).length;
+  return active > MV_FLAT_DAYS || (s.total_in + s.total_out) / grand >= MV_FLAT_SHARE;
+}
+
+/* 柱顶数字用「万 / 亿」缩写，避免 9px 字号下长数字挤在一起（完整值见悬停提示） */
+function fmtQtyShort(v) {
+  v = Number(v) || 0;
+  const a = Math.abs(v);
+  if (a >= 1e8) return (v / 1e8).toFixed(a >= 1e9 ? 0 : 1).replace(/\.0$/, "") + "亿";
+  if (a >= MV_WAN) return (v / MV_WAN).toFixed(a >= 1e6 ? 0 : 1).replace(/\.0$/, "") + "万";
+  return fmtNum(Math.round(v));
+}
+
+/* 一组柱：上半绿=入库（贴中线向上）、下半红=出库（贴中线向下），柱顶标当天净变动。
+   上下共用同一刻度（取两向最大值），所以入库远大于出库时红柱看着短——这是真实的量级差，
+   在标题里标出两侧峰值，避免误读为「没有出库」。 */
+function mvColumns(days, unit) {
+  const max = Math.max(1, ...days.map((d) => Math.max(d.in || 0, d.out || 0)));
+  const h = (v) => (v > 0 ? Math.max(2, Math.round((v / max) * 100)) : 0);
+  return days.map((d) => {
+    const net = (d.in || 0) - (d.out || 0);
+    const cls = net > 0 ? "up" : net < 0 ? "down" : "flat";
+    const label = net ? (net > 0 ? "+" : "-") + fmtQtyShort(Math.abs(net)) : "";
+    const tip = `${d.date}：入库 +${fmtNum(d.in)} ${unit} / 出库 -${fmtNum(d.out)} ${unit}`
+      + ` / 净 ${net >= 0 ? "+" : "-"}${fmtNum(Math.abs(net))} ${unit}`;
+    return `<div class="mv-col" title="${esc(tip)}">
+        <span class="mv-val ${cls}">${label}</span>
+        <div class="mv-pos"><div class="mv-bar" style="height:${h(d.in)}%"></div></div>
+        <div class="mv-neg"><div class="mv-bar down" style="height:${h(d.out)}%"></div></div>
+        <div class="mv-x">${d.date.slice(5)}</div></div>`;
+  }).join("");
+}
+
+function renderMvChart(chart) {
   const box = $("mvChart");
   if (!box) return;
-  const from = $("mvDateFrom").value, to = $("mvDateTo").value;
-  const useDisp = !!pid; // 选中具体商品时按默认单位展示
-  const byDate = {};
-  rows.forEach((m) => {
-    const v = useDisp ? (m.quantity_display != null ? m.quantity_display : m.quantity_base) : m.quantity_base;
-    const g = byDate[m.date] || (byDate[m.date] = { inQ: 0, outQ: 0 });
-    if (v >= 0) g.inQ += v; else g.outQ -= v;
-  });
-  const end = to ? new Date(to + "T00:00:00") : new Date();
-  const start = from ? new Date(from + "T00:00:00") : new Date(end.getTime() - 29 * 86400000);
-  const days = [];
-  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    const g = byDate[ds] || { inQ: 0, outQ: 0 };
-    days.push({ ds, inQ: g.inQ, outQ: g.outQ, net: g.inQ - g.outQ });
+  const series = (chart && chart.series) || [];
+  if (!series.length) {
+    box.innerHTML = `<div class="mv-chart-title">该区间没有库存变动流水</div>`;
+    return;
   }
-  if (days.length > 62) days.splice(0, days.length - 62); // 防止日期范围过大
-  const p = useDisp ? PRODUCTS.find((x) => x.id === pid) : null;
-  const unit = p ? (p.default_unit || p.base_unit) : "基础单位";
-  const max = Math.max(1, ...days.map((d) => Math.max(d.inQ, d.outQ)));
-  const h = (v) => (v > 0 ? Math.max(2, Math.round(v / max * 100)) : 0);
-  box.innerHTML = `<div class="mv-chart-title">近${days.length}天库存变动趋势（${unit}，上半绿=入库 / 下半红=出库，柱顶为当天净变动）</div><div class="mv-chart">` +
-    days.map((d) => {
-      const label = d.net ? (d.net > 0 ? "+" : "-") + fmtNum(Math.abs(d.net)) : "";
-      const color = d.net > 0 ? "var(--green)" : d.net < 0 ? "var(--red)" : "#999";
-      const tip = `${d.ds}：入库 +${fmtNum(d.inQ)} / 出库 -${fmtNum(d.outQ)} / 净 ${d.net >= 0 ? "+" : "-"}${fmtNum(Math.abs(d.net))} ${unit}`;
-      return `<div class="mv-col" title="${tip}">
-        <span class="mv-val" style="color:${color}">${label}</span>
-        <div class="mv-pos"><div class="mv-bar" style="height:${h(d.inQ)}%"></div></div>
-        <div class="mv-neg"><div class="mv-bar down" style="height:${h(d.outQ)}%"></div></div>
-        <div class="mv-x">${d.ds.slice(5)}</div></div>`;
-    }).join("") + `</div>`;
+  const grand = series.reduce((s, x) => s + x.total_in + x.total_out, 0) || 1;
+  let mains = series.filter((s) => mvHasTrend(s, grand));
+  let flat = series.filter((s) => !mvHasTrend(s, grand));
+  if (!mains.length) { mains = [series[0]]; flat = series.slice(1); } // 极端情况兜底
+
+  const head = (s) => {
+    const peakIn = Math.max(0, ...s.days.map((d) => d.in || 0));
+    const peakOut = Math.max(0, ...s.days.map((d) => d.out || 0));
+    return `<div class="mv-chart-title">
+        <span class="mv-unit-chip">单位：${esc(s.unit)}</span>
+        <span class="mv-legend"><i class="up"></i>入库<i class="down"></i>出库</span>
+        <span class="muted">柱顶=当天净变动 · 峰值 入 ${fmtQtyShort(peakIn)} / 出 ${fmtQtyShort(peakOut)}（上下同一刻度）</span>
+      </div>`;
+  };
+  box.innerHTML =
+    mains.map((s) => `<div class="mv-block">${head(s)}<div class="mv-chart">${mvColumns(s.days, s.unit)}</div></div>`).join("")
+    + (flat.length
+      ? `<div class="mv-note">另有 ${flat.map((s) => `${esc(s.unit)}：入 ${fmtNum(s.total_in)} / 出 ${fmtNum(s.total_out)}`).join("、")}`
+        + `（只有零星几天有变动，未单独绘图，明细见下表）</div>`
+      : "")
+    + `<div class="mv-note muted">区间 ${esc(chart.date_from)} ~ ${esc(chart.date_to)}`
+    + `；口径：只统计真实库存进出（不含人工/快递工作量、成本流水）</div>`;
 }
 
 /* =============== 工作量统计（人工打包） =============== */

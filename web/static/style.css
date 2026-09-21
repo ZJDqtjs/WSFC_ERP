@@ -1452,7 +1452,31 @@ body.notice-on .login-mask { padding-top: 40px; }
 
 /* ============ 库存流水柱状图 ============ */
 #mvChart { margin-bottom: 12px; }
-.mv-chart-title { font-size: 13px; color: var(--text-muted, #8a8f98); margin-bottom: 8px; }
+.mv-block + .mv-block { margin-top: 16px; }
+.mv-chart-title {
+  font-size: 13px;
+  color: var(--text-muted, #8a8f98);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+/* 单位徽标：不同分组的量不可相加，单位必须一眼可见 */
+.mv-unit-chip {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text, #1f2328);
+  background: var(--bg-subtle, #f2f4f7);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+.mv-legend { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.mv-legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-left: 6px; }
+.mv-legend i.up { background: var(--green, #16a34a); }
+.mv-legend i.down { background: var(--red, #dc2626); }
+.mv-note { font-size: 12px; color: var(--text-muted, #8a8f98); margin-top: 8px; }
 .mv-chart {
   display: flex;
   align-items: flex-end;
@@ -1476,6 +1500,8 @@ body.notice-on .login-mask { padding-top: 40px; }
   margin-bottom: 2px;
   white-space: nowrap;
 }
+.mv-val.up { color: var(--green, #16a34a); }
+.mv-val.down { color: var(--red, #dc2626); }
 .mv-track {
   height: 160px;
   width: 70%;
