@@ -3280,8 +3280,10 @@ async function saveProduct(pid) {
     base_unit: unitPayload.base_unit,
     default_unit: unitPayload.default_unit,
     spec: $("pSpec").value,
-    sale_price: +((+$("pSalePrice").value || 0) / fDisp).toFixed(8),
-    unit_cost: +((+$("pUnitCost").value || 0) / fDisp).toFixed(8),
+    // 界面上售价/成本按「默认单位」填，存库要折回基础单位；
+    // PM_UNIT_F 就是当前显示单位对应的换算系数（打开弹窗时设置，切换单位时同步更新）
+    sale_price: +((+$("pSalePrice").value || 0) / (PM_UNIT_F || 1)).toFixed(8),
+    unit_cost: +((+$("pUnitCost").value || 0) / (PM_UNIT_F || 1)).toFixed(8),
     weight_kg: +($("pWeightKg").value || 0),
     conversions: unitPayload.conversions,
     pack_items: collectPacks(),
