@@ -252,6 +252,19 @@ function refCostHtml(p) {
   if (p.unit_cost > 0) return `${fmtMoney(p.unit_cost * f)}/${du}`;
   return "—";
 }
+/* 「成本」格的悬停说明：这格优先显示库存均价（随出入库自动重算），没有均价才用它手填的参考成本。
+   （用户容易以为这格就是自己填的参考成本，所以鼠标停上去要说清楚） */
+function refCostTitle(p) {
+  const du = defaultUnit(p);
+  const f = unitFactor(p, du);
+  const ref = p.unit_cost > 0 ? `${fmtMoney(p.unit_cost * f)}/${du}` : "未设置";
+  if (p.avg_cost > 0) {
+    return `显示的是库存均价 ${fmtMoney(p.avg_cost * f)}/${du}（随出入库自动重算）；你手填的参考成本：${ref}`;
+  }
+  return p.unit_cost > 0
+    ? `该商品还没有入库均价，显示的是你手填的参考成本 ${ref}`
+    : "未设置成本：可到商品编辑页按默认单位填「参考成本」，或入库后自动形成均价";
+}
 /* 参考成本那一格的「排序值」：与 refCostHtml 的显示规则完全一致（均价优先，无则参考成本，按默认单位换算）。
    两者都为 0 时这一格显示「—」，排序时按空值处理（详见 compareVal），免得点了表头却看不出变化。 */
 function refCostValue(p) {
@@ -2875,7 +2888,7 @@ async function renderProducts() {
         <td><b>${typeBadge} ${esc(p.name)}</b><div class="muted" style="font-size:12px;">${linkInfo}</div></td>
         <td>${esc(p.category) ? `<span class="badge adjust">${esc(p.category)}</span>` : "—"}</td>
         <td class="muted" style="max-width:170px;">${esc(packs) || "—"}</td>
-        <td class="num mono">${refCostHtml(p)}</td>
+        <td class="num mono" title="${esc(refCostTitle(p))}">${refCostHtml(p)}</td>
         <td class="num">${fmtMoney(p.pack_fee)}</td>
         <td class="num mono">${stockShown}</td>
         <td>${p.is_active ? '<span class="badge in">启用</span>' : '<span class="badge off">停用</span>'}</td>
@@ -2994,6 +3007,16 @@ function openProductModal(pid = 0, prefillName = "") {
   const curUnit = p ? (p.default_unit || p.base_unit) : "斤";
   const curCat = p ? p.category : (prodForceCat || ""); // 独立分类页新增时自动带上分类
   const curName = p?.name || prefillName || "";
+  // 售价/成本一律按「默认单位」填（以前按基础单位，如 元/克，太反直觉）；
+  // 内部仍按基础单位存库，这里只是显示与录入时做一次换算。
+  const up0 = deriveUnitPayload(ptype, curUnit);
+  const du0 = up0.default_unit || up0.base_unit;
+  const f0 = (up0.conversions || {})[du0] || 1;
+  PM_UNIT_F = f0;
+  PM_SALE_BASE = p ? (+p.sale_price || 0) : 0;
+  PM_COST_BASE = p ? (+p.unit_cost || 0) : 0;
+  const saleDisp = +(PM_SALE_BASE * f0).toFixed(6);
+  const costDisp = +(PM_COST_BASE * f0).toFixed(6);
   // 商品表单字段多，用加宽弹窗（字段自动多列排布）减少上下滚动
   $("modalBox").classList.add("wide");
   openModal(`
@@ -3007,9 +3030,9 @@ function openProductModal(pid = 0, prefillName = "") {
           <option value="stock" ${ptype === "stock" ? "selected" : ""}>库存商品（大类·真实库存）</option>
           <option value="order" ${ptype === "order" ? "selected" : ""}>订单商品（小类·出库销售）</option>
         </select></div>
-      <div class="field"><label>单位</label><select id="pUnit" class="searchable"></select><div class="field-hint">重量类按克记账（1斤=500克），计数类按个记账；订单商品固定为「单」</div></div>
-      <div class="field"><label>默认售价（每基础单位）</label><input id="pSalePrice" type="number" step="any" value="${p?.sale_price || 0}" /></div>
-      <div class="field"><label>参考成本（每基础单位）</label><input id="pUnitCost" type="number" step="any" value="${p?.unit_cost || 0}" /><div class="field-hint">包材/人工等无入库时按此成本结算，如纸箱0.9元/个</div></div>
+      <div class="field"><label>单位（默认单位）</label><select id="pUnit" class="searchable"></select><div class="field-hint">重量类按克记账（1斤=500克），计数类按个记账；订单商品固定为「单」。<b>下面的售价与成本都按这个单位填</b></div></div>
+      <div class="field"><label id="pSalePriceLabel">默认售价（元/${esc(du0)}）</label><input id="pSalePrice" type="number" step="any" value="${saleDisp}" /><div class="field-hint" id="pSalePriceHint"></div></div>
+      <div class="field"><label id="pUnitCostLabel">参考成本（元/${esc(du0)}）</label><input id="pUnitCost" type="number" step="any" value="${costDisp}" /><div class="field-hint" id="pUnitCostHint"></div></div>
       <div class="field" id="pWeightBox"><label>单件净重（kg）</label><input id="pWeightKg" type="number" step="any" value="${p?.weight_kg || 0}" /><div class="field-hint">用于计算快递费。重量类库存自动按「扣减库存量」推导；按袋/按件等计数库存推不出重量时，就用这里手填的净重兜底（如 四神汤200g 填 0.2）。<b>代发商品填了净重也会按净重结算快递费</b>（不填=代发方包邮，不计快递费）</div></div>
     </div>
     <div id="pStockBox" class="form-grid" style="margin-top:10px;display:${ptype === "order" ? "grid" : "none"};">
@@ -3036,6 +3059,7 @@ function openProductModal(pid = 0, prefillName = "") {
       <button class="btn" onclick="saveProduct(${pid || 0})">保存</button>
     </div>`);
   initProductUnitSelect(ptype, curUnit);
+  updateProductPriceLabels(du0, f0, up0.base_unit);   // 价格字段标签/提示按默认单位显示
   // 加载库存商品（大类）列表，并渲染「扣减库存商品」多行（支持 + 号新增）
   if (ptype === "order") {
     api("/api/stocks").then((stocks) => {
@@ -3051,6 +3075,35 @@ function initProductUnitSelect(ptype, curUnit) {
   const sel = $("pUnit");
   const cur = ptype === "order" ? "单" : (units.includes(curUnit) ? curUnit : "斤");
   sel.innerHTML = units.map((u) => `<option value="${u}" ${u === cur ? "selected" : ""}>${u}</option>`).join("");
+  sel.onchange = pUnitChanged;   // 换默认单位时，价格字段按新单位重算显示
+}
+/* 商品弹窗里的价格：对外按默认单位，内部按基础单位（PM_* 存的就是基础单位值） */
+let PM_UNIT_F = 1;
+let PM_SALE_BASE = 0;
+let PM_COST_BASE = 0;
+function updateProductPriceLabels(du, f, bu) {
+  const conv = f !== 1 ? `（1${du} = ${fmtNum(f)}${bu}）` : "";
+  if ($("pSalePriceLabel")) $("pSalePriceLabel").textContent = `默认售价（元/${du}）`;
+  if ($("pUnitCostLabel")) $("pUnitCostLabel").textContent = `参考成本（元/${du}）`;
+  if ($("pSalePriceHint")) $("pSalePriceHint").textContent = `按默认单位填${conv}；出库时按这个价带出`;
+  if ($("pUnitCostHint")) $("pUnitCostHint").textContent = `按默认单位填${conv}；包材/人工等无入库时按此成本结算（如纸箱 0.9 元/个）`;
+}
+/* 切换默认单位：先把手填的值折回基础单位，再按新单位显示，避免价格被单位搞乱 */
+function pUnitChanged() {
+  const up = deriveUnitPayload($("pType").value, $("pUnit").value);
+  const du = up.default_unit || up.base_unit;
+  const f = (up.conversions || {})[du] || 1;
+  const back = (id) => {
+    const el = $(id);
+    const v = el ? parseFloat(el.value) : NaN;
+    return isFinite(v) ? v / (PM_UNIT_F || 1) : 0;
+  };
+  PM_SALE_BASE = back("pSalePrice");
+  PM_COST_BASE = back("pUnitCost");
+  PM_UNIT_F = f;
+  if ($("pSalePrice")) $("pSalePrice").value = +(PM_SALE_BASE * f).toFixed(6);
+  if ($("pUnitCost")) $("pUnitCost").value = +(PM_COST_BASE * f).toFixed(6);
+  updateProductPriceLabels(du, f, up.base_unit);
 }
 function deriveUnitPayload(ptype, unit) {
   if (ptype === "order" || unit === "单") return { base_unit: "单", default_unit: "单", conversions: { 单: 1 } };
@@ -3143,8 +3196,8 @@ async function saveProduct(pid) {
     base_unit: unitPayload.base_unit,
     default_unit: unitPayload.default_unit,
     spec: $("pSpec").value,
-    sale_price: +$("pSalePrice").value || 0,
-    unit_cost: +$("pUnitCost").value || 0,
+    sale_price: +((+$("pSalePrice").value || 0) / fDisp).toFixed(8),
+    unit_cost: +((+$("pUnitCost").value || 0) / fDisp).toFixed(8),
     weight_kg: +($("pWeightKg").value || 0),
     conversions: unitPayload.conversions,
     pack_items: collectPacks(),
@@ -3419,7 +3472,8 @@ function inboundProducts() {
 }
 function initInbound() {
   if (!$("inDate").value) $("inDate").value = today();
-  $("inUnit").onchange = calcInbound;
+  // 换单位时价格要跟着换算，所以重填一次（自动带出的是「最近一次录入价 × 该单位换算」）
+  $("inUnit").onchange = () => { calcInbound(); fillInboundPrice(); };
   loadInbounds();
 }
 /* 入库商品选择器（二级弹层：搜索 + 分类 + 卡片列表） */
@@ -3465,7 +3519,53 @@ function pickInboundProduct(id) {
   const factor = (p.conversions || {})[du] || 1;
   $("inStockHint").textContent = `当前库存 ${fmtStock(p)}；1${du} = ${fmtNum(factor)} ${p.base_unit}`;
   closeModal();
+  fillInboundPrice();   // 自动带出上次的价（没有入库记录就用参考成本），用户可改
+}
+/* 入库单价自动带出：优先用「最近一次录入的入库价」（按所选单位换算），没有入库记录时用参考成本。
+   只在重新选商品 / 换单位时重填，用户改了或清空后不再覆盖（真正落库由 submitInbound 校验）。 */
+function fillInboundPrice() {
+  const p = PRODUCTS.find((x) => x.id === +($("inProduct").dataset.pid || 0));
+  const inp = $("inPrice");
+  if (!p || !inp) return;
+  const unit = $("inUnit").value || defaultUnit(p);
+  const f = (p.conversions || {})[unit] || 1;
+  const lastBase = Number(p.last_in_price) || 0;   // 最近一次入库价（按基础单位）
+  const refBase = Number(p.unit_cost) || 0;        // 参考成本（按基础单位）
+  const per = (base) => +(base * f).toFixed(6);
+  if (lastBase > 0) {
+    inp.value = per(lastBase);
+  } else if (refBase > 0) {
+    inp.value = per(refBase);
+  } else {
+    inp.value = "";
+  }
+  const hint = $("inPriceHint");
+  if (hint) {
+    const money = (v) => `¥${fmtNum(+v.toFixed(4))}/${esc(unit)}`;
+    if (lastBase > 0) {
+      let t = `最近入库价 ${money(per(lastBase))}（${esc(p.last_in_date || "")}）`;
+      if (refBase > 0) {
+        t += `　参考成本 ${money(per(refBase))} <button class="btn sm ghost" onclick="useInboundRefCost()">用参考成本</button>`;
+      }
+      hint.innerHTML = t + `<div class="muted" style="font-size:11px;">可改可清；改了下次入库自动用新价</div>`;
+    } else if (refBase > 0) {
+      hint.innerHTML = `按参考成本填 ${money(per(refBase))}<div class="muted" style="font-size:11px;">该商品还没入库过；保存后即记住这个价</div>`;
+    } else {
+      hint.innerHTML = `该商品还没入库过、也没设参考成本，请手动填单价`;
+    }
+  }
   calcInbound();
+}
+/* 一键改用参考成本（当最近入库价不是你想要的时候） */
+function useInboundRefCost() {
+  const p = PRODUCTS.find((x) => x.id === +($("inProduct").dataset.pid || 0));
+  if (!p) return;
+  const unit = $("inUnit").value || defaultUnit(p);
+  const f = (p.conversions || {})[unit] || 1;
+  const v = (Number(p.unit_cost) || 0) * f;
+  $("inPrice").value = v > 0 ? +v.toFixed(6) : "";
+  calcInbound();
+  toast("已改用参考成本，可直接修改");
 }
 function calcInbound() {
   const p = PRODUCTS.find((x) => x.id === +$("inProduct").dataset.pid);
@@ -3499,9 +3599,12 @@ async function submitInbound() {
     });
     toast(`已入库 ${fmtNum(qty)}${unit} ${p.name}${payStatus === "unpaid" ? "（待付款，已进待付款账单）" : ""}`);
     $("inQty").value = ""; $("inPrice").value = ""; $("inAmount").value = "";
+    if ($("inPriceHint")) $("inPriceHint").textContent = "";
     clearRemarkField("inRemark");
     setPay("inPay", "paid");   // 回到默认「已付款」
     loadInbounds(); loadStock();
+    // 刷新商品缓存：下次选这个商品时会带上「这次录入的价」（最近价实时跟着变）
+    api("/api/products").then((ps) => { PRODUCTS = ps; }).catch(() => {});
   } catch (e) { toast("入库失败：" + e.message); }
 }
 async function loadInbounds() {
@@ -4195,7 +4298,7 @@ function openBatchProductModal() {
     <div class="form-grid">
       <div class="field"><label>修改分类</label><input id="bpCategory" placeholder="如：蔬菜 / 干货 / 包材，留空不改" /></div>
       <div class="field"><label>状态</label><select id="bpActive"><option value="">保持不变</option><option value="1">启用</option><option value="0">停用</option></select></div>
-      <div class="field"><label>参考成本（元/基础单位）</label><input id="bpCost" type="number" step="any" placeholder="留空不改" /></div>
+      <div class="field"><label>参考成本（元/基础单位）</label><input id="bpCost" type="number" step="any" placeholder="留空不改" /><div class="field-hint">批量改价只能按基础单位算（重量类 = 元/克，计数类 = 元/个）；单个商品的价建议在商品编辑页按默认单位填</div></div>
       <div class="field"><label>默认售价（元/基础单位）</label><input id="bpPrice" type="number" step="any" placeholder="留空不改" /></div>
       <div class="field"><label>打包费（元/单）</label><input id="bpFee" type="number" step="any" placeholder="留空不改" /></div>
     </div>

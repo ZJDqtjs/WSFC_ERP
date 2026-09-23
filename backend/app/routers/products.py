@@ -55,11 +55,42 @@ class ProductIn(BaseModel):
     is_active: bool = True
 
 
-def _to_dict(p: Product, db: Session | None = None) -> dict:
+def _last_in_map(db: Session) -> dict[int, dict]:
+    """每个商品「最近一次录入」的入库价，一次查询算完（避免逐商品查库）。
+
+    最近 = 按录入顺序取该商品最后一条入库（id 最大，即用户最后录的那笔，跟补录旧日期无关）。
+    返回 {product_id: {"base_price": 折算到基础单位的单价, "unit": 录入时的单位,
+                      "unit_price": 录入时的单价, "date": 日期}}
+    用途：入库时自动带出上次的单价（用户改价 → 下次自动跟着变）；没有入库记录的商品不在结果里。
+    """
+    latest = (
+        select(Inbound.product_id, func.max(Inbound.id).label("mid"))
+        .group_by(Inbound.product_id)
+        .subquery()
+    )
+    rows = db.execute(
+        select(Inbound, Product.conversions)
+        .join(latest, Inbound.id == latest.c.mid)
+        .join(Product, Product.id == Inbound.product_id)
+    ).all()
+    out: dict[int, dict] = {}
+    for rec, conversions in rows:
+        factor = ((conversions or {}).get(rec.unit, 1) or 1)
+        out[rec.product_id] = {
+            "base_price": round((rec.unit_price or 0) / factor, 8),
+            "unit": rec.unit or "",
+            "unit_price": rec.unit_price or 0.0,
+            "date": rec.date or "",
+        }
+    return out
+
+
+def _to_dict(p: Product, db: Session | None = None, last_in: dict[int, dict] | None = None) -> dict:
     sp_name = ""
     if p.stock_product_id and db:
         sp = db.get(Product, p.stock_product_id)
         sp_name = sp.name if sp else ""
+    li = (last_in or {}).get(p.id) or {}
     # 多扣减关联清单（含商品名与单位，供前端直接展示）；旧数据无 stock_links 时用单关联字段兜底
     raw_links = list(p.stock_links or [])
     if not raw_links and p.stock_product_id:
@@ -88,6 +119,11 @@ def _to_dict(p: Product, db: Session | None = None) -> dict:
         "spec": p.spec,
         "sale_price": p.sale_price,
         "unit_cost": p.unit_cost,
+        # 最近一次录入的入库价（入库时自动带出、用户可改；下次入库就会用新的那次价格）
+        "last_in_price": li.get("base_price") or 0.0,        # 按基础单位
+        "last_in_unit": li.get("unit") or "",
+        "last_in_unit_price": li.get("unit_price") or 0.0,   # 最近一次录入时的原始单位单价
+        "last_in_date": li.get("date") or "",
         "weight_kg": p.weight_kg or 0,
         "free_shipping": bool(p.free_shipping),
         "conversions": p.conversions or {},
@@ -203,7 +239,8 @@ def delete_unit(uid: int, db: Session = Depends(get_db), user: User = Depends(ge
 @router.get("/products")
 def list_products(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     rows = db.execute(select(Product).order_by(Product.is_active.desc(), Product.category, Product.name)).scalars()
-    return [_to_dict(p, db) for p in rows]
+    last_in = _last_in_map(db)   # 一次查询拿到所有商品的最近入库价，供入库自动带出
+    return [_to_dict(p, db, last_in) for p in rows]
 
 
 @router.post("/products")
@@ -281,7 +318,7 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
     p.is_active = data.is_active
     db.commit()
     db.refresh(p)
-    return _to_dict(p, db)
+    return _to_dict(p, db, _last_in_map(db))
 
 
 @router.delete("/products/{pid}")
