@@ -4,7 +4,7 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_user
@@ -39,22 +39,135 @@ def _parse_rel(s: str, what: str) -> float:
     return v
 
 
+# 明细表分页参数。以前这里写死 limit(500)，而 wh01 近 30 天有 1.9 万条、aosidi 1.3 万条流水，
+# 等于 96% 的流水静默看不到（越早的日期越缺，且没有任何提示），所以改成显式分页。
+MV_DEFAULT_PAGE = 100
+MV_MAX_PAGE = 1000
+# 单次最多从库里取多少条来处理（极端区间兜底，防止把内存吃光）；触顶会在响应里标 truncated
+MV_FETCH_CAP = 200_000
+MV_SORT_KEYS = ("date", "product_name", "move_type", "quantity_base", "amount", "operator")
+
+
+def _mv_merge_out(rows: list[dict]) -> list[dict]:
+    """出库行按「同一商品 + 同一每单扣减量」合并成一行。
+
+    出库是按单逐笔记账的（一个订单一行），同一商品同一规格一天可能几十行，
+    不合并的话一页 100 条连一天都看不完。合并后把涉及的单号（CK…）收在 remark 里。
+    非出库行（入库 / 盘点 / 工作量 / 包装消耗…）原样保留。
+    """
+    groups: dict[tuple, dict] = {}
+    rest: list[dict] = []
+    for m in rows:
+        if m["move_type"] != "out":
+            rest.append(m)
+            continue
+        v = m["quantity_display"] if m["quantity_display"] is not None else m["quantity_base"]
+        key = (m["product_id"], m["product_name"], m["unit"] or "", v)
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = {
+                "product_id": m["product_id"], "product_name": m["product_name"],
+                "unit": m["unit"] or "", "per": v, "count": 0, "total": 0.0,
+                "amount": 0.0, "dates": set(), "operators": set(), "codes": [],
+            }
+        g["count"] += 1
+        g["total"] += v
+        g["amount"] += m["amount"] or 0.0
+        g["dates"].add(m["date"])
+        if m["operator"]:
+            g["operators"].add(m["operator"])
+        hit = re.search(r"(CK\S+)", m["remark"] or "")
+        if hit and hit.group(1) not in g["codes"]:
+            g["codes"].append(hit.group(1))
+
+    merged = []
+    for g in groups.values():
+        dates = sorted(g["dates"])
+        merged.append(
+            {
+                "date": f"{dates[0]} ~ {dates[-1]}" if len(dates) > 1 else dates[0],
+                "_date_sort": dates[0],  # 合并行按「最早一天」参与排序
+                "product_id": g["product_id"],
+                "product_name": g["product_name"],
+                "move_type": "out",
+                "quantity_display": g["per"],
+                "unit": g["unit"],
+                "quantity_base": g["total"],
+                "amount": round(g["amount"], 4),
+                "operator": "、".join(sorted(g["operators"])),
+                "remark": "、".join(g["codes"]),
+                "_merged": {
+                    "count": g["count"], "per": g["per"], "total": g["total"],
+                    "unit": g["unit"], "days": len(dates),
+                    "codes": g["codes"], "more": 0,
+                },
+            }
+        )
+    return rest + merged
+
+
+def _mv_search_text(r: dict) -> str:
+    """一行的可搜索文本（与前端原来的关键字筛选口径一致，另补上单位、类型与合并行单号）。"""
+    parts = [r.get("date"), r.get("product_name"), r.get("remark"), r.get("operator"),
+             r.get("unit"), r.get("move_type")]
+    mg = r.get("_merged")
+    if mg:
+        parts.extend(mg.get("codes") or [])
+    return " ".join(str(x or "") for x in parts).lower()
+
+
+def _mv_sort_val(r: dict, key: str):
+    """排序取值，与表格里显示的值一致。
+
+    注意：合并行的 date 是「起 ~ 止」字符串，排序用最早的那天（_date_sort）。
+    文本列按码位排序（不再是浏览器 localeCompare 的中文拼音序），只影响中文商品名的先后。
+    """
+    if key == "date":
+        return r.get("_date_sort") or r.get("date") or ""
+    if key in ("quantity_base", "amount"):
+        return float(r.get(key) or 0.0)
+    return str(r.get(key) or "")
+
+
 @router.get("/movements")
 def list_movements(
     product_id: int = 0,
     date_from: str = "",
     date_to: str = "",
+    keyword: str = "",
+    merge_out: bool = True,
+    sort: str = "date",
+    dir: str = "desc",
+    limit: int = MV_DEFAULT_PAGE,
+    offset: int = 0,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """库存流水明细（分页，全量可翻）。
+
+    「合并出库 → 关键字筛选 → 排序 → 切片」全部在后端做，返回 total 供前端翻页。
+    这三件事必须和分页绑在一起：只在当前页合并的话，「合计出库 N 单」会随翻页变化；
+    只在当前页排序的话，翻到第 2 页就又不是全局有序了。
+    """
+    limit = max(1, min(int(limit or MV_DEFAULT_PAGE), MV_MAX_PAGE))
+    offset = max(0, int(offset or 0))
+    if sort not in MV_SORT_KEYS:
+        sort = "date"
+
     # 遍历使用 m.product，selectinload 预载避免每行一条懒加载查询
-    q = select(StockMovement).options(selectinload(StockMovement.product)).order_by(StockMovement.id.desc()).limit(500)
+    q = (
+        select(StockMovement)
+        .options(selectinload(StockMovement.product))
+        .order_by(StockMovement.id.desc())
+        .limit(MV_FETCH_CAP)
+    )
     if product_id:
         q = q.where(StockMovement.product_id == product_id)
     if date_from:
         q = q.where(StockMovement.date >= date_from)
     if date_to:
         q = q.where(StockMovement.date <= date_to)
+
     rows = []
     for m in db.execute(q).scalars():
         p = m.product
@@ -76,7 +189,35 @@ def list_movements(
                 "remark": m.remark,
             }
         )
-    return rows
+
+    truncated = len(rows) >= MV_FETCH_CAP
+    if merge_out:
+        rows = _mv_merge_out(rows)
+    kw = (keyword or "").strip().lower()
+    if kw:
+        rows = [r for r in rows if kw in _mv_search_text(r)]
+    rows.sort(key=lambda r: _mv_sort_val(r, sort), reverse=(dir != "asc"))
+    total = len(rows)
+
+    page = rows[offset:offset + limit]
+    for r in page:
+        r.pop("_date_sort", None)
+        mg = r.get("_merged")
+        if mg and len(mg["codes"]) > 12:  # 单号只回前 12 个，其余用 more 记数量
+            mg["more"] = len(mg["codes"]) - 12
+            mg["codes"] = mg["codes"][:12]
+
+    return {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "merged": bool(merge_out),
+        "keyword": keyword or "",
+        "sort": sort,
+        "dir": "asc" if dir == "asc" else "desc",
+        "truncated": truncated,
+        "rows": page,
+    }
 
 
 # 柱状图口径：只统计真实库存进出。
@@ -93,7 +234,13 @@ UNIT_DISPLAY: dict[str, tuple[str, float]] = {
     "公斤": ("公斤", 1.0),
     "千克": ("公斤", 1.0),
     "kg": ("公斤", 1.0),
+    "斤": ("公斤", 2.0),  # 兜底：万一有商品的基础单位就是斤（1 斤 = 0.5 公斤）
 }
+
+# 单位是「单」的流水一律不算库存量：它记的是单数（人工/打包工作量、快递费、订单商品），
+# 不是库存数量。人工工作量已由 move_type 排除，这里再挡掉其它残留：
+# 例如 wh01 的「墨西哥葫芦8个」（订单商品）把自己写进了随货包材，每次出库都记一笔 -1 单。
+CHART_EXCLUDE_UNITS = ("单",)
 CHART_DEFAULT_DAYS = 30
 CHART_MAX_DAYS = 62
 
@@ -109,11 +256,11 @@ def movements_chart(
     """库存变动柱状图数据：按「日期 × 单位」聚合，每个单位一组、各自独立刻度。
 
     为什么不复用 /movements：
-    1. /movements 是明细接口且有 limit(500)，大仓（aosidi 近 40 天 6000+ 条流水）拿它画图
+    1. /movements 是明细接口（原来 limit 500），大仓（aosidi 近 30 天 1.3 万条流水）拿它画图
        会静默漏数，越早的日期越不可信；
     2. 各商品基础单位不同（克 / 个 / 瓶 / 公斤…），把 quantity_base 直接相加没有意义
        （曾经的「基础单位」就是这么来的），所以按单位分组返回，由前端每组一张图；
-    3. 顺带剔除不是库存量的流水（人工工作量、成本流水）。
+    3. 顺带剔除不是库存量的流水（人工工作量、成本流水、以及单位为「单」的单数流水）。
     """
     end = date.fromisoformat(date_to) if date_to else date.today()
     if date_from:
@@ -140,6 +287,8 @@ def movements_chart(
             StockMovement.date >= days[0],
             StockMovement.date <= days[-1],
             StockMovement.move_type.notin_(CHART_EXCLUDE_TYPES),
+            # 单数流水不算库存量；coalesce 是为了让「商品已删除」的流水不被误杀
+            func.coalesce(Product.base_unit, "").notin_(CHART_EXCLUDE_UNITS),
         )
     )
     if product_id:
@@ -192,6 +341,7 @@ def movements_chart(
         "date_from": days[0],
         "date_to": days[-1],
         "excluded_types": list(CHART_EXCLUDE_TYPES),
+        "excluded_units": list(CHART_EXCLUDE_UNITS),
         "series": series,
     }
 

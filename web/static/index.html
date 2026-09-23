@@ -196,14 +196,15 @@
             <div class="toolbar">
               <select id="mvProduct" class="searchable"><option value="0">全部商品</option></select>
               <input id="mvDateFrom" type="date" /><span>-</span><input id="mvDateTo" type="date" />
-              <input id="mvSearch" placeholder="🔍 筛选流水..." oninput="loadMovements()" />
+              <input id="mvSearch" placeholder="🔍 筛选流水..." oninput="onMvSearch()" />
               <label class="check-inline" title="把同一商品、同一扣减量的出库行合并成一行（显示单数与合计出库量）">
-                <input type="checkbox" id="mvMergeOut" checked onchange="loadMovements()" /> 合并出库
+                <input type="checkbox" id="mvMergeOut" checked onchange="mvResetPage(); loadMovements()" /> 合并出库
               </label>
-              <button class="btn" onclick="loadMovements()">查询</button>
+              <button class="btn" onclick="mvResetPage(); loadMovements()">查询</button>
             </div>
             <div id="mvChart"></div>
             <div class="table-wrap"><table id="mvTable"></table></div>
+            <div id="mvPager" class="pager"></div>
           </div>
         </div>
 
@@ -768,6 +769,7 @@
             <button class="seg-item" data-panel="import" onclick="switchSettingsTab('import')">批量导入</button>
             <button class="seg-item" data-panel="jushuitan" onclick="switchSettingsTab('jushuitan')">聚水潭关联</button>
             <button class="seg-item" data-panel="jstauto" onclick="switchSettingsTab('jstauto')">自动出库设置</button>
+            <button class="seg-item" data-panel="modules" onclick="switchSettingsTab('modules')">模块显示</button>
           </div>
         </div>
 
@@ -1033,6 +1035,19 @@
               <button class="btn secondary" onclick="loadJstHistory()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
             </div>
             <div class="table-wrap"><table id="jstHistoryTable"></table></div>
+          </div>
+        </div>
+
+        <!-- 模块显示调整：勾选侧边栏各功能的显示 / 隐藏（记忆化到本机浏览器） -->
+        <div class="settings-panel" data-panel="modules" style="display:none;">
+          <div class="card">
+            <div class="card-head">
+              <h3>模块显示调整</h3>
+              <span class="hint">勾选需要在左侧侧边栏显示的功能（如 入仓 / 鲜货现采 等）；设置按分仓独立保存在本机浏览器，下次打开自动生效</span>
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="resetNavModules()"><svg class="ic"><use href="#i-refresh"/></svg> 全部显示</button>
+            </div>
+            <div id="navModList"></div>
           </div>
         </div>
       </section>

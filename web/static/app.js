@@ -363,8 +363,92 @@ function switchSettingsTab(panel) {
   else if (panel === "backup") loadBackupPage();
   else if (panel === "jushuitan") loadMappingPage();
   else if (panel === "jstauto") loadJstAutoPage();
+  else if (panel === "modules") renderNavModulesPanel();
 }
 async function loadSettingsPage() { switchSettingsTab("pdata"); }
+
+/* ---------- 模块显示调整（侧边栏功能显隐，记忆化到本机浏览器） ---------- */
+const NAV_HIDDEN_KEY = "erp_nav_hidden"; // 本机偏好前缀；实际按分仓隔离，见 navHiddenKey()
+/** 侧边栏导航项的稳定标识：页面 + 分类/类型限定，保证「商品 / 关联结算 / 包材」各自独立 */
+function navModKey(el) {
+  const parts = [el.dataset.page || (el.dataset.action ? "action:" + el.dataset.action : "?")];
+  if (el.dataset.cat) parts.push("cat=" + el.dataset.cat);
+  if (el.dataset.type) parts.push("type=" + el.dataset.type);
+  return parts.join("|");
+}
+/** 侧边栏显隐偏好按分仓隔离：key = erp_nav_hidden:<分仓key>，未取到分仓时退回全局 */
+function navHiddenKey() {
+  const wh = (CURRENT_USER && CURRENT_USER.warehouse && CURRENT_USER.warehouse.key) || "";
+  return wh ? `${NAV_HIDDEN_KEY}:${wh}` : NAV_HIDDEN_KEY;
+}
+function getHiddenNavMods() {
+  try { return new Set(JSON.parse(localStorage.getItem(navHiddenKey()) || "[]")); }
+  catch (e) { return new Set(); }
+}
+function setHiddenNavMods(set) { localStorage.setItem(navHiddenKey(), JSON.stringify([...set])); }
+/** 按本机偏好应用侧边栏显隐；「设置」入口锁定常显，避免把自己锁死 */
+function applyNavVisibility() {
+  const nav = document.querySelector(".side-nav");
+  if (!nav) return;
+  const hidden = getHiddenNavMods();
+  nav.querySelectorAll(":scope > .nav-item").forEach((el) => {
+    const locked = el.dataset.page === "settings";
+    el.style.display = (!locked && hidden.has(navModKey(el))) ? "none" : "";
+  });
+  // 分组内功能全被隐藏时，连带隐藏该分组标题
+  let group = null, hasVisible = false;
+  const flush = () => { if (group) group.style.display = hasVisible ? "" : "none"; };
+  nav.querySelectorAll(":scope > .nav-group, :scope > .nav-item").forEach((el) => {
+    if (el.classList.contains("nav-group")) { flush(); group = el; hasVisible = false; }
+    else if (el.style.display !== "none") hasVisible = true;
+  });
+  flush();
+}
+/** 设置页「模块显示」面板：按侧边栏分组列出各功能的显示开关 */
+function renderNavModulesPanel() {
+  const box = $("navModList");
+  const nav = document.querySelector(".side-nav");
+  if (!box || !nav) return;
+  const hidden = getHiddenNavMods();
+  const groups = [];
+  let cur = { name: "", items: [] };
+  nav.querySelectorAll(":scope > .nav-group, :scope > .nav-item").forEach((el) => {
+    if (el.classList.contains("nav-group")) {
+      if (cur.items.length) groups.push(cur);
+      cur = { name: el.textContent.trim(), items: [] };
+    } else {
+      const locked = el.dataset.page === "settings";
+      cur.items.push({ key: navModKey(el), label: el.textContent.trim(), locked });
+    }
+  });
+  if (cur.items.length) groups.push(cur);
+  box.innerHTML = groups.map((g) => `
+    <div class="card" style="margin-bottom:10px;">
+      <div class="card-head"><h3>${esc(g.name || "其他")}</h3><span class="hint">勾选后在侧边栏显示</span></div>
+      <div class="form-grid">
+        ${g.items.map((it) => `
+          <label class="check-inline" ${it.locked ? 'title="设置入口固定显示，不可隐藏"' : ""}>
+            <input type="checkbox" ${hidden.has(it.key) ? "" : "checked"} ${it.locked ? "disabled" : ""}
+              onchange="toggleNavModule('${it.key}', this.checked)" /> ${esc(it.label)}
+          </label>`).join("")}
+      </div>
+    </div>`).join("") + `
+    <p class="hint">当前分仓：<b>${esc((CURRENT_USER && CURRENT_USER.warehouse && CURRENT_USER.warehouse.name) || "未指定分仓")}</b>。
+    显隐设置<b>按分仓各自独立保存</b>，切换分仓后互不影响；隐藏只影响左侧菜单的显示，不影响数据与权限；「设置」入口始终保留，方便随时回来调整。</p>`;
+}
+function toggleNavModule(key, visible) {
+  const hidden = getHiddenNavMods();
+  if (visible) hidden.delete(key); else hidden.add(key);
+  setHiddenNavMods(hidden);
+  applyNavVisibility();
+  toast(visible ? "已显示该模块" : "已隐藏该模块");
+}
+function resetNavModules() {
+  setHiddenNavMods(new Set());
+  applyNavVisibility();
+  renderNavModulesPanel();
+  toast("已恢复显示全部模块");
+}
 /* 支持通过地址栏 hash 深链到二级页（用于「未关联商品」跳转新标签手动新增商品）
    例：#/products/new?name=新鲜香蕈菌250g */
 function applyHashRoute() {
@@ -5892,23 +5976,51 @@ async function checkJstPending(popup) {
 }
 
 /* =============== 库存流水 =============== */
+/* 明细表分页状态：翻页 / 搜索 / 排序 / 合并出库都在后端做（只有后端知道总数），
+   这里只记住「第几页、每页多少条」。以前明细接口写死 limit(500)，
+   而 wh01 近 30 天就有 1.9 万条流水 —— 等于 96% 静默看不到，现在改成完整翻页。 */
+let mvPage = 0;
+let mvSize = 100;
+
+function mvResetPage() { mvPage = 0; }
+function mvSetPage(n) { mvPage = Math.max(0, +n || 0); loadMovements(); }
+function mvSetSize(v) { mvSize = +v || 100; mvPage = 0; loadMovements(); }
+
+/* 搜索由后端做，所以输入要防抖，否则每敲一个字都发一次请求 */
+let mvSearchTimer = null;
+function onMvSearch() {
+  clearTimeout(mvSearchTimer);
+  mvSearchTimer = setTimeout(() => { mvPage = 0; loadMovements(); }, 300);
+}
+
 async function loadMovements() {
   const pid = $("mvProduct").value || "0";
   const from = $("mvDateFrom").value, to = $("mvDateTo").value;
-  const qs = `product_id=${pid}&date_from=${from || ""}&date_to=${to || ""}`;
-  // 图表用后端聚合接口（明细接口有 limit(500)，直接拿它画图会漏数）
-  const [rows, chart] = await Promise.all([
-    api(`/api/movements?${qs}`),
-    api(`/api/movements/chart?${qs}`),
-  ]);
-  renderMvChart(chart);
-  const kw = ($("mvSearch")?.value || "").trim().toLowerCase();
-  if (kw) rows = rows.filter((m) => [m.date, m.product_name, m.remark, m.operator].join(" ").toLowerCase().includes(kw));
-  // 出库行按「每单扣减量」合并（同一商品同一扣减量合成一行：多少单、合计出库多少）
-  const mergeOut = $("mvMergeOut") ? $("mvMergeOut").checked : true;
-  const view = mergeOut ? mergeOutboundRows(rows) : rows;
   const t = $("mvTable");
-  const sorted = applyTableSort(t, view);
+  // 表头点击由通用处理器写进 t._sort（dir: 1 升 / -1 降）
+  const s = t._sort || { key: "date", dir: -1 };
+  const mergeOut = $("mvMergeOut") ? $("mvMergeOut").checked : true;
+  const qs = new URLSearchParams({
+    product_id: pid, date_from: from || "", date_to: to || "",
+    keyword: (($("mvSearch") && $("mvSearch").value) || "").trim(),
+    merge_out: mergeOut ? "true" : "false",
+    sort: s.key, dir: s.dir === 1 ? "asc" : "desc",
+    limit: String(mvSize), offset: String(mvPage * mvSize),
+  });
+  // 明细与图表分开取：图表走聚合接口，口径只含真实库存进出，且不受分页影响
+  const [res, chart] = await Promise.all([
+    api(`/api/movements?${qs}`),
+    api(`/api/movements/chart?product_id=${pid}&date_from=${from || ""}&date_to=${to || ""}`),
+  ]);
+  mvChartData = chart;
+  renderMvChart(chart);
+  renderMvTable(res);
+  renderMvPager(res);
+}
+
+function renderMvTable(res) {
+  const t = $("mvTable");
+  const rows = (res && res.rows) || [];
   const typeBadge = { in: '<span class="badge in">入库</span>', out: '<span class="badge out">出库</span>', pack_out: '<span class="badge pack">包装消耗</span>', work: '<span class="badge income">工作量</span>', adjust: '<span class="badge adjust">盘点</span>', cost: '<span class="badge adjust">均价重估</span>', avg: '<span class="badge adjust">均价重估</span>', ucost: '<span class="badge adjust">成本单价</span>' };
   t.innerHTML = `<thead><tr>
     <th data-key="date">时间${sortArrow("mvTable", "date")}</th>
@@ -5918,8 +6030,8 @@ async function loadMovements() {
     <th data-key="amount" class="num">金额${sortArrow("mvTable", "amount")}</th>
     <th data-key="operator">操作员${sortArrow("mvTable", "operator")}</th>
     <th>备注</th></tr></thead><tbody>` +
-    sorted.map((m) => {
-      const mg = m._merged;
+    rows.map((m) => {
+      const mg = m._merged;   // 合并行由后端给出（同一商品 + 同一每单扣减量）
       const v = m.quantity_display != null ? m.quantity_display : m.quantity_base;
       const unit = m.unit || "";
       // 变动列：合并行显示「每单扣减量 × 单数 = 合计」
@@ -5932,7 +6044,7 @@ async function loadMovements() {
         : (typeBadge[m.move_type] || m.move_type);
       const noteCell = mg
         ? `<span class="muted">已合并 ${mg.count} 笔${mg.days > 1 ? `（跨 ${mg.days} 天）` : ""}</span>`
-          + `<div class="muted" style="font-size:11px;" title="${esc(mg.codes.join("、"))}${mg.more ? `（另有 ${mg.more} 单）` : ""}">`
+          + `<div class="muted" style="font-size:11px;" title="${esc(mg.codes.join("、"))}${mg.more ? `（另有 ${mg.more} 个单号）` : ""}">`
           + `${esc(mg.codes.slice(0, 3).join("、"))}${mg.codes.length > 3 ? " …" : ""}</div>`
         : `<span class="muted">${esc(m.remark)}</span>`;
       return `<tr${mg ? ' class="mv-merged"' : ""}>
@@ -5944,60 +6056,61 @@ async function loadMovements() {
       <td>${esc(m.operator) || "—"}</td>
       <td>${noteCell}</td></tr>`;
     }).join("") + `</tbody>`;
-  if (!view.length) t.innerHTML = `<tr><td colspan="7" class="empty">暂无流水</td></tr>`;
-  t._rows = view;
-  t._render = loadMovements;
+  if (!rows.length) {
+    const kw = (($("mvSearch") && $("mvSearch").value) || "").trim();
+    t.innerHTML = `<tr><td colspan="7" class="empty">${kw ? `没有匹配「${esc(kw)}」的流水` : "该条件暂无流水"}</td></tr>`;
+  }
+  t._rows = rows;
+  t._render = loadMovements;   // 点表头排序 → 重新请求（排序在后端做，保证全局有序）
 }
 
-/* 出库行合并：同一商品 + 同一「每单扣减量」的行合成一条
-   （如「-2.25 公斤/单 × 12 单，合计 -27.00 公斤」），非出库行原样保留。 */
-function mergeOutboundRows(rows) {
-  const groups = new Map();
-  const rest = [];
-  rows.forEach((m) => {
-    if (m.move_type !== "out") { rest.push(m); return; }
-    const v = m.quantity_display != null ? m.quantity_display : m.quantity_base;
-    const key = `${m.product_id}|${m.product_name}|${m.unit || ""}|${v}`;
-    let g = groups.get(key);
-    if (!g) {
-      g = {
-        product_id: m.product_id, product_name: m.product_name, unit: m.unit || "", per: v,
-        count: 0, total: 0, amount: 0, dates: new Set(), operators: new Set(), codes: [],
-      };
-      groups.set(key, g);
-    }
-    g.count += 1;
-    g.total += v;
-    g.amount += m.amount || 0;
-    g.dates.add(m.date);
-    if (m.operator) g.operators.add(m.operator);
-    const hit = (m.remark || "").match(/(CK\S+)/);
-    if (hit && !g.codes.includes(hit[1])) g.codes.push(hit[1]);
-  });
-  const merged = [...groups.values()].map((g) => {
-    const dates = [...g.dates].sort();
-    return {
-      date: dates.length > 1 ? `${dates[0]} ~ ${dates[dates.length - 1]}` : dates[0],
-      product_id: g.product_id, product_name: g.product_name, move_type: "out",
-      quantity_display: g.per, unit: g.unit, quantity_base: g.total, amount: g.amount,
-      operator: [...g.operators].join("、"), remark: g.codes.join("、"),
-      _merged: {
-        count: g.count, per: g.per, total: g.total, unit: g.unit, days: dates.length,
-        codes: g.codes.slice(0, 12), more: Math.max(0, g.codes.length - 12),
-      },
-    };
-  });
-  return rest.concat(merged);
+/* 分页条：总数 / 页码 / 每页条数。顺带写明口径 ——
+   表格是完整流水（含工作量、包装消耗），图表只统计真实库存进出。 */
+function renderMvPager(res) {
+  const p = $("mvPager");
+  if (!p) return;
+  const total = (res && res.total) || 0;
+  const size = (res && res.limit) || mvSize;
+  const off = (res && res.offset) || 0;
+  const pages = Math.max(1, Math.ceil(total / size));
+  const cur = Math.min(pages, Math.floor(off / size) + 1);
+  const nav = (label, target, disabled) =>
+    `<button class="btn sm secondary"${disabled ? " disabled" : ""} onclick="mvSetPage(${target})">${label}</button>`;
+  p.innerHTML =
+    `<span class="muted">第 ${fmtNum(total ? off + 1 : 0)}–${fmtNum(Math.min(off + size, total))} 条，`
+    + `共 <b>${fmtNum(total)}</b> 条${res && res.merged ? "（出库已合并）" : ""}`
+    + ` · 表格为完整流水，图表只统计真实库存进出</span>`
+    + `<span class="pager-nav">`
+    + nav("‹ 上一页", cur - 2, cur <= 1)
+    + `<span class="pager-cur">第 ${cur} / ${pages} 页</span>`
+    + nav("下一页 ›", cur, cur >= pages)
+    + `<select onchange="mvSetSize(this.value)">${[50, 100, 200, 500, 1000]
+      .map((n) => `<option value="${n}"${n === size ? " selected" : ""}>每页 ${n} 条</option>`).join("")}</select>`
+    + `</span>`
+    + (res && res.truncated
+      ? `<span class="pager-warn">区间内流水过多，本次只处理了最新的一部分，请缩小时间范围</span>`
+      : "");
 }
 
 /* 库存变动柱状图：数据来自 /api/movements/chart（后端按「日期 × 单位」聚合）。
    单商品 → 一组（该商品默认单位，如 公斤）；
    全部商品 → 每个展示单位一组（重量类后端已统一折算成公斤，个 / 瓶等计数单位各自一组）。
    单位不同就不能相加，所以每组各自成图、独立刻度，并在图上醒目地标出单位；
-   只有零星几天有变动、占比也很小的单位不单独绘图，改为在图下用文字列出。 */
+   只有零星几天有变动、占比也很小的单位不单独绘图，改为在图下用文字列出。
+
+   注：出库行的「按扣减量合并」已挪到后端 /api/movements —— 合并必须发生在分页之前，
+   否则「合计出库 N 单」会随翻页变化（同一批出库在不同页显示成不同的单数）。 */
+let mvChartData = null;   // 最近一次图表数据，供切换刻度时原地重绘
+let mvSplitScale = true;  // 上下是否各自独立刻度
+
 const MV_FLAT_DAYS = 2; // 非零天数 ≤ 此值且占比很小的单位不单独绘图（画不出趋势）
 const MV_FLAT_SHARE = 0.05;
 const MV_WAN = 10000;
+
+function mvToggleScale() {
+  mvSplitScale = !mvSplitScale;
+  if (mvChartData) renderMvChart(mvChartData);
+}
 
 /* 是否值得单独画一张图：每组独立刻度，所以关键看「有没有趋势」而不是「量大量小」 */
 function mvHasTrend(s, grand) {
@@ -6015,11 +6128,18 @@ function fmtQtyShort(v) {
 }
 
 /* 一组柱：上半绿=入库（贴中线向上）、下半红=出库（贴中线向下），柱顶标当天净变动。
-   上下共用同一刻度（取两向最大值），所以入库远大于出库时红柱看着短——这是真实的量级差，
-   在标题里标出两侧峰值，避免误读为「没有出库」。 */
+
+   刻度有两种，用标题上的按钮切换（默认「上下独立」）：
+   - 独立（默认）：两半各自按自己的峰值铺满。入库通常比出库大一个量级
+     （aosidi 公斤 峰值 入 8,829 / 出 396，同一刻度时红柱只有 4.5% 高，等于看不见），
+     独立刻度才能看清出库走势；代价是两向高度不能直接比。
+   - 同一：两向共用峰值刻度，高度可比，但小量级那一向会被压平。 */
 function mvColumns(days, unit) {
-  const max = Math.max(1, ...days.map((d) => Math.max(d.in || 0, d.out || 0)));
-  const h = (v) => (v > 0 ? Math.max(2, Math.round((v / max) * 100)) : 0);
+  const peakIn = Math.max(1, ...days.map((d) => d.in || 0));
+  const peakOut = Math.max(1, ...days.map((d) => d.out || 0));
+  const shared = Math.max(1, peakIn, peakOut);
+  const maxOf = (side) => (mvSplitScale ? (side === "in" ? peakIn : peakOut) : shared);
+  const h = (v, side) => (v > 0 ? Math.max(2, Math.round((v / maxOf(side)) * 100)) : 0);
   return days.map((d) => {
     const net = (d.in || 0) - (d.out || 0);
     const cls = net > 0 ? "up" : net < 0 ? "down" : "flat";
@@ -6028,8 +6148,8 @@ function mvColumns(days, unit) {
       + ` / 净 ${net >= 0 ? "+" : "-"}${fmtNum(Math.abs(net))} ${unit}`;
     return `<div class="mv-col" title="${esc(tip)}">
         <span class="mv-val ${cls}">${label}</span>
-        <div class="mv-pos"><div class="mv-bar" style="height:${h(d.in)}%"></div></div>
-        <div class="mv-neg"><div class="mv-bar down" style="height:${h(d.out)}%"></div></div>
+        <div class="mv-pos"><div class="mv-bar" style="height:${h(d.in, "in")}%"></div></div>
+        <div class="mv-neg"><div class="mv-bar down" style="height:${h(d.out, "out")}%"></div></div>
         <div class="mv-x">${d.date.slice(5)}</div></div>`;
   }).join("");
 }
@@ -6050,10 +6170,14 @@ function renderMvChart(chart) {
   const head = (s) => {
     const peakIn = Math.max(0, ...s.days.map((d) => d.in || 0));
     const peakOut = Math.max(0, ...s.days.map((d) => d.out || 0));
+    const scale = mvSplitScale
+      ? `上下各自独立刻度（上半满格=入 ${fmtQtyShort(peakIn)}，下半满格=出 ${fmtQtyShort(peakOut)}，两向高度不可直接比）`
+      : `上下同一刻度（满格=${fmtQtyShort(Math.max(peakIn, peakOut))}，两向高度可比）`;
     return `<div class="mv-chart-title">
         <span class="mv-unit-chip">单位：${esc(s.unit)}</span>
         <span class="mv-legend"><i class="up"></i>入库<i class="down"></i>出库</span>
-        <span class="muted">柱顶=当天净变动 · 峰值 入 ${fmtQtyShort(peakIn)} / 出 ${fmtQtyShort(peakOut)}（上下同一刻度）</span>
+        <span class="muted">柱顶=当天净变动 · ${scale}</span>
+        <button class="btn-link mv-scale-btn" onclick="mvToggleScale()">刻度：${mvSplitScale ? "上下独立" : "上下同一"}（点此切换）</button>
       </div>`;
   };
   box.innerHTML =
@@ -6063,7 +6187,7 @@ function renderMvChart(chart) {
         + `（只有零星几天有变动，未单独绘图，明细见下表）</div>`
       : "")
     + `<div class="mv-note muted">区间 ${esc(chart.date_from)} ~ ${esc(chart.date_to)}`
-    + `；口径：只统计真实库存进出（不含人工/快递工作量、成本流水）</div>`;
+    + `；口径：只统计真实库存进出（不含人工/快递工作量、成本流水，也不含单位为「单」的单数流水）</div>`;
 }
 
 /* =============== 工作量统计（人工打包） =============== */
@@ -6346,6 +6470,7 @@ function startMaintenanceWatch() {
     $("inUnit").onchange = calcInbound;
   } catch (e) {}
   try { bindSearchable(document); } catch (e) {}
+  applyNavVisibility();     // 侧边栏按本机偏好显隐（设置 → 模块显示）
   syncExcludeOtherHint();   // 报表页「排除其他开支」开关按本机偏好回显（默认开启）
   loadDashboard();
   applyHashRoute(); // 支持深链：登录后跳转到指定二级页

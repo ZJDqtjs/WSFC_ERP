@@ -1502,6 +1502,8 @@ body.notice-on .login-mask { padding-top: 40px; }
 }
 .mv-val.up { color: var(--green, #16a34a); }
 .mv-val.down { color: var(--red, #dc2626); }
+/* 「上下独立/同一刻度」切换：量级差太大时，默认独立刻度才能看清出库趋势 */
+.mv-scale-btn { font-size: 12px; white-space: nowrap; }
 .mv-track {
   height: 160px;
   width: 70%;
@@ -1538,6 +1540,42 @@ tr.mv-merged td { background: rgba(220, 38, 38, 0.03); }
   color: #999;
   margin-top: 3px;
   white-space: nowrap;
+}
+
+/* ============ 分页条（库存流水明细） ============ */
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 13px;
+}
+.pager .muted { color: var(--muted); }
+.pager-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pager-cur { font-size: 13px; color: var(--muted); white-space: nowrap; padding: 0 2px; }
+.pager select {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-size: 13px;
+  background: var(--card);
+  color: var(--text);
+}
+.pager-warn {
+  flex: 1 0 100%;
+  font-size: 12.5px;
+  color: var(--red);
+  background: var(--red-light, #fee2e2);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 /* ============ 工作量统计（人工打包） ============ */
