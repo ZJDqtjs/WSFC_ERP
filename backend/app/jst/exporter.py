@@ -28,7 +28,7 @@ from urllib.parse import unquote, urlparse
 from ._http import httpx
 from .client import BASE_URL, JstSession, NotLoggedIn
 from .config import JstConfig
-from .login import build_relogin
+from .login import CaptchaRequired, LoginError, build_relogin
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +65,24 @@ _BASE_FIELDS = {
 
 class ExportError(RuntimeError):
     pass
+
+
+# 聚水潭「导出出库单要先过短信验证」的识别：
+# 返回 IsSuccess=false，且 Message=910001（msg 为「导出出库单要求验证身份，已发送验证码到您手机…」）。
+# 这类不是程序错误，而是要人工介入（填验证码 / 换 Cookie），必须归到「待办」而不是普通导出失败。
+_CAPTCHA_CODES = ("910001",)
+_CAPTCHA_MARKERS = ("验证码", "验证身份", "身份验证")
+_MSG_RE = re.compile(r'"msg":"([^"]*)"')
+
+
+def _captcha_hint(text: str) -> str | None:
+    """识别「要求短信验证」的返回并给出提示文案；不是这种情况返回 None。"""
+    code_hit = any(f'"Message":"{c}"' in text for c in _CAPTCHA_CODES)
+    m = _MSG_RE.search(text)
+    hint = (m.group(1) if m else "").strip()
+    if not code_hit and not any(k in hint for k in _CAPTCHA_MARKERS):
+        return None
+    return hint or "聚水潭要求验证身份"
 
 
 def make_relogin(cfg: JstConfig, on_cookie: Callable[[str], None] | None = None):
@@ -164,6 +182,14 @@ class Exporter:
         resp.raise_for_status()
 
         if '"IsSuccess":false' in resp.text:
+            hint = _captcha_hint(resp.text)
+            if hint:
+                # 要人工过短信验证：交给 runner 生成「待办」（填验证码 / 粘 Cookie），不要当普通失败吞掉
+                raise CaptchaRequired(
+                    f"聚水潭要求短信验证（导出出库单）：{hint}"
+                    " —— 处理方式：① 直接把验证码填进「待办」后点重跑（会带着验证码先重新登录，再导出）；"
+                    "② 或在浏览器登录聚水潭、手动导出一次并输入验证码后，把该会话的 Cookie 粘到「待办」里（最稳）"
+                )
             raise ExportError(f"创建导出任务失败：{resp.text[:300]}")
         match = _TOKEN_RE.search(resp.text)
         if not match:
@@ -256,6 +282,17 @@ class Exporter:
     def export_with_retries(self, start: datetime, end: datetime) -> Path:
         last_error: Exception | None = None
         relogged = False  # 同一次导出最多续登一次，避免拿新 Cookie 反复登录
+        # 「待办」里人工填了验证码：先带着它重新登录一次再导出。
+        # 聚水潭要求短信验证时（登录 301105/301109、导出 910001 是同一套安全校验），
+        # 验证码就是登录接口的 verifyCode；如果只在 Cookie 失效时才续登，用户填的码就永远用不上。
+        # 登录不成功（比如码不适用于登录）不算致命：保留原 Cookie 继续走正常导出，失败信息照样进待办。
+        if self.cfg.verify_code:
+            try:
+                if self._session.relogin():
+                    relogged = True
+                    log.info("已带「待办」里人工填写的验证码重新登录，继续导出")
+            except Exception as e:  # noqa: BLE001 - 登录不成功不该直接失败：原 Cookie 还能继续试，失败信息照样进待办
+                log.warning("带「待办」验证码重新登录未成功：%s（保留原 Cookie 继续导出）", e)
         for attempt in range(1, self.cfg.max_retries + 1):
             try:
                 return self.export(start, end)
@@ -267,6 +304,9 @@ class Exporter:
                     raise
                 relogged = True
                 log.warning("Cookie 已失效并完成自动续登，重试导出")
+            except CaptchaRequired:
+                # 需要人工过验证码：重试只会再发一条短信，还会把「待办」需要的信息吞掉，直接上报
+                raise
             except Exception as exc:  # noqa: BLE001 - 网络抖动等一律重试
                 last_error = exc
                 log.warning("第 %d/%d 次导出失败：%s", attempt, self.cfg.max_retries, exc)
