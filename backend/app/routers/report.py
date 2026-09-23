@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import and_, case, exists, func, or_, select
+from sqlalchemy.orm import Session, aliased, selectinload
 
 from ..auth import get_current_user
 from ..database import (
@@ -107,12 +107,18 @@ PACK_FIELD_OF_CAT = {
     "其他关联结算": "other_cogs",
 }
 
+# 商品分类 → 成本字段（把上面两步合成一步，供 SQL 的 CASE 归类使用，口径与 _pack_cost_category_of 一致）
+PACK_FIELD_OF_CATNAME = {cat: PACK_FIELD_OF_CAT[fee] for cat, fee in PACK_COST_CATS.items()}
+
 
 def _pack_cost_breakdown(outbounds: list[Outbound]) -> dict[str, float]:
     """按费用类别汇总出库单的关联结算成本。
 
     这些成本已包含在 total_cogs 中（不是账外费用），此处仅做结构化拆分，
     让报表能看清「包材 / 人工 / 快递」各花了多少，不重复计入净利。
+
+    注：报表接口现已改为 SQL 聚合（按「商品分类 + 名称」分组，见 _pack_cost_category_of），
+    本函数保留给需要直接对单据对象汇总的场合。
     """
     out: dict[str, float] = {}
     for o in outbounds:
@@ -296,11 +302,10 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             q = q.where(model.date <= date_to)
         return q
 
-    # 后续遍历 o.lines / l.product，selectinload 一次预载避免 N+1（by_product 与包材拆分两处复用）
+    # 出库单只取单据本身：明细（单仓 2 万行）改成下面的列查询 + 按单分组处理，
+    # 不再把每张单的 lines/product 都实例化成 ORM 对象（这一步实测 0.9 秒，线上放大到 4 秒+）。
     # 「待付款」的单据不进报表：先拆出来，单独汇总给报表页提示（在「待付款账单」点「已支付」后转入报表）
-    outbounds, unpaid_outbounds = _split_paid(
-        list(db.execute(scope(Outbound).options(selectinload(Outbound.lines).selectinload(OutboundLine.product))).scalars())
-    )
+    outbounds, unpaid_outbounds = _split_paid(list(db.execute(scope(Outbound)).scalars()))
     # 采购明细要显示商品名，预载 product 避免逐条懒加载
     inbounds, unpaid_inbounds = _split_paid(
         list(db.execute(scope(Inbound).options(selectinload(Inbound.product))).scalars())
@@ -355,49 +360,127 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             },
         )
 
-    for o in outbounds:
-        sale_lines = [l for l in o.lines if l.line_type == "sale"]
-        # 先把销售行归到各自桶（商品+规格+代发），并记住每个商品对应的桶，供关联结算就近归属
-        line_buckets: list[tuple] = []
-        bucket_of_pid: dict[int, dict] = {}
-        for l in sale_lines:
-            spec = (l.spec or "").strip()
-            dropship = bool(getattr(l, "is_dropship", False))
-            d = _bucket(l.product_id, spec, dropship, l.product.name if l.product else "")
-            # 名称以销售行自身的商品为准（pack 行只累加金额，不参与命名）
-            if l.product and l.product.name:
-                d["name"] = l.product.name
-            d["qty"] += l.quantity_base or 0.0
-            d["amount"] += l.amount or 0.0
-            d["gross_sales"] += l.gross_sales if l.gross_sales is not None else (l.amount or 0.0)
-            d["goods_cogs"] += l.cogs or 0.0
-            d["cogs"] += l.cogs or 0.0
-            line_buckets.append((l, d))
-            bucket_of_pid.setdefault(l.product_id, d)
+    # ---- 商品维度：交给 SQL 按「单 × 桶」聚合，Python 只做最后合并与分摊 ----
+    # 明细动辄两万行，逐行在 Python 里跑是这里最大的开销（实测 0.7 秒，线上放大到几秒）。
+    # 归属规则与原来完全一致：关联结算行优先归到本单对应销售商品的桶，
+    # 无归属的（没填销售商品 / 指向的商品不在本单）按单内销售金额占比分摊到各桶。
+    line_conds = []
+    if date_from:
+        line_conds.append(Outbound.date >= date_from)
+    if date_to:
+        line_conds.append(Outbound.date <= date_to)
+    paid_out = func.coalesce(Outbound.pay_status, PAID) != "unpaid"
+    spec_expr = func.trim(func.coalesce(OutboundLine.spec, ""))
+    dr_expr = func.coalesce(OutboundLine.is_dropship, 0)
+    pk = aliased(Product)
+    # 关联结算行的费用类别（人工/包材/快递/其他）→ 成本字段；口径同 _pack_cost_category_of
+    field_expr = case(
+        *[(func.trim(func.coalesce(pk.category, "")) == c, f) for c, f in PACK_FIELD_OF_CATNAME.items()],
+        (func.trim(func.coalesce(pk.name, "")).like("%打包"), "labor_cogs"),
+        else_="other_cogs",
+    )
 
-        # 本单待分摊的关联成本：{费用类别: 金额}
-        unowned: dict[str, float] = {}
-        for l in o.lines:
-            if l.line_type != "pack":
-                continue
-            cat = _pack_cost_category(l.product, l)
-            amount = l.cogs or 0.0
-            field = PACK_FIELD_OF_CAT.get(cat, "other_cogs")
-            # 仅当归属对象确实是本单的销售商品时才直接归属，避免历史脏数据把费用挂到
-            # 不存在的商品上（并确保 _bucket 不会用「未归属」覆盖真实商品名）
-            target = bucket_of_pid.get(l.sale_product_id) if l.sale_product_id else None
-            if target is not None:
-                target[field] += amount
-            else:
-                unowned[field] = unowned.get(field, 0.0) + amount
+    # ① 销售行：按「单 × 商品 × 规格 × 是否代发」聚合
+    sale_rows = db.execute(
+        select(
+            OutboundLine.outbound_id.label("oid"),
+            OutboundLine.product_id.label("pid"),
+            spec_expr.label("spec"),
+            dr_expr.label("dr"),
+            func.count().label("n"),
+            func.coalesce(func.sum(OutboundLine.quantity_base), 0).label("qb"),
+            func.coalesce(func.sum(OutboundLine.amount), 0).label("amt"),
+            func.coalesce(func.sum(func.coalesce(OutboundLine.gross_sales, OutboundLine.amount)), 0).label("gross"),
+            func.coalesce(func.sum(OutboundLine.cogs), 0).label("goods"),
+            func.max(Product.name).label("pname"),
+        )
+        .select_from(OutboundLine)
+        .join(Outbound, Outbound.id == OutboundLine.outbound_id)
+        .join(Product, Product.id == OutboundLine.product_id, isouter=True)
+        .where(OutboundLine.line_type == "sale", *line_conds, paid_out)
+        .group_by(OutboundLine.outbound_id, OutboundLine.product_id, spec_expr, dr_expr)
+    ).all()
 
-        if unowned:
-            total_sale_amount = sum(l.amount or 0.0 for l in sale_lines)
-            for l, d in line_buckets:
-                # 分摊无归属的关联成本（按销售金额占比；金额为 0 时平均分摊）
-                share = (l.amount or 0.0) / total_sale_amount if total_sale_amount else 1.0 / max(len(line_buckets), 1)
-                for field, amt in unowned.items():
-                    d[field] += amt * share
+    # ② 有关联对象的结算行：归到「本单该销售商品所在的桶」
+    #    同单同商品只会有一个规格（实测），所以用 MIN(id) 定位那一行即可，不会重复计数
+    first_sale = (
+        select(OutboundLine.outbound_id.label("oid"), OutboundLine.product_id.label("pid"),
+               func.min(OutboundLine.id).label("sid"))
+        .where(OutboundLine.line_type == "sale")
+        .group_by(OutboundLine.outbound_id, OutboundLine.product_id)
+        .subquery()
+    )
+    owner = aliased(OutboundLine)
+    owned_rows = db.execute(
+        select(
+            owner.product_id.label("pid"),
+            func.trim(func.coalesce(owner.spec, "")).label("spec"),
+            func.coalesce(owner.is_dropship, 0).label("dr"),
+            field_expr.label("field"),
+            func.coalesce(func.sum(OutboundLine.cogs), 0).label("amt"),
+        )
+        .select_from(OutboundLine)
+        .join(Outbound, Outbound.id == OutboundLine.outbound_id)
+        .join(first_sale, and_(first_sale.c.oid == OutboundLine.outbound_id,
+                               first_sale.c.pid == OutboundLine.sale_product_id))
+        .join(owner, owner.id == first_sale.c.sid)
+        .join(pk, pk.id == OutboundLine.product_id, isouter=True)
+        .where(OutboundLine.line_type == "pack", *line_conds, paid_out)
+        .group_by(owner.product_id, func.trim(func.coalesce(owner.spec, "")),
+                  func.coalesce(owner.is_dropship, 0), field_expr)
+    ).all()
+
+    # ③ 无归属的结算成本：按「单 × 类别」聚合，稍后按销售金额占比分摊
+    sl = aliased(OutboundLine)
+    has_owner = (
+        select(sl.id).where(
+            sl.outbound_id == OutboundLine.outbound_id,
+            sl.line_type == "sale",
+            sl.product_id == OutboundLine.sale_product_id,
+        ).exists()
+    )
+    unowned_rows = db.execute(
+        select(
+            OutboundLine.outbound_id.label("oid"),
+            field_expr.label("field"),
+            func.coalesce(func.sum(OutboundLine.cogs), 0).label("amt"),
+        )
+        .select_from(OutboundLine)
+        .join(Outbound, Outbound.id == OutboundLine.outbound_id)
+        .join(pk, pk.id == OutboundLine.product_id, isouter=True)
+        .where(OutboundLine.line_type == "pack", *line_conds, paid_out,
+               or_(OutboundLine.sale_product_id.is_(None), ~has_owner))
+        .group_by(OutboundLine.outbound_id, field_expr)
+    ).all()
+
+    for r in sale_rows:
+        d = _bucket(r.pid, r.spec, bool(r.dr), r.pname or "")
+        if r.pname:  # 名称以销售行自身的商品为准（结算行只累加金额，不参与命名）
+            d["name"] = r.pname
+        d["qty"] += float(r.qb or 0.0)
+        d["amount"] += float(r.amt or 0.0)
+        d["gross_sales"] += float(r.gross or 0.0)
+        d["goods_cogs"] += float(r.goods or 0.0)
+        d["cogs"] += float(r.goods or 0.0)
+
+    for r in owned_rows:
+        d = _bucket(r.pid, r.spec, bool(r.dr), "")
+        d[r.field] += float(r.amt or 0.0)
+
+    # 分摊无归属的关联成本（按单内销售金额占比；金额为 0 时按销售行数平均）——
+    # 与原来逐行分摊等价：同一桶内多行累加后即为「桶金额占比 × 无归属金额」
+    per_order: dict[int, list] = {}
+    for r in sale_rows:
+        per_order.setdefault(r.oid, []).append(r)
+    for oid, field, amt in unowned_rows:
+        rows_o = per_order.get(oid)
+        if not rows_o:
+            continue
+        tot_amt = sum(float(x.amt or 0.0) for x in rows_o)
+        tot_n = sum(int(x.n or 0) for x in rows_o)
+        for x in rows_o:
+            share = (float(x.amt or 0.0) / tot_amt) if tot_amt else ((int(x.n or 0) / tot_n) if tot_n else 0.0)
+            _bucket(x.pid, x.spec, bool(x.dr), "")[field] += float(amt or 0.0) * share
 
     product_rows = []
     for _key, d in sorted(by_product.items(), key=lambda kv: -kv[1]["amount"]):
@@ -437,8 +520,19 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             }
         )
 
-    # 关联结算成本拆分（包材/人工/快递）——已含在 cogs 内，单独列出供分析
-    pack_costs = _pack_cost_breakdown(outbounds)
+    # 关联结算成本拆分（包材/人工/快递）——已含在 cogs 内，单独列出供分析。
+    # 按「商品分类 + 名称」分组聚合即可（与 _pack_cost_category_of 同口径），不必逐行累加。
+    pack_costs: dict[str, float] = {}
+    for pcat, pname, amt in db.execute(
+        select(Product.category, Product.name, func.coalesce(func.sum(OutboundLine.cogs), 0))
+        .select_from(OutboundLine).join(Outbound, Outbound.id == OutboundLine.outbound_id)
+        .join(Product, Product.id == OutboundLine.product_id, isouter=True)
+        .where(OutboundLine.line_type == "pack", *line_conds,
+               func.coalesce(Outbound.pay_status, PAID) != "unpaid")
+        .group_by(Product.category, Product.name)
+    ):
+        cat_key = _pack_cost_category_of(pcat, pname)   # 注意别用 key：那是分仓标识参数
+        pack_costs[cat_key] = round(pack_costs.get(cat_key, 0.0) + float(amt or 0.0), 2)
     pack_total = round(sum(pack_costs.values()), 2)
     # 商品本身成本 = 总成本 - 关联结算成本
     goods_cogs = round(cogs - pack_total, 2)
@@ -776,79 +870,101 @@ def sales_by_spec(
 
 
 def _sales_by_spec_of(db: Session, date_from: str, date_to: str, key: str) -> dict:
-    q = select(Outbound).options(selectinload(Outbound.lines).selectinload(OutboundLine.product))
+    """按「日期 × 规格」汇总出库明细（全部在 SQL 里分组求和）。
+
+    以前把区间内每张出库单连同明细 selectinload 出来、在 Python 里逐行累加
+    （单仓近 5000 单 / 2 万行，实测 5 秒+），但这些其实都是「分组求和」：
+    订单数 = COUNT(DISTINCT 单号)，代发量/成本 = 条件求和，单位取组内出现最多的那个。
+    """
+    conds = []
     if date_from:
-        q = q.where(Outbound.date >= date_from)
+        conds.append(Outbound.date >= date_from)
     if date_to:
-        q = q.where(Outbound.date <= date_to)
-    q = q.order_by(Outbound.date, Outbound.id)
+        conds.append(Outbound.date <= date_to)
+    sale_conds = [*conds, OutboundLine.line_type == "sale"]
+    spec_col = func.coalesce(func.nullif(func.trim(OutboundLine.spec), ""), "未标规格")
+    dropship = OutboundLine.is_dropship == True  # noqa: E712 - 生成 SQL 的 = 1，NULL 不匹配
 
-    days: dict[str, dict] = {}
+    def _sums():
+        """销售行的分组聚合（日期×规格、规格两个粒度共用）。"""
+        return (
+            func.count(func.distinct(Outbound.id)),
+            func.coalesce(func.sum(OutboundLine.quantity), 0.0),
+            func.coalesce(func.sum(OutboundLine.amount), 0.0),
+            func.coalesce(func.sum(case((dropship, OutboundLine.quantity), else_=0.0)), 0.0),
+            func.coalesce(func.sum(case((dropship, OutboundLine.cogs), else_=0.0)), 0.0),
+        )
+
+    # 每天的总单数：含没有销售行的单（与原实现一致，days 也会包含这些日期）
+    day_orders = dict(db.execute(
+        select(Outbound.date, func.count()).where(*conds).group_by(Outbound.date)
+    ).all())
+    days: dict[str, dict] = {d: {"date": d, "cells": {}} for d in day_orders}
+
+    for date, spec, cnt, qty, amount, dq, dc in db.execute(
+        select(Outbound.date, spec_col, *_sums())
+        .select_from(OutboundLine).join(Outbound, Outbound.id == OutboundLine.outbound_id)
+        .where(*sale_conds).group_by(Outbound.date, spec_col)
+    ):
+        days[date]["cells"][spec] = {"orders": int(cnt), "qty": float(qty), "amount": float(amount),
+                                     "dropship_qty": float(dq), "dropship_cogs": float(dc), "units": {}}
+
     specs: dict[str, dict] = {}
-    all_orders: set[int] = set()
+    for spec, cnt, qty, amount, dq, dc, ndays in db.execute(
+        select(spec_col, *_sums(), func.count(func.distinct(Outbound.date)))
+        .select_from(OutboundLine).join(Outbound, Outbound.id == OutboundLine.outbound_id)
+        .where(*sale_conds).group_by(spec_col)
+    ):
+        specs[spec] = {"name": spec, "orders": int(cnt), "days": int(ndays), "qty": float(qty),
+                       "amount": float(amount), "dropship_qty": float(dq), "dropship_cogs": float(dc),
+                       "units": {}}
 
-    def _bump(bucket: dict, l, o) -> None:
-        bucket["orders"].add(o.id)
-        bucket["qty"] += l.quantity or 0.0
-        bucket["amount"] += l.amount or 0.0
-        u = l.unit or ""
-        bucket["units"][u] = bucket["units"].get(u, 0) + 1
-        if getattr(l, "is_dropship", False):
-            bucket["dropship_qty"] += l.quantity or 0.0
-            bucket["dropship_cogs"] += l.cogs or 0.0
-
-    def _new() -> dict:
-        return {"orders": set(), "qty": 0.0, "amount": 0.0, "units": {}, "dropship_qty": 0.0, "dropship_cogs": 0.0}
-
-    for o in db.execute(q).scalars():
-        day = days.setdefault(o.date, {"date": o.date, "cells": {}, **_new()})
-        day["orders"].add(o.id)
-        all_orders.add(o.id)
-        for l in o.lines:
-            if l.line_type != "sale":
-                continue
-            name = (l.spec or "").strip() or "未标规格"
-            _bump(day["cells"].setdefault(name, _new()), l, o)
-            s = specs.setdefault(name, {"name": name, "days": set(), **_new()})
-            s["days"].add(o.date)
-            _bump(s, l, o)
-    # 日合计按行累加（上面已通过 cells 累加到 day）
-    for day in days.values():
-        day["qty"] = round(sum(c["qty"] for c in day["cells"].values()), 2)
-        day["amount"] = round(sum(c["amount"] for c in day["cells"].values()), 2)
-        day["dropship_qty"] = round(sum(c["dropship_qty"] for c in day["cells"].values()), 2)
-        day["dropship_cogs"] = round(sum(c["dropship_cogs"] for c in day["cells"].values()), 2)
+    # 单位取组内出现次数最多的（按计数倒序、单位名升序，结果稳定可复现）
+    for date, spec, unit, cnt in db.execute(
+        select(Outbound.date, spec_col, OutboundLine.unit, func.count())
+        .select_from(OutboundLine).join(Outbound, Outbound.id == OutboundLine.outbound_id)
+        .where(*sale_conds).group_by(Outbound.date, spec_col, OutboundLine.unit)
+        .order_by(func.count().desc(), OutboundLine.unit)
+    ):
+        cell = (days.get(date) or {}).get("cells", {}).get(spec)
+        if cell is not None and not cell["units"]:
+            cell["units"][unit or ""] = int(cnt)
+        s = specs.get(spec)
+        if s is not None and not s["units"]:
+            s["units"][unit or ""] = int(cnt)
 
     def _unit(units: dict) -> str:
         return max(units, key=units.get) if units else ""
 
-    spec_cols = sorted(specs.values(), key=lambda x: (-len(x["orders"]), -x["qty"]))
     out_rows = []
-    for day in sorted(days.values(), key=lambda x: x["date"], reverse=True):
+    for date in sorted(days, reverse=True):
+        cells = days[date]["cells"]
         out_rows.append({
-            "date": day["date"],
-            "orders": len(day["orders"]),
-            "qty": day["qty"],
-            "amount": day["amount"],
-            "dropship_qty": day["dropship_qty"],
-            "dropship_cogs": day["dropship_cogs"],
+            "date": date,
+            "orders": int(day_orders.get(date, 0)),
+            "qty": round(sum(c["qty"] for c in cells.values()), 2),
+            "amount": round(sum(c["amount"] for c in cells.values()), 2),
+            "dropship_qty": round(sum(c["dropship_qty"] for c in cells.values()), 2),
+            "dropship_cogs": round(sum(c["dropship_cogs"] for c in cells.values()), 2),
             "cells": {
                 name: {
-                    "orders": len(c["orders"]), "qty": round(c["qty"], 2), "unit": _unit(c["units"]),
+                    "orders": c["orders"], "qty": round(c["qty"], 2), "unit": _unit(c["units"]),
                     "amount": round(c["amount"], 2),
-                    "dropship_qty": round(c["dropship_qty"], 2), "dropship_cogs": round(c["dropship_cogs"], 2),
+                    "dropship_qty": round(c["dropship_qty"], 2),
+                    "dropship_cogs": round(c["dropship_cogs"], 2),
                 }
-                for name, c in day["cells"].items()
+                for name, c in cells.items()
             },
         })
 
+    spec_cols = sorted(specs.values(), key=lambda x: (-x["orders"], -x["qty"]))
     return {
         "date_from": date_from,
         "date_to": date_to,
         "warehouse": {"key": key, "name": current_warehouse_name(key)},
         "specs": [
             {
-                "name": s["name"], "orders": len(s["orders"]), "days": len(s["days"]),
+                "name": s["name"], "orders": s["orders"], "days": s["days"],
                 "qty": round(s["qty"], 2), "unit": _unit(s["units"]), "amount": round(s["amount"], 2),
                 "dropship_qty": round(s["dropship_qty"], 2), "dropship_cogs": round(s["dropship_cogs"], 2),
             }
@@ -856,13 +972,13 @@ def _sales_by_spec_of(db: Session, date_from: str, date_to: str, key: str) -> di
         ],
         "rows": out_rows,
         "totals": {
-            "orders": len(all_orders),
+            "orders": sum(int(v) for v in day_orders.values()),
             "days": len(days),
             "spec_count": len(specs),
-            "qty": round(sum(x["qty"] for x in days.values()), 2),
-            "amount": round(sum(x["amount"] for x in days.values()), 2),
-            "dropship_qty": round(sum(x["dropship_qty"] for x in days.values()), 2),
-            "dropship_cogs": round(sum(x["dropship_cogs"] for x in days.values()), 2),
+            "qty": round(sum(x["qty"] for x in out_rows), 2),
+            "amount": round(sum(x["amount"] for x in out_rows), 2),
+            "dropship_qty": round(sum(x["dropship_qty"] for x in out_rows), 2),
+            "dropship_cogs": round(sum(x["dropship_cogs"] for x in out_rows), 2),
         },
     }
 
@@ -955,45 +1071,92 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
     """单个分仓的「收入 / 支出 / 利润」总览（口径与 /report/summary 完全一致：只含已付款单据）。
 
     exclude_other=True 时不计入其他开支（只看商品售卖利润）。
+
+    全部走 SQL 聚合：全仓总览要为每个分仓各算一遍，以前每仓都把区间内所有单据
+    （出库/入库/流水/开支）实例化成 ORM 对象再在 Python 里求和，几秒钟就是这么攒出来的。
     """
-    def scope(model):
-        q = select(model)
+    def _date_conds(model):
+        c = []
         if date_from:
-            q = q.where(model.date >= date_from)
+            c.append(model.date >= date_from)
         if date_to:
-            q = q.where(model.date <= date_to)
-        return q
+            c.append(model.date <= date_to)
+        return c
 
-    outbounds, unpaid_outbounds = _split_paid(list(db.execute(scope(Outbound)).scalars()))
-    inbounds, unpaid_inbounds = _split_paid(list(db.execute(scope(Inbound)).scalars()))
-    finances, unpaid_finances = _split_paid(list(db.execute(scope(FinanceRecord)).scalars()))
-    others, unpaid_others = _split_paid(list(db.execute(scope(OtherExpense)).scalars()))
+    def paid(model):
+        return func.coalesce(model.pay_status, PAID) != "unpaid"
 
-    revenue = round(sum(o.total_amount or 0 for o in outbounds), 2)
-    cogs = round(sum(o.total_cogs or 0 for o in outbounds), 2)
-    manual_expense = sum(f.amount or 0 for f in finances if f.type == "expense" and f.category != "采购支出")
-    other_raw = round(sum(e.amount or 0 for e in others), 2)
+    def unpaid(model):
+        return func.coalesce(model.pay_status, PAID) == "unpaid"
+
+    def unpaid_count_sum(model, col, extra=()):
+        """未付款单据的 (条数, 金额合计)。"""
+        cnt, amt = db.execute(
+            select(func.count(), func.coalesce(func.sum(col), 0))
+            .where(*_date_conds(model), unpaid(model), *extra)
+        ).one()
+        return int(cnt), float(amt or 0)
+
+    orders, revenue, cogs = db.execute(
+        select(func.count(), func.coalesce(func.sum(Outbound.total_amount), 0),
+               func.coalesce(func.sum(Outbound.total_cogs), 0))
+        .where(*_date_conds(Outbound), paid(Outbound))
+    ).one()
+    revenue, cogs = float(revenue), float(cogs)
+
+    manual_expense = float(db.execute(
+        select(func.coalesce(func.sum(FinanceRecord.amount), 0))
+        .where(*_date_conds(FinanceRecord), paid(FinanceRecord),
+               FinanceRecord.type == "expense", FinanceRecord.category != "采购支出")
+    ).scalar() or 0.0)
+    other_raw = round(float(db.execute(
+        select(func.coalesce(func.sum(OtherExpense.amount), 0))
+        .where(*_date_conds(OtherExpense), paid(OtherExpense))
+    ).scalar() or 0.0), 2)
+    inb_cnt, purchase = db.execute(
+        select(func.count(), func.coalesce(func.sum(Inbound.total_amount), 0))
+        .where(*_date_conds(Inbound), paid(Inbound))
+    ).one()
+    purchase = float(purchase)
+    stock_value = round(float(db.execute(
+        select(func.coalesce(func.sum(Product.stock_value), 0))
+    ).scalar() or 0.0), 2)
+
     other_expense = 0.0 if exclude_other else other_raw
     expense = round(manual_expense + other_expense, 2)
-    purchase = round(sum(i.total_amount or 0 for i in inbounds), 2)
+
+    # 待付款/待收款：与 _pending_stats 同口径（按来源单据算，避免自动流水重复计）
+    ib_c, ib_a = unpaid_count_sum(Inbound, Inbound.total_amount)
+    oe_c, oe_a = unpaid_count_sum(OtherExpense, OtherExpense.amount)
+    fi_out_c, fi_out_a = unpaid_count_sum(FinanceRecord, FinanceRecord.amount,
+                                          (FinanceRecord.type == "expense", FinanceRecord.ref_type == "manual"))
+    ob_c, ob_a = unpaid_count_sum(Outbound, Outbound.total_amount)
+    fi_in_c, fi_in_a = unpaid_count_sum(FinanceRecord, FinanceRecord.amount,
+                                        (FinanceRecord.type == "income", FinanceRecord.ref_type == "manual"))
+
     return {
         "key": key,
         "name": name,
-        "revenue": revenue,
-        "cogs": cogs,
+        "revenue": round(revenue, 2),
+        "cogs": round(cogs, 2),
         "gross": round(revenue - cogs, 2),
         "expense": expense,
         "other_expense": other_expense,
         "manual_expense": round(manual_expense, 2),
         "exclude_other_expense": bool(exclude_other),
         "excluded_other_expense": other_raw,
-        "purchase": purchase,
+        "purchase": round(purchase, 2),
         "total_expense": round(purchase + expense, 2),
         "net_profit": round(revenue - cogs - expense, 2),
-        "orders": len(outbounds),
-        "inbounds": len(inbounds),
-        "stock_value": round(sum(p.stock_value or 0 for p in db.execute(select(Product)).scalars()), 2),
-        "pending": _pending_stats(unpaid_inbounds, unpaid_outbounds, unpaid_others, unpaid_finances),
+        "orders": int(orders),
+        "inbounds": int(inb_cnt),
+        "stock_value": stock_value,
+        "pending": {
+            "payables_count": ib_c + oe_c + fi_out_c,
+            "payables_amount": round(ib_a + oe_a + fi_out_a, 2),
+            "receivables_count": ob_c + fi_in_c,
+            "receivables_amount": round(ob_a + fi_in_a, 2),
+        },
     }
 
 
@@ -1077,26 +1240,38 @@ def list_finance(
 
 
 def _finance_of(db: Session, date_from: str, date_to: str, wh_name: str = "") -> list[dict]:
-    q = _date_filter(select(FinanceRecord), date_from, date_to).options(selectinload(FinanceRecord.product)).order_by(FinanceRecord.id.desc())
+    """财务流水列表。
+
+    商品名用 join 直接取列，不再 selectinload 出整棵对象树——流水动辄几千条，
+    每条只用一个商品名，没必要把 FinanceRecord/Product 都实例化成 ORM 对象。
+    """
+    q = select(
+        FinanceRecord.id, FinanceRecord.type, FinanceRecord.category, FinanceRecord.product_id,
+        Product.name, FinanceRecord.amount, FinanceRecord.date, FinanceRecord.operator,
+        FinanceRecord.remark, FinanceRecord.ref_type, FinanceRecord.ref_id,
+        FinanceRecord.pay_status, FinanceRecord.paid_at,
+    ).outerjoin(Product, Product.id == FinanceRecord.product_id)
+    q = _date_filter(q, date_from, date_to).order_by(FinanceRecord.id.desc())
     return [
         {
-            "id": f.id,
-            "type": f.type,
-            "category": f.category,
-            "product_id": f.product_id,
-            "product_name": f.product.name if f.product else "",
-            "amount": f.amount,
-            "date": f.date,
-            "operator": f.operator,
-            "remark": f.remark,
-            "ref_type": f.ref_type,
-            "ref_id": f.ref_id,
-            "pay_status": getattr(f, "pay_status", PAID) or PAID,
-            "paid_at": getattr(f, "paid_at", "") or "",
+            "id": fid,
+            "type": ftype,
+            "category": fcat,
+            "product_id": fpid,
+            "product_name": pname or "",
+            "amount": famount,
+            "date": fdate,
+            "operator": fop or "",
+            "remark": frm or "",
+            "ref_type": fref or "",
+            "ref_id": frefid,
+            "pay_status": fpay or PAID,
+            "paid_at": fpaid or "",
             # 全仓流水需要区分来源分仓（单仓模式下为空，前端不显示该列）
             **({"warehouse": wh_name} if wh_name else {}),
         }
-        for f in db.execute(q).scalars()
+        for fid, ftype, fcat, fpid, pname, famount, fdate, fop, frm, fref, frefid, fpay, fpaid
+        in db.execute(q)
     ]
 
 
