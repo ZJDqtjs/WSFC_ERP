@@ -12,12 +12,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import re
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -684,6 +685,43 @@ def _loop() -> None:
         time.sleep(20)
 
 
+def _jitter_seconds(key: str, day: str, slot_text: str, span: int) -> int:
+    """按 (分仓, 日期, 定时点) 生成稳定的随机偏移秒数，范围 [-span, +span]。
+
+    用哈希而不是 random：同一分钟内 tick 多次结果一致，服务重启也不会变，
+    但每天的偏移都不同——触发时间自然散开，不再是"每天同一分同一秒精确执行"。
+    """
+    if span <= 0:
+        return 0
+    h = int(hashlib.md5(f"{key}|{day}|{slot_text}".encode()).hexdigest()[:8], 16)
+    return (h % (2 * span + 1)) - span
+
+
+def next_runs_with_jitter(key: str, wh: dict[str, Any], limit: int = 3) -> list[str]:
+    """界面展示用的「接下来几次实际执行时间」：把定时浮动算进去（只做展示，不参与调度判定）。"""
+    span = int(wh.get("jitter_minutes") or 0) * 60
+    try:
+        parsed = parse_schedule(wh.get("schedule") or [])
+    except ValueError:
+        return []
+    now = datetime.now()
+    out: list[datetime] = []
+    for day_offset in range(0, 8):
+        day = now.date().fromordinal(now.date().toordinal() + day_offset)
+        day_str = f"{day:%Y-%m-%d}"
+        for s in parsed:
+            base = datetime(day.year, day.month, day.day, s.hour, s.minute)
+            off = _jitter_seconds(key, day_str, f"{day_str} {s.hour:02d}:{s.minute:02d}", span)
+            target = base + timedelta(seconds=off)
+            if target.date() != base.date():
+                target = base
+            if target > now:
+                out.append(target)
+        if len(out) >= limit:
+            break
+    return [f"{t:%Y-%m-%d %H:%M}" for t in sorted(out)[:limit]]
+
+
 def _tick(now: datetime) -> None:
     day = f"{now:%Y-%m-%d}"
     d = st.load()
@@ -696,13 +734,22 @@ def _tick(now: datetime) -> None:
         except ValueError as e:
             log.warning("分仓 %s 的定时时间配置有问题：%s", key, e)
             continue
+        span = int(wh.get("jitter_minutes") or 0) * 60  # 分钟 → 秒
         for slot in slots:
-            if (now.hour, now.minute) != (slot.hour, slot.minute):
-                continue
             stamp = f"{day} {slot.hour:02d}:{slot.minute:02d}"
+            base = now.replace(hour=slot.hour, minute=slot.minute, second=0, microsecond=0)
+            offset = _jitter_seconds(key, day, stamp, span)
+            target = base + timedelta(seconds=offset)
+            if target.date() != now.date():
+                target, offset = base, 0  # 浮动不跨天，否则去重用的 stamp 日期会对不上
+            if now < target:
+                continue  # 还没到（浮动后的）触发时刻
+            if (now - target).total_seconds() >= 60:
+                continue  # 已错过这一分钟：与原来「只在那一分钟执行」一致，不补跑
             if not st.mark_slot(key, stamp, day):
                 continue  # 这一分钟内已经跑过（或服务刚重启但已记录）
-            log.info("到点触发自动出库：%s %s（区间规则 %s）", key, stamp, slot.window or wh.get("window"))
+            log.info("到点触发自动出库：%s %s（浮动 %+ds → 实际 %s；区间规则 %s）",
+                     key, stamp, offset, f"{target:%H:%M:%S}", slot.window or wh.get("window"))
             threading.Thread(
                 target=run_once,
                 args=(key,),

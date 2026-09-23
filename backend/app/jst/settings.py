@@ -63,6 +63,8 @@ WH_DEFAULTS: dict[str, Any] = {
     "fixed_from": "",
     "fixed_to": "",
     "schedule": [],         # ["07:30", "19:30:today"]
+    # 定时浮动范围（分钟）：实际触发时间在「定时点 ± N 分钟」内随机，打散精确到分的规律，降低风控概率
+    "jitter_minutes": 0,
     "auto_import": True,
     "skip_imported": True,
     "operator": "",
@@ -161,6 +163,7 @@ def wh_of(d: dict[str, Any] | None, key: str) -> dict[str, Any]:
     out["enabled"] = _clean_bool(out.get("enabled"))
     out["auto_import"] = _clean_bool(out.get("auto_import"), True)
     out["skip_imported"] = _clean_bool(out.get("skip_imported"), True)
+    out["jitter_minutes"] = int(_clean_num(out.get("jitter_minutes"), 0, 0, 120))
     return out
 
 
@@ -205,6 +208,8 @@ def patch_wh(key: str, patch: dict[str, Any]) -> dict[str, Any]:
             ]
         if "schedule" in patch and patch["schedule"] is not None:
             cur["schedule"] = [_clean_str(s, 48) for s in patch["schedule"] if _clean_str(s, 48)]
+        if "jitter_minutes" in patch and patch["jitter_minutes"] is not None:
+            cur["jitter_minutes"] = int(_clean_num(patch["jitter_minutes"], 0, 0, 120))
         # 运行时数据（执行记录 / 定时点标记 / 待办）不参与本次写入，但要原样带回去，否则会被覆盖掉
         runtime = {k: cur[k] for k in ("last_run", "runs", "done_slots", "pending") if k in cur}
         for k in ("last_run", "runs", "done_slots", "pending"):

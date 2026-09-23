@@ -42,6 +42,7 @@ class WhSettingsIn(BaseModel):
     fixed_from: str = ""
     fixed_to: str = ""
     schedule: list[str] | None = None
+    jitter_minutes: int | None = None   # 定时浮动范围（分钟）：实际在定时点 ± N 分钟内随机触发
     auto_import: bool | None = None
     skip_imported: bool | None = None
     operator: str = ""
@@ -126,7 +127,7 @@ def get_settings(user: User = Depends(get_current_user)):
         "all_warehouses": [{"key": w.get("key"), "name": w.get("name") or w.get("key")} for w in get_warehouses()],
         "windows": [{"value": v, "label": lb} for v, lb in WINDOW_CHOICES],
         "window_help": WINDOW_HELP,
-        "next_runs": st.next_runs(wh.get("schedule") or []),
+        "next_runs": runner.next_runs_with_jitter(key, wh),   # 已把定时浮动算进去，显示的是真实触发时刻
         "status": runner.status(),
         "last_run": wh.get("last_run") or {},
         "pending": [{"id": t.get("id"), "type": t.get("type"), "message": t.get("message"),

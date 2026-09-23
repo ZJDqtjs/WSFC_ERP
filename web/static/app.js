@@ -5465,6 +5465,7 @@ function fillJstAuto(d) {
   if ($("jstFixedFrom")) $("jstFixedFrom").value = String(wh.fixed_from || "").replace(" ", "T").slice(0, 16);
   if ($("jstFixedTo")) $("jstFixedTo").value = String(wh.fixed_to || "").replace(" ", "T").slice(0, 16);
   if ($("jstSchedule")) $("jstSchedule").value = (wh.schedule || []).join(",");
+  if ($("jstJitter")) $("jstJitter").value = Number(wh.jitter_minutes || 0);
   if ($("jstOperator")) $("jstOperator").value = wh.operator || "";
   if ($("jstAutoImport")) $("jstAutoImport").checked = wh.auto_import !== false;
   if ($("jstSkipImported")) $("jstSkipImported").checked = wh.skip_imported !== false;
@@ -5473,8 +5474,9 @@ function fillJstAuto(d) {
   JST_PENDING_N = JST_AUTO.pending_count || 0;   // 状态区据此显示「去处理」按钮
   renderJstTargets(wh.targets || []);
   jstWindowChanged();
+  const jit = Number(wh.jitter_minutes || 0);
   jstSetText("jstNextRuns", (JST_AUTO.next_runs || []).length
-    ? `下次执行：${JST_AUTO.next_runs.join("、")}`
+    ? `下次执行：${JST_AUTO.next_runs.join("、")}` + (jit ? `（已开启 ±${jit} 分钟随机浮动）` : "")
     : (wh.enabled ? "⚠ 已启用定时但没填执行时间，不会自动跑" : "未启用定时（仍可手动执行）"));
   renderJstStatus(JST_AUTO.status || {}, JST_AUTO.last_run || {});
   if ((JST_AUTO.status || {}).running) startJstPoll(); else loadJstHistory();
@@ -5516,6 +5518,7 @@ async function saveJstAuto(opts) {
       fixed_from: ($("jstFixedFrom")?.value || "").replace("T", " "),
       fixed_to: ($("jstFixedTo")?.value || "").replace("T", " "),
       schedule: ($("jstSchedule")?.value || "").split(",").map((s) => s.trim()).filter(Boolean),
+      jitter_minutes: Number($("jstJitter")?.value || 0),
       auto_import: !!$("jstAutoImport")?.checked,
       skip_imported: !!$("jstSkipImported")?.checked,
       operator: ($("jstOperator")?.value || "").trim(),

@@ -994,6 +994,11 @@
                 <div class="field-hint">逗号分隔；可写 HH:MM，也可写 HH:MM:区间规则 单独指定区间（如 07:30:yesterday、19:30:today）。留空 = 不定时执行。<span class="mono" id="jstWindowHelp"></span></div>
               </div>
               <div class="field" style="grid-column:1/-1;">
+                <label>定时浮动范围（分钟）</label>
+                <input id="jstJitter" type="number" min="0" max="120" step="1" placeholder="0 = 精确到点" />
+                <div class="field-hint">实际触发时间在「定时点 ± 这个范围」内随机（每天不同），避免总是在同一分钟精确执行而触发风控，建议 5~15。注意：填了正数后可能<b>提前</b>几分钟执行，若区间规则是「今天到现在」这类会少导几分钟，建议配「昨天」等整天区间使用。</div>
+              </div>
+              <div class="field" style="grid-column:1/-1;">
                 <label>固定区间（补数据 / 试跑用）</label>
                 <div class="toolbar">
                   <input id="jstFixedFrom" type="datetime-local" />
