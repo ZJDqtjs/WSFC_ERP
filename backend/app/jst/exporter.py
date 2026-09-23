@@ -26,7 +26,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from ._http import httpx
-from .client import BASE_URL, JstSession, NotLoggedIn
+from .client import BASE_URL, USER_AGENT, JstSession, NotLoggedIn
 from .config import JstConfig
 from .login import CaptchaRequired, LoginError, build_relogin
 
@@ -74,15 +74,91 @@ _CAPTCHA_CODES = ("910001",)
 _CAPTCHA_MARKERS = ("验证码", "验证身份", "身份验证")
 _MSG_RE = re.compile(r'"msg":"([^"]*)"')
 
+# 平台安全中心的「动作级短信验证」（前端 sms-verification 子应用用的就是这两个接口）：
+#   发码   POST /erp/webapi/SecurityApi/SendSmsAuthCode   {"data": {action, toAdmin, sid}}
+#   校验   POST /erp/webapi/SecurityApi/CheckSmsAuthCode  {"data": {smsCode, action, toAdmin, sid}}
+# 校验通过后服务端把该动作标记为「已验证」（有时效），此时再发起导出就会被放行。
+API_BASE = "https://api.erp321.com"
+SMS_SEND_PATH = "/erp/webapi/SecurityApi/SendSmsAuthCode"
+SMS_CHECK_PATH = "/erp/webapi/SecurityApi/CheckSmsAuthCode"
 
-def _captcha_hint(text: str) -> str | None:
-    """识别「要求短信验证」的返回并给出提示文案；不是这种情况返回 None。"""
+
+class SmsAuthRequired(CaptchaRequired):
+    """导出被平台安全中心拦下，要求「导出出库单」这个动作先过短信验证。
+
+    聚水潭会在 ReturnValue 里给出这次拦截的 action / toAdmin / sid，
+    拿到人工填的验证码后带上这三个参数调 CheckSmsAuthCode，校验通过导出才放行。
+    """
+
+    def __init__(self, message: str, *, action: str = "", to_admin: bool = False, sid: str | None = None):
+        super().__init__(message)
+        self.action = action
+        self.to_admin = to_admin
+        self.sid = sid
+
+    @property
+    def auth_params(self) -> dict:
+        """给 check_sms_code 用的参数（键名与它一致，可直接 ** 展开）。"""
+        return {"action": self.action, "to_admin": self.to_admin, "sid": self.sid}
+
+
+def _parse_call_return(text: str) -> dict:
+    """解析 ASP.NET AJAX 的 '0|{...}' 响应体，拿到完整对象（用于取 ReturnValue）。"""
+    i = text.find("{")
+    if i < 0:
+        return {}
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(text[i:])
+    except Exception:  # noqa: BLE001 - 响应被截断等，交给调用方兜底
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def _captcha_hint(text: str) -> tuple[str, dict] | None:
+    """识别「要求短信验证」的返回；返回 (提示文案, ReturnValue)，不是这种情况返回 None。"""
     code_hit = any(f'"Message":"{c}"' in text for c in _CAPTCHA_CODES)
     m = _MSG_RE.search(text)
     hint = (m.group(1) if m else "").strip()
     if not code_hit and not any(k in hint for k in _CAPTCHA_MARKERS):
         return None
-    return hint or "聚水潭要求验证身份"
+    rv = _parse_call_return(text).get("ReturnValue") or {}
+    return (hint or "聚水潭要求验证身份"), (rv if isinstance(rv, dict) else {})
+
+
+def check_sms_code(cookie: str, *, sms_code: str, action: str = "", to_admin: bool = False,
+                   sid: str | None = None, timeout: float = 30.0) -> tuple[bool, str]:
+    """把人工填的验证码交给聚水潭校验（导出前那道「验证身份」）。返回 (是否通过, 提示语)。"""
+    code = str(sms_code or "").strip()
+    if not code:
+        return False, "验证码为空"
+    body = {
+        "data": {
+            "smsCode": int(code) if code.isdigit() else code,
+            "action": action,
+            "toAdmin": bool(to_admin),
+            "sid": sid,
+        }
+    }
+    headers = {
+        "content-type": "application/json",
+        "accept": "application/json, text/plain, */*",
+        "cookie": cookie,
+        "user-agent": USER_AGENT,
+        "origin": BASE_URL,
+        "referer": BASE_URL + "/",
+    }
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=False) as c:
+            resp = c.post(API_BASE + SMS_CHECK_PATH, json=body, headers=headers)
+    except Exception as e:  # noqa: BLE001 - 网络问题同样只是「校验没过」
+        return False, f"校验请求失败：{e}"
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        return False, f"校验返回异常（HTTP {resp.status_code}）"
+    if data.get("code") == 0 and data.get("data"):
+        return True, "验证通过"
+    return False, str(data.get("msg") or f"校验失败（code={data.get('code')}）")
 
 
 def make_relogin(cfg: JstConfig, on_cookie: Callable[[str], None] | None = None):
@@ -182,13 +258,16 @@ class Exporter:
         resp.raise_for_status()
 
         if '"IsSuccess":false' in resp.text:
-            hint = _captcha_hint(resp.text)
-            if hint:
-                # 要人工过短信验证：交给 runner 生成「待办」（填验证码 / 粘 Cookie），不要当普通失败吞掉
-                raise CaptchaRequired(
-                    f"聚水潭要求短信验证（导出出库单）：{hint}"
-                    " —— 处理方式：① 直接把验证码填进「待办」后点重跑（会带着验证码先重新登录，再导出）；"
-                    "② 或在浏览器登录聚水潭、手动导出一次并输入验证码后，把该会话的 Cookie 粘到「待办」里（最稳）"
+            hit = _captcha_hint(resp.text)
+            if hit:
+                hint, rv = hit
+                # 要人工过短信验证：带上聚水潭给的 action/toAdmin/sid，交给 runner 生成「待办」——
+                # 用户在待办里填码后调 CheckSmsAuthCode 校验，通过了再重跑导出
+                raise SmsAuthRequired(
+                    f"聚水潭要求短信验证（导出出库单）：{hint} —— 在「待办」里填验证码即可（会先校验，通过后自动重跑）",
+                    action=str(rv.get("action") or ""),
+                    to_admin=bool(rv.get("toAdmin")),
+                    sid=rv.get("sid"),
                 )
             raise ExportError(f"创建导出任务失败：{resp.text[:300]}")
         match = _TOKEN_RE.search(resp.text)
@@ -282,17 +361,6 @@ class Exporter:
     def export_with_retries(self, start: datetime, end: datetime) -> Path:
         last_error: Exception | None = None
         relogged = False  # 同一次导出最多续登一次，避免拿新 Cookie 反复登录
-        # 「待办」里人工填了验证码：先带着它重新登录一次再导出。
-        # 聚水潭要求短信验证时（登录 301105/301109、导出 910001 是同一套安全校验），
-        # 验证码就是登录接口的 verifyCode；如果只在 Cookie 失效时才续登，用户填的码就永远用不上。
-        # 登录不成功（比如码不适用于登录）不算致命：保留原 Cookie 继续走正常导出，失败信息照样进待办。
-        if self.cfg.verify_code:
-            try:
-                if self._session.relogin():
-                    relogged = True
-                    log.info("已带「待办」里人工填写的验证码重新登录，继续导出")
-            except Exception as e:  # noqa: BLE001 - 登录不成功不该直接失败：原 Cookie 还能继续试，失败信息照样进待办
-                log.warning("带「待办」验证码重新登录未成功：%s（保留原 Cookie 继续导出）", e)
         for attempt in range(1, self.cfg.max_retries + 1):
             try:
                 return self.export(start, end)

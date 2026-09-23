@@ -5697,7 +5697,8 @@ function evaCaptchaCard(t) {
     <div class="form-grid">
       <div class="field">
         <label>验证码${t.has_verify_code ? "（已填过一次，可重填）" : ""}</label>
-        <input id="evaCode-${t.id}" placeholder="聚水潭发来的验证码" />
+        <input id="evaCode-${t.id}" placeholder="聚水潭发来的验证码（最新一条）" />
+        ${t.sms_verifiable ? '<div class="field-hint">提交后会先把验证码交给聚水潭校验，通过才重新导出；<b>请填最新一条短信</b>（旧码会被后发的新码顶掉）</div>' : ""}
       </div>
       <div class="field">
         <label>或粘贴浏览器 Cookie（最稳，推荐）</label>

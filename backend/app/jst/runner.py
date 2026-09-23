@@ -28,7 +28,7 @@ from ..models import Outbound, User
 from . import settings as st
 from .client import BASE_URL, JstSession, NotLoggedIn
 from .config import JstConfig, parse_datetime, parse_schedule, resolve_window
-from .exporter import EXPORT_PAGE_PATH, SALEOUT_PATH, PAGE_QUERY, ExportError, Exporter
+from .exporter import EXPORT_PAGE_PATH, SALEOUT_PATH, PAGE_QUERY, ExportError, Exporter, check_sms_code
 from .login import CaptchaRequired, LoginError, login, parse_warehouses
 
 log = logging.getLogger("jst")
@@ -398,7 +398,9 @@ def run_once(
     except CaptchaRequired as e:
         result["message"] = str(e)
         result["need"] = "captcha"
-        result["pending_id"] = _open_captcha_task(key, str(e), files, rng, targets, reason="captcha")
+        # 导出被平台安全中心拦下时，异常里带着 action/toAdmin/sid ——发现待办里填码后要用它调校验接口
+        result["pending_id"] = _open_captcha_task(key, str(e), files, rng, targets, reason="captcha",
+                                                  sms_auth=getattr(e, "auth_params", None))
     except NotLoggedIn as e:
         # Cookie 失效且没有账号密码可续登：同样交给「待办」——填验证码重新登录，或直接粘贴浏览器 Cookie
         result["message"] = str(e)
@@ -470,10 +472,17 @@ def _open_unmapped_task(key: str, files: list[Path], rng, targets, agg: dict[str
     return task["id"]
 
 
-def _open_captcha_task(key: str, message: str, files: list[Path], rng, targets, *, reason: str) -> str:
-    """导出/登录需要人工介入（验证码 / Cookie 失效）→ 生成待办。"""
+def _open_captcha_task(key: str, message: str, files: list[Path], rng, targets, *, reason: str,
+                       sms_auth: dict[str, Any] | None = None) -> str:
+    """导出/登录需要人工介入（验证码 / Cookie 失效）→ 生成待办。
+
+    sms_auth 是聚水潭给的动作参数（action/toAdmin/sid）：有它就能拿人工填的验证码调
+    CheckSmsAuthCode 真正通过这道校验；没有它（比如登录态失效）只能靠换 Cookie。
+    """
     task = _task_base(key, "captcha", message, files, rng, targets)
     task["reason"] = reason
+    if sms_auth:
+        task["sms_auth"] = sms_auth
     task = st.upsert_pending(key, task)
     _notify(key, task)
     return task["id"]
@@ -612,6 +621,18 @@ def resolve_pending(key: str, task_id: str, *, mappings: list[dict[str, Any]] | 
             _set_state(running=False, step="", warehouse="", trigger="")
             _JOB_LOCK.release()
     else:
+        # 验证码待办：先把人工填的码交给聚水潭校验，通过了才重跑。
+        # 直接重跑的话，导出请求会再触发一条新短信、把用户手里那条码顶掉（这就是以前"填了也不对"的原因）。
+        sms_auth = task.get("sms_auth") or {}
+        if verify_code and sms_auth.get("action"):
+            auth_kw = {k: sms_auth.get(k) for k in ("action", "to_admin", "sid")}
+            ok, why = check_sms_code(st.load().get("cookie") or "", sms_code=verify_code, **auth_kw)
+            if not ok:
+                log.info("待办 %s 验证码校验未通过：%s", task_id, why)
+                return {"ok": False, "verify_failed": True, "mappings_saved": saved, "pending_left": 0,
+                        "task_id": task_id,
+                        "message": f"聚水潭校验未通过：{why}。请填最新一条短信里的验证码（后发的新码会让旧码失效）"}
+            log.info("待办 %s 验证码已通过聚水潭校验，开始重跑导出", task_id)
         # 整轮重跑（run_once 内部会拿锁、写执行记录）
         res = run_once(key, target_co_ids=[str(t.get("co_id")) for t in task.get("targets") or []],
                        start=rng[0] if rng else None, end=rng[1] if rng else None,

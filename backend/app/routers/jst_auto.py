@@ -241,6 +241,8 @@ def _public_task(t: dict) -> dict:
         "reason": t.get("reason", ""),
         "message": t.get("message", ""),
         "created_at": t.get("created_at", ""),
+        # 有 action 说明这条待办可以「填验证码 → 调聚水潭校验 → 放行导出」（不是只能换 Cookie）
+        "sms_verifiable": bool((t.get("sms_auth") or {}).get("action")),
         "files": t.get("files") or [],
         "window": t.get("window", ""),
         "targets": t.get("targets") or [],
