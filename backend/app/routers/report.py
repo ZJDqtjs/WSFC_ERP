@@ -77,17 +77,25 @@ PACK_COST_CATS = {
 }
 
 
+def _pack_cost_category_of(cat: str | None, name: str | None) -> str:
+    """按「商品分类 + 名称」判断关联结算行属于哪类费用（人工打包费 / 包材耗材 / 快递运费）。
+
+    与 SQL 聚合后的归类共用同一套口径：聚合查询只要分类名，不必把商品对象取出来。
+    """
+    c = (cat or "").strip()
+    if c in PACK_COST_CATS:
+        return PACK_COST_CATS[c]
+    # 兜底：名称以「打包」结尾的按人工计（与 outbound._to_dict 的 is_labor 判定一致）
+    if (name or "").strip().endswith("打包"):
+        return "人工打包费"
+    return "其他关联结算"
+
+
 def _pack_cost_category(p: Product | None, line: OutboundLine) -> str:
     """判断一条关联结算行属于哪类费用（人工打包费 / 包材耗材 / 快递运费）。"""
     if not p:
         return "其他关联结算"
-    cat = (p.category or "").strip()
-    if cat in PACK_COST_CATS:
-        return PACK_COST_CATS[cat]
-    # 兜底：名称以「打包」结尾的按人工计（与 outbound._to_dict 的 is_labor 判定一致）
-    if (p.name or "").strip().endswith("打包"):
-        return "人工打包费"
-    return "其他关联结算"
+    return _pack_cost_category_of(p.category, p.name)
 
 
 # 关联结算类别 → 「商品销售明细」逐行的成本字段。
@@ -124,35 +132,52 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
     month = today[:8] + "01"
 
     def range_summary(f, t):
-        # 需遍历 o.lines 统计包材/人工/快递，务必 selectinload 一次预载，避免每单一条懒加载 SELECT（N+1）
-        # 只统计「已付款」单据，与财务报表口径保持一致（待付款的先到「待付款账单」）
-        outbounds = [
-            o for o in db.execute(
-                select(Outbound)
-                .options(selectinload(Outbound.lines).selectinload(OutboundLine.product))
-                .where(Outbound.date >= f, Outbound.date <= t)
-            ).scalars()
-            if _is_paid(o)
-        ]
-        finances = [
-            x for x in db.execute(select(FinanceRecord).where(FinanceRecord.date >= f, FinanceRecord.date <= t)).scalars()
-            if _is_paid(x)
-        ]
-        others = [
-            x for x in db.execute(select(OtherExpense).where(OtherExpense.date >= f, OtherExpense.date <= t)).scalars()
-            if _is_paid(x)
-        ]
-        revenue = sum(o.total_amount for o in outbounds)
-        cogs = sum(o.total_cogs for o in outbounds)
-        fee = sum(x.amount for x in finances if x.type == "expense" and x.category != "采购支出")
-        other_fee = round(sum(e.amount or 0.0 for e in others), 2)
-        fee = round(fee + other_fee, 2)  # 期间费用含「其他开支」（与报表口径一致）
-        packs = _pack_cost_breakdown(outbounds)
+        """区间汇总——全部走 SQL 聚合，不把单据与明细实例化成 ORM 对象。
+
+        原来这里 selectinload 出区间内每张单、每条明细（单仓近 5000 单 / 2 万行，实测 0.9 秒，
+        线上放大到 4 秒+）。其中只有「关联结算(pack)成本按类拆分」需要明细，
+        改成按「商品分类 + 名称」分组聚合，几十行就能算完；付款状态过滤也一并下推。
+        """
+        paid_o = func.coalesce(Outbound.pay_status, PAID) != "unpaid"
+        orders, revenue, cogs = db.execute(
+            select(func.count(),
+                   func.coalesce(func.sum(Outbound.total_amount), 0),
+                   func.coalesce(func.sum(Outbound.total_cogs), 0))
+            .where(Outbound.date >= f, Outbound.date <= t, paid_o)
+        ).one()
+        revenue, cogs = float(revenue), float(cogs)
+
+        # 期间费用 = 财务流水里手工登记的支出（不含采购支出，采购已计入库存成本）+ 其他开支
+        manual_expense = float(db.execute(
+            select(func.coalesce(func.sum(FinanceRecord.amount), 0))
+            .where(FinanceRecord.date >= f, FinanceRecord.date <= t,
+                   FinanceRecord.type == "expense", FinanceRecord.category != "采购支出",
+                   func.coalesce(FinanceRecord.pay_status, PAID) != "unpaid")
+        ).scalar() or 0.0)
+        other_fee = round(float(db.execute(
+            select(func.coalesce(func.sum(OtherExpense.amount), 0))
+            .where(OtherExpense.date >= f, OtherExpense.date <= t,
+                   func.coalesce(OtherExpense.pay_status, PAID) != "unpaid")
+        ).scalar() or 0.0), 2)
+
+        packs: dict[str, float] = {}
+        for cat, name, amt in db.execute(
+            select(Product.category, Product.name, func.coalesce(func.sum(OutboundLine.cogs), 0))
+            .select_from(OutboundLine)
+            .join(Outbound, Outbound.id == OutboundLine.outbound_id)
+            .join(Product, Product.id == OutboundLine.product_id, isouter=True)
+            .where(OutboundLine.line_type == "pack", Outbound.date >= f, Outbound.date <= t, paid_o)
+            .group_by(Product.category, Product.name)
+        ):
+            key = _pack_cost_category_of(cat, name)
+            packs[key] = round(packs.get(key, 0.0) + float(amt or 0.0), 2)
+
+        fee = round(manual_expense + other_fee, 2)  # 期间费用含「其他开支」（与报表口径一致）
         return {
             "revenue": round(revenue, 2),
             "gross": round(revenue - cogs, 2),
             "net": round(revenue - cogs - fee, 2),
-            "orders": len(outbounds),
+            "orders": int(orders),
             "cogs": round(cogs, 2),
             "expense": fee,
             "other_expense": other_fee,
@@ -195,21 +220,22 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
             else:
                 singles.append(r)
         entries = []
-        for g in groups.values():
-            key = g[0].import_group
-            # 整批真实规模与合计（批次可能远大于窗口）
-            cnt, amt, net = db.execute(
+        keys = list(groups.keys())
+        stats: dict[str, tuple] = {}
+        if keys:
+            # 各批次的真实规模与合计：一条 group by 查完（原来每个批次两条 SQL，批次一多就是 N+1）
+            for gk, cnt, amt, net in db.execute(
                 select(
+                    Outbound.import_group,
                     func.count(),
                     func.coalesce(func.sum(Outbound.total_amount), 0),
                     func.coalesce(func.sum(Outbound.total_amount - Outbound.total_cogs - Outbound.total_fee), 0),
-                ).where(Outbound.import_group == key)
-            ).one()
-            ls = list(db.execute(
-                select(Outbound).where(Outbound.import_group == key).order_by(Outbound.id.desc()).limit(6)
-            ).scalars())
-            if not ls:
-                continue
+                ).where(Outbound.import_group.in_(keys)).group_by(Outbound.import_group)
+            ):
+                stats[gk] = (int(cnt), float(amt), float(net))
+        for gk, g in groups.items():
+            cnt, amt, net = stats.get(gk, (len(g), 0.0, 0.0))
+            ls = g[:6]  # recent 已按 id 倒序，组内前几条即该批次最近的几单
             entries.append({
                 "code": f"批量 · {cnt}单",
                 "customer": "/".join(dict.fromkeys(x.customer for x in ls if x.customer)),
