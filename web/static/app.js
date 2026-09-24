@@ -5697,7 +5697,72 @@ async function loadPayablesPage() {
 function paySwitchView(btn) {
   $("paySeg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
   PAY_VIEW = btn.dataset.view === "all" ? "all" : "unpaid";
-  loadPayablesPage();
+  loadPayablesPage();   // 切视图重新拉取，关键词 / 日期筛选条件保留，列表与合计立即重算
+}
+
+/** 当前筛选条件：关键词 + 日期区间（起止都按单据日期 YYYY-MM-DD 比较） */
+function payFilter() {
+  return {
+    kwRaw: ($("paySearch") ? $("paySearch").value : "").trim(),
+    from: $("payFrom") ? $("payFrom").value : "",
+    to: $("payTo") ? $("payTo").value : "",
+  };
+}
+
+/** 日期框有空值 / 有值时切换 .has-value：空值显示自己的占位文案，避免露出浏览器自带的「年/月/日」掩码 */
+function paySyncDatePh() {
+  ["payFrom", "payTo"].forEach((id) => {
+    const el = $(id);
+    if (el && el.parentElement) el.parentElement.classList.toggle("has-value", !!el.value);
+  });
+}
+
+/** 清空关键词与日期区间，恢复到全部账单 */
+function payClearFilter() {
+  if ($("paySearch")) $("paySearch").value = "";
+  if ($("payFrom")) $("payFrom").value = "";
+  if ($("payTo")) $("payTo").value = "";
+  renderPayables();
+}
+
+/** 先按关键词、再按日期区间过滤出要展示的账单（同时报告被排除的「无日期」笔数） */
+function payFilterRows() {
+  const f = payFilter();
+  const kw = f.kwRaw.toLowerCase();
+  let rows = PAY_ROWS;
+  if (kw) {
+    rows = rows.filter((r) =>
+      [r.date, r.source, r.title, r.sub, r.code, r.remark, r.operator].join(" ").toLowerCase().includes(kw));
+  }
+  let undated = 0;
+  if (f.from || f.to) {
+    const keep = [];
+    rows.forEach((r) => {
+      if (!r.date) { undated += 1; return; }   // 没日期的单据无法证明落在区间内，不计入合计
+      if ((!f.from || r.date >= f.from) && (!f.to || r.date <= f.to)) keep.push(r);
+    });
+    rows = keep;
+  }
+  return { rows, undated, active: !!(kw || f.from || f.to), f };
+}
+
+/** 筛选结果实时合计：笔数 + 总金额（应付 + 应收）+ 拆分；关键词 / 日期一变就重算 */
+function renderPaySum(rows, undated, active, f) {
+  const el = $("paySum");
+  if (!el) return;
+  const outSum = rows.filter((r) => r.direction !== "in").reduce((a, r) => a + r.amount, 0);
+  const inSum = rows.filter((r) => r.direction === "in").reduce((a, r) => a + r.amount, 0);
+  const range = (f.from || f.to) ? `${f.from || "最早"} ~ ${f.to || "最新"}` : "";
+  const cond = [range ? `日期 ${range}` : "", f.kwRaw ? `关键词「${f.kwRaw}」` : ""].filter(Boolean).join(" + ");
+  el.innerHTML =
+    `<span class="pay-sum-label">${active ? "筛选结果" : "当前列表"}</span>` +
+    `<span><b>${rows.length}</b> 笔${rows.length === PAY_ROWS.length ? "" : ` <span class="muted">/ 共 ${PAY_ROWS.length} 笔</span>`}</span>` +
+    `<span class="pay-sum-total">合计 <b class="mono">${fmtMoney(outSum + inSum)}</b></span>` +
+    `<span class="muted">应付 <b class="mono" style="color:var(--danger, #dc2626);">${fmtMoney(outSum)}</b>`
+    + ` ／ 应收 <b class="mono" style="color:var(--green, #16a34a);">${fmtMoney(inSum)}</b></span>` +
+    (undated ? `<span class="muted">${undated} 笔无日期未计入</span>` : "") +
+    `<span class="grow"></span>` +
+    (cond ? `<span class="muted">已按 ${cond} 筛选</span>` : "");
 }
 
 function payAlertMsg(msg) {
@@ -5722,12 +5787,8 @@ function renderPayStats(t) {
 function renderPayables() {
   const t = $("payTable");
   if (!t) return;
-  const kw = ($("paySearch") ? $("paySearch").value : "").trim().toLowerCase();
-  let rows = PAY_ROWS;
-  if (kw) {
-    rows = rows.filter((r) =>
-      [r.date, r.source, r.title, r.sub, r.code, r.remark, r.operator].join(" ").toLowerCase().includes(kw));
-  }
+  const { rows, undated, active, f } = payFilterRows();
+  paySyncDatePh();
   t.innerHTML = `<thead><tr>
       <th style="width:102px;">日期</th><th style="width:96px;">来源</th><th>具体事物 / 款项</th>
       <th class="num" style="width:150px;">金额</th><th style="width:88px;">操作员</th><th style="width:180px;"></th>
@@ -5753,18 +5814,19 @@ function renderPayables() {
                </span>`}</td>
         </tr>`;
       }).join("")
-      : `<tr><td colspan="6" class="empty">${PAY_VIEW === "all" ? "没有账单" : "没有待结清的账单"}</td></tr>`) +
+      : `<tr><td colspan="6" class="empty">${active && PAY_ROWS.length
+        ? "没有符合筛选条件的账单（可点「清空筛选」看全部）"
+        : (PAY_VIEW === "all" ? "没有账单" : "没有待结清的账单")}</td></tr>`) +
     `</tbody>` +
     (rows.length
       ? `<tfoot><tr>
-          <td><b>列出合计</b></td>
+          <td><b>${active ? "筛选合计" : "列出合计"}</b></td>
           <td class="muted" colspan="2">${rows.length} 笔${PAY_VIEW === "all" ? "（含已结清）" : ""}</td>
           <td class="num mono"><b>应付 ${fmtMoney(rows.filter((r) => r.direction !== "in").reduce((a, r) => a + r.amount, 0))}
             ／ 应收 ${fmtMoney(rows.filter((r) => r.direction === "in").reduce((a, r) => a + r.amount, 0))}</b></td>
           <td colspan="2"></td></tr></tfoot>`
       : "");
-  const sumEl = $("paySum");
-  if (sumEl) sumEl.textContent = `共 ${rows.length} 笔`;
+  renderPaySum(rows, undated, active, f);
 }
 
 /** 标记已支付/撤销：支付后按原日期纳入财务报表，撤销则移出 */

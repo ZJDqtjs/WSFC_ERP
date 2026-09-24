@@ -762,7 +762,7 @@
         <div class="card">
           <div class="card-head">
             <h3><svg class="ic"><use href="#i-bill"/></svg> 待付款账单</h3>
-            <span class="hint" id="payHint">入库 / 入仓 / 出库 / 其他开支 / 手动记账 里勾了「待付款」的单据都汇总在这里；点「已支付」后按原日期纳入财务报表</span>
+            <span class="hint" id="payHint">入库 / 入仓 / 出库 / 其他开支 / 手动记账 里勾了「待付款」的单据都汇总在这里；点「已支付」后按原日期纳入财务报表。上方统计卡是全部待结清，下方「合计」随日期 / 关键词筛选实时更新；已结清只载入最近 30 天</span>
             <div class="grow"></div>
             <button class="btn secondary" onclick="loadPayablesPage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
           </div>
@@ -771,10 +771,16 @@
               <button class="seg-item active" data-view="unpaid" onclick="paySwitchView(this)">待结清</button>
               <button class="seg-item" data-view="all" onclick="paySwitchView(this)">含最近已结清</button>
             </div>
-            <input id="paySearch" placeholder="🔍 筛选 款项 / 单据 / 客户 / 操作员..." oninput="renderPayables()" />
-            <div class="grow"></div>
-            <span class="muted" id="paySum"></span>
+            <input id="paySearch" placeholder="🔍 筛选 款项 / 单据 / 客户 / 操作员..." style="flex:1 1 220px;min-width:220px;" oninput="renderPayables()" />
+            <span class="date-range" title="按单据日期筛选">
+              <span class="date-pick"><input id="payFrom" type="date" onchange="renderPayables()" /><span class="date-ph">开始</span></span>
+              <span class="muted">至</span>
+              <span class="date-pick"><input id="payTo" type="date" onchange="renderPayables()" /><span class="date-ph">结束</span></span>
+            </span>
+            <button class="btn sm secondary" onclick="payClearFilter()">清空筛选</button>
           </div>
+          <!-- 筛选结果实时合计（按日期 / 关键词筛选后立刻重算） -->
+          <div class="pay-sum" id="paySum"></div>
           <div id="payAlert" class="alert warn" style="display:none;"></div>
           <div class="table-wrap"><table id="payTable"></table></div>
         </div>

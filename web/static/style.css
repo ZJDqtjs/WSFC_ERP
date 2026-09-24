@@ -2016,6 +2016,84 @@ tr.draft-off {
   justify-content: flex-end;
 }
 
+/* 待付款账单：日期区间（开始 ~ 结束） */
+.date-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.date-range .muted {
+  font-size: 13px;
+}
+
+/* 日期框为空时，隐藏浏览器自带的「年/月/日」掩码，改用自己的占位文案 */
+.date-pick {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.date-pick .date-ph {
+  position: absolute;
+  left: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+/* 已有值时不显示占位；聚焦时收起占位，露出原生掩码方便键盘输入 */
+.date-pick.has-value .date-ph,
+.date-pick:focus-within .date-ph {
+  display: none;
+}
+
+.date-pick:not(.has-value) input[type="date"]:not(:focus)::-webkit-datetime-edit {
+  color: transparent;
+}
+
+/* 待付款账单：筛选结果实时合计条 */
+.pay-sum {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--primary-50);
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.pay-sum .pay-sum-label {
+  color: var(--muted);
+}
+
+.pay-sum b {
+  font-weight: 600;
+}
+
+.pay-sum .pay-sum-total {
+  color: var(--text-secondary);
+}
+
+.pay-sum .pay-sum-total b {
+  font-size: 18px;
+  color: var(--primary);
+}
+
+.pay-sum .grow {
+  flex: 1;
+}
+
+@media (prefers-color-scheme: dark) {
+  .pay-sum {
+    background: rgba(255, 255, 255, 0.04);
+  }
+}
+
 /* 销售成本构成：堆叠占比条 + 图例圆点 */
 .cost-stack {
   display: flex;
