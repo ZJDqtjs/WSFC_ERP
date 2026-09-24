@@ -136,8 +136,45 @@ def _chat(cfg: dict, system: str, user: str) -> str:
     return resp.choices[0].message.content
 
 
+def _chunk_reasoning(chunk) -> str:
+    """取出流式片段里的「思考内容」。
+
+    不同网关字段名不同（DeepSeek/Qwen 系列多为 reasoning_content，也有用 reasoning/thinking 的），
+    这些内容在正式回答之前就会不断推送——正是要展示给用户的「AI 思考过程」。
+    """
+    try:
+        delta = chunk.choices[0].delta if chunk.choices else None
+    except Exception:
+        return ""
+    if delta is None:
+        return ""
+    for attr in ("reasoning_content", "reasoning", "thinking"):
+        v = getattr(delta, attr, None)
+        if isinstance(v, str) and v:
+            return v
+    extra = getattr(delta, "model_extra", None) or {}
+    for k in ("reasoning_content", "reasoning", "thinking"):
+        v = extra.get(k)
+        if isinstance(v, str) and v:
+            return v
+    return ""
+
+
+def _stream_pieces(chunk):
+    """把流式 chunk 拆成 (类型, 文本)：('think', 思考) / ('content', 正式回答)。"""
+    think = _chunk_reasoning(chunk)
+    if think:
+        yield "think", think
+    try:
+        content = chunk.choices[0].delta.content if chunk.choices else None
+    except Exception:
+        content = None
+    if content:
+        yield "content", content
+
+
 def _chat_stream(cfg: dict, system: str, user: str):
-    """流式获取增量文本（生成器，逐段返回内容片段）。"""
+    """流式获取增量文本（生成器，逐段返回 (类型, 文本)）。"""
     stream = _make_client(cfg).chat.completions.create(
         model=cfg["model"],
         messages=[
@@ -149,8 +186,7 @@ def _chat_stream(cfg: dict, system: str, user: str):
         stream=True,
     )
     for chunk in stream:
-        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+        yield from _stream_pieces(chunk)
 
 
 def _chat_stream_mm(cfg: dict, system: str, user: str, image_data_uri: str):
@@ -172,8 +208,7 @@ def _chat_stream_mm(cfg: dict, system: str, user: str, image_data_uri: str):
         stream=True,
     )
     for chunk in stream:
-        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+        yield from _stream_pieces(chunk)
 
 
 def _ensure_unit(db: Session, unit: str) -> Unit:
@@ -1132,10 +1167,14 @@ def parse_stream(data: ParseIn, db: Session = Depends(get_db), user: User = Depe
                     return
                 except HTTPException:
                     pass
+            yield event({"stage": "正在调用大模型识别…"})
             buf = ""
-            for delta in _chat_stream(cfg, SYSTEM_PROMPT, _user_msg(text)):
-                buf += delta
-                yield event({"delta": delta})
+            for kind, piece in _chat_stream(cfg, SYSTEM_PROMPT, _user_msg(text)):
+                if kind == "think":
+                    yield event({"think": piece})    # 模型的思考过程，实时展示
+                else:
+                    buf += piece
+                    yield event({"delta": piece})    # 正式输出
             result = _build_result(db, _extract_json(buf), text)
             yield event({"result": result, "source": "llm", "confidence": "high"})
         except HTTPException as e:
@@ -1200,10 +1239,14 @@ async def parse_image_stream(
     def gen():
         try:
             uri = _image_data_uri(data, file.filename or "invoice.jpg")
+            yield event({"stage": "正在调用大模型识别票据…"})
             buf = ""
-            for delta in _chat_stream_mm(cfg, IMAGE_SYSTEM_PROMPT, user_msg, uri):
-                buf += delta
-                yield event({"delta": delta})
+            for kind, piece in _chat_stream_mm(cfg, IMAGE_SYSTEM_PROMPT, user_msg, uri):
+                if kind == "think":
+                    yield event({"think": piece})    # 模型的思考过程，实时展示
+                else:
+                    buf += piece
+                    yield event({"delta": piece})    # 正式输出
             result = _build_result(db, _extract_json(buf), text or "(图片票据识别)")
             result["image_url"] = image_url  # 供前端确认框展示与备注挂图
             yield event({"result": result})

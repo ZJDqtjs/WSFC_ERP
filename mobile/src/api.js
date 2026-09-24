@@ -113,8 +113,14 @@ export function downloadJson(obj, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-/** 流式读取 SSE（AI 识别），onDelta 实时回调，返回最终 result；formData 传 FormData 则按 multipart 上传。 */
-export async function aiStream(path, body, onDelta, formData, signal) {
+/**
+ * 流式读取 SSE（AI 识别）。
+ * @param onDelta 正式输出（JSON）增量回调
+ * @param onThink 模型「思考过程」增量回调（reasoning_content）
+ * @param onStage 阶段提示回调（如「正在调用大模型识别…」）
+ * 返回最终 result；formData 传 FormData 则按 multipart 上传。
+ */
+export async function aiStream(path, body, onDelta, formData, signal, onThink, onStage) {
   const opt = { method: 'POST' }
   if (signal) opt.signal = signal
   if (formData) opt.body = formData
@@ -138,7 +144,9 @@ export async function aiStream(path, body, onDelta, formData, signal) {
       if (!data) continue
       let obj
       try { obj = JSON.parse(data) } catch (e) { continue }
-      if (obj.delta) onDelta && onDelta(obj.delta)
+      if (obj.think) onThink && onThink(obj.think)
+      else if (obj.stage) onStage && onStage(obj.stage)
+      else if (obj.delta) onDelta && onDelta(obj.delta)
       // 本地快速识别（quick）优先于大模型精修（llm）覆盖
       else if (obj.result) { if (!result || obj.source === 'quick') result = obj.result }
       else if (obj.error) throw new Error(obj.error)

@@ -39,12 +39,15 @@
       <input ref="camInput" type="file" accept="image/*" capture="environment" multiple style="display:none" @change="onFiles" />
       <input ref="albumInput" type="file" accept="image/*" multiple style="display:none" @change="onFiles" />
 
-      <div v-if="thinking || busy" class="think-box">
+      <div v-if="thinking || answer || busy || busyImg" class="think-box">
         <div class="row" style="justify-content:space-between;">
-          <span class="muted">AI 思考中…</span>
-          <van-button size="mini" plain @click="cancelAI">取消</van-button>
+          <span class="muted">{{ aiStage || ((busy || busyImg) ? 'AI 思考中…' : 'AI 思考过程') }}</span>
+          <van-button v-if="busy || busyImg" size="mini" plain @click="cancelAI">取消</van-button>
         </div>
-        <pre>{{ thinking || '正在识别…' }}</pre>
+        <div v-if="thinking" class="think-sub">🧠 思考过程（模型实时输出）</div>
+        <pre v-if="thinking">{{ thinking }}</pre>
+        <div v-if="answer" class="think-sub">📄 识别结果</div>
+        <pre v-if="answer" class="think-answer">{{ answer }}</pre>
       </div>
     </div>
 
@@ -261,7 +264,9 @@ const feedTab = ref('out')
 
 // AI
 const aiText = ref('')
-const thinking = ref('')
+const thinking = ref('')   // 模型思考过程
+const answer = ref('')     // 模型正式输出（JSON）
+const aiStage = ref('')    // 当前阶段提示
 const busy = ref(false)
 const busyImg = ref(false)
 const confirmShow = ref(false)
@@ -307,21 +312,28 @@ function pickImages(src) {
   el && el.click()
 }
 
+const AI_TEXT_MAX = 8000
+function _cap(t) { return t.length > AI_TEXT_MAX ? '…（前面内容略）\n' + t.slice(-AI_TEXT_MAX) : t }
+function pushThink(s) { if (s) thinking.value = _cap(thinking.value + s) }   // 模型思考过程
+function pushAnswer(s) { if (s) answer.value = _cap(answer.value + s) }     // 模型正式输出
+function resetThinking() { thinking.value = ''; answer.value = ''; aiStage.value = '' }
+
 async function aiParse() {
   const text = aiText.value.trim()
   if (!text) { showToast('请输入描述'); return }
   busy.value = true
-  thinking.value = ''
+  resetThinking()
   abortCtrl = new AbortController()
   try {
-    const r = await aiStream('/api/ai/parse/stream', { text }, (d) => { thinking.value += d }, null, abortCtrl.signal)
+    const r = await aiStream('/api/ai/parse/stream', { text },
+      (d) => pushAnswer(d), null, abortCtrl.signal,
+      (t) => pushThink(t), (s) => { aiStage.value = s })
     openConfirm(r)
   } catch (e) {
-    if (e.name !== 'AbortError') showToast('识别失败：' + e.message)
+    if (e.name !== 'AbortError') { aiStage.value = '识别失败'; pushThink('\n⚠ 识别失败：' + e.message); showToast('识别失败：' + e.message) }
   }
   busy.value = false
-  thinking.value = ''
-  abortCtrl = null
+  abortCtrl = null   // 保留思考过程供回看
 }
 
 async function onFiles(e) {
@@ -329,8 +341,8 @@ async function onFiles(e) {
   e.target.value = ''
   if (!files.length) return
   busyImg.value = true
-  thinking.value = ''
   for (let i = 0; i < files.length; i++) {
+    resetThinking()
     abortCtrl = new AbortController()
     try {
       const fd = new FormData()
@@ -338,27 +350,30 @@ async function onFiles(e) {
       // 输入框里的文字作为「补充说明」一起发给 AI（如「京东8号->8号纸箱」）
       const extra = aiText.value.trim()
       if (extra) fd.append('text', extra)
-      const r = await aiStream('/api/ai/parse-image/stream', null, (d) => { thinking.value += d }, fd, abortCtrl.signal)
+      const r = await aiStream('/api/ai/parse-image/stream', null,
+        (d) => pushAnswer(d), fd, abortCtrl.signal,
+        (t) => pushThink(t), (s) => { aiStage.value = s })
       openConfirm(r)
     } catch (err) {
       if (err.name === 'AbortError') break
+      aiStage.value = '识别失败'
+      pushThink(`\n⚠ 第 ${i + 1} 张识别失败：${err.message}`)
       showToast(`第 ${i + 1} 张识别失败：${err.message}`)
     }
     // 多张连传逐张确认：等用户关掉确认框再继续下一张
     if (i < files.length - 1 && confirmShow.value) {
       await new Promise((res) => { waitNext = res })
     }
-    thinking.value = ''
   }
   busyImg.value = false
-  abortCtrl = null
+  abortCtrl = null   // 保留思考过程供回看
 }
 
 function cancelAI() {
   if (abortCtrl) { try { abortCtrl.abort() } catch (e) {} }
   busy.value = false
   busyImg.value = false
-  thinking.value = ''
+  resetThinking()
   if (waitNext) { waitNext(); waitNext = null }
 }
 
@@ -494,6 +509,8 @@ async function submitAI() {
 .danger-text { color: #ee0a24; font-weight: 600; font-variant-numeric: tabular-nums; }
 .think-box { margin-top: 10px; background: #f2f3f5; border-radius: 8px; padding: 8px; }
 .think-box pre { font-size: 12px; color: #646566; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow: auto; margin-top: 6px; }
+.think-sub { font-size: 11px; font-weight: 600; color: #969799; margin-top: 8px; }
+.think-answer { background: #eef6ff; border-radius: 6px; padding: 6px; color: #323233 !important; }
 .ai-img { width: 100%; max-height: 200px; object-fit: contain; border-radius: 8px; margin-bottom: 10px; background: #f7f8fa; }
 .ai-line { padding: 10px 0; border-bottom: 1px solid #f5f5f5; }
 .ai-line-name { font-weight: 600; font-size: 14px; }

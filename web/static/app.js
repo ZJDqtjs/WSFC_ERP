@@ -1172,30 +1172,73 @@ async function loadDashboard() {
 let AI_CTRL = null;   // 当前识别任务的 AbortController（后台挂起，可取消）
 let AI_TIMER = null;  // 用时刷新定时器
 let AI_START = 0;
+let AI_THINK_TEXT = "";    // 累计的「思考过程」原文（确认框里可展开回看）
+let AI_ANSWER_TEXT = "";   // 累计的模型正式输出
+const AI_THINK_MAX = 12000; // 面板最多保留的字符数，避免超长卡顿
 
 function aiShowThinking() {
+  AI_THINK_TEXT = "";
+  AI_ANSWER_TEXT = "";
+  $("aiThinking").classList.remove("done");
   $("aiThinking").style.display = "";
+  $("aiThinkWrap").style.display = "";
   $("aiThinkBody").textContent = "";
+  $("aiAnswerBody").textContent = "";
+  $("aiAnswerBody").style.display = "none";
+  $("aiAnswerHead").style.display = "none";
+  $("aiThinkStage").textContent = "已开始识别…";
+  $("aiThinkTitle").textContent = "AI 思考中";
+  $("aiThinkToggle").style.display = "none";
+  $("aiThinkToggle").textContent = "收起";
+  $("aiCancelBtn").style.display = "";
   AI_START = Date.now();
   clearInterval(AI_TIMER);
   AI_TIMER = setInterval(() => {
     $("aiThinkTime").textContent = `${((Date.now() - AI_START) / 1000).toFixed(0)}s`;
   }, 500);
 }
-function aiHideThinking() {
+// 识别结束：不直接隐藏，保留「思考过程」供查看；标题转完成态、隐藏取消、给出收起按钮
+function aiFinishThinking(title) {
+  clearInterval(AI_TIMER);
+  AI_TIMER = null;
+  $("aiThinking").classList.add("done");
+  $("aiThinkTitle").textContent = title || "AI 思考过程";
+  $("aiThinkToggle").style.display = "";
+  $("aiCancelBtn").style.display = "none";
+}
+function aiHideThinking() {   // 彻底隐藏（用户主动取消时）
   clearInterval(AI_TIMER);
   AI_TIMER = null;
   $("aiThinking").style.display = "none";
+}
+function aiToggleThink() {
+  const hidden = $("aiThinkWrap").style.display === "none";
+  $("aiThinkWrap").style.display = hidden ? "" : "none";
+  $("aiThinkToggle").textContent = hidden ? "收起" : "展开";
+}
+function aiSetStage(s) {
+  if (s) $("aiThinkStage").textContent = s;
+}
+function _aiFill(el, text) {
+  el.textContent = text.length > AI_THINK_MAX ? "…（前面内容略）\n" + text.slice(-AI_THINK_MAX) : text;
+  el.scrollTop = el.scrollHeight;
+}
+function aiAppendThink(s) {           // 模型的思考过程（reasoning_content）
+  if (!s) return;
+  AI_THINK_TEXT += s;
+  _aiFill($("aiThinkBody"), AI_THINK_TEXT);
+}
+function aiAppendAnswer(s) {          // 模型的正式输出（JSON）
+  if (!s) return;
+  AI_ANSWER_TEXT += s;
+  $("aiAnswerHead").style.display = "";
+  $("aiAnswerBody").style.display = "";
+  _aiFill($("aiAnswerBody"), AI_ANSWER_TEXT);
 }
 function aiCancel() {
   if (AI_CTRL) AI_CTRL.abort();
   aiHideThinking();
   toast("已取消识别");
-}
-function aiAppendThink(s) {
-  const el = $("aiThinkBody");
-  el.textContent += s;
-  el.scrollTop = el.scrollHeight;
 }
 function aiStartTask(btnHtml = '<svg class="ic"><use href="#i-ai"/></svg> 识别中…') {
   if (AI_CTRL) AI_CTRL.abort();           // 取消上一次任务
@@ -1232,8 +1275,12 @@ async function aiCollectStream(res) {
       if (!data) continue;
       let obj;
       try { obj = JSON.parse(data); } catch (e) { continue; }
-      if (obj.delta) {
-        aiAppendThink(obj.delta);          // 实时展示 AI 思考过程
+      if (obj.think) {
+        aiAppendThink(obj.think);          // 模型的思考过程，实时逐字展示
+      } else if (obj.stage) {
+        aiSetStage(obj.stage);             // 当前阶段提示
+      } else if (obj.delta) {
+        aiAppendAnswer(obj.delta);         // 模型正式输出（JSON）
       } else if (obj.result) {
         if (!result || obj.source === "quick") result = obj.result;
       } else if (obj.error) {
@@ -1245,7 +1292,8 @@ async function aiCollectStream(res) {
   return result;
 }
 async function aiFinishOk(result) {
-  aiHideThinking();
+  // 不隐藏思考过程面板：识别完成后仍可回看（标题转完成态）
+  aiFinishThinking("AI 思考过程（点击「收起」可折叠）");
   // 刷新商品列表，保证确认框里的候选/分类下拉是最新的
   PRODUCTS = await api("/api/products");
   openAiConfirm(result);
@@ -1253,8 +1301,9 @@ async function aiFinishOk(result) {
 }
 function aiFinishErr(e) {
   if (e.name === "AbortError") return;     // 用户手动取消
+  aiSetStage("识别失败");
   aiAppendThink("\n⚠ 识别失败：" + e.message);
-  setTimeout(aiHideThinking, 2500);
+  aiFinishThinking("识别失败");
   toast("识别失败：" + e.message);
   aiResetBtn();
 }
@@ -1473,10 +1522,16 @@ function openAiConfirm(r) {
   const invImg = r.image_url
     ? `<div class="ai-invoice"><span class="muted">📎 票据凭证（点击预览）</span><img src="${esc(r.image_url)}" alt="票据" onclick="openAttachmentPreview('${r.image_url}','票据凭证')" /></div>`
     : "";
+  // 识别时的「思考过程」也放进确认框，方便回看 AI 是怎么判断的
+  const thinkHtml = AI_THINK_TEXT.trim()
+    ? `<details class="ai-think-details"><summary>🧠 查看 AI 思考过程（${AI_THINK_TEXT.length} 字，点击展开）</summary>
+         <pre>${esc(AI_THINK_TEXT.length > 8000 ? "…（前面内容略）\n" + AI_THINK_TEXT.slice(-8000) : AI_THINK_TEXT)}</pre></details>`
+    : "";
   openModal(`
     <h3>确认录入（${isIn ? "入库" : "出库"}） <button class="close" onclick="closeModal()">✕</button></h3>
     ${invImg}
     <p class="hint" style="margin-bottom:12px;">已自动识别以下内容，请核对（可修改/可删除行）后提交；🆕 标记的商品为新物品，点「确认提交」后才会新增商品档案（取消不会创建）。单价可留空，提交后在单据里补也行。每行默认<b>已付款</b>，可点成「待付款」把该笔列入「待付款账单」。</p>
+    ${thinkHtml}
     <div class="form-grid">
       <div class="field"><label>业务类型</label><select id="aiType" onchange="aiTypeChanged()">
         <option value="inbound" ${isIn ? "selected" : ""}>入库（进货）</option>

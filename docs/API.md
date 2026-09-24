@@ -537,12 +537,18 @@ Outbound 字段：`id, code, customer, operator, date, remark, total_amount, tot
 事件逐行推送：
 
 ```
-data: {"delta": "模型增量文本"}
+data: {"stage": "正在调用大模型识别…"}          ← 阶段提示
+
+data: {"think": "模型思考过程增量"}             ← 模型的 reasoning_content，实时推送（约 2 秒就出）
+
+data: {"delta": "正式输出增量（JSON）"}         ← 正式回答
 
 data: {"result": { ...同上 9.1 结果结构... }}
 
 data: {"done": true}
 ```
+
+> `think` 是模型的「思考过程」（思考型模型在正式回答前会先输出一大段推理，本系统原样透传，前端实时展示，避免长时间看不到反馈）。若所用模型不返回 `reasoning_content`，则不会有 `think` 事件，只有 `delta`。
 
 异常时推送：`data: {"error": "..."}`。
 
