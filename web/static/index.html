@@ -844,9 +844,24 @@
               <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
                 保留 <input type="number" id="bkKeep" min="1" style="width:72px;" /> 份
               </label>
+              <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
+                <input type="checkbox" id="bkRemoteEnabled" onchange="toggleRemoteBackup()" /> 开启远程备份
+              </label>
               <button class="btn" onclick="saveBkConfig()">保存设置</button>
               <div class="grow"></div>
               <button class="btn green" onclick="createBackup()"><svg class="ic"><use href="#i-save"/></svg> 立即备份</button>
+            </div>
+            <div id="bkRemoteBox" style="display:none;margin-top:10px;padding:10px 12px;border:1px dashed #c9ced6;border-radius:8px;">
+              <div class="toolbar">
+                <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
+                  目标服务器 <input type="text" id="bkRemoteUrl" placeholder="如 1.2.3.4:8080/cloudback" style="width:280px;" />
+                </label>
+                <button class="btn" onclick="downloadRemoteScript('deploy')"><svg class="ic"><use href="#i-save"/></svg> 下载部署脚本</button>
+                <button class="btn" onclick="downloadRemoteScript('stop')">下载停止脚本</button>
+              </div>
+              <p class="hint" style="margin-top:8px;">
+                填写接收端地址：<code>ip:端口/路径</code>（如 <code>1.2.3.4:8080/cloudback</code>，对应接收端监听端口与路径前缀）。保存设置后点「下载部署脚本」，上传到备份服务器执行即可一键部署接收端；远程服务器最多保留 100 份，超出的旧备份自动清理。
+              </p>
             </div>
             <p class="hint" id="bkStatus" style="margin-top:10px;"></p>
           </div>

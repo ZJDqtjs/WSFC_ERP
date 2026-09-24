@@ -2814,11 +2814,46 @@ async function loadBackupPage() {
     $("bkEnabled").checked = !!d.config.enabled;
     $("bkInterval").value = d.config.interval_hours;
     $("bkKeep").value = d.config.keep;
-    $("bkStatus").textContent = d.config.enabled
+    $("bkRemoteEnabled").checked = !!d.config.remote_enabled;
+    $("bkRemoteUrl").value = d.config.remote_url || "";
+    toggleRemoteBackup();
+    let s = d.config.enabled
       ? `自动备份已开启：每 ${d.config.interval_hours} 小时一次，保留最近 ${d.config.keep} 份`
       : "自动备份已关闭";
+    if (d.config.remote_enabled && d.config.remote_url) {
+      s += `；远程备份已开启 → ${d.config.remote_url}（远程保留 ${d.config.remote_keep || 100} 份）`;
+      const rs = d.remote_status || {};
+      if (rs.time) s += `｜上次推送 ${rs.time}：${rs.ok ? "成功" : "失败 " + (rs.message || "")}`;
+    }
+    $("bkStatus").textContent = s;
     renderBkTable(d.backups || []);
   } catch (e) { toast("加载备份失败：" + e.message); }
+}
+/* 远程备份：勾选后展开地址输入与部署脚本下载区 */
+function toggleRemoteBackup() {
+  const on = $("bkRemoteEnabled").checked;
+  $("bkRemoteBox").style.display = on ? "" : "none";
+}
+/* 下载远程接收端部署/停止脚本（后端生成，含端口/路径/密钥） */
+async function downloadRemoteScript(kind) {
+  const isStop = kind === "stop";
+  const url = routePath("/api/backup/remote/" + (isStop ? "stop-script" : "deploy-script"));
+  const filename = isStop ? "stop_erp_backup_receiver.sh" : "deploy_erp_backup_receiver.sh";
+  try {
+    if (!isStop && !$("bkRemoteUrl").value.trim()) { toast("请先填写目标服务器地址"); return; }
+    const res = await fetch(url);
+    if (res.status === 401) { showLogin(); return; }
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const text = await res.text();
+    const blob = new Blob([text], { type: "text/x-shellscript;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 200);
+    toast(`已下载 ${filename}，上传到备份服务器执行即可`);
+  } catch (e) { toast("下载失败：" + e.message); }
 }
 function renderBkTable(list) {
   const t = $("bkTable");
@@ -2844,11 +2879,17 @@ async function createBackup() {
   } catch (e) { toast("备份失败：" + e.message); }
 }
 async function saveBkConfig() {
+  const remoteEnabled = $("bkRemoteEnabled").checked;
+  const remoteUrl = $("bkRemoteUrl").value.trim();
+  if (remoteEnabled && !remoteUrl) { toast("请填写目标服务器地址，如 1.2.3.4:8080/cloudback"); return; }
   try {
     await api("/api/backup/config", "POST", {
       enabled: $("bkEnabled").checked,
       interval_hours: +$("bkInterval").value || 2,
       keep: +$("bkKeep").value || 30,
+      remote_enabled: remoteEnabled,
+      remote_url: remoteUrl,
+      remote_keep: 100,
     });
     toast("自动备份设置已保存");
     loadBackupPage();
