@@ -67,6 +67,8 @@ def _split_target(target: str):
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "ERPPreview/1.0"
+    # SSE（AI 流式识别）要一小块一小块尽快送出去，关掉 Nagle 合并
+    disable_nagle_algorithm = True
 
     def log_message(self, fmt, *args):
         sys.stderr.write("[%s] %s\n" % (self.log_date_time_string(), fmt % args))
@@ -106,8 +108,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_header(k, v)
             self.send_header("Connection", "close")
             self.end_headers()
+            # 用 read1 而不是 read：read(n) 会一直攒够 n 字节才返回，
+            # 后端 SSE（/api/ai/parse/stream 等）会被整段缓冲到结束才吐给浏览器，
+            # 结果就是"AI 思考过程"面板在识别期间一直空白、结束后内容才一次性出现。
+            # read1 每次只读"当前已有的"数据（chunked 响应最多读一个 chunk），边到边转发。
             while True:
-                chunk = resp.read(65536)
+                chunk = resp.read1(65536) if hasattr(resp, "read1") else resp.read(65536)
                 if not chunk:
                     break
                 self.wfile.write(chunk)
