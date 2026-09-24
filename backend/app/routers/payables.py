@@ -144,7 +144,8 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
             "inbound", r.id, r.date,
             f"{name} × {_qty(r.quantity)}{r.unit or ''}".strip(),
             "供应商 " + r.supplier if r.supplier else "采购入库",
-            r.total_amount, "out", r.pay_status, r.paid_at, r.operator, r.remark, r.code,
+            r.total_amount + (getattr(r, "adjust_amount", 0.0) or 0.0),  # 应付 = 实付（含抹零/凑整调整）
+            "out", r.pay_status, r.paid_at, r.operator, r.remark, r.code,
         ))
 
     for r in db.execute(
@@ -175,11 +176,16 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
         rows.append(_row(
             "outbound", r.id, r.date, title,
             ("客户 " + r.customer) if r.customer else "销售出库",
-            r.total_amount, "in", r.pay_status, r.paid_at, r.operator, r.remark, r.code,
+            r.total_amount + (getattr(r, "adjust_amount", 0.0) or 0.0),  # 应收 = 实收（含抹零/凑整调整）
+            "in", r.pay_status, r.paid_at, r.operator, r.remark, r.code,
         ))
 
+    # 只列手工登记的其他开支：入库/出库金额调整自动生成的记录随主单结算，不单独作为待办
     for r in db.execute(
-        select(OtherExpense).where(_pay_filter(OtherExpense, include_paid, cutoff))
+        select(OtherExpense).where(
+            func.coalesce(OtherExpense.ref_type, "") == "",
+            _pay_filter(OtherExpense, include_paid, cutoff),
+        )
     ).scalars():
         rows.append(_row(
             "otherexp", r.id, r.date, r.category, "其他开支",

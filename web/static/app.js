@@ -3658,7 +3658,14 @@ function calcInbound() {
   const unit = $("inUnit").value;
   const qty = parseFloat($("inQty").value) || 0;
   const price = parseFloat($("inPrice").value) || 0;
-  $("inAmount").value = (qty * price).toFixed(2);
+  const base = qty * price;
+  $("inAmount").value = base.toFixed(2);
+  const adj = parseFloat($("inAdjust")?.value) || 0;
+  if ($("inAdjustHint")) {
+    $("inAdjustHint").textContent = adj
+      ? `实付 ¥${(base + adj).toFixed(2)}（商品金额 ¥${base.toFixed(2)} ${adj > 0 ? "+" : "-"} ${Math.abs(adj).toFixed(2)}）· 差额记「金额调整」其他开支`
+      : "正=多付，负=少付；差额自动记「金额调整」其他开支，商品成本不变";
+  }
   if (p && unit) {
     const factor = (p.conversions || {})[unit];
     $("inUnitHint").textContent = factor ? `1${unit} = ${fmtNum(factor)} ${p.base_unit}` : "";
@@ -3677,15 +3684,17 @@ async function submitInbound() {
   if (isNaN(price)) { toast("请填写单价"); return; }
   try {
     const payStatus = payOf("inPay");
+    const adjust = parseFloat($("inAdjust").value) || 0;
     await api("/api/inbounds", "POST", {
       product_id: pid, unit, quantity: qty, unit_price: price,
       supplier: $("inSupplier").value, operator: $("inOperator").value,
       date: $("inDate").value, remark: remarkValue("inRemark"),
-      pay_status: payStatus,
+      pay_status: payStatus, adjust_amount: adjust,
     });
-    toast(`已入库 ${fmtNum(qty)}${unit} ${p.name}${payStatus === "unpaid" ? "（待付款，已进待付款账单）" : ""}`);
-    $("inQty").value = ""; $("inPrice").value = ""; $("inAmount").value = "";
+    toast(`已入库 ${fmtNum(qty)}${unit} ${p.name}${adjust ? `（调整 ${adjust > 0 ? "+" : "-"}${Math.abs(adjust).toFixed(2)}，已记其他开支）` : ""}${payStatus === "unpaid" ? "（待付款，已进待付款账单）" : ""}`);
+    $("inQty").value = ""; $("inPrice").value = ""; $("inAmount").value = ""; $("inAdjust").value = "";
     if ($("inPriceHint")) $("inPriceHint").textContent = "";
+    calcInbound();
     clearRemarkField("inRemark");
     setPay("inPay", "paid");   // 回到默认「已付款」
     loadInbounds(); loadStock();
@@ -3719,12 +3728,12 @@ async function loadInbounds() {
       <td><b>${esc(r.product_name)}</b></td>
       <td>${fmtNum(r.quantity)} ${r.unit}</td>
       <td class="num mono">${fmtMoney(r.unit_price)}/${r.unit}</td>
-      <td class="num mono">${fmtMoney(r.total_amount)}</td>
+      <td class="num mono">${fmtMoney(r.final_amount != null ? r.final_amount : r.total_amount)}${r.adjust_amount ? `<div class="muted" style="font-size:11px;">调整 ${r.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(r.adjust_amount))}</div>` : ""}</td>
       <td>${esc(r.supplier) || "—"}</td>
       <td>${esc(r.operator) || "—"}</td>
       <td>${r.date}</td>
       <td class="muted" style="max-width:150px;">${renderRemarkHtml(r.remark)}</td>
-      <td><button class="btn sm danger" onclick="deleteInbound(${r.id})">删</button></td></tr>`).join("") + `</tbody>`;
+      <td style="white-space:nowrap;"><button class="btn sm secondary" onclick="editInbound(${r.id})">改</button> <button class="btn sm danger" onclick="deleteInbound(${r.id})">删</button></td></tr>`).join("") + `</tbody>`;
   t._rows = rows;
   t._render = loadInbounds;
   updateBatchBar("in");
@@ -3733,6 +3742,41 @@ async function deleteInbound(id) {
   if (!confirm("确认删除该入库单？将回退库存与成本。")) return;
   try { await api("/api/inbounds/" + id, "DELETE"); toast("已删除"); loadInbounds(); loadStock(); }
   catch (e) { toast("删除失败：" + e.message); }
+}
+/* 手动修改入库单：只允许改 供应商 / 入库日期 / 付款状态；保存后操作员记为修改人 */
+function editInbound(id) {
+  const r = ($("inTable")._rows || []).find((x) => x.id === id);
+  if (!r) { toast("未找到该入库单，请刷新列表"); return; }
+  openModal(`
+    <h3>修改入库单 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="muted" style="margin-bottom:12px;">
+      ${esc(r.code)} · ${esc(r.product_name)} ${fmtNum(r.quantity)}${esc(r.unit || "")} · 金额 ${fmtMoney(r.total_amount)}${r.adjust_amount ? `（调整 ${r.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(r.adjust_amount))}）` : ""}
+    </div>
+    <div class="form-grid">
+      <div class="field"><label>供应商</label><input id="edInSupplier" value="${esc(r.supplier || "")}" placeholder="供应商名称" /></div>
+      <div class="field"><label>入库日期 *</label><input id="edInDate" type="date" value="${esc(r.date || "")}" /></div>
+      <div class="field" style="grid-column:1/-1;">
+        <label>付款状态</label>
+        ${payRadios("edInPay", r.pay_status, "待付款：先进「待付款账单」，点「已支付」后才计入财务报表")}
+      </div>
+    </div>
+    <p class="hint">只能修改以上三项；保存后操作员记为当前登录账号（${esc(operatorName())}）。数量 / 单价 / 金额如需更正，请删除后重新入库。</p>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn green" onclick="saveInboundEdit(${id})">✓ 保存</button>
+    </div>`);
+}
+async function saveInboundEdit(id) {
+  const date = $("edInDate").value;
+  if (!date) { toast("请选择入库日期"); return; }
+  try {
+    await api(`/api/inbounds/${id}`, "PUT", {
+      supplier: $("edInSupplier").value, date, pay_status: payOf("edInPay"),
+    });
+    closeModal();
+    toast(`已保存，操作员记为 ${operatorName()}`);
+    loadInbounds();
+  } catch (e) { toast("保存失败：" + e.message); }
 }
 
 /* =============== 出库 =============== */
@@ -3936,12 +3980,16 @@ function calcOutboundTotals() {
     cogs += amt;
   });
   const fee = parseFloat($("outFee").value) || 0;
+  const adjust = parseFloat($("outAdjust")?.value) || 0;   // 抹零/凑整：正=加收，负=抹零
+  const finalAmount = amount + adjust;                     // 实收金额（差额记「金额调整」其他开支）
   $("otAmount").textContent = fmtMoney(amount);
+  if ($("otFinal")) $("otFinal").textContent = fmtMoney(finalAmount);
   $("otCogs").textContent = fmtMoney(cogs);
   $("otGross").textContent = fmtMoney(amount - cogs);
-  $("otNet").textContent = fmtMoney(amount - cogs - fee);
+  // 净利按实收口径：抹零/凑整的差额已计入其他开支，这里同步扣掉，与报表口径一致
+  $("otNet").textContent = fmtMoney(finalAmount - cogs - fee);
 }
-function clearPreview() { $("outPreview").style.display = "none"; OUT_PREVIEW = null; }
+function clearPreview() { $("outPreview").style.display = "none"; OUT_PREVIEW = null; if ($("outAdjust")) $("outAdjust").value = ""; }
 async function submitOutbound() {
   const lines = collectSaleLines();
   if (!lines.length) { toast("请至少添加一行销售商品"); return; }
@@ -3949,15 +3997,16 @@ async function submitOutbound() {
   const fee = parseFloat($("outFee").value) || 0;
   try {
     const payStatus = payOf("outPay");
+    const adjust = parseFloat($("outAdjust")?.value) || 0;
     const r = await api("/api/outbounds", "POST", {
       customer: $("outCustomer").value, operator: $("outOperator").value,
       date: $("outDate").value, remark: remarkValue("outRemark"),
       lines, pack_lines: packLines, pack_fee_total: fee,
       auto_express: autoExpressOn(),   // 与预览一致：关掉就不再自动加快递费
-      pay_status: payStatus,
+      pay_status: payStatus, adjust_amount: adjust,
     });
     const warns = (r.warnings || []).length ? "\n⚠ " + r.warnings.join("；") : "";
-    toast("出库成功" + (payStatus === "unpaid" ? "（待付款，已进待付款账单）" : "") + warns, 3800);
+    toast("出库成功" + (adjust ? `（调整 ${adjust > 0 ? "+" : "-"}${Math.abs(adjust).toFixed(2)}，已记其他开支）` : "") + (payStatus === "unpaid" ? "（待付款，已进待付款账单）" : "") + warns, 3800);
     $("outSaleBody").innerHTML = ""; outSaleRowId = 0; addSaleRow();
     clearPreview();
     $("outCustomer").value = "";
@@ -4027,13 +4076,13 @@ function renderOutRow(o) {
       <td class="mono">${o.code}${payTag(o.pay_status)}${o.has_dropship ? ' <span class="badge income">含代发</span>' : ""}</td>
       <td>${esc(o.customer) || "—"}</td>
       <td><button class="detail-toggle" onclick="toggleOutDetail(${o.id})">▸ 查看明细</button></td>
-      <td class="num mono">${fmtMoney(o.total_amount)}</td>
+      <td class="num mono">${fmtMoney(o.final_amount != null ? o.final_amount : o.total_amount)}${o.adjust_amount ? `<div class="muted" style="font-size:11px;">调整 ${o.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(o.adjust_amount))}</div>` : ""}</td>
       <td class="num mono">${fmtMoney(o.total_cogs)}</td>
       <td class="num mono">${fmtMoney(o.total_fee)}</td>
       <td class="num mono" style="color:${o.net_profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(o.net_profit)}</td>
       <td>${o.date}</td>
       <td class="muted" style="max-width:140px;">${renderRemarkHtml(o.remark)}</td>
-      <td><button class="btn sm danger" onclick="deleteOutbound(${o.id})">删</button></td></tr>
+      <td style="white-space:nowrap;"><button class="btn sm secondary" onclick="editOutbound(${o.id})">改</button> <button class="btn sm danger" onclick="deleteOutbound(${o.id})">删</button></td></tr>
       <tr id="od-${o.id}" style="display:none;"><td colspan="11"><div class="subtable"><table>` +
       o.lines.map((l) => `<tr>
         <td>${esc(l.product_name)}${l.is_dropship ? ' <span class="badge income">代发</span>' : ""}${l.spec ? `<div class="muted" style="font-size:11px;">规格 ${esc(l.spec)}</div>` : ""}</td>
@@ -4060,7 +4109,7 @@ function buildOutGroup(recs) {
     code: `批量 · ${recs.length}单`,
     customer: customers.join(" / ") || "—",
     date: dates[0] === dates[dates.length - 1] ? dates[0] : `${dates[0]} ~ ${dates[dates.length - 1]}`,
-    total_amount: recs.reduce((s, r) => s + (r.total_amount || 0), 0),
+    total_amount: recs.reduce((s, r) => s + (r.final_amount != null ? r.final_amount : (r.total_amount || 0)), 0),
     total_cogs: recs.reduce((s, r) => s + (r.total_cogs || 0), 0),
     total_fee: recs.reduce((s, r) => s + (r.total_fee || 0), 0),
     net_profit: recs.reduce((s, r) => s + (r.net_profit || 0), 0),
@@ -4083,7 +4132,7 @@ function renderOutGroupRow(g) {
       <td class="num mono" style="color:${g.net_profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(g.net_profit)}</td>
       <td>${g.date}</td>
       <td class="muted" style="max-width:140px;">—</td>
-      <td><button class="btn sm danger" onclick="deleteOutGroupKeys(['${esc(g.import_group)}'])">删</button></td></tr>`;
+      <td style="white-space:nowrap;"><button class="btn sm secondary" onclick="editOutboundInGroup('${esc(g.import_group)}')">改</button> <button class="btn sm danger" onclick="deleteOutGroupKeys(['${esc(g.import_group)}'])">删</button></td></tr>`;
 }
 /* 打开批次二级页 */
 function openOutGroup(groupKey) {
@@ -4360,6 +4409,74 @@ async function deleteOutbound(id) {
   if (!confirm("确认删除该出库单？将回退库存、成本与财务记录。")) return;
   try { await api("/api/outbounds/" + id, "DELETE"); toast("已删除"); loadOutbounds(); loadStock(); }
   catch (e) { toast("删除失败：" + e.message); }
+}
+/* 在出库主列表（单条行或批次成员）里按 id 找单据 */
+function findOutbound(id) {
+  for (const x of ($("outTable")._rows || [])) {
+    if (!x._group && x.rec && x.rec.id === id) return x.rec;
+    if (x._group && x.g && x.g.records) {
+      const hit = x.g.records.find((o) => o.id === id);
+      if (hit) return hit;
+    }
+  }
+  if (OUT_GROUP) { const hit = OUT_GROUP.find((o) => o.id === id); if (hit) return hit; }
+  return null;
+}
+/* 批次行改单：先列出该批次内的单据，再选一条改 */
+function editOutboundInGroup(groupKey) {
+  const row = ($("outTable")._rows || []).find((x) => x._group && x.g && x.g.import_group === groupKey);
+  const recs = row && row.g.records ? row.g.records : [];
+  if (!recs.length) { toast("未找到该批次单据，请刷新列表"); return; }
+  openModal(`
+    <h3>选择要修改的出库单 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="muted" style="margin-bottom:10px;">批次 ${esc(groupKey)} · 共 ${recs.length} 单（只能改 客户 / 出库日期 / 付款状态）</div>
+    <div style="max-height:50vh;overflow:auto;">
+      <table class="table"><thead><tr><th>单号</th><th>客户</th><th class="num">金额</th><th>日期</th><th></th></tr></thead><tbody>
+      ${recs.map((o) => `<tr>
+        <td class="mono">${esc(o.code)}${payTag(o.pay_status)}</td>
+        <td>${esc(o.customer) || "—"}</td>
+        <td class="num mono">${fmtMoney(o.final_amount != null ? o.final_amount : o.total_amount)}</td>
+        <td>${esc(o.date)}</td>
+        <td><button class="btn sm secondary" onclick="editOutbound(${o.id})">改</button></td>
+      </tr>`).join("")}
+      </tbody></table>
+    </div>
+    <div class="modal-foot"><button class="btn secondary" onclick="closeModal()">关闭</button></div>`);
+}
+/* 手动修改出库单：只允许改 客户 / 出库日期 / 付款状态；保存后操作员记为修改人 */
+function editOutbound(id) {
+  const o = findOutbound(id);
+  if (!o) { toast("未找到该出库单，请刷新列表"); return; }
+  openModal(`
+    <h3>修改出库单 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="muted" style="margin-bottom:12px;">
+      ${esc(o.code)} · 销售收入 ${fmtMoney(o.total_amount)}${o.adjust_amount ? `（调整 ${o.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(o.adjust_amount))}，实收 ${fmtMoney(o.total_amount + o.adjust_amount)}）` : ""}
+    </div>
+    <div class="form-grid">
+      <div class="field"><label>客户</label><input id="edOutCustomer" value="${esc(o.customer || "")}" placeholder="客户名称" /></div>
+      <div class="field"><label>出库日期 *</label><input id="edOutDate" type="date" value="${esc(o.date || "")}" /></div>
+      <div class="field" style="grid-column:1/-1;">
+        <label>付款状态</label>
+        ${payRadios("edOutPay", o.pay_status, "待付款：先进「待付款账单」，点「已支付」后才计入财务报表")}
+      </div>
+    </div>
+    <p class="hint">只能修改以上三项；保存后操作员记为当前登录账号（${esc(operatorName())}）。商品 / 数量 / 价格如需更正，请删除后重新出库。</p>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn green" onclick="saveOutboundEdit(${id})">✓ 保存</button>
+    </div>`);
+}
+async function saveOutboundEdit(id) {
+  const date = $("edOutDate").value;
+  if (!date) { toast("请选择出库日期"); return; }
+  try {
+    await api(`/api/outbounds/${id}`, "PUT", {
+      customer: $("edOutCustomer").value, date, pay_status: payOf("edOutPay"),
+    });
+    closeModal();
+    toast(`已保存，操作员记为 ${operatorName()}`);
+    loadOutbounds();
+  } catch (e) { toast("保存失败：" + e.message); }
 }
 
 /* =============== 批量操作 =============== */
@@ -5350,12 +5467,14 @@ function renderOtherExpenseList() {
     (rows.length
       ? rows.map((r) => `<tr>
         <td class="mono">${esc(r.date)}</td>
-        <td><span class="badge expense">${esc(r.category)}</span>${payTag(r.pay_status)}</td>
+        <td><span class="badge expense">${esc(r.category)}</span>${payTag(r.pay_status)}${r.ref_type ? ` <span class="badge">来自${r.ref_type === "inbound" ? "入库单" : "出库单"}</span>` : ""}</td>
         <td class="num mono" style="color:var(--red)">${fmtMoney(r.amount)}</td>
         <td>${esc(r.operator) || "—"}</td>
         <td class="muted" style="max-width:260px;">${renderRemarkHtml(r.remark)}</td>
-        <td><button class="btn sm secondary" onclick="oeEdit(${r.id})">改</button>
-            <button class="btn sm danger" onclick="oeDelete(${r.id})">删</button></td></tr>`).join("")
+        <td>${r.ref_type
+          ? `<span class="muted" style="font-size:12px;">随单据自动维护</span>`
+          : `<button class="btn sm secondary" onclick="oeEdit(${r.id})">改</button>
+             <button class="btn sm danger" onclick="oeDelete(${r.id})">删</button>`}</td></tr>`).join("")
       : `<tr><td colspan="6" class="empty">该区间暂无开支，先在上方登记一笔</td></tr>`) + `</tbody>`;
   const sum = rows.reduce((a, r) => a + (Number(r.amount) || 0), 0);
   $("oeListSum").textContent = `共 ${rows.length} 笔 · 合计 ${fmtMoney(sum)}`;

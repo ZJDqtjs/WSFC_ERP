@@ -242,6 +242,11 @@
             <div class="field"><label>数量 *</label><input id="inQty" type="number" min="0" step="any" placeholder="0" oninput="calcInbound()" /></div>
             <div class="field"><label>单价（所选单位）*</label><input id="inPrice" type="number" min="0" step="any" placeholder="0.00" oninput="calcInbound()" /><div class="field-hint" id="inPriceHint"></div></div>
             <div class="field"><label>金额</label><input id="inAmount" readonly /></div>
+            <div class="field">
+              <label>调整（抹零 / 凑整）</label>
+              <input id="inAdjust" type="number" step="any" placeholder="0.00" oninput="calcInbound()" />
+              <div class="field-hint" id="inAdjustHint">正=多付，负=少付；差额自动记「金额调整」其他开支，商品成本不变</div>
+            </div>
             <div class="field"><label>供应商</label><input id="inSupplier" placeholder="供应商名称" /></div>
             <div class="field"><label>日期 *</label><input id="inDate" type="date" /></div>
             <div class="field"><label>操作员</label><input id="inOperator" readonly title="默认当前登录账号，不可修改" /></div>
@@ -347,9 +352,15 @@
             </div>
             <div class="form-grid" style="margin-top:12px;">
               <div class="field"><label>固定费用合计（人工打包费等）</label><input id="outFee" type="number" step="any" min="0" oninput="calcOutboundTotals()" /></div>
+              <div class="field">
+                <label>调整（给客户抹零 / 凑整）</label>
+                <input id="outAdjust" type="number" step="any" placeholder="0.00" oninput="calcOutboundTotals()" />
+                <div class="field-hint">正=加收，负=抹零；差额自动记「金额调整」其他开支，商品成本不变</div>
+              </div>
             </div>
             <div class="stat-grid" style="margin-top:14px;">
               <div class="stat"><div class="label">销售收入</div><div class="value" id="otAmount">¥0.00</div></div>
+              <div class="stat"><div class="label">实收金额</div><div class="value" id="otFinal">¥0.00</div></div>
               <div class="stat"><div class="label">结转成本</div><div class="value" id="otCogs">¥0.00</div></div>
               <div class="stat success"><div class="label">毛利</div><div class="value" id="otGross" style="color:var(--green)">¥0.00</div></div>
               <div class="stat success"><div class="label">净利</div><div class="value" id="otNet" style="color:var(--green)">¥0.00</div></div>

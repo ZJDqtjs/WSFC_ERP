@@ -1,3 +1,5 @@
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -5,10 +7,12 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import FinanceRecord, Inbound, Product, StockMovement, User
-from ..services import create_inbound, purge_inbounds, recompute_product
+from ..models import FinanceRecord, Inbound, OtherExpense, Product, StockMovement, User
+from ..services import create_inbound, pay_fields, purge_inbounds, recompute_product, sync_doc_edit
 
 router = APIRouter(prefix="/api/inbounds", tags=["inbound"])
+
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 class BatchIds(BaseModel):
@@ -25,6 +29,16 @@ class InboundIn(BaseModel):
     date: str
     remark: str = ""
     pay_status: str = "paid"  # paid 已付款（默认）/ unpaid 待付款（先进「待付款账单」）
+    # 金额调整（抹零/凑整）：正=多付给供应商，负=少付。商品成本按原价不变，差额自动记「金额调整」其他开支
+    adjust_amount: float = 0.0
+
+
+class InboundUpdate(BaseModel):
+    """手动修改入库单：只允许改 供应商 / 日期 / 付款状态（其余字段须删除重建）。"""
+
+    supplier: str = ""
+    date: str
+    pay_status: str = "paid"
 
 
 def _to_dict(r: Inbound) -> dict:
@@ -38,6 +52,8 @@ def _to_dict(r: Inbound) -> dict:
         "quantity_base": r.quantity_base,
         "unit_price": r.unit_price,
         "total_amount": r.total_amount,
+        "adjust_amount": round(getattr(r, "adjust_amount", 0.0) or 0.0, 2),
+        "final_amount": round((r.total_amount or 0.0) + (getattr(r, "adjust_amount", 0.0) or 0.0), 2),
         "supplier": r.supplier,
         "operator": r.operator,
         "date": r.date,
@@ -77,6 +93,26 @@ def create_inbound_api(data: InboundIn, db: Session = Depends(get_db), user: Use
     return _to_dict(rec)
 
 
+@router.put("/{rid}")
+def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """手动修改入库单：只允许改 供应商 / 日期 / 付款状态；操作员记为本次修改人。"""
+    rec = db.get(Inbound, rid)
+    if not rec:
+        raise HTTPException(404, "入库单不存在")
+    date = (data.date or "").strip()
+    if not DATE_RE.match(date):
+        raise HTTPException(400, "日期格式应为 YYYY-MM-DD")
+    pay = pay_fields({"pay_status": data.pay_status, "paid_at": ""}, date)
+    rec.supplier = (data.supplier or "").strip()
+    rec.date = date
+    rec.operator = user.name   # 记录为后来的修改人（忽略前端传值）
+    rec.pay_status, rec.paid_at = pay["pay_status"], pay["paid_at"]
+    sync_doc_edit(db, "inbound", rid, date, user.name, pay)
+    db.commit()
+    db.refresh(rec)
+    return _to_dict(rec)
+
+
 @router.delete("/{rid}")
 def delete_inbound(rid: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     rec = db.get(Inbound, rid)
@@ -87,6 +123,9 @@ def delete_inbound(rid: int, db: Session = Depends(get_db), user: User = Depends
         db.delete(m)
     for f in db.execute(select(FinanceRecord).where(FinanceRecord.ref_type == "inbound", FinanceRecord.ref_id == rid)).scalars():
         db.delete(f)
+    # 金额调整带出的其他开支一并删除，避免删单后报表还挂着这笔调整
+    for e in db.execute(select(OtherExpense).where(OtherExpense.ref_type == "inbound", OtherExpense.ref_id == rid)).scalars():
+        db.delete(e)
     db.delete(rec)
     recompute_product(db, pid)
     db.commit()

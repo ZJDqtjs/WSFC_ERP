@@ -7,7 +7,7 @@ from collections import deque
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from .models import FinanceRecord, Inbound, Outbound, OutboundLine, Product, StockMovement, Unit
+from .models import FinanceRecord, Inbound, OtherExpense, Outbound, OutboundLine, Product, StockMovement, Unit
 
 # 标准重量单位（克 为基础）
 STANDARD_WEIGHT_UNITS = [
@@ -454,6 +454,7 @@ def purge_outbounds(db: Session, ids: list[int]) -> tuple[int, int, set[int]]:
     for part in _chunks(existing):
         _bulk_delete_ref(db, StockMovement, "outbound", part)
         _bulk_delete_ref(db, FinanceRecord, "outbound", part)
+        _bulk_delete_ref(db, OtherExpense, "outbound", part)  # 金额调整带出的其他开支一并删除
         db.execute(
             delete(OutboundLine).where(OutboundLine.outbound_id.in_(part)).execution_options(synchronize_session=False)
         )
@@ -486,6 +487,7 @@ def purge_inbounds(db: Session, ids: list[int]) -> tuple[int, int, set[int]]:
     for part in _chunks(existing):
         _bulk_delete_ref(db, StockMovement, "inbound", part)
         _bulk_delete_ref(db, FinanceRecord, "inbound", part)
+        _bulk_delete_ref(db, OtherExpense, "inbound", part)  # 金额调整带出的其他开支一并删除
         db.execute(delete(Inbound).where(Inbound.id.in_(part)).execution_options(synchronize_session=False))
     db.flush()
     for pid in affected:
@@ -563,6 +565,63 @@ def pay_fields(payload: dict, date: str = "") -> dict:
     return {"pay_status": status, "paid_at": paid_at if status == "paid" else ""}
 
 
+ADJUST_CATEGORY = "金额调整"  # 抹零/凑整等金额调整自动生成的其他开支类型
+
+
+def sync_adjust_expense(db: Session, kind: str, ref_id: int, code: str, date: str,
+                        operator: str, adjust: float, pay: dict) -> None:
+    """维护单据「金额调整」对应的其他开支：调整额为 0 则删除，否则新建/更新为 |调整额|。
+
+    单据金额与商品成本都按商品原价不变，抹零/凑整的差额在这里单独记一笔支出——
+    这样报表口径 = 实收/实付，而商品成本（FIFO 批次）不受影响。
+    """
+    existing = list(db.execute(
+        select(OtherExpense).where(OtherExpense.ref_type == kind, OtherExpense.ref_id == ref_id)
+    ).scalars())
+    amount = round(abs(float(adjust or 0)), 2)
+    if amount <= 0:
+        for e in existing:
+            db.delete(e)
+        return
+    label = "入库" if kind == "inbound" else "出库"
+    remark = f"{label} {code} 金额调整 {'+' if adjust > 0 else '-'}{amount}"
+    if existing:
+        e = existing[0]
+        e.amount, e.date, e.remark, e.operator = amount, date, remark, operator
+        e.pay_status, e.paid_at = pay["pay_status"], pay["paid_at"]
+        for extra in existing[1:]:
+            db.delete(extra)
+        return
+    db.add(OtherExpense(
+        category=ADJUST_CATEGORY, amount=amount, date=date, remark=remark,
+        operator=operator, ref_type=kind, ref_id=ref_id,
+        pay_status=pay["pay_status"], paid_at=pay["paid_at"],
+    ))
+
+
+def sync_doc_edit(db: Session, kind: str, ref_id: int, date: str, operator: str, pay: dict) -> None:
+    """单据被手动修改（供应商/客户、日期、付款状态）后，同步它带出的库存流水/财务流水/其他开支。
+
+    - 操作员统一记为本次修改人（后端强制取登录账号，忽略前端传值）；
+    - 改日期时三类关联记录的日期一起改，保证报表按日期统计口径一致；
+      FIFO 重放按流水 id 排序，因此改日期不会改变结转成本。
+    """
+    for m in db.execute(
+        select(StockMovement).where(StockMovement.ref_type == kind, StockMovement.ref_id == ref_id)
+    ).scalars():
+        m.date, m.operator = date, operator
+    for f in db.execute(
+        select(FinanceRecord).where(FinanceRecord.ref_type == kind, FinanceRecord.ref_id == ref_id)
+    ).scalars():
+        f.date, f.operator = date, operator
+        f.pay_status, f.paid_at = pay["pay_status"], pay["paid_at"]
+    for e in db.execute(
+        select(OtherExpense).where(OtherExpense.ref_type == kind, OtherExpense.ref_id == ref_id)
+    ).scalars():
+        e.date, e.operator = date, operator
+        e.pay_status, e.paid_at = pay["pay_status"], pay["paid_at"]
+
+
 def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     """创建入库单（含库存流水 + 财务记录 + 成本重算）。"""
     product = db.get(Product, payload["product_id"])
@@ -575,7 +634,8 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     unit_price = float(payload["unit_price"])
     date = payload["date"]
     qty_base = unit_to_base(product, unit, quantity)
-    amount = round(quantity * unit_price, 2)
+    amount = round(quantity * unit_price, 2)   # 商品金额（= 批次成本），不随金额调整变化
+    adjust = round(float(payload.get("adjust_amount") or 0), 2)   # 抹零/凑整：正=多付，负=少付
     op = (payload.get("operator") or "").strip() or operator
 
     pay = pay_fields(payload, date)
@@ -587,6 +647,7 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
         quantity_base=qty_base,
         unit_price=unit_price,
         total_amount=amount,
+        adjust_amount=adjust,
         supplier=(payload.get("supplier") or "").strip(),
         operator=op,
         date=date,
@@ -622,6 +683,7 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
             **pay,   # 挂账状态随入库单：待付款时这笔采购支出也不进报表
         )
     )
+    sync_adjust_expense(db, "inbound", rec.id, rec.code, date, op, adjust, pay)
     recompute_product(db, product.id)
     db.flush()
     return rec
@@ -870,6 +932,7 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
     )
     op = (payload.get("operator") or "").strip() or operator
     date = payload["date"]
+    adjust = round(float(payload.get("adjust_amount") or 0), 2)   # 抹零/凑整：正=加收，负=抹零
     pay = pay_fields(payload, date)
     rec = Outbound(
         code=gen_outbound_code(db, date),
@@ -881,6 +944,7 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
         date=date,
         remark=(payload.get("remark") or "").strip(),
         total_amount=order["total_amount"],
+        adjust_amount=adjust,
         total_cogs=order["total_cogs"],
         total_fee=order["total_fee"],
         **pay,
@@ -974,6 +1038,7 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
                 **pay,   # 挂账状态随出库单
             )
         )
+    sync_adjust_expense(db, "outbound", rec.id, rec.code, date, op, adjust, pay)
     if defer_recompute:
         if affected_out is not None:
             affected_out.extend(affected)
