@@ -1173,23 +1173,28 @@ let AI_CTRL = null;   // 当前识别任务的 AbortController（后台挂起，
 let AI_TIMER = null;  // 用时刷新定时器
 let AI_START = 0;
 let AI_THINK_TEXT = "";    // 累计的「思考过程」原文（确认框里可展开回看）
-let AI_ANSWER_TEXT = "";   // 累计的模型正式输出
+let AI_ANSWER_TEXT = "";   // 累计的模型正式输出（中文「思路」+ JSON）
 const AI_THINK_MAX = 20000; // 面板最多保留的字符数（票据识别的思考常有 1.5 万字），超出只留尾部
+let AI_THINK_OPEN = false;  // 原始思考（该模型只能用英文）默认收起，点「展开英文思考」才看
+let _batchAbort = false;    // 多图批量识别是否已被取消
+let _aiDoneResolve = null;  // 批量识别时，等待当前确认框关闭后再识别下一张
 
 function aiShowThinking() {
   AI_THINK_TEXT = "";
   AI_ANSWER_TEXT = "";
+  AI_THINK_OPEN = false;
   $("aiThinking").classList.remove("done");
   $("aiThinking").style.display = "";
   $("aiThinkWrap").style.display = "";
   $("aiThinkBody").textContent = "";
+  $("aiThinkBody").style.display = "none";   // 英文原始思考默认收起
   $("aiAnswerBody").textContent = "";
   $("aiAnswerBody").style.display = "none";
   $("aiAnswerHead").style.display = "none";
   $("aiThinkStage").textContent = "已开始识别…";
   $("aiThinkTitle").textContent = "AI 思考中";
   $("aiThinkToggle").style.display = "none";
-  $("aiThinkToggle").textContent = "收起";
+  $("aiThinkToggle").textContent = "展开英文思考";
   $("aiCancelBtn").style.display = "";
   AI_START = Date.now();
   clearInterval(AI_TIMER);
@@ -1212,9 +1217,9 @@ function aiHideThinking() {   // 彻底隐藏（用户主动取消时）
   $("aiThinking").style.display = "none";
 }
 function aiToggleThink() {
-  const hidden = $("aiThinkWrap").style.display === "none";
-  $("aiThinkWrap").style.display = hidden ? "" : "none";
-  $("aiThinkToggle").textContent = hidden ? "收起" : "展开";
+  AI_THINK_OPEN = !AI_THINK_OPEN;
+  $("aiThinkBody").style.display = AI_THINK_OPEN ? "" : "none";
+  $("aiThinkToggle").textContent = AI_THINK_OPEN ? "收起英文思考" : "展开英文思考";
 }
 function aiSetStage(s) {
   if (s) $("aiThinkStage").textContent = s;
@@ -1223,13 +1228,19 @@ function _aiFill(el, text) {
   el.textContent = text.length > AI_THINK_MAX ? "…（前面内容略）\n" + text.slice(-AI_THINK_MAX) : text;
   el.scrollTop = el.scrollHeight;
 }
-function aiAppendThink(s) {           // 模型的思考过程（reasoning_content）
+function aiAppendThink(s) {           // 模型原始思考（该模型 reasoning 通道只能用英文）
   if (!s) return;
   AI_THINK_TEXT += s;
   _aiFill($("aiThinkBody"), AI_THINK_TEXT);
+  $("aiThinkToggle").style.display = "";
+  if (!AI_THINK_OPEN) {
+    // 收起状态：用阶段行报告进度，避免看起来"一片空白"
+    aiSetStage(`模型正在思考…（已 ${AI_THINK_TEXT.length} 字；原始思考为英文，中文思路稍后在下方输出）`);
+  }
 }
-function aiAppendAnswer(s) {          // 模型的正式输出（JSON）
+function aiAppendAnswer(s) {          // 模型正式输出：中文「思路」+ JSON
   if (!s) return;
+  if (!AI_ANSWER_TEXT) aiSetStage("正在输出中文思路与识别结果…");
   AI_ANSWER_TEXT += s;
   $("aiAnswerHead").style.display = "";
   $("aiAnswerBody").style.display = "";
@@ -1237,7 +1248,13 @@ function aiAppendAnswer(s) {          // 模型的正式输出（JSON）
 }
 function aiCancel() {
   if (AI_CTRL) AI_CTRL.abort();
+  // 批量识别的「等确认框关闭」阶段没有在途请求，abort 拦不住，必须自己打断并放行等待
+  _batchAbort = true;
+  const done = _aiDoneResolve;
+  _aiDoneResolve = null;
+  if (done) done();
   aiHideThinking();
+  aiResetBtn();          // 关键：取消后按钮恢复可用（原来漏了，会一直停在"识别中…"且点不动）
   toast("已取消识别");
 }
 function aiStartTask(btnHtml = '<svg class="ic"><use href="#i-ai"/></svg> 识别中…') {
@@ -1293,7 +1310,7 @@ async function aiCollectStream(res) {
 }
 async function aiFinishOk(result) {
   // 不隐藏思考过程面板：识别完成后仍可回看（标题转完成态）
-  aiFinishThinking("AI 思考过程（点击「收起」可折叠）");
+  aiFinishThinking("识别完成（可「展开英文思考」看模型原始推理）");
   // 刷新商品列表，保证确认框里的候选/分类下拉是最新的
   PRODUCTS = await api("/api/products");
   openAiConfirm(result);
@@ -1301,7 +1318,7 @@ async function aiFinishOk(result) {
 }
 function aiFinishErr(e) {
   if (e.name === "AbortError") return;     // 用户手动取消
-  aiSetStage("识别失败");
+  aiSetStage("识别失败：" + e.message);
   aiAppendThink("\n⚠ 识别失败：" + e.message);
   aiFinishThinking("识别失败");
   toast("识别失败：" + e.message);
@@ -1377,8 +1394,8 @@ function aiRun() {
   }
   aiParse();
 }
-let _aiDoneResolve = null;   // 批量识别时，等待当前确认框关闭后再识别下一张
 async function aiParseImageFiles(files, label) {
+  _batchAbort = false;   // 每批开始前复位，避免上次取消留下的标记把新一批直接掐掉
   const total = files.length;
   // 输入框里的文字会作为「补充说明」一起发给 AI（如「京东8号->8号纸箱」）
   const extra = $("aiText").value.trim();
@@ -1392,7 +1409,6 @@ async function aiParseImageFiles(files, label) {
   }
   aiClearPending();   // 整批识别完成，清掉待识别预览
 }
-let _batchAbort = false;
 async function aiRecognizeOne(f, idx, total, label, extra) {
   const progress = total > 1 ? `（第 ${idx + 1}/${total} 张）` : "";
   aiStartTask(`<svg class="ic"><use href="#i-camera"/></svg> ${label}识别中 ${progress}`);
@@ -1578,7 +1594,7 @@ function openAiConfirm(r) {
     : "";
   // 识别时的「思考过程」也放进确认框，方便回看 AI 是怎么判断的
   const thinkHtml = AI_THINK_TEXT.trim()
-    ? `<details class="ai-think-details"><summary>🧠 查看 AI 思考过程（${AI_THINK_TEXT.length} 字，点击展开）</summary>
+    ? `<details class="ai-think-details"><summary>🧠 查看模型原始思考（英文 reasoning，${AI_THINK_TEXT.length} 字，点击展开）</summary>
          <pre>${esc(AI_THINK_TEXT.length > 12000 ? "…（前面内容略）\n" + AI_THINK_TEXT.slice(-12000) : AI_THINK_TEXT)}</pre></details>`
     : "";
   openModal(`

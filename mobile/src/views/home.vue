@@ -55,13 +55,20 @@
 
       <div v-if="thinking || answer || busy || busyImg" class="think-box">
         <div class="row" style="justify-content:space-between;">
-          <span class="muted">{{ aiStage || ((busy || busyImg) ? 'AI 思考中…' : 'AI 思考过程') }}</span>
+          <span class="muted grow">{{ aiStage || ((busy || busyImg) ? 'AI 思考中…' : 'AI 思考过程') }}</span>
+          <van-button v-if="thinking" size="mini" plain @click="thinkOpen = !thinkOpen">
+            {{ thinkOpen ? '收起英文思考' : '展开英文思考' }}
+          </van-button>
           <van-button v-if="busy || busyImg" size="mini" plain @click="cancelAI">取消</van-button>
         </div>
-        <div v-if="thinking" class="think-sub">🧠 思考过程（模型实时输出）</div>
-        <pre v-if="thinking">{{ thinking }}</pre>
-        <div v-if="answer" class="think-sub">📄 识别结果</div>
-        <pre v-if="answer" class="think-answer">{{ answer }}</pre>
+        <template v-if="thinking && thinkOpen">
+          <div class="think-sub">🧠 原始思考（模型 reasoning 通道，英文）</div>
+          <pre>{{ thinking }}</pre>
+        </template>
+        <template v-if="answer">
+          <div class="think-sub">📄 识别结果（中文思路 + JSON）</div>
+          <pre class="think-answer">{{ answer }}</pre>
+        </template>
       </div>
     </div>
 
@@ -284,6 +291,7 @@ const aiStage = ref('')    // 当前阶段提示
 const busy = ref(false)
 const busyImg = ref(false)
 const aiPending = ref([])  // 待识别图片：[{ file, url }]（选好后先预览，确认才开始识别）
+const thinkOpen = ref(false)  // 原始思考（该模型只能用英文）默认收起
 const confirmShow = ref(false)
 const submitting = ref(false)
 const camInput = ref(null)
@@ -293,6 +301,7 @@ const pickerShow = ref(false)
 let replaceIndex = -1
 let abortCtrl = null
 let waitNext = null
+let batchCancelled = false   // 取消后不再继续识别下一张（两张之间的确认框阶段没有在途请求，abort 拦不住）
 
 const aiForm = reactive({
   type: 'inbound', date: todayStr(), supplier: '', customer: '', remark: '', lines: [], image_url: '',
@@ -359,9 +368,20 @@ async function aiRun() {
 
 const AI_TEXT_MAX = 8000
 function _cap(t) { return t.length > AI_TEXT_MAX ? '…（前面内容略）\n' + t.slice(-AI_TEXT_MAX) : t }
-function pushThink(s) { if (s) thinking.value = _cap(thinking.value + s) }   // 模型思考过程
-function pushAnswer(s) { if (s) answer.value = _cap(answer.value + s) }     // 模型正式输出
-function resetThinking() { thinking.value = ''; answer.value = ''; aiStage.value = '' }
+// 模型原始思考（reasoning_content，该模型只能是英文）：收起时用阶段行报进度，避免"一片空白"
+function pushThink(s) {
+  if (!s) return
+  thinking.value = _cap(thinking.value + s)
+  if (!thinkOpen.value) {
+    aiStage.value = `模型正在思考…（已 ${thinking.value.length} 字；原始思考为英文，中文思路稍后在下方输出）`
+  }
+}
+function pushAnswer(s) {                 // 模型正式输出：中文「思路」+ JSON
+  if (!s) return
+  if (!answer.value) aiStage.value = '正在输出中文思路与识别结果…'
+  answer.value = _cap(answer.value + s)
+}
+function resetThinking() { thinking.value = ''; answer.value = ''; aiStage.value = ''; thinkOpen.value = false }
 
 async function aiParse() {
   const text = aiText.value.trim()
@@ -382,9 +402,11 @@ async function aiParse() {
 }
 
 async function runImageBatch(files) {
+  batchCancelled = false
   busyImg.value = true
   let aborted = false
   for (let i = 0; i < files.length; i++) {
+    if (batchCancelled) break
     resetThinking()
     abortCtrl = new AbortController()
     try {
@@ -410,10 +432,11 @@ async function runImageBatch(files) {
   }
   busyImg.value = false
   abortCtrl = null   // 保留思考过程供回看
-  if (!aborted) clearPending()   // 整批识别完成；取消则保留预览图，方便重试
+  if (!aborted && !batchCancelled) clearPending()   // 整批识别完成；取消则保留预览图，方便重试
 }
 
 function cancelAI() {
+  batchCancelled = true
   if (abortCtrl) { try { abortCtrl.abort() } catch (e) {} }
   busy.value = false
   busyImg.value = false

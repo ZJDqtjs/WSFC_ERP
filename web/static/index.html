@@ -127,14 +127,14 @@
               <span class="ai-think-title"><svg class="ic"><use href="#i-ai"/></svg> <span id="aiThinkTitle">AI 思考中</span></span>
               <span class="ai-think-time" id="aiThinkTime">0s</span>
               <span class="grow"></span>
-              <button class="btn sm secondary" id="aiThinkToggle" onclick="aiToggleThink()" style="display:none;">收起</button>
+              <button class="btn sm secondary" id="aiThinkToggle" onclick="aiToggleThink()" style="display:none;">展开英文思考</button>
               <button class="btn sm secondary" id="aiCancelBtn" onclick="aiCancel()"><svg class="ic"><use href="#i-x"/></svg> 取消</button>
             </div>
             <div class="ai-think-stage" id="aiThinkStage"></div>
             <div id="aiThinkWrap">
-              <div class="ai-think-sub">🧠 思考过程（模型实时输出）</div>
-              <pre class="ai-think-body" id="aiThinkBody"></pre>
-              <div class="ai-think-sub" id="aiAnswerHead" style="display:none;">📄 识别结果（JSON）</div>
+              <div class="ai-think-sub">🧠 原始思考（模型 reasoning 通道，英文，默认收起）</div>
+              <pre class="ai-think-body" id="aiThinkBody" style="display:none;"></pre>
+              <div class="ai-think-sub" id="aiAnswerHead" style="display:none;">📄 识别结果（中文思路 + JSON）</div>
               <pre class="ai-answer-body" id="aiAnswerBody" style="display:none;"></pre>
             </div>
           </div>

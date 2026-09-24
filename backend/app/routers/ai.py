@@ -35,12 +35,12 @@ UNIT_ALIASES = {
     "个": "个", "件": "件", "袋": "袋", "包": "包", "盒": "盒", "箱": "箱", "份": "份", "单": "单",
 }
 
-# 统一要求模型用简体中文思考与作答：思考过程（reasoning）会实时展示给用户，
-# 默认常常是一大段英文，这里强制中文。
+# 语言要求：本模型（blian_qwen35_plus / Qwen3 系）的 reasoning 通道是英文（实测提示词改不动），
+# 所以改为要求它在正文里先写一段中文「思路」，用户看到的就是中文分析；另外再要求一次中文思考。
 ZH_LANG_RULE = """
 
-语言要求：无论用户使用什么语言，请全程使用简体中文思考（包括内部 reasoning / thinking 过程）与作答，不要使用英文。
-最后再次强调：回答只输出上面规定的那一个 JSON 对象本身，不要输出任何解释、前后缀或 markdown 代码块标记。"""
+语言要求：无论用户使用什么语言，你必须用简体中文作答，上面要求的「思路」必须逐行使用简体中文书写。
+最后再次强调：只输出「思路」（简体中文，3~6 行）和一个 JSON 对象，不要输出任何其他解释、前后缀或 markdown 代码块标记。"""
 
 SYSTEM_PROMPT = """你是「企业台账系统」的自然语言录入解析器。用户会用口语描述入库（进货/采购/进仓）或出库（销售/卖出/发货）业务，例如：
 - 入库：今天入库了100斤木耳，25一斤
@@ -60,7 +60,8 @@ SYSTEM_PROMPT = """你是「企业台账系统」的自然语言录入解析器�
 6. supplier（入库时的供应商）/ customer（出库时的客户）/ remark（备注）：有则提取，没有给空字符串。
 7. 一句话可能包含多行/多个商品，lines 里逐行列出；单价统一理解为"每 unit 单位的金额"。
 
-只输出一个 JSON 对象，禁止输出 JSON 以外的任何文字、解释、markdown 代码块标记。
+输出格式：先用简体中文写 3~6 行「思路」，每行一句话，说明：判断的业务类型、每条商品的数量与单位是怎么来的、准备匹配还是新建商品；
+然后再另起一行输出一个 JSON 对象。除「思路」文字和这个 JSON 之外，不要输出任何其他内容（不要解释、不要前后缀、不要 markdown 代码块标记）。
 JSON 要紧凑输出：单行、无缩进无换行、字段间不留多余空格；supplier/customer/remark 为空时省略该字段。
 JSON 结构：
 {
@@ -90,7 +91,8 @@ IMAGE_SYSTEM_PROMPT = """你是「企业台账系统」的采购票据识别助�
 7. remark：可留空。
 8. 票据可能有多张/多条，lines 逐条列出；金额合计不用输出。
 
-只输出一个 JSON 对象，禁止输出 JSON 以外的任何文字、解释、markdown 代码块标记。
+输出格式：先用简体中文写 3~6 行「思路」，每行一句话，说明：识别到的票据类型与条数、数量/单价是怎么从票据上取的、准备匹配还是新建商品；
+然后再另起一行输出一个 JSON 对象。除「思路」文字和这个 JSON 之外，不要输出任何其他内容（不要解释、不要前后缀、不要 markdown 代码块标记）。
 JSON 要紧凑输出：单行、无缩进无换行、字段间不留多余空格；supplier/customer/remark 为空时省略该字段。
 JSON 结构：
 {
@@ -783,8 +785,36 @@ def _apply_aliases(name: str, aliases: list[tuple[str, str]]) -> str:
 
 
 def _pack_key(s: str) -> str:
-    """包材宽松名：去空白、去“纸/拖”等箱型限定词，用于「9号箱」↔「9号纸箱」的等价判断。"""
-    return _tight(s).replace("纸", "").replace("拖", "")
+    """包材宽松名：去空白，再去「箱」这类容器词与「纸/拖」等箱型词，只留编号/主名。
+
+    这样「纸箱3号箱」「3号纸箱」「3号箱」都得到同一个键「3号」，能互相对上；
+    「8号纸箱」与「8号拖箱」都得到「8号」，两者的区分交给 _narrow_by_pack_type（看名称里的箱型词）。
+
+    旧实现只去「纸/拖」、留着「箱」：模型把箱型写在前面时（票据两列拼成「纸箱3号箱」），
+    键是「箱3号箱」，与档案「3号纸箱」的「3号箱」对不上 → 被判成新商品、污染商品资料。
+    """
+    t = _tight(s)
+    for w in ("泡沫箱", "纸箱", "拖箱", "塑料箱", "箱"):
+        t = t.replace(w, "")
+    return t.replace("纸", "").replace("拖", "")
+
+
+def _pack_box_type(s: str) -> str:
+    """包材箱型词：纸箱 ->「纸」，拖箱 ->「拖」，判别不出返回空。"""
+    t = _tight(s)
+    if "拖" in t:
+        return "拖"
+    if "纸" in t:
+        return "纸"
+    return ""
+
+
+def _narrow_by_pack_type(name: str, cands: list[Product]) -> list[Product]:
+    """按识别名里的箱型词（纸箱/拖箱）筛候选；识别名没写箱型词时返回空。"""
+    qt = _pack_box_type(name)
+    if not qt:
+        return []
+    return [c for c in cands if _pack_box_type(c.name) == qt]
 
 
 def _line_candidates(db: Session, name: str, op_type: str, cat: str) -> list[Product]:
@@ -993,10 +1023,11 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
         auto = False
         cands = _line_candidates(db, name, op_type, cat)
         if cat == "pack":
-            # 包材判定分三级，优先级从高到低：
+            # 包材判定分四级，优先级从高到低：
             #   ① 同名（忽略空白）：票据「8号拖箱」必须命中档案里的「8号拖箱」，绝不串到「8号纸箱」
-            #   ② 去「纸/拖」等限定词后等价且唯一：「3号箱」→「3号纸箱」
+            #   ② 去「箱/纸/拖」后等价且唯一：「3号箱」→「3号纸箱」；「纸箱3号箱」（票据两列拼起来）→「3号纸箱」
             #   ③ 前缀近似且唯一：「松茸6号」→「松茸6号箱」
+            #   ④ 同编号多箱型时按名称里的箱型词定位：「纸箱8号箱」→「8号纸箱」
             # 仍剩多个候选（如「8号箱」同时对上 8号纸箱 / 8号拖箱）才算歧义，交给用户挑选。
             qname = _tight(name)
             qkey = _pack_key(name)
@@ -1010,6 +1041,11 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
                 )
             ]
             cands = exact_name + loose + sub
+            # 识别名里写了箱型词（纸箱/拖箱）时，同箱型的候选排前面
+            narrowed = _narrow_by_pack_type(name, loose or sub)
+            if narrowed:
+                others = [c for c in cands if all(c.id != n.id for n in narrowed)]
+                cands = narrowed + others
             if exact_name:
                 exact_hit = True
                 p = exact_name[0]
@@ -1019,6 +1055,11 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
             elif not loose and len(sub) == 1:
                 exact_hit = True
                 p = sub[0]
+            elif len(narrowed) == 1:
+                # 同编号有多个箱型候选（如「8号纸箱」「8号拖箱」）：
+                # 识别名里带了箱型词就能唯一定位（「纸箱8号箱」→「8号纸箱」），直接采信
+                exact_hit = True
+                p = narrowed[0]
             else:
                 exact_hit = False
                 p = None       # 没有/有多个等价 → 交由用户选择
