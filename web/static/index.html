@@ -111,23 +111,32 @@
         </div>
 
         <div class="card">
-          <div class="card-head"><h3><svg class="ic"><use href="#i-ai"/></svg> AI 智能录入</h3><span class="hint">用大白话描述入库/出库，AI 自动拆分成系统格式，确认后再提交；识别在后台进行，可先做别的</span></div>
+          <div class="card-head"><h3><svg class="ic"><use href="#i-ai"/></svg> AI 智能录入</h3><span class="hint">用大白话描述入库/出库，AI 自动拆分成系统格式，确认后再提交；<b>粘贴/选择票据图片后先预览，按回车或点「识别并录入」才开始识别</b>；识别时输入框里的文字会作为补充说明一起发给 AI（如「图里的京东箱子就是纸箱：京东8号-&gt;8号纸箱」）</span></div>
           <div class="toolbar">
-            <input id="aiText" placeholder='例如：今天入库了100斤木耳，25一斤；或 出库2单七彩土豆3斤，每单15元，客户张三' style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')aiParse()" />
-            <button class="btn green" id="aiBtn" onclick="aiParse()"><svg class="ic"><use href="#i-ai"/></svg> 识别并录入</button>
-            <button class="btn secondary" onclick="aiPickImage()"><svg class="ic"><use href="#i-paperclip"/></svg> 相册识别</button>
-            <button class="btn secondary" onclick="aiCaptureImage()"><svg class="ic"><use href="#i-camera"/></svg> 拍照识别</button>
+            <input id="aiText" placeholder='文字：今天入库了100斤木耳，25一斤 ｜ 图片补充说明：图里说的京东箱子就是纸箱箱子（京东8号-&gt;8号纸箱）' style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')aiRun()" oninput="if(AI_PENDING.length)aiRenderPending()" />
+            <button class="btn green" id="aiBtn" onclick="aiRun()"><svg class="ic"><use href="#i-ai"/></svg> 识别并录入</button>
+            <button class="btn secondary" onclick="aiPickImage()"><svg class="ic"><use href="#i-paperclip"/></svg> 相册选图</button>
+            <button class="btn secondary" onclick="aiCaptureImage()"><svg class="ic"><use href="#i-camera"/></svg> 拍照选图</button>
             <input type="file" id="aiImgFile" accept="image/*" multiple style="display:none;" onchange="aiParseImage('file')" />
             <input type="file" id="aiCamFile" accept="image/*" capture="environment" style="display:none;" onchange="aiParseImage('cam')" />
           </div>
+          <!-- 待识别图片预览：粘贴/选图后先在这里预览，按回车或点「识别并录入」才开始识别 -->
+          <div id="aiPending" class="ai-pending" style="display:none;"></div>
           <div id="aiThinking" class="ai-thinking" style="display:none;">
             <div class="ai-think-head">
-              <span class="ai-think-title"><svg class="ic"><use href="#i-ai"/></svg> AI 思考中</span>
+              <span class="ai-think-title"><svg class="ic"><use href="#i-ai"/></svg> <span id="aiThinkTitle">AI 思考中</span></span>
               <span class="ai-think-time" id="aiThinkTime">0s</span>
               <span class="grow"></span>
-              <button class="btn sm secondary" onclick="aiCancel()"><svg class="ic"><use href="#i-x"/></svg> 取消</button>
+              <button class="btn sm secondary" id="aiThinkToggle" onclick="aiToggleThink()" style="display:none;">展开英文思考</button>
+              <button class="btn sm secondary" id="aiCancelBtn" onclick="aiCancel()"><svg class="ic"><use href="#i-x"/></svg> 取消</button>
             </div>
-            <pre class="ai-think-body" id="aiThinkBody"></pre>
+            <div class="ai-think-stage" id="aiThinkStage"></div>
+            <div id="aiThinkWrap">
+              <div class="ai-think-sub">🧠 原始思考（模型 reasoning 通道，英文，默认收起）</div>
+              <pre class="ai-think-body" id="aiThinkBody" style="display:none;"></pre>
+              <div class="ai-think-sub" id="aiAnswerHead" style="display:none;">📄 识别结果（中文思路 + JSON）</div>
+              <pre class="ai-answer-body" id="aiAnswerBody" style="display:none;"></pre>
+            </div>
           </div>
         </div>
 
@@ -196,14 +205,15 @@
             <div class="toolbar">
               <select id="mvProduct" class="searchable"><option value="0">全部商品</option></select>
               <input id="mvDateFrom" type="date" /><span>-</span><input id="mvDateTo" type="date" />
-              <input id="mvSearch" placeholder="🔍 筛选流水..." oninput="loadMovements()" />
+              <input id="mvSearch" placeholder="🔍 筛选流水..." oninput="onMvSearch()" />
               <label class="check-inline" title="把同一商品、同一扣减量的出库行合并成一行（显示单数与合计出库量）">
-                <input type="checkbox" id="mvMergeOut" checked onchange="loadMovements()" /> 合并出库
+                <input type="checkbox" id="mvMergeOut" checked onchange="mvResetPage(); loadMovements()" /> 合并出库
               </label>
-              <button class="btn" onclick="loadMovements()">查询</button>
+              <button class="btn" onclick="mvResetPage(); loadMovements()">查询</button>
             </div>
             <div id="mvChart"></div>
             <div class="table-wrap"><table id="mvTable"></table></div>
+            <div id="mvPager" class="pager"></div>
           </div>
         </div>
 
@@ -239,8 +249,13 @@
             </div>
             <div class="field"><label>进货单位 *</label><select id="inUnit" class="searchable"></select><div class="field-hint" id="inUnitHint"></div></div>
             <div class="field"><label>数量 *</label><input id="inQty" type="number" min="0" step="any" placeholder="0" oninput="calcInbound()" /></div>
-            <div class="field"><label>单价（所选单位）*</label><input id="inPrice" type="number" min="0" step="any" placeholder="0.00" oninput="calcInbound()" /></div>
+            <div class="field"><label>单价（所选单位）*</label><input id="inPrice" type="number" min="0" step="any" placeholder="0.00" oninput="calcInbound()" /><div class="field-hint" id="inPriceHint"></div></div>
             <div class="field"><label>金额</label><input id="inAmount" readonly /></div>
+            <div class="field">
+              <label>调整（抹零 / 凑整）</label>
+              <input id="inAdjust" type="number" step="any" placeholder="0.00" oninput="calcInbound()" />
+              <div class="field-hint" id="inAdjustHint">正=多付，负=少付；差额自动记「金额调整」其他开支，商品成本不变</div>
+            </div>
             <div class="field"><label>供应商</label><input id="inSupplier" placeholder="供应商名称" /></div>
             <div class="field"><label>日期 *</label><input id="inDate" type="date" /></div>
             <div class="field"><label>操作员</label><input id="inOperator" readonly title="默认当前登录账号，不可修改" /></div>
@@ -289,6 +304,7 @@
           <div class="card-head">
             <h3>新增出库 / 销售单</h3><span class="hint">卖商品自动结转关联包装材料与打包费</span>
             <button class="btn" style="margin-left:auto;" onclick="openBatchModal('jushuitan')"><svg class="ic"><use href="#i-download"/></svg> 导入聚水潭出库单</button>
+            <button class="btn secondary" id="jstPendingBtn" onclick="openJstPending()" title="聚水潭新商品没规则匹配 / 需要验证码时，在这里处理">待办处理</button>
             <button class="btn secondary" onclick="openBatchModal('outbound')"><svg class="ic"><use href="#i-out"/></svg> 批量出库</button>
           </div>
           <div class="form-grid">
@@ -345,9 +361,15 @@
             </div>
             <div class="form-grid" style="margin-top:12px;">
               <div class="field"><label>固定费用合计（人工打包费等）</label><input id="outFee" type="number" step="any" min="0" oninput="calcOutboundTotals()" /></div>
+              <div class="field">
+                <label>调整（给客户抹零 / 凑整）</label>
+                <input id="outAdjust" type="number" step="any" placeholder="0.00" oninput="calcOutboundTotals()" />
+                <div class="field-hint">正=加收，负=抹零；差额自动记「金额调整」其他开支，商品成本不变</div>
+              </div>
             </div>
             <div class="stat-grid" style="margin-top:14px;">
               <div class="stat"><div class="label">销售收入</div><div class="value" id="otAmount">¥0.00</div></div>
+              <div class="stat"><div class="label">实收金额</div><div class="value" id="otFinal">¥0.00</div></div>
               <div class="stat"><div class="label">结转成本</div><div class="value" id="otCogs">¥0.00</div></div>
               <div class="stat success"><div class="label">毛利</div><div class="value" id="otGross" style="color:var(--green)">¥0.00</div></div>
               <div class="stat success"><div class="label">净利</div><div class="value" id="otNet" style="color:var(--green)">¥0.00</div></div>
@@ -766,6 +788,8 @@
             <button class="seg-item" data-panel="backup" onclick="switchSettingsTab('backup')">备份与恢复</button>
             <button class="seg-item" data-panel="import" onclick="switchSettingsTab('import')">批量导入</button>
             <button class="seg-item" data-panel="jushuitan" onclick="switchSettingsTab('jushuitan')">聚水潭关联</button>
+            <button class="seg-item" data-panel="jstauto" onclick="switchSettingsTab('jstauto')">自动出库设置</button>
+            <button class="seg-item" data-panel="modules" onclick="switchSettingsTab('modules')">模块显示</button>
           </div>
         </div>
 
@@ -914,6 +938,136 @@
                 <tbody></tbody>
               </table>
             </div>
+          </div>
+        </div>
+
+        <!-- 自动出库设置：聚水潭销售出库单定时自动导出 + 导入当前分仓 -->
+        <div class="settings-panel" data-panel="jstauto" style="display:none;">
+          <div class="card">
+            <div class="card-head">
+              <h3>自动出库设置</h3>
+              <span class="hint">定时从聚水潭自动导出销售出库单（xlsx），下载后直接在<b>当前分仓</b>建出库单。设置按分仓隔离，当前分仓：<b id="jstWhName">—</b></span>
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="loadJstAutoPage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+            </div>
+            <div class="toolbar" style="margin-bottom:8px;">
+              <span class="muted">聚水潭账号（所有分仓共用）</span>
+            </div>
+            <div class="form-grid">
+              <div class="field"><label>聚水潭账号</label><input id="jstAccount" placeholder="登录 erp321 的账号" /></div>
+              <div class="field"><label>密码</label><input id="jstPassword" type="password" placeholder="留空 = 不修改" /></div>
+              <div class="field"><label>主账号 co_id</label><input id="jstOwner" placeholder="owner_co_id，默认 13662884" /><div class="field-hint">与聚水潭出库单页面参数一致，一般不用改</div></div>
+              <div class="field"><label>请求间隔（秒）</label><input id="jstMinInterval" type="number" step="1" min="0" /><div class="field-hint">太快会被聚水潭风控，默认 10 秒</div></div>
+              <div class="field"><label>超时（秒）</label><input id="jstTimeout" type="number" step="10" min="5" /></div>
+              <div class="field"><label>重试次数</label><input id="jstRetries" type="number" step="1" min="1" max="10" /></div>
+            </div>
+            <div class="field">
+              <label>Cookie（可选）</label>
+              <textarea id="jstCookie" rows="2" placeholder="留空 = 用账号密码自动登录；也可粘贴浏览器里 erp321 的 Cookie"></textarea>
+              <div class="field-hint" id="jstCookieHint"></div>
+            </div>
+            <div class="form-grid">
+              <div class="field">
+                <label>待办通知 webhook（可选）</label>
+                <input id="jstNotifyWebhook" placeholder="企业微信 / 钉钉机器人、Server酱、Bark 的地址" />
+                <div class="field-hint">出现待办（新商品没规则 / 要验证码）时往这里推一条消息，方便手机上收到；留空则只在登录后弹窗提醒</div>
+              </div>
+              <div class="field">
+                <label>弹窗提醒的账号</label>
+                <input id="jstNotifyUsers" placeholder="如 小王,老孔；留空 = 所有管理员" />
+                <div class="field-hint">这些账号登录后会弹窗提醒有待办</div>
+              </div>
+            </div>
+            <div class="toolbar">
+              <button class="btn green" onclick="saveJstAuto()"><svg class="ic"><use href="#i-save"/></svg> 保存设置</button>
+              <button class="btn secondary" onclick="checkJstLogin()">检查登录态</button>
+              <button class="btn secondary" onclick="loadJstWarehouseOptions()">拉取聚水潭分仓列表</button>
+              <button class="btn sm ghost" onclick="saveJstAuto({clearCookie:true})">清空 Cookie</button>
+              <span class="muted" id="jstCheckResult"></span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h3>本分仓（<b id="jstWhName2">—</b>）的自动出库</h3>
+              <span class="hint">勾选要从哪些聚水潭分仓导出、导出哪个时间段、每天几点执行</span>
+            </div>
+            <div class="toolbar">
+              <label class="check-inline" title="关闭后不再定时执行，仍可手动「立即执行一次」">
+                <input type="checkbox" id="jstEnabled" /> 启用定时自动出库
+              </label>
+              <span class="muted" id="jstNextRuns"></span>
+            </div>
+            <div class="form-grid">
+              <div class="field" style="min-width:300px;">
+                <label>要导入本分仓的聚水潭分仓</label>
+                <select id="jstTargets" multiple size="6" style="min-width:280px;height:auto;"></select>
+                <div class="field-hint">可多选（Ctrl / ⌘ + 点击）。列表来自「拉取聚水潭分仓列表」，已保存的选择会保留。</div>
+              </div>
+              <div class="field">
+                <label>导出时间段</label>
+                <select id="jstWindow" onchange="jstWindowChanged()"></select>
+                <div class="field-hint">每次执行时按这个规则算区间；需要补历史数据时用下面的固定区间</div>
+              </div>
+              <div class="field"><label>导入操作员</label><input id="jstOperator" placeholder="留空 = 用第一个管理员账号" /><div class="field-hint">写入出库单的「操作员」字段</div></div>
+              <div class="field" style="grid-column:1/-1;">
+                <label>每天执行时间</label>
+                <input id="jstSchedule" placeholder="如 07:30,19:30" />
+                <div class="field-hint">逗号分隔；可写 HH:MM，也可写 HH:MM:区间规则 单独指定区间（如 07:30:yesterday、19:30:today）。留空 = 不定时执行。<span class="mono" id="jstWindowHelp"></span></div>
+              </div>
+              <div class="field" style="grid-column:1/-1;">
+                <label>定时浮动范围（分钟）</label>
+                <input id="jstJitter" type="number" min="0" max="120" step="1" placeholder="0 = 精确到点" />
+                <div class="field-hint">实际触发时间在「定时点 ± 这个范围」内随机（每天不同），避免总是在同一分钟精确执行而触发风控，建议 5~15。注意：填了正数后可能<b>提前</b>几分钟执行，若区间规则是「今天到现在」这类会少导几分钟，建议配「昨天」等整天区间使用。</div>
+              </div>
+              <div class="field" style="grid-column:1/-1;">
+                <label>固定区间（补数据 / 试跑用）</label>
+                <div class="toolbar">
+                  <input id="jstFixedFrom" type="datetime-local" />
+                  <span>-</span>
+                  <input id="jstFixedTo" type="datetime-local" />
+                  <button class="btn sm ghost" onclick="saveJstAuto()">保存设置</button>
+                </div>
+                <div class="field-hint">两个都填则每次都导出这个固定区间（忽略上面的「导出时间段」）；留空则用时间段规则</div>
+              </div>
+            </div>
+            <div class="toolbar" style="flex-wrap:wrap;">
+              <label class="check-inline" title="不勾选则只下载 xlsx，不建出库单">
+                <input type="checkbox" id="jstAutoImport" /> 下载后直接建出库单
+              </label>
+              <label class="check-inline" title="按出库单号跳过已导入过的单据，避免重复建单">
+                <input type="checkbox" id="jstSkipImported" /> 跳过已导入过的单据号
+              </label>
+            </div>
+            <div class="toolbar">
+              <button class="btn green" onclick="runJstAuto(false)">立即执行一次（导出并建单）</button>
+              <button class="btn secondary" onclick="runJstAuto(true)">只导出试跑（不建单）</button>
+              <button class="btn sm ghost" onclick="refreshJstStatus()">刷新状态</button>
+            </div>
+            <div id="jstRunStatus" class="muted" style="white-space:pre-wrap;"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h3>执行记录</h3>
+              <span class="hint">最近 20 次（定时 + 手动），含导出文件、建单数、跳过重复数、失败原因</span>
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="loadJstHistory()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+            </div>
+            <div class="table-wrap"><table id="jstHistoryTable"></table></div>
+          </div>
+        </div>
+
+        <!-- 模块显示调整：勾选侧边栏各功能的显示 / 隐藏（记忆化到本机浏览器） -->
+        <div class="settings-panel" data-panel="modules" style="display:none;">
+          <div class="card">
+            <div class="card-head">
+              <h3>模块显示调整</h3>
+              <span class="hint">勾选需要在左侧侧边栏显示的功能（如 入仓 / 鲜货现采 等）；设置按分仓独立保存在本机浏览器，下次打开自动生效</span>
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="resetNavModules()"><svg class="ic"><use href="#i-refresh"/></svg> 全部显示</button>
+            </div>
+            <div id="navModList"></div>
           </div>
         </div>
       </section>

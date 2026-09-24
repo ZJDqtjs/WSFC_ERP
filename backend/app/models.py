@@ -85,7 +85,10 @@ class Inbound(Base):
     quantity: Mapped[float] = mapped_column(Float)  # 以所选单位计
     quantity_base: Mapped[float] = mapped_column(Float)  # 折算成基础单位
     unit_price: Mapped[float] = mapped_column(Float)  # 所选单位的单价
-    total_amount: Mapped[float] = mapped_column(Float)
+    total_amount: Mapped[float] = mapped_column(Float)  # 商品金额（数量×单价），= 批次成本，不随金额调整变化
+    # 金额调整（抹零/凑整）：正=多付给供应商，负=少付。实付金额 = total_amount + adjust_amount；
+    # 商品成本仍按 total_amount（不变），差额自动记一笔「金额调整」的其他开支（见 services.create_inbound）
+    adjust_amount: Mapped[float] = mapped_column(Float, default=0.0)
     supplier: Mapped[str] = mapped_column(String(64), default="")
     operator: Mapped[str] = mapped_column(String(32), default="")
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
@@ -112,7 +115,10 @@ class Outbound(Base):
     operator: Mapped[str] = mapped_column(String(32), default="")
     date: Mapped[str] = mapped_column(String(10), index=True)
     remark: Mapped[str] = mapped_column(String(255), default="")
-    total_amount: Mapped[float] = mapped_column(Float, default=0.0)  # 销售收入
+    total_amount: Mapped[float] = mapped_column(Float, default=0.0)  # 销售收入（商品原价）
+    # 金额调整（给客户抹零/凑整）：正=加收，负=抹零。实收金额 = total_amount + adjust_amount；
+    # 商品成本（total_cogs）不受影响，差额自动记一笔「金额调整」的其他开支（见 services.create_outbound）
+    adjust_amount: Mapped[float] = mapped_column(Float, default=0.0)
     total_cogs: Mapped[float] = mapped_column(Float, default=0.0)  # 商品成本+包装材料成本
     total_fee: Mapped[float] = mapped_column(Float, default=0.0)  # 人工/打包等固定费用
     # 付款状态：paid 已付款/已回款（默认，整单进报表）/ unpaid 待付款（未回款，整单先进待付款账单，不进报表）
@@ -216,6 +222,9 @@ class OtherExpense(Base):
     # 付款状态：paid 已付款（默认，直接进报表）/ unpaid 待付款（先进「待付款账单」）
     pay_status: Mapped[str] = mapped_column(String(8), default="paid")
     paid_at: Mapped[str] = mapped_column(String(10), default="")
+    # 来源单据（入库/出库的金额调整自动生成的开支）：单据删除/改日期时同步维护
+    ref_type: Mapped[str] = mapped_column(String(16), default="")  # inbound / outbound / ""（手工登记）
+    ref_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 

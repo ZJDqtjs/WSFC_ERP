@@ -21,6 +21,7 @@ router = APIRouter(prefix="/api", tags=["other-expense"])
 
 # 预设费用类型（前端下拉建议；也允许直接输入新类型，保存后自动进入建议列表）
 PRESET_CATEGORIES = [
+    "金额调整",  # 入库/出库抹零·凑整自动生成（也可手动登记）
     "网线费", "安装费", "机器费", "样品费", "设备维修", "水电费", "搬运费", "办公用品", "其他",
 ]
 
@@ -45,6 +46,9 @@ def _to_dict(e: OtherExpense) -> dict:
         "operator": e.operator or "",
         "pay_status": getattr(e, "pay_status", "paid") or "paid",
         "paid_at": getattr(e, "paid_at", "") or "",
+        # 来源单据（入库/出库金额调整自动生成）：非空表示由单据带出，删除/改日期随单据同步
+        "ref_type": getattr(e, "ref_type", "") or "",
+        "ref_id": getattr(e, "ref_id", None),
         "created_at": e.created_at.isoformat(timespec="seconds") if e.created_at else "",
     }
 

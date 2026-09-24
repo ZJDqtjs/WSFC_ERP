@@ -1366,6 +1366,43 @@ body.notice-on .login-mask { padding-top: 40px; }
 }
 .fc-sel-item:last-child { border-bottom: none; }
 .fc-sel-item .btn { padding: 2px 6px; font-size: 12px; }
+/* 待识别图片预览（粘贴/选图后先看，再按回车开始识别） */
+.ai-pending {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-soft, #fafafa);
+}
+.ai-pending-head {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12.5px; font-weight: 600; color: var(--primary);
+}
+.ai-pending-head .muted { font-weight: 400; }
+.ai-pending-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.ai-pending-item {
+  position: relative;
+  width: 84px; height: 84px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+.ai-pending-item img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+  cursor: zoom-in;
+}
+.ai-pending-x {
+  position: absolute; top: 2px; right: 2px;
+  width: 20px; height: 20px; padding: 0;
+  border: none; border-radius: 50%;
+  background: rgba(0, 0, 0, .55); color: #fff;
+  font-size: 12px; line-height: 20px; cursor: pointer;
+}
+.ai-pending-x:hover { background: rgba(0, 0, 0, .78); }
 .ai-thinking {
   margin-top: 10px;
   border: 1px solid var(--border);
@@ -1386,9 +1423,23 @@ body.notice-on .login-mask { padding-top: 40px; }
   color: var(--primary);
 }
 .ai-think-time { color: var(--muted); font-weight: 400; }
-.ai-think-body {
+.ai-think-stage {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--bg-soft, #fafafa);
+  border-bottom: 1px dashed var(--border);
+}
+.ai-think-sub {
+  padding: 6px 12px 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: .3px;
+}
+.ai-think-body, .ai-answer-body {
   margin: 0;
-  padding: 10px 12px;
+  padding: 6px 12px 10px;
   min-height: 48px;
   max-height: 220px;
   overflow-y: auto;
@@ -1399,12 +1450,41 @@ body.notice-on .login-mask { padding-top: 40px; }
   white-space: pre-wrap;
   word-break: break-all;
 }
+.ai-answer-body { color: var(--text); background: var(--primary-light); }
 .ai-think-body::after {
   content: "▍";
   color: var(--primary);
   animation: ai-blink 1s steps(2) infinite;
 }
+/* 识别结束后不再显示闪烁光标 */
+.ai-thinking.done .ai-think-body::after { content: ""; animation: none; }
 @keyframes ai-blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+
+/* 确认框里的「AI 思考过程」折叠块 */
+.ai-think-details {
+  margin: 0 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-soft, #fafafa);
+  padding: 8px 10px;
+}
+.ai-think-details summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--primary);
+  font-weight: 600;
+}
+.ai-think-details pre {
+  margin: 8px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
 
 .line-actions button { 
   margin: 0 4px; 
@@ -1502,6 +1582,8 @@ body.notice-on .login-mask { padding-top: 40px; }
 }
 .mv-val.up { color: var(--green, #16a34a); }
 .mv-val.down { color: var(--red, #dc2626); }
+/* 「上下独立/同一刻度」切换：量级差太大时，默认独立刻度才能看清出库趋势 */
+.mv-scale-btn { font-size: 12px; white-space: nowrap; }
 .mv-track {
   height: 160px;
   width: 70%;
@@ -1538,6 +1620,42 @@ tr.mv-merged td { background: rgba(220, 38, 38, 0.03); }
   color: #999;
   margin-top: 3px;
   white-space: nowrap;
+}
+
+/* ============ 分页条（库存流水明细） ============ */
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 13px;
+}
+.pager .muted { color: var(--muted); }
+.pager-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pager-cur { font-size: 13px; color: var(--muted); white-space: nowrap; padding: 0 2px; }
+.pager select {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-size: 13px;
+  background: var(--card);
+  color: var(--text);
+}
+.pager-warn {
+  flex: 1 0 100%;
+  font-size: 12.5px;
+  color: var(--red);
+  background: var(--red-light, #fee2e2);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 /* ============ 工作量统计（人工打包） ============ */

@@ -35,6 +35,13 @@ UNIT_ALIASES = {
     "个": "个", "件": "件", "袋": "袋", "包": "包", "盒": "盒", "箱": "箱", "份": "份", "单": "单",
 }
 
+# 语言要求：本模型（blian_qwen35_plus / Qwen3 系）的 reasoning 通道是英文（实测提示词改不动），
+# 所以改为要求它在正文里先写一段中文「思路」，用户看到的就是中文分析；另外再要求一次中文思考。
+ZH_LANG_RULE = """
+
+语言要求：无论用户使用什么语言，你必须用简体中文作答，上面要求的「思路」必须逐行使用简体中文书写。
+最后再次强调：只输出「思路」（简体中文，3~6 行）和一个 JSON 对象，不要输出任何其他解释、前后缀或 markdown 代码块标记。"""
+
 SYSTEM_PROMPT = """你是「企业台账系统」的自然语言录入解析器。用户会用口语描述入库（进货/采购/进仓）或出库（销售/卖出/发货）业务，例如：
 - 入库：今天入库了100斤木耳，25一斤
 - 出库：出库2单七彩土豆3斤，每单15元，客户叫张三
@@ -53,7 +60,8 @@ SYSTEM_PROMPT = """你是「企业台账系统」的自然语言录入解析器�
 6. supplier（入库时的供应商）/ customer（出库时的客户）/ remark（备注）：有则提取，没有给空字符串。
 7. 一句话可能包含多行/多个商品，lines 里逐行列出；单价统一理解为"每 unit 单位的金额"。
 
-只输出一个 JSON 对象，禁止输出 JSON 以外的任何文字、解释、markdown 代码块标记。
+输出格式：先用简体中文写 3~6 行「思路」，每行一句话，说明：判断的业务类型、每条商品的数量与单位是怎么来的、准备匹配还是新建商品；
+然后再另起一行输出一个 JSON 对象。除「思路」文字和这个 JSON 之外，不要输出任何其他内容（不要解释、不要前后缀、不要 markdown 代码块标记）。
 JSON 要紧凑输出：单行、无缩进无换行、字段间不留多余空格；supplier/customer/remark 为空时省略该字段。
 JSON 结构：
 {
@@ -65,7 +73,7 @@ JSON 结构：
   "lines": [
     { "category": "库存商品", "product": "商品名称", "quantity": 100, "unit": "斤", "unit_price": 25 }
   ]
-}"""
+}""" + ZH_LANG_RULE
 
 IMAGE_SYSTEM_PROMPT = """你是「企业台账系统」的采购票据识别助手。用户会提供一张采购发票 / 送货单 / 销货单的图片（如公司进货凭证），请从中提取采购信息。
 
@@ -73,14 +81,18 @@ IMAGE_SYSTEM_PROMPT = """你是「企业台账系统」的采购票据识别助�
 1. 业务类型一律为入库（inbound）：这些票据代表公司采购了货物进入仓库。
 2. 逐条提取每条采购商品的：商品名称（product）、数量（quantity）、单位（unit，如 张/个/斤/公斤/袋/箱）、单价（unit_price，每单位的金额，保留小数）。
    - product 必须逐字照抄票据上的名称（保留括号、规格、编号等），不要改写、缩写、纠错，也不要自行补「干货」等字样；名称中不要插入空格。
-   - quantity 取票据上直接列出的数量（如「数额」列）为准，不要用「计算明细」里的算式自行重算；票据上没有单价的，unit_price 一律填 0，禁止拿明细里的数字当单价。
+   - quantity 取票据上直接列出的数量（如「数额」列）为准；若数量写成算式（如「2960-1500-1308=152」「2214-1587=627个」），取等号后面的结果作为 quantity。不要用「计算明细」里的算式重算；票据上没有单价的，unit_price 一律填 0，禁止拿明细里的数字当单价。
 3. category 商品分类：逐条判断属于"库存商品"（货品/蔬菜/干货）、"包材"（纸箱/泡沫箱/胶带/包装袋等包装材料）、还是"人工"（打包劳务）；销售小规格的"订单商品"一般不出现，出现也按"库存商品"处理。无法判断时不输出该字段（省略）。
-4. supplier：票据上的销方（卖方）公司名称；customer 留空。
-5. 日期 date：票据上若有日期就用它（格式 YYYY-MM-DD），没有就用"今天"（今天的日期见用户消息）。
-6. remark：可留空。
-7. 票据可能有多张/多条，lines 逐条列出；金额合计不用输出。
+4. 用户消息里可能带「补充说明」：它优先级最高，用于纠正/解释图片内容（比如说明"京东箱子就是纸箱"，或给出「京东8号->8号纸箱」这类别名对应）。
+   - 若补充说明给了对应关系，product 必须输出右边的正式名称，不要仍写图片上的别名。
+   - 给的是举例时（如只给了「京东8号->8号纸箱」），请按同样规律套用到同类条目（京东四号→4号纸箱、京东11号→11号纸箱）。
+5. supplier：票据上的销方（卖方）公司名称；customer 留空。
+6. 日期 date：票据上若有日期就用它（格式 YYYY-MM-DD），没有就用"今天"（今天的日期见用户消息）。
+7. remark：可留空。
+8. 票据可能有多张/多条，lines 逐条列出；金额合计不用输出。
 
-只输出一个 JSON 对象，禁止输出 JSON 以外的任何文字、解释、markdown 代码块标记。
+输出格式：先用简体中文写 3~6 行「思路」，每行一句话，说明：识别到的票据类型与条数、数量/单价是怎么从票据上取的、准备匹配还是新建商品；
+然后再另起一行输出一个 JSON 对象。除「思路」文字和这个 JSON 之外，不要输出任何其他内容（不要解释、不要前后缀、不要 markdown 代码块标记）。
 JSON 要紧凑输出：单行、无缩进无换行、字段间不留多余空格；supplier/customer/remark 为空时省略该字段。
 JSON 结构：
 {
@@ -92,7 +104,7 @@ JSON 结构：
   "lines": [
     { "category": "库存商品", "product": "商品名称", "quantity": 100, "unit": "个", "unit_price": 0.5 }
   ]
-}"""
+}""" + ZH_LANG_RULE
 
 
 class ParseIn(BaseModel):
@@ -133,8 +145,45 @@ def _chat(cfg: dict, system: str, user: str) -> str:
     return resp.choices[0].message.content
 
 
+def _chunk_reasoning(chunk) -> str:
+    """取出流式片段里的「思考内容」。
+
+    不同网关字段名不同（DeepSeek/Qwen 系列多为 reasoning_content，也有用 reasoning/thinking 的），
+    这些内容在正式回答之前就会不断推送——正是要展示给用户的「AI 思考过程」。
+    """
+    try:
+        delta = chunk.choices[0].delta if chunk.choices else None
+    except Exception:
+        return ""
+    if delta is None:
+        return ""
+    for attr in ("reasoning_content", "reasoning", "thinking"):
+        v = getattr(delta, attr, None)
+        if isinstance(v, str) and v:
+            return v
+    extra = getattr(delta, "model_extra", None) or {}
+    for k in ("reasoning_content", "reasoning", "thinking"):
+        v = extra.get(k)
+        if isinstance(v, str) and v:
+            return v
+    return ""
+
+
+def _stream_pieces(chunk):
+    """把流式 chunk 拆成 (类型, 文本)：('think', 思考) / ('content', 正式回答)。"""
+    think = _chunk_reasoning(chunk)
+    if think:
+        yield "think", think
+    try:
+        content = chunk.choices[0].delta.content if chunk.choices else None
+    except Exception:
+        content = None
+    if content:
+        yield "content", content
+
+
 def _chat_stream(cfg: dict, system: str, user: str):
-    """流式获取增量文本（生成器，逐段返回内容片段）。"""
+    """流式获取增量文本（生成器，逐段返回 (类型, 文本)）。"""
     stream = _make_client(cfg).chat.completions.create(
         model=cfg["model"],
         messages=[
@@ -146,8 +195,7 @@ def _chat_stream(cfg: dict, system: str, user: str):
         stream=True,
     )
     for chunk in stream:
-        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+        yield from _stream_pieces(chunk)
 
 
 def _chat_stream_mm(cfg: dict, system: str, user: str, image_data_uri: str):
@@ -169,8 +217,7 @@ def _chat_stream_mm(cfg: dict, system: str, user: str, image_data_uri: str):
         stream=True,
     )
     for chunk in stream:
-        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+        yield from _stream_pieces(chunk)
 
 
 def _ensure_unit(db: Session, unit: str) -> Unit:
@@ -655,9 +702,119 @@ def _tight(s: str) -> str:
     return re.sub(r"\s+", "", s or "")
 
 
+# 汉字数字 → 阿拉伯数字：用于「京东八号」↔「京东8号」这类写法比较
+_NUM_CN = {"〇": "0", "零": "0", "一": "1", "二": "2", "三": "3", "四": "4", "五": "5",
+           "六": "6", "七": "7", "八": "8", "九": "9"}
+
+
+def _norm_numerals(s: str) -> str:
+    return "".join(_NUM_CN.get(ch, ch) for ch in (s or ""))
+
+
+# 补充说明里的「别名 -> 正式名称」写法
+_ARROW_ALIAS_RE = re.compile(
+    r"([^，,。;；、（）()\[\]【】|]{1,24}?)\s*(?:->|→|=>|⇒|＝|=)\s*([^，,。;；、（）()\[\]【】|]{1,24})"
+)
+_NL_ALIAS_RE = re.compile(r"\s*(?:就是|即是|改为|改成|换成|叫作|叫做)\s*")
+_ALIAS_NOISE = ("的", "说", "图", "里", "所谓", "这个", "这些")
+
+
+def _alias_side(s: str) -> str:
+    """把对应关系的一侧整理成干净的名称。"""
+    s = _tight(s).strip("，,。;；:：")
+    s = re.sub(r"^(?:图里的|图里说的|图里写的|图上的|图中有?的?|里面说的|这个|这些|所谓|指的是|是|为|叫|即)+", "", s)
+    s = re.sub(r"(?:这类|之类的|等等|等)$", "", s)
+    return s.strip()
+
+
+def _alias_ok(src: str, dst: str) -> bool:
+    if not src or not dst or src == dst:
+        return False
+    if len(src) < 2 or len(dst) < 2 or len(dst) > 24:
+        return False
+    # 自然语言里的噪声（「图里说的…」这类）不要当成别名
+    return not any(w in src for w in _ALIAS_NOISE)
+
+
+def _parse_aliases(text: str) -> list[tuple[str, str]]:
+    """从补充说明里提取「别名 -> 正式名称」对应关系。
+
+    例：
+      「京东8号->8号纸箱」                          → [("京东8号", "8号纸箱")]
+      「京东八号就是8号纸箱」                        → [("京东八号", "8号纸箱")]
+      「图里说的京东箱子就是纸箱箱子（京东8号->8号纸箱）」 → [("京东8号", "8号纸箱")]
+    """
+    text = str(text or "")
+    if not text.strip():
+        return []
+    # ① 显式「A -> B」最可靠，有它就只认它，免得从描述性语句里抠出噪声
+    out: list[tuple[str, str]] = []
+    for m in _ARROW_ALIAS_RE.finditer(text):
+        src, dst = _alias_side(m.group(1)), _alias_side(m.group(2))
+        if _alias_ok(src, dst):
+            out.append((src, dst))
+    if out:
+        return out
+    # ② 没有箭头时，才尝试「A就是B」这种短句写法
+    for seg in re.split(r"[，,。;；\n\r\t（）()\[\]【】{}、\"'“”‘’|]", text):
+        seg = seg.strip()
+        if not seg or len(seg) > 24:
+            continue
+        parts = _NL_ALIAS_RE.split(seg, maxsplit=1)
+        if len(parts) != 2:
+            continue
+        src, dst = _alias_side(parts[0]), _alias_side(parts[1])
+        if _alias_ok(src, dst):
+            out.append((src, dst))
+    return out
+
+
+def _apply_aliases(name: str, aliases: list[tuple[str, str]]) -> str:
+    """按补充说明里的对应关系改写识别到的商品名（如「京东8号」→「8号纸箱」）。"""
+    name = (name or "").strip()
+    if not name or not aliases:
+        return name
+    norm = _norm_numerals(_tight(name))
+    for src, dst in aliases:
+        if _norm_numerals(_tight(src)) == norm:        # 整条名称就是别名（含「八/8」写法差异）
+            return dst
+    for src, dst in aliases:
+        if src and src in name:                        # 别名只是名称的一段
+            return name.replace(src, dst)
+    return name
+
+
 def _pack_key(s: str) -> str:
-    """包材宽松名：去空白、去“纸/拖”等箱型限定词，用于「9号箱」↔「9号纸箱」的等价判断。"""
-    return _tight(s).replace("纸", "").replace("拖", "")
+    """包材宽松名：去空白，再去「箱」这类容器词与「纸/拖」等箱型词，只留编号/主名。
+
+    这样「纸箱3号箱」「3号纸箱」「3号箱」都得到同一个键「3号」，能互相对上；
+    「8号纸箱」与「8号拖箱」都得到「8号」，两者的区分交给 _narrow_by_pack_type（看名称里的箱型词）。
+
+    旧实现只去「纸/拖」、留着「箱」：模型把箱型写在前面时（票据两列拼成「纸箱3号箱」），
+    键是「箱3号箱」，与档案「3号纸箱」的「3号箱」对不上 → 被判成新商品、污染商品资料。
+    """
+    t = _tight(s)
+    for w in ("泡沫箱", "纸箱", "拖箱", "塑料箱", "箱"):
+        t = t.replace(w, "")
+    return t.replace("纸", "").replace("拖", "")
+
+
+def _pack_box_type(s: str) -> str:
+    """包材箱型词：纸箱 ->「纸」，拖箱 ->「拖」，判别不出返回空。"""
+    t = _tight(s)
+    if "拖" in t:
+        return "拖"
+    if "纸" in t:
+        return "纸"
+    return ""
+
+
+def _narrow_by_pack_type(name: str, cands: list[Product]) -> list[Product]:
+    """按识别名里的箱型词（纸箱/拖箱）筛候选；识别名没写箱型词时返回空。"""
+    qt = _pack_box_type(name)
+    if not qt:
+        return []
+    return [c for c in cands if _pack_box_type(c.name) == qt]
 
 
 def _line_candidates(db: Session, name: str, op_type: str, cat: str) -> list[Product]:
@@ -814,8 +971,35 @@ def _user_msg(text: str) -> str:
     return f"今天是 {date.today().isoformat()}（务必以这个日期作为\"今天\"）。\n\n【用户描述】\n{text}"
 
 
+def _image_user_msg(text: str) -> str:
+    """构造图片识别的用户消息：日期 + 补充说明 + 「别名 -> 正式名称」对应表。
+
+    用户粘贴/上传票据图片时可以补一句说明（如「京东8号->8号纸箱」），
+    这里把显式写出的对应关系单独列出来，模型更不容易漏。
+    """
+    text = (text or "").strip()
+    alias_block = ""
+    aliases = _parse_aliases(text)
+    if aliases:
+        alias_block = (
+            "\n【名称对应关系（product 必须输出右边的正式名称，不要沿用图片里的别名）】\n"
+            + "\n".join(f"{s} -> {d}" for s, d in aliases)
+            + "\n同类名称请按同样的规律套用（例如给了「京东8号 -> 8号纸箱」，那「京东五号」就要输出「5号纸箱」）。"
+        )
+    return (
+        f"今天是 {date.today().isoformat()}（务必以这个日期作为\"今天\"）。"
+        "请识别这张采购票据图片。"
+        + (f"\n补充说明：{text}" if text else "")
+        + alias_block
+    )
+
+
 def _build_result(db: Session, parsed: dict, text: str) -> dict:
-    """把模型抽取结果规范化：校验类型/日期，匹配商品，换算单位。"""
+    """把模型抽取结果规范化：校验类型/日期，匹配商品，换算单位。
+
+    text（补充说明）里若写了「别名 -> 正式名称」对应关系，会在匹配前先改写商品名，
+    这样用户粘贴票据后可以补一句「京东8号->8号纸箱」来纠正识别结果。
+    """
     op_type = str(parsed.get("type", "")).strip().lower()
     if op_type not in ("inbound", "outbound"):
         raise HTTPException(400, "无法识别业务类型（入库/出库），请换个说法")
@@ -823,9 +1007,15 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
     if not lines_in:
         raise HTTPException(400, "未能从描述中提取商品明细，请补充商品名称、数量与价格")
 
+    aliases = _parse_aliases(text)
     lines = []
     for ln in lines_in:
         name = ln.get("product", "")
+        if aliases:
+            real_name = _apply_aliases(name, aliases)
+            if real_name != name:
+                ln["product"] = real_name      # 按补充说明换成正式名称
+                name = real_name
         cat = _normalize_category(ln.get("category", ""))
         if not cat:
             cat = _guess_category(name)
@@ -833,10 +1023,11 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
         auto = False
         cands = _line_candidates(db, name, op_type, cat)
         if cat == "pack":
-            # 包材判定分三级，优先级从高到低：
+            # 包材判定分四级，优先级从高到低：
             #   ① 同名（忽略空白）：票据「8号拖箱」必须命中档案里的「8号拖箱」，绝不串到「8号纸箱」
-            #   ② 去「纸/拖」等限定词后等价且唯一：「3号箱」→「3号纸箱」
+            #   ② 去「箱/纸/拖」后等价且唯一：「3号箱」→「3号纸箱」；「纸箱3号箱」（票据两列拼起来）→「3号纸箱」
             #   ③ 前缀近似且唯一：「松茸6号」→「松茸6号箱」
+            #   ④ 同编号多箱型时按名称里的箱型词定位：「纸箱8号箱」→「8号纸箱」
             # 仍剩多个候选（如「8号箱」同时对上 8号纸箱 / 8号拖箱）才算歧义，交给用户挑选。
             qname = _tight(name)
             qkey = _pack_key(name)
@@ -850,6 +1041,11 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
                 )
             ]
             cands = exact_name + loose + sub
+            # 识别名里写了箱型词（纸箱/拖箱）时，同箱型的候选排前面
+            narrowed = _narrow_by_pack_type(name, loose or sub)
+            if narrowed:
+                others = [c for c in cands if all(c.id != n.id for n in narrowed)]
+                cands = narrowed + others
             if exact_name:
                 exact_hit = True
                 p = exact_name[0]
@@ -859,6 +1055,11 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
             elif not loose and len(sub) == 1:
                 exact_hit = True
                 p = sub[0]
+            elif len(narrowed) == 1:
+                # 同编号有多个箱型候选（如「8号纸箱」「8号拖箱」）：
+                # 识别名里带了箱型词就能唯一定位（「纸箱8号箱」→「8号纸箱」），直接采信
+                exact_hit = True
+                p = narrowed[0]
             else:
                 exact_hit = False
                 p = None       # 没有/有多个等价 → 交由用户选择
@@ -1014,10 +1215,14 @@ def parse_stream(data: ParseIn, db: Session = Depends(get_db), user: User = Depe
                     return
                 except HTTPException:
                     pass
+            yield event({"stage": "正在调用大模型识别…"})
             buf = ""
-            for delta in _chat_stream(cfg, SYSTEM_PROMPT, _user_msg(text)):
-                buf += delta
-                yield event({"delta": delta})
+            for kind, piece in _chat_stream(cfg, SYSTEM_PROMPT, _user_msg(text)):
+                if kind == "think":
+                    yield event({"think": piece})    # 模型的思考过程，实时展示
+                else:
+                    buf += piece
+                    yield event({"delta": piece})    # 正式输出
             result = _build_result(db, _extract_json(buf), text)
             yield event({"result": result, "source": "llm", "confidence": "high"})
         except HTTPException as e:
@@ -1073,11 +1278,8 @@ async def parse_image_stream(
     # 保存票据图片，供确认框预览与记录备注引用
     image_url = _save_invoice(data, file.filename or "invoice.jpg")
 
-    user_msg = (
-        f"今天是 {date.today().isoformat()}（务必以这个日期作为\"今天\"）。"
-        "请识别这张采购票据图片。"
-        + (f"补充说明：{text}" if (text or "").strip() else "")
-    )
+    # 补充说明里若有「别名 -> 正式名称」，额外列一遍并提示可类推，让模型少犯错
+    user_msg = _image_user_msg(text)
 
     def event(obj: dict) -> str:
         return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
@@ -1085,10 +1287,14 @@ async def parse_image_stream(
     def gen():
         try:
             uri = _image_data_uri(data, file.filename or "invoice.jpg")
+            yield event({"stage": "正在调用大模型识别票据…"})
             buf = ""
-            for delta in _chat_stream_mm(cfg, IMAGE_SYSTEM_PROMPT, user_msg, uri):
-                buf += delta
-                yield event({"delta": delta})
+            for kind, piece in _chat_stream_mm(cfg, IMAGE_SYSTEM_PROMPT, user_msg, uri):
+                if kind == "think":
+                    yield event({"think": piece})    # 模型的思考过程，实时展示
+                else:
+                    buf += piece
+                    yield event({"delta": piece})    # 正式输出
             result = _build_result(db, _extract_json(buf), text or "(图片票据识别)")
             result["image_url"] = image_url  # 供前端确认框展示与备注挂图
             yield event({"result": result})

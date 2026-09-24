@@ -23,7 +23,10 @@
         <div class="divider"></div>
         <div class="row" style="justify-content:space-between;">
           <span class="bold">入库明细（{{ rows.length }} 行）</span>
-          <span class="muted">合计 {{ fmtMoney(totalAmount) }}</span>
+          <span class="muted">
+            合计 {{ fmtMoney(totalAmount) }}
+            <template v-if="totalAdjust"> · 实付 {{ fmtMoney(totalAmount + totalAdjust) }}</template>
+          </span>
         </div>
 
         <div v-for="(r, i) in rows" :key="i" class="io-row">
@@ -42,6 +45,10 @@
             <van-field v-model="r.price" type="number" label="单价" @update:model-value="calcRow(r)" />
             <div class="io-amount">{{ fmtMoney(rowAmount(r)) }}</div>
           </div>
+          <div v-if="r.product_id" class="row mt8">
+            <van-field v-model="r.adjust" type="number" label="调整" placeholder="0.00" @update:model-value="calcRow(r)" />
+          </div>
+          <div v-if="r.product_id" class="muted io-note">{{ adjustHint(r) }}</div>
         </div>
 
         <div class="row" style="gap:8px;margin-top:10px;">
@@ -89,14 +96,18 @@
                 @click="toggleSel(r.id)"
               />
               <span class="grow item-title">{{ r.product_name }}</span>
-              <span class="bold">{{ fmtMoney(r.total_amount) }}</span>
+              <span class="bold">{{ fmtMoney(finalOf(r)) }}</span>
             </div>
             <div class="item-meta">
               {{ r.code }} · {{ fmtNum(r.quantity) }}{{ r.unit }} × {{ fmtMoney(r.unit_price) }} · {{ r.date }}
             </div>
+            <div v-if="num(r.adjust_amount)" class="item-meta" style="color:#ed6a0c;">
+              调整 {{ num(r.adjust_amount) > 0 ? '+' : '−' }}{{ fmtMoney(Math.abs(num(r.adjust_amount))) }} · 商品金额 {{ fmtMoney(r.total_amount) }}
+            </div>
             <div class="item-meta">
               {{ r.supplier || '无供应商' }}{{ r.operator ? ' · ' + r.operator : '' }}
               <span style="float:right;">
+                <van-button size="mini" plain type="primary" @click="openEdit(r)">改</van-button>
                 <van-button size="mini" plain type="danger" @click="del(r)">删除</van-button>
               </span>
             </div>
@@ -116,6 +127,31 @@
       :type-tabs="false"
       @pick="onPick"
     />
+
+    <!-- 修改入库单（只允许改 供应商 / 日期 / 付款状态） -->
+    <van-popup v-model:show="editShow" position="bottom" round>
+      <div class="sheet-body">
+        <div class="sheet-title">修改入库单</div>
+        <div class="muted" style="margin-bottom:10px;">
+          {{ editForm.code }} · {{ editForm.product_name }} · 商品金额 {{ fmtMoney(editForm.total_amount) }}
+          <template v-if="num(editForm.adjust_amount)">
+            （调整 {{ num(editForm.adjust_amount) > 0 ? '+' : '−' }}{{ fmtMoney(Math.abs(num(editForm.adjust_amount))) }}，实付 {{ fmtMoney(editForm.total_amount + num(editForm.adjust_amount)) }}）
+          </template>
+        </div>
+        <van-cell-group inset>
+          <van-field v-model="editForm.supplier" label="供应商" placeholder="可留空" />
+          <van-field v-model="editForm.date" label="日期" type="date" />
+          <PayStatusField v-model="editForm.pay_status" hint="待付款：先进「待付款账单」，点「已支付」后才计入财务报表" />
+        </van-cell-group>
+        <div class="muted io-note" style="margin:8px 4px;">
+          只能修改以上三项；保存后操作员记为当前登录账号。数量 / 单价 / 金额如需更正，请删除后重新入库。
+        </div>
+        <div class="row" style="gap:8px;">
+          <van-button block plain @click="editShow = false">取消</van-button>
+          <van-button block type="success" :loading="editSaving" @click="saveEdit">保存</van-button>
+        </div>
+      </div>
+    </van-popup>
 
     <!-- 批量入库 -->
     <van-popup v-model:show="batchShow" position="bottom" round :style="{ height: '88%' }">
@@ -187,10 +223,20 @@ const rows = ref([newRow()])
 const saving = ref(false)
 
 function newRow() {
-  return { product_id: '', name: '', unit: '', qty: '1', price: '0' }
+  return { product_id: '', name: '', unit: '', qty: '1', price: '0', adjust: '' }
 }
 const totalAmount = computed(() => rows.value.reduce((s, r) => s + rowAmount(r), 0))
+// 金额调整（抹零/凑整）：正=多付给供应商，负=少付。只影响实付，商品成本按原价不变
+const totalAdjust = computed(() => rows.value.reduce((s, r) => s + (r.product_id ? num(r.adjust) : 0), 0))
 const rowAmount = (r) => (r.product_id ? num(r.qty) * num(r.price) : 0)
+const rowFinal = (r) => rowAmount(r) + num(r.adjust)
+const finalOf = (r) => num(r.final_amount != null ? r.final_amount : num(r.total_amount) + num(r.adjust_amount))
+function adjustHint(r) {
+  const base = rowAmount(r)
+  const adj = num(r.adjust)
+  if (!adj) return `实付 ${fmtMoney(base)}；正=多付，负=少付，差额自动记「金额调整」其他开支（商品成本不变）`
+  return `实付 ${fmtMoney(base + adj)}（商品金额 ${fmtMoney(base)} ${adj > 0 ? '+' : '−'} ${fmtMoney(Math.abs(adj))}）· 差额记「金额调整」其他开支`
+}
 function calcRow() {}
 
 function conversionText(r) {
@@ -211,6 +257,7 @@ async function submit() {
   }
   saving.value = true
   try {
+    const adjustTotal = lines.reduce((s, r) => s + num(r.adjust), 0)
     for (const r of lines) {
       await api('/api/inbounds', 'POST', {
         product_id: +r.product_id,
@@ -222,9 +269,14 @@ async function submit() {
         date: form.date,
         remark: form.remark,
         pay_status: form.pay_status,
+        adjust_amount: num(r.adjust),   // 抹零/凑整：差额自动记「金额调整」其他开支
       })
     }
-    showToast(form.pay_status === 'unpaid' ? '入库成功（待付款，已进待付款账单）' : '入库成功')
+    showToast(
+      '入库成功'
+      + (adjustTotal ? `（调整 ${adjustTotal > 0 ? '+' : '−'}${Math.abs(adjustTotal).toFixed(2)}，已记其他开支）` : '')
+      + (form.pay_status === 'unpaid' ? '（待付款，已进待付款账单）' : '')
+    )
     clearRows()
     form.pay_status = 'paid'
     loadList()
@@ -293,7 +345,7 @@ const filteredList = computed(() => {
   )
 })
 const selectedAmount = computed(() =>
-  list.value.filter((r) => selected.value.includes(r.id)).reduce((s, r) => s + num(r.total_amount), 0)
+  list.value.filter((r) => selected.value.includes(r.id)).reduce((s, r) => s + finalOf(r), 0)
 )
 const allSelected = computed(() => filteredList.value.length > 0 && filteredList.value.every((r) => selected.value.includes(r.id)))
 
@@ -350,6 +402,44 @@ async function batchDelete() {
 function switchList() {
   tab.value = 'list'
   loadList()
+}
+
+/* ---------- 修改单据（只允许改 供应商 / 日期 / 付款状态） ---------- */
+const editShow = ref(false)
+const editSaving = ref(false)
+const editForm = reactive({
+  id: null, code: '', product_name: '', total_amount: 0, adjust_amount: 0,
+  supplier: '', date: todayStr(), pay_status: 'paid',
+})
+
+function openEdit(r) {
+  Object.assign(editForm, {
+    id: r.id,
+    code: r.code,
+    product_name: r.product_name,
+    total_amount: num(r.total_amount),
+    adjust_amount: num(r.adjust_amount),
+    supplier: r.supplier || '',
+    date: r.date || todayStr(),
+    pay_status: r.pay_status === 'unpaid' ? 'unpaid' : 'paid',
+  })
+  editShow.value = true
+}
+
+async function saveEdit() {
+  if (!editForm.date) { showToast('请选择入库日期'); return }
+  editSaving.value = true
+  try {
+    await api(`/api/inbounds/${editForm.id}`, 'PUT', {
+      supplier: (editForm.supplier || '').trim(),
+      date: editForm.date,
+      pay_status: editForm.pay_status,
+    })
+    editShow.value = false
+    showToast('已保存，操作员记为当前登录账号')
+    loadList()
+  } catch (e) { showToast('保存失败：' + e.message) }
+  editSaving.value = false
 }
 
 /* ---------- 批量入库 ---------- */
@@ -429,6 +519,7 @@ onActivated(() => { if (tab.value === 'list') loadList() })
 .io-name .placeholder { color: #1989fa; font-weight: 500; }
 .io-hint { color: #1989fa; font-size: 12px; cursor: pointer; }
 .io-amount { min-width: 76px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; font-size: 13px; }
+.io-note { font-size: 12px; line-height: 1.5; }
 .batch-bar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   background: #fff7e6; border-radius: 8px; padding: 8px 10px; margin-top: 8px;

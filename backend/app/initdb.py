@@ -426,9 +426,14 @@ _PAY_COLUMNS = (
 
 # 各表需要补齐的新增列（幂等）：{表名: ((列, DDL), ...)}
 _EXTRA_COLUMNS = {
-    "inbounds": _PAY_COLUMNS,
-    "outbounds": _PAY_COLUMNS,
-    "other_expenses": _PAY_COLUMNS,
+    # 金额调整（抹零/凑整）：单据金额仍按商品原价，差额单独记「金额调整」的其他开支
+    "inbounds": _PAY_COLUMNS + (("adjust_amount", "FLOAT DEFAULT 0"),),
+    "outbounds": _PAY_COLUMNS + (("adjust_amount", "FLOAT DEFAULT 0"),),
+    # 其他开支：来源单据（入库/出库金额调整自动生成）——单据删除/改日期时按此同步
+    "other_expenses": _PAY_COLUMNS + (
+        ("ref_type", "VARCHAR(16) DEFAULT ''"),
+        ("ref_id", "INTEGER"),
+    ),
     "finance_records": _PAY_COLUMNS,
     "warehouse_ins": _PAY_COLUMNS + (
         # 随货包材结算：明细快照 + 成本合计
@@ -448,8 +453,19 @@ _EXTRA_COLUMNS = {
 }
 
 
+# 按来源查/删单据关联数据时的高频索引（幂等补建）：SQLite 不会为外键自动建索引，
+# stock_movements / finance_records 的 (ref_type, ref_id) 与 outbound_lines.outbound_id
+# 之前都是全表扫描——删除一张单要扫一遍流水表，批量删几百单就慢得离谱。
+_EXTRA_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_stock_movements_ref ON stock_movements(ref_type, ref_id)",
+    "CREATE INDEX IF NOT EXISTS idx_finance_records_ref ON finance_records(ref_type, ref_id)",
+    "CREATE INDEX IF NOT EXISTS idx_outbound_lines_outbound ON outbound_lines(outbound_id)",
+    "CREATE INDEX IF NOT EXISTS idx_other_expenses_ref ON other_expenses(ref_type, ref_id)",
+)
+
+
 def ensure_columns(engine: Engine) -> None:
-    """为已有表补充新增列（幂等）。老库默认视为「已付款」「非代发」，历史数据口径不变。"""
+    """为已有表补充新增列与常用索引（幂等）。老库默认视为「已付款」「非代发」，历史数据口径不变。"""
     with engine.connect() as conn:
         for table, columns in _EXTRA_COLUMNS.items():
             cols = [r[1] for r in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()]
@@ -458,6 +474,8 @@ def ensure_columns(engine: Engine) -> None:
             for col, ddl in columns:
                 if col not in cols:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
+        for ddl in _EXTRA_INDEXES:
+            conn.execute(text(ddl))
         conn.commit()
 
 
