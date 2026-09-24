@@ -1174,7 +1174,7 @@ let AI_TIMER = null;  // 用时刷新定时器
 let AI_START = 0;
 let AI_THINK_TEXT = "";    // 累计的「思考过程」原文（确认框里可展开回看）
 let AI_ANSWER_TEXT = "";   // 累计的模型正式输出
-const AI_THINK_MAX = 12000; // 面板最多保留的字符数，避免超长卡顿
+const AI_THINK_MAX = 20000; // 面板最多保留的字符数（票据识别的思考常有 1.5 万字），超出只留尾部
 
 function aiShowThinking() {
   AI_THINK_TEXT = "";
@@ -1323,12 +1323,59 @@ async function aiParse() {
 }
 function aiPickImage() { $("aiImgFile").click(); }
 function aiCaptureImage() { $("aiCamFile").click(); }
+
+/* ---------- 待识别图片：粘贴/选图后先预览，回车或点「识别并录入」才开始识别 ---------- */
+let AI_PENDING = [];         // [{ file, url }]
+let AI_PENDING_LABEL = "";   // 来源标签：粘贴 / 相册 / 拍照
+function aiAddPending(files, label) {
+  const list = Array.from(files || []).filter((f) => f && /^image\//.test(f.type || ""));
+  if (!list.length) return;
+  AI_PENDING_LABEL = label || "";
+  list.forEach((f) => AI_PENDING.push({ file: f, url: URL.createObjectURL(f) }));
+  aiRenderPending();
+  toast(`已添加 ${list.length} 张图片，按回车或点「识别并录入」开始识别`);
+}
+function aiRemovePending(i) {
+  const it = AI_PENDING.splice(i, 1)[0];
+  if (it && it.url) URL.revokeObjectURL(it.url);
+  aiRenderPending();
+}
+function aiClearPending() {
+  AI_PENDING.forEach((it) => { if (it && it.url) URL.revokeObjectURL(it.url); });
+  AI_PENDING = [];
+  aiRenderPending();
+}
+function aiRenderPending() {
+  const box = $("aiPending");
+  if (!box) return;
+  if (!AI_PENDING.length) { box.style.display = "none"; box.innerHTML = ""; return; }
+  const withText = !!$("aiText").value.trim();
+  box.style.display = "";
+  box.innerHTML =
+    `<div class="ai-pending-head">🖼 待识别图片 ${AI_PENDING.length} 张` +
+    `<span class="muted">按回车或点「识别并录入」开始识别${withText ? "（输入框文字会作为补充说明一起发给 AI）" : ""}</span></div>` +
+    `<div class="ai-pending-list">` + AI_PENDING.map((it, i) =>
+      `<div class="ai-pending-item">` +
+        `<img src="${it.url}" alt="待识别图片" title="点击放大" onclick="openAttachmentPreview('${it.url}','待识别图片')" />` +
+        `<button type="button" class="ai-pending-x" title="移除这张" onclick="aiRemovePending(${i})">✕</button>` +
+      `</div>`).join("") +
+    `</div>`;
+}
 function aiParseImage(src) {
   const inp = src === "cam" ? $("aiCamFile") : $("aiImgFile");
   const files = Array.from(inp.files || []);
-  if (!files.length) return;
-  aiParseImageFiles(files, src === "cam" ? "拍照" : "相册");
   inp.value = "";
+  if (!files.length) return;
+  aiAddPending(files, src === "cam" ? "拍照" : "相册");
+}
+// 回车 /「识别并录入」的统一入口：有待识别图片就先识别图片，否则解析文字
+function aiRun() {
+  if (AI_CTRL) { toast("正在识别中，可先点「取消」"); return; }
+  if (AI_PENDING.length) {
+    aiParseImageFiles(AI_PENDING.map((it) => it.file), AI_PENDING_LABEL || "已选");
+    return;
+  }
+  aiParse();
 }
 let _aiDoneResolve = null;   // 批量识别时，等待当前确认框关闭后再识别下一张
 async function aiParseImageFiles(files, label) {
@@ -1340,8 +1387,10 @@ async function aiParseImageFiles(files, label) {
     if (_batchAbort) { _batchAbort = false; break; }
     if (i > 0) await new Promise((r) => setTimeout(r, 400));
     const ok = await aiRecognizeOne(files[i], i, total, label, extra);
-    if (!ok) return;  // 识别失败或用户取消，停止剩余批次
+    // 识别失败或用户取消：保留预览图，方便改完补充说明后按回车重试
+    if (!ok) return;
   }
+  aiClearPending();   // 整批识别完成，清掉待识别预览
 }
 let _batchAbort = false;
 async function aiRecognizeOne(f, idx, total, label, extra) {
@@ -1366,16 +1415,21 @@ async function aiRecognizeOne(f, idx, total, label, extra) {
     return false;
   }
 }
-// 支持 Ctrl+V 粘贴图片批量识别
+// Ctrl+V 粘贴图片：只加入「待识别」预览，按回车或点「识别并录入」才开始识别（不再粘贴即识别）
 document.addEventListener("paste", (e) => {
-  // 粘贴目标若是「备注/附件」输入框：交给其自身 onpaste 走附件上传，不再触发 AI 识别
+  // 粘贴目标若是「备注/附件」输入框：交给其自身 onpaste 走附件上传，不加入 AI 待识别
   const _pt = e.target;
   if (_pt && _pt.closest && _pt.closest("textarea[onpaste]")) return;
   const files = Array.from((e.clipboardData || {}).items || [])
     .filter((it) => it.type.startsWith("image/"))
     .map((it) => it.getAsFile())
     .filter(Boolean);
-  if (files.length) { e.preventDefault(); aiParseImageFiles(files, "粘贴"); }
+  if (!files.length) return;
+  // 只在「工作台」页（AI 录入卡片可见）接管，避免在别的页面误触发、顶掉正在填的表单
+  const box = $("aiText");
+  if (!box || !box.offsetParent) { toast("图片已忽略：请到「工作台 → AI 智能录入」粘贴票据"); return; }
+  e.preventDefault();
+  aiAddPending(files, "粘贴");
 });
 const AI_CAT_ORDER = [["stock", "库存商品"], ["order", "订单商品"], ["pack", "包材"], ["labor", "人工"]];
 function aiCatOptions(selectedCat) {
@@ -1525,7 +1579,7 @@ function openAiConfirm(r) {
   // 识别时的「思考过程」也放进确认框，方便回看 AI 是怎么判断的
   const thinkHtml = AI_THINK_TEXT.trim()
     ? `<details class="ai-think-details"><summary>🧠 查看 AI 思考过程（${AI_THINK_TEXT.length} 字，点击展开）</summary>
-         <pre>${esc(AI_THINK_TEXT.length > 8000 ? "…（前面内容略）\n" + AI_THINK_TEXT.slice(-8000) : AI_THINK_TEXT)}</pre></details>`
+         <pre>${esc(AI_THINK_TEXT.length > 12000 ? "…（前面内容略）\n" + AI_THINK_TEXT.slice(-12000) : AI_THINK_TEXT)}</pre></details>`
     : "";
   openModal(`
     <h3>确认录入（${isIn ? "入库" : "出库"}） <button class="close" onclick="closeModal()">✕</button></h3>
@@ -1724,7 +1778,8 @@ function closeAttachmentPreview() {
 function openAttachmentPreview(url, name) {
   const u = routePath(url);
   const label = name || "附件";
-  if (!/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(u)) { window.open(u, "_blank"); return; }
+  // blob:/data: 是本地预览图（如 AI 待识别图片），同样走全屏图片浮层
+  if (!/^(blob|data):/i.test(u) && !/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(u)) { window.open(u, "_blank"); return; }
   closeAttachmentPreview();
   const lay = document.createElement("div");
   lay.className = "attach-preview";

@@ -22,7 +22,7 @@
       </div>
       <div class="muted" style="margin-bottom:8px;">
         用大白话描述入库/出库，AI 自动拆成系统格式；识别后可核对再提交，也可拍票据多张连传。<br />
-        <b>拍照/传图时，上面的文字会作为补充说明一起发给 AI</b>（如「图里的京东箱子就是纸箱：京东8号-&gt;8号纸箱」）。
+        <b>选好图片后先预览，按回车或点「识别并录入」才开始识别</b>；拍照/传图时，上面的文字会作为补充说明一起发给 AI（如「图里的京东箱子就是纸箱：京东8号-&gt;8号纸箱」）。
       </div>
       <van-field
         v-model="aiText"
@@ -30,14 +30,28 @@
         rows="2"
         autosize
         placeholder="文字：今天入库了100斤木耳，25一斤；图片补充说明：京东8号->8号纸箱"
+        @keydown.enter.exact.prevent="aiRun"
       />
       <div class="quick-row">
-        <van-button size="small" type="success" icon="fire-o" :loading="busy" @click="aiParse">识别并录入</van-button>
-        <van-button size="small" plain type="primary" icon="photograph" :loading="busyImg" @click="pickImages('camera')">拍照识别</van-button>
-        <van-button size="small" plain type="primary" icon="photo-o" :loading="busyImg" @click="pickImages('album')">相册识别</van-button>
+        <van-button size="small" type="success" icon="fire-o" :loading="busy || busyImg" @click="aiRun">识别并录入</van-button>
+        <van-button size="small" plain type="primary" icon="photograph" @click="pickImages('camera')">拍照选图</van-button>
+        <van-button size="small" plain type="primary" icon="photo-o" @click="pickImages('album')">相册选图</van-button>
       </div>
       <input ref="camInput" type="file" accept="image/*" capture="environment" multiple style="display:none" @change="onFiles" />
       <input ref="albumInput" type="file" accept="image/*" multiple style="display:none" @change="onFiles" />
+
+      <!-- 待识别图片预览：选好后按回车 / 点「识别并录入」才开始识别 -->
+      <div v-if="aiPending.length" class="pending-box">
+        <div class="muted" style="margin:8px 0 4px;">
+          🖼 待识别图片 {{ aiPending.length }} 张，按回车或点「识别并录入」开始识别
+        </div>
+        <div class="pending-list">
+          <div v-for="(it, i) in aiPending" :key="it.url" class="pending-item">
+            <img :src="it.url" alt="待识别图片" @click="previewPending(i)" />
+            <van-icon name="cross" class="pending-x" @click="removePending(i)" />
+          </div>
+        </div>
+      </div>
 
       <div v-if="thinking || answer || busy || busyImg" class="think-box">
         <div class="row" style="justify-content:space-between;">
@@ -51,34 +65,34 @@
       </div>
     </div>
 
-    <!-- 经营数据 -->
+    <!-- 经营数据（点卡片直接进财务报表，并带上对应口径：today / month） -->
     <div class="stat-grid" style="margin-bottom:12px;">
-      <div class="stat accent">
+      <div class="stat accent tappable" @click="$router.push('/report?quick=today&tab=summary')">
         <div class="label">今日收入</div>
         <div class="value">{{ fmtMoney(todayStats.revenue) }}</div>
         <div class="sub">{{ todayStats.orders || 0 }} 单</div>
       </div>
-      <div class="stat success">
+      <div class="stat success tappable" @click="$router.push('/report?quick=today&tab=summary')">
         <div class="label">今日毛利</div>
         <div class="value">{{ fmtMoney(todayStats.gross) }}</div>
         <div class="sub">净利 {{ fmtMoney(todayStats.net) }}</div>
       </div>
-      <div class="stat">
+      <div class="stat tappable" @click="$router.push('/report?quick=month&tab=summary')">
         <div class="label">本月收入</div>
         <div class="value">{{ fmtMoney(month.revenue) }}</div>
         <div class="sub">{{ month.orders || 0 }} 单</div>
       </div>
     </div>
     <div class="stat-grid" style="margin-bottom:12px;">
-      <div class="stat">
+      <div class="stat tappable" @click="$router.push('/report?quick=month&tab=summary')">
         <div class="label">本月毛利</div>
         <div class="value">{{ fmtMoney(month.gross) }}</div>
       </div>
-      <div class="stat">
+      <div class="stat tappable" @click="$router.push('/report?quick=month&tab=summary')">
         <div class="label">本月净利</div>
         <div class="value">{{ fmtMoney(month.net) }}</div>
       </div>
-      <div class="stat accent">
+      <div class="stat accent tappable" @click="$router.push('/report?quick=month&tab=summary')">
         <div class="label">库存总值</div>
         <div class="value">{{ fmtMoney(stockValue) }}</div>
         <div class="sub">{{ productCount }} 种商品</div>
@@ -246,7 +260,7 @@
 
 <script setup>
 import { ref, reactive, onMounted, onActivated } from 'vue'
-import { showToast } from 'vant'
+import { showToast, showImagePreview } from 'vant'
 import api, { aiStream, assetUrl } from '../api'
 import ProductPicker from '../components/ProductPicker.vue'
 import { fmtMoney, fmtNum, fmtStock, todayStr } from '../utils/format'
@@ -269,6 +283,7 @@ const answer = ref('')     // 模型正式输出（JSON）
 const aiStage = ref('')    // 当前阶段提示
 const busy = ref(false)
 const busyImg = ref(false)
+const aiPending = ref([])  // 待识别图片：[{ file, url }]（选好后先预览，确认才开始识别）
 const confirmShow = ref(false)
 const submitting = ref(false)
 const camInput = ref(null)
@@ -312,6 +327,36 @@ function pickImages(src) {
   el && el.click()
 }
 
+/* 待识别图片：选图后先预览，按回车 / 点「识别并录入」才开始识别 */
+function addPending(files) {
+  const list = Array.from(files || []).filter((f) => f && /^image\//.test(f.type || ''))
+  if (!list.length) return
+  list.forEach((f) => aiPending.value.push({ file: f, url: URL.createObjectURL(f) }))
+  showToast(`已添加 ${list.length} 张图片，按回车或点「识别并录入」开始识别`)
+}
+function removePending(i) {
+  const it = aiPending.value.splice(i, 1)[0]
+  if (it && it.url) URL.revokeObjectURL(it.url)
+}
+function clearPending() {
+  aiPending.value.forEach((it) => { if (it && it.url) URL.revokeObjectURL(it.url) })
+  aiPending.value = []
+}
+function previewPending(i) {
+  showImagePreview({ images: aiPending.value.map((it) => it.url), startPosition: i })
+}
+function onFiles(e) {
+  const files = Array.from(e.target.files || [])
+  e.target.value = ''
+  addPending(files)
+}
+// 回车 /「识别并录入」统一入口：有待识别图片就先识别图片，否则解析文字
+async function aiRun() {
+  if (busy.value || busyImg.value) { showToast('正在识别中，可先点「取消」'); return }
+  if (aiPending.value.length) { await runImageBatch(aiPending.value.map((it) => it.file)); return }
+  await aiParse()
+}
+
 const AI_TEXT_MAX = 8000
 function _cap(t) { return t.length > AI_TEXT_MAX ? '…（前面内容略）\n' + t.slice(-AI_TEXT_MAX) : t }
 function pushThink(s) { if (s) thinking.value = _cap(thinking.value + s) }   // 模型思考过程
@@ -336,11 +381,9 @@ async function aiParse() {
   abortCtrl = null   // 保留思考过程供回看
 }
 
-async function onFiles(e) {
-  const files = Array.from(e.target.files || [])
-  e.target.value = ''
-  if (!files.length) return
+async function runImageBatch(files) {
   busyImg.value = true
+  let aborted = false
   for (let i = 0; i < files.length; i++) {
     resetThinking()
     abortCtrl = new AbortController()
@@ -355,7 +398,7 @@ async function onFiles(e) {
         (t) => pushThink(t), (s) => { aiStage.value = s })
       openConfirm(r)
     } catch (err) {
-      if (err.name === 'AbortError') break
+      if (err.name === 'AbortError') { aborted = true; break }
       aiStage.value = '识别失败'
       pushThink(`\n⚠ 第 ${i + 1} 张识别失败：${err.message}`)
       showToast(`第 ${i + 1} 张识别失败：${err.message}`)
@@ -367,6 +410,7 @@ async function onFiles(e) {
   }
   busyImg.value = false
   abortCtrl = null   // 保留思考过程供回看
+  if (!aborted) clearPending()   // 整批识别完成；取消则保留预览图，方便重试
 }
 
 function cancelAI() {
@@ -506,6 +550,19 @@ async function submitAI() {
 <style scoped>
 .hello { font-size: 17px; font-weight: 700; }
 .quick-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+/* 统计卡可点击（跳财务报表）*/
+.stat.tappable { cursor: pointer; transition: transform .08s ease, background .15s ease; }
+.stat.tappable:active { transform: scale(.97); background: #f2f6ff; }
+/* 待识别图片预览 */
+.pending-box { margin-top: 8px; }
+.pending-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.pending-item { position: relative; width: 72px; height: 72px; border: 1px solid #ebedf0; border-radius: 8px; overflow: hidden; }
+.pending-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pending-x {
+  position: absolute; top: 0; right: 0; padding: 2px;
+  background: rgba(0, 0, 0, .55); color: #fff;
+  font-size: 12px; border-bottom-left-radius: 8px;
+}
 .danger-text { color: #ee0a24; font-weight: 600; font-variant-numeric: tabular-nums; }
 .think-box { margin-top: 10px; background: #f2f3f5; border-radius: 8px; padding: 8px; }
 .think-box pre { font-size: 12px; color: #646566; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow: auto; margin-top: 6px; }

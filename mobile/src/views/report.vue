@@ -374,7 +374,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api from '../api'
 import OperatorField from '../components/OperatorField.vue'
@@ -383,6 +383,7 @@ import { userName, ensureUserName } from '../utils/user'
 import { getExcludeOther, setExcludeOther, excludeOtherQs } from '../utils/reportPref'
 
 const router = useRouter()
+const route = useRoute()
 
 /* 报表口径：是否排除其他开支（开关在本页顶部，与 web 端共用同一偏好） */
 const excludeOther = ref(getExcludeOther())
@@ -650,7 +651,21 @@ async function delFinance(f) {
   } catch (e) { showToast(e.message || '删除失败') }
 }
 
-onMounted(() => { if (!inited) load() })
+/** 工作台统计卡片深链进来时带上口径：/report?quick=month&tab=summary */
+function applyQuery() {
+  const q = route.query || {}
+  const k = String(q.quick || '')
+  if (k === 'today' || k === 'month' || k === 'all') {
+    quickKey.value = k
+    if (k === 'today') { df.value = todayStr(); dt.value = todayStr() }
+    else if (k === 'month') { df.value = todayStr().slice(0, 8) + '01'; dt.value = todayStr() }
+    else { df.value = ''; dt.value = '' }
+  }
+  const t = String(q.tab || '')
+  if (['summary', 'expense', 'goods', 'flow'].includes(t)) tab.value = t
+}
+
+onMounted(() => { applyQuery(); if (!inited) load() })
 </script>
 
 <style scoped>

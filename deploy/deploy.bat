@@ -183,9 +183,9 @@ echo ==^> Starting frontend (serve.py)
 powershell -NoProfile -Command "Start-Process -FilePath '%PY%' -ArgumentList 'serve.py' -WorkingDirectory '%APP_DIR%\web' -WindowStyle Hidden -RedirectStandardOutput '%LOG_DIR%\web.out.log' -RedirectStandardError '%LOG_DIR%\web.err.log'"
 
 :start_services_wait
-echo ==^> Waiting for backend on port %API_PORT% ...
+echo ==^> Waiting for backend on port %API_PORT% ... (up to 60s, cold start can be slow)
 set "API_UP=0"
-for /l %%i in (1,1,20) do (
+for /l %%i in (1,1,60) do (
   if "!API_UP!"=="0" (
     netstat -ano -p TCP | findstr /c:":%API_PORT% " | findstr /c:"LISTENING" >nul 2>nul
     if !errorlevel!==0 (
@@ -202,8 +202,12 @@ echo     Backend is listening on :%API_PORT%  -  PID !API_PID!
 goto start_services_done
 
 :start_services_not_up
-echo [WARN] Backend did not listen on %API_PORT% within 20s, see %LOG_DIR%\api.err.log
-for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "(Get-NetTCPConnection -State Listen -LocalPort %API_PORT% -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess"`) do echo [WARN] Port %API_PORT% is held by PID %%p - run deploy.bat stop, then retry.
+echo [WARN] Backend still not listening on %API_PORT% after 60s.
+for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "(Get-NetTCPConnection -State Listen -LocalPort %API_PORT% -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess"`) do echo [WARN] Port %API_PORT% is currently held by PID %%p.
+echo [WARN] Last lines of %LOG_DIR%\api.err.log:
+powershell -NoProfile -Command "if (Test-Path -LiteralPath '%LOG_DIR%\api.err.log') { Get-Content -LiteralPath '%LOG_DIR%\api.err.log' -Tail 6 }"
+echo [WARN] If that PID is the backend just started it is still initializing - wait and refresh.
+echo [WARN] Only run "deploy.bat stop" if the PID belongs to some other/old process.
 
 :start_services_done
 echo.
