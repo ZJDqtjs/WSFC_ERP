@@ -2815,6 +2815,7 @@ async function loadBackupPage() {
     $("bkInterval").value = d.config.interval_hours;
     $("bkKeep").value = d.config.keep;
     $("bkRemoteEnabled").checked = !!d.config.remote_enabled;
+    $("bkJsonEnabled").checked = d.config.json_backup_enabled !== false;
     $("bkRemoteUrl").value = d.config.remote_url || "";
     toggleRemoteBackup();
     let s = d.config.enabled
@@ -2824,6 +2825,12 @@ async function loadBackupPage() {
       s += `；远程备份已开启 → ${d.config.remote_url}（远程保留 ${d.config.remote_keep || 100} 份）`;
       const rs = d.remote_status || {};
       if (rs.time) s += `｜上次推送 ${rs.time}：${rs.ok ? "成功" : "失败 " + (rs.message || "")}`;
+    }
+    const jb = (d.json_backups || [])[0];
+    if (d.config.json_backup_enabled !== false) {
+      s += jb
+        ? `｜json 目录：最近 ${jb.mtime}（${jb.size_human}，共 ${d.json_backups.length} 份）`
+        : "｜json 目录：暂无备份（内容无变化时不生成）";
     }
     $("bkStatus").textContent = s;
     renderBkTable(d.backups || []);
@@ -2874,8 +2881,9 @@ function renderBkTable(list) {
 async function createBackup() {
   try {
     const r = await api("/api/backup", "POST");
-    toast("备份成功：" + r.name);
+    toast(r.json_backup ? `备份成功：${r.name}＋${r.json_backup}` : "备份成功：" + r.name);
     renderBkTable(r.backups || []);
+    loadBackupPage();
   } catch (e) { toast("备份失败：" + e.message); }
 }
 async function saveBkConfig() {
@@ -2890,6 +2898,7 @@ async function saveBkConfig() {
       remote_enabled: remoteEnabled,
       remote_url: remoteUrl,
       remote_keep: 100,
+      json_backup_enabled: $("bkJsonEnabled").checked,
     });
     toast("自动备份设置已保存");
     loadBackupPage();

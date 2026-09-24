@@ -847,6 +847,9 @@
               <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
                 <input type="checkbox" id="bkRemoteEnabled" onchange="toggleRemoteBackup()" /> 开启远程备份
               </label>
+              <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;" title="把 backend/json 目录（含 jst_auto/店铺扣点/鲜货清单等不在数据库里的配置）打包，随每次备份一并保存到 data/backups 并推送远程">
+                <input type="checkbox" id="bkJsonEnabled" /> 备份 json 目录
+              </label>
               <button class="btn" onclick="saveBkConfig()">保存设置</button>
               <div class="grow"></div>
               <button class="btn green" onclick="createBackup()"><svg class="ic"><use href="#i-save"/></svg> 立即备份</button>
