@@ -105,14 +105,30 @@ const batchState = {
           </div>
         </div>
 
+        <div class="form-row">
+          <span class="lbl">调整（给客户抹零 / 凑整）</span>
+          <div class="inline-field">
+            <van-field v-model="form.adjust" type="number" style="width:96px;" placeholder="0.00" @update:model-value="calcPreview" />
+            <span class="muted">元</span>
+          </div>
+        </div>
+        <div class="muted" style="margin-bottom:4px;">
+          正=加收，负=抹零；差额自动记「金额调整」其他开支，商品成本不变。
+        </div>
+
         <div class="stat-grid cols2" style="margin-top:10px;">
           <div class="stat"><div class="label">销售收入</div><div class="value">{{ fmtMoney(totals.amount) }}</div></div>
+          <div class="stat accent"><div class="label">实收金额</div><div class="value">{{ fmtMoney(totals.final) }}</div></div>
           <div class="stat"><div class="label">结转成本</div><div class="value">{{ fmtMoney(totals.cogs) }}</div></div>
           <div class="stat success"><div class="label">毛利</div><div class="value">{{ fmtMoney(totals.gross) }}</div></div>
           <div class="stat success"><div class="label">净利</div><div class="value">{{ fmtMoney(totals.net) }}</div></div>
         </div>
         <div class="muted" style="margin-top:6px;">
-          结转成本含商品成本、包装耗材{{ autoExpress ? '与快递费' : '' }}；毛利 = 收入 − 成本。合计成本 {{ fmtMoney(totals.cogs) }}。
+          结转成本含商品成本、包装耗材{{ autoExpress ? '与快递费' : '' }}；毛利 = 收入 − 成本。
+          <template v-if="totals.adjust">
+            实收 = 收入 {{ fmtMoney(totals.amount) }} {{ totals.adjust > 0 ? '+' : '−' }} {{ fmtMoney(Math.abs(totals.adjust)) }} = {{ fmtMoney(totals.final) }}，净利按实收口径。
+          </template>
+          合计成本 {{ fmtMoney(totals.cogs) }}。
           <template v-if="!autoExpress">已关闭自动计快递费，本单不算快递费。</template>
         </div>
 
@@ -169,6 +185,9 @@ const batchState = {
               {{ e.customer || '—' }} · {{ e.date }} · 成本 {{ fmtMoney(e.cogs) }} · 费用 {{ fmtMoney(e.fee) }} · 净利
               <b :class="e.net >= 0 ? 'up' : 'down'">{{ fmtMoney(e.net) }}</b>
             </div>
+            <div v-if="!e.isGroup && num(e.rec.adjust_amount)" class="item-meta" style="color:#ed6a0c;">
+              调整 {{ num(e.rec.adjust_amount) > 0 ? '+' : '−' }}{{ fmtMoney(Math.abs(num(e.rec.adjust_amount))) }} · 销售收入 {{ fmtMoney(e.rec.total_amount) }}
+            </div>
             <div v-if="e.isGroup" class="item-meta">
               {{ e.records.length }} 单 · {{ e.products }} 种商品
               {{ e.multiRule ? ' · 规则：' + e.multiRule : '' }}
@@ -177,6 +196,7 @@ const batchState = {
             <div class="row" style="gap:8px;margin-top:6px;">
               <van-button v-if="e.isGroup" size="mini" plain type="primary" @click="openGroup(e)">查看批次明细</van-button>
               <van-button v-else size="mini" plain @click="toggleDetail(e)">{{ detailId === e.rec.id ? '收起明细' : '查看明细' }}</van-button>
+              <van-button size="mini" plain type="primary" @click="e.isGroup ? openGroupEdit(e) : openEdit(e.rec)">改</van-button>
               <div class="grow"></div>
               <van-button size="mini" plain type="danger" @click="delEntry(e)">删除</van-button>
             </div>
@@ -214,6 +234,56 @@ const batchState = {
       :products="pickableProducts"
       @pick="onPick"
     />
+
+    <!-- 批次内选择要修改的出库单 -->
+    <van-popup v-model:show="groupEditShow" position="bottom" round :style="{ height: '70%' }">
+      <div class="sheet-body">
+        <div class="sheet-title">选择要修改的出库单</div>
+        <div class="muted" style="margin-bottom:8px;">
+          批次共 {{ groupEditRecs.length }} 单（只能改 客户 / 出库日期 / 付款状态）
+        </div>
+        <div v-for="o in groupEditRecs" :key="o.id" class="list-item">
+          <div class="row">
+            <span class="grow item-title">{{ o.code }}</span>
+            <span class="bold">{{ fmtMoney(finalOf(o)) }}</span>
+          </div>
+          <div class="item-meta">
+            {{ o.customer || '—' }} · {{ o.date }}
+            <span style="float:right;">
+              <van-button size="mini" plain type="primary" @click="openEdit(o)">改</van-button>
+            </span>
+          </div>
+        </div>
+        <div class="sheet-foot">
+          <van-button block plain @click="groupEditShow = false">关闭</van-button>
+        </div>
+      </div>
+    </van-popup>
+
+    <!-- 修改出库单（只允许改 客户 / 日期 / 付款状态） -->
+    <van-popup v-model:show="editShow" position="bottom" round>
+      <div class="sheet-body">
+        <div class="sheet-title">修改出库单</div>
+        <div class="muted" style="margin-bottom:10px;">
+          {{ editForm.code }} · 销售收入 {{ fmtMoney(editForm.total_amount) }}
+          <template v-if="num(editForm.adjust_amount)">
+            （调整 {{ num(editForm.adjust_amount) > 0 ? '+' : '−' }}{{ fmtMoney(Math.abs(num(editForm.adjust_amount))) }}，实收 {{ fmtMoney(editForm.total_amount + num(editForm.adjust_amount)) }}）
+          </template>
+        </div>
+        <van-cell-group inset>
+          <van-field v-model="editForm.customer" label="客户" placeholder="可留空" />
+          <van-field v-model="editForm.date" label="日期" type="date" />
+          <PayStatusField v-model="editForm.pay_status" hint="待付款：先进「待付款账单」，点「已支付」后才计入财务报表" />
+        </van-cell-group>
+        <div class="muted" style="font-size:12px;line-height:1.5;margin:8px 4px;">
+          只能修改以上三项；保存后操作员记为当前登录账号。商品 / 数量 / 价格如需更正，请删除后重新出库。
+        </div>
+        <div class="row" style="gap:8px;">
+          <van-button block plain @click="editShow = false">取消</van-button>
+          <van-button block type="success" :loading="editSaving" @click="saveEdit">保存</van-button>
+        </div>
+      </div>
+    </van-popup>
 
     <!-- 批量导入（批量出库 / 聚水潭） -->
     <van-popup v-model:show="batchShow" position="bottom" round :style="{ height: '90%' }">
@@ -352,7 +422,7 @@ const tab = ref('new')
 const refreshing = ref(false)
 
 /* ---------- 新增 ---------- */
-const form = reactive({ date: todayStr(), customer: '', operator: '', remark: '', pay_status: 'paid' })
+const form = reactive({ date: todayStr(), customer: '', operator: '', remark: '', pay_status: 'paid', adjust: '' })
 const rows = ref([newRow()])
 const saving = ref(false)
 const previewing = ref(false)
@@ -368,8 +438,11 @@ const saleAmount = computed(() => rows.value.reduce((s, r) => s + rowAmount(r), 
 const rowAmount = (r) => (r.product_id ? num(r.qty) * num(r.price) : 0)
 
 function addRow() { rows.value.push(newRow()) }
-function clearRows() { rows.value = [newRow()]; preview.value = null }
+function clearRows() { rows.value = [newRow()]; preview.value = null; form.adjust = '' }
 function removeRow(i) { rows.value.splice(i, 1) }
+
+/** 实收金额（= 销售收入 + 抹零/凑整调整） */
+const finalOf = (o) => num(o.final_amount != null ? o.final_amount : num(o.total_amount) + num(o.adjust_amount))
 
 function saleLines() {
   return rows.value
@@ -425,13 +498,16 @@ function removePackLine(i) {
 
 const totals = computed(() => {
   const p = preview.value
-  if (!p) return { amount: 0, cogs: 0, gross: 0, net: 0 }
+  if (!p) return { amount: 0, final: 0, adjust: 0, cogs: 0, gross: 0, net: 0 }
   const amount = (p.sale_lines || []).reduce((s, l) => s + num(l.amount), 0)
   const goodsCogs = (p.sale_lines || []).reduce((s, l) => s + num(l.cogs), 0)
   const packCogs = (p.pack_lines || []).reduce((s, l) => s + packLineCost(l), 0)
   const fee = num(packFeeTotal.value)
+  const adjust = num(form.adjust)      // 抹零/凑整：正=加收，负=抹零（差额记「金额调整」其他开支）
+  const final = amount + adjust        // 实收金额
   const cogs = goodsCogs + packCogs
-  return { amount, cogs, gross: amount - cogs, net: amount - cogs - fee }
+  // 净利按实收口径：与报表口径一致（抹零差额已计入其他开支）
+  return { amount, final, adjust, cogs, gross: amount - cogs, net: final - cogs - fee }
 })
 function calcPreview() {}
 
@@ -443,6 +519,7 @@ async function submit() {
     .map((l) => ({ product_id: l.product_id, unit: l.unit, quantity: num(l.quantity) }))
   saving.value = true
   try {
+    const adjust = num(form.adjust)   // 抹零/凑整：差额自动记「金额调整」其他开支
     const r = await api('/api/outbounds', 'POST', {
       customer: form.customer,
       operator: form.operator,
@@ -453,9 +530,15 @@ async function submit() {
       pack_fee_total: num(packFeeTotal.value),
       auto_express: autoExpress.value,   // 与预览一致：关掉就不再自动加快递费
       pay_status: form.pay_status,
+      adjust_amount: adjust,
     })
     const warns = (r.warnings || []).length ? '\n⚠ ' + r.warnings.join('；') : ''
-    showToast('出库成功' + (form.pay_status === 'unpaid' ? '（待付款，已进待付款账单）' : '') + warns)
+    showToast(
+      '出库成功'
+      + (adjust ? `（调整 ${adjust > 0 ? '+' : '−'}${Math.abs(adjust).toFixed(2)}，已记其他开支）` : '')
+      + (form.pay_status === 'unpaid' ? '（待付款，已进待付款账单）' : '')
+      + warns
+    )
     clearRows()
     form.customer = ''
     form.remark = ''
@@ -553,7 +636,7 @@ const entries = computed(() => {
     } else {
       out.push({
         key: `s${o.id}`, isGroup: false, rec: o, ids: [o.id], code: o.code, customer: o.customer,
-        date: o.date, amount: num(o.total_amount), cogs: num(o.total_cogs), fee: num(o.total_fee),
+        date: o.date, amount: finalOf(o), cogs: num(o.total_cogs), fee: num(o.total_fee),
         net: num(o.net_profit), products: 0, multiRule: o.multi_rule || '',
       })
     }
@@ -569,7 +652,7 @@ const entries = computed(() => {
       code: `批量 · ${recs.length}单`,
       customer: customers.join(' / ') || '—',
       date: dates[0] === dates[dates.length - 1] ? dates[0] : `${dates[0]} ~ ${dates[dates.length - 1]}`,
-      amount: recs.reduce((s, r) => s + num(r.total_amount), 0),
+      amount: recs.reduce((s, r) => s + finalOf(r), 0),
       cogs: recs.reduce((s, r) => s + num(r.total_cogs), 0),
       fee: recs.reduce((s, r) => s + num(r.total_fee), 0),
       net: recs.reduce((s, r) => s + num(r.net_profit), 0),
@@ -616,6 +699,51 @@ function toggleEntry(e) {
 }
 function toggleDetail(e) { detailId.value = detailId.value === e.rec.id ? null : e.rec.id }
 function openGroup(e) { router.push(`/ogroup/${encodeURIComponent(e.importGroup)}`) }
+
+/* ---------- 修改单据（只允许改 客户 / 日期 / 付款状态） ---------- */
+const editShow = ref(false)
+const editSaving = ref(false)
+const groupEditShow = ref(false)
+const groupEditRecs = ref([])
+const editForm = reactive({
+  id: null, code: '', total_amount: 0, adjust_amount: 0,
+  customer: '', date: todayStr(), pay_status: 'paid',
+})
+
+function openGroupEdit(e) {
+  groupEditRecs.value = e.records || []
+  groupEditShow.value = true
+}
+
+function openEdit(o) {
+  groupEditShow.value = false
+  Object.assign(editForm, {
+    id: o.id,
+    code: o.code,
+    total_amount: num(o.total_amount),
+    adjust_amount: num(o.adjust_amount),
+    customer: o.customer || '',
+    date: o.date || todayStr(),
+    pay_status: o.pay_status === 'unpaid' ? 'unpaid' : 'paid',
+  })
+  editShow.value = true
+}
+
+async function saveEdit() {
+  if (!editForm.date) { showToast('请选择出库日期'); return }
+  editSaving.value = true
+  try {
+    await api(`/api/outbounds/${editForm.id}`, 'PUT', {
+      customer: (editForm.customer || '').trim(),
+      date: editForm.date,
+      pay_status: editForm.pay_status,
+    })
+    editShow.value = false
+    showToast('已保存，操作员记为当前登录账号')
+    loadList()
+  } catch (e) { showToast('保存失败：' + e.message) }
+  editSaving.value = false
+}
 
 async function delEntry(e) {
   const msg = e.isGroup ? `确认删除该批次共 ${e.ids.length} 单？库存与成本会自动回退。` : `确认删除 ${e.code}？库存与成本会自动回退。`
