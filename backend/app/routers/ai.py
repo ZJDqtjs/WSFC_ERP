@@ -73,12 +73,15 @@ IMAGE_SYSTEM_PROMPT = """你是「企业台账系统」的采购票据识别助�
 1. 业务类型一律为入库（inbound）：这些票据代表公司采购了货物进入仓库。
 2. 逐条提取每条采购商品的：商品名称（product）、数量（quantity）、单位（unit，如 张/个/斤/公斤/袋/箱）、单价（unit_price，每单位的金额，保留小数）。
    - product 必须逐字照抄票据上的名称（保留括号、规格、编号等），不要改写、缩写、纠错，也不要自行补「干货」等字样；名称中不要插入空格。
-   - quantity 取票据上直接列出的数量（如「数额」列）为准，不要用「计算明细」里的算式自行重算；票据上没有单价的，unit_price 一律填 0，禁止拿明细里的数字当单价。
+   - quantity 取票据上直接列出的数量（如「数额」列）为准；若数量写成算式（如「2960-1500-1308=152」「2214-1587=627个」），取等号后面的结果作为 quantity。不要用「计算明细」里的算式重算；票据上没有单价的，unit_price 一律填 0，禁止拿明细里的数字当单价。
 3. category 商品分类：逐条判断属于"库存商品"（货品/蔬菜/干货）、"包材"（纸箱/泡沫箱/胶带/包装袋等包装材料）、还是"人工"（打包劳务）；销售小规格的"订单商品"一般不出现，出现也按"库存商品"处理。无法判断时不输出该字段（省略）。
-4. supplier：票据上的销方（卖方）公司名称；customer 留空。
-5. 日期 date：票据上若有日期就用它（格式 YYYY-MM-DD），没有就用"今天"（今天的日期见用户消息）。
-6. remark：可留空。
-7. 票据可能有多张/多条，lines 逐条列出；金额合计不用输出。
+4. 用户消息里可能带「补充说明」：它优先级最高，用于纠正/解释图片内容（比如说明"京东箱子就是纸箱"，或给出「京东8号->8号纸箱」这类别名对应）。
+   - 若补充说明给了对应关系，product 必须输出右边的正式名称，不要仍写图片上的别名。
+   - 给的是举例时（如只给了「京东8号->8号纸箱」），请按同样规律套用到同类条目（京东四号→4号纸箱、京东11号→11号纸箱）。
+5. supplier：票据上的销方（卖方）公司名称；customer 留空。
+6. 日期 date：票据上若有日期就用它（格式 YYYY-MM-DD），没有就用"今天"（今天的日期见用户消息）。
+7. remark：可留空。
+8. 票据可能有多张/多条，lines 逐条列出；金额合计不用输出。
 
 只输出一个 JSON 对象，禁止输出 JSON 以外的任何文字、解释、markdown 代码块标记。
 JSON 要紧凑输出：单行、无缩进无换行、字段间不留多余空格；supplier/customer/remark 为空时省略该字段。
@@ -655,6 +658,88 @@ def _tight(s: str) -> str:
     return re.sub(r"\s+", "", s or "")
 
 
+# 汉字数字 → 阿拉伯数字：用于「京东八号」↔「京东8号」这类写法比较
+_NUM_CN = {"〇": "0", "零": "0", "一": "1", "二": "2", "三": "3", "四": "4", "五": "5",
+           "六": "6", "七": "7", "八": "8", "九": "9"}
+
+
+def _norm_numerals(s: str) -> str:
+    return "".join(_NUM_CN.get(ch, ch) for ch in (s or ""))
+
+
+# 补充说明里的「别名 -> 正式名称」写法
+_ARROW_ALIAS_RE = re.compile(
+    r"([^，,。;；、（）()\[\]【】|]{1,24}?)\s*(?:->|→|=>|⇒|＝|=)\s*([^，,。;；、（）()\[\]【】|]{1,24})"
+)
+_NL_ALIAS_RE = re.compile(r"\s*(?:就是|即是|改为|改成|换成|叫作|叫做)\s*")
+_ALIAS_NOISE = ("的", "说", "图", "里", "所谓", "这个", "这些")
+
+
+def _alias_side(s: str) -> str:
+    """把对应关系的一侧整理成干净的名称。"""
+    s = _tight(s).strip("，,。;；:：")
+    s = re.sub(r"^(?:图里的|图里说的|图里写的|图上的|图中有?的?|里面说的|这个|这些|所谓|指的是|是|为|叫|即)+", "", s)
+    s = re.sub(r"(?:这类|之类的|等等|等)$", "", s)
+    return s.strip()
+
+
+def _alias_ok(src: str, dst: str) -> bool:
+    if not src or not dst or src == dst:
+        return False
+    if len(src) < 2 or len(dst) < 2 or len(dst) > 24:
+        return False
+    # 自然语言里的噪声（「图里说的…」这类）不要当成别名
+    return not any(w in src for w in _ALIAS_NOISE)
+
+
+def _parse_aliases(text: str) -> list[tuple[str, str]]:
+    """从补充说明里提取「别名 -> 正式名称」对应关系。
+
+    例：
+      「京东8号->8号纸箱」                          → [("京东8号", "8号纸箱")]
+      「京东八号就是8号纸箱」                        → [("京东八号", "8号纸箱")]
+      「图里说的京东箱子就是纸箱箱子（京东8号->8号纸箱）」 → [("京东8号", "8号纸箱")]
+    """
+    text = str(text or "")
+    if not text.strip():
+        return []
+    # ① 显式「A -> B」最可靠，有它就只认它，免得从描述性语句里抠出噪声
+    out: list[tuple[str, str]] = []
+    for m in _ARROW_ALIAS_RE.finditer(text):
+        src, dst = _alias_side(m.group(1)), _alias_side(m.group(2))
+        if _alias_ok(src, dst):
+            out.append((src, dst))
+    if out:
+        return out
+    # ② 没有箭头时，才尝试「A就是B」这种短句写法
+    for seg in re.split(r"[，,。;；\n\r\t（）()\[\]【】{}、\"'“”‘’|]", text):
+        seg = seg.strip()
+        if not seg or len(seg) > 24:
+            continue
+        parts = _NL_ALIAS_RE.split(seg, maxsplit=1)
+        if len(parts) != 2:
+            continue
+        src, dst = _alias_side(parts[0]), _alias_side(parts[1])
+        if _alias_ok(src, dst):
+            out.append((src, dst))
+    return out
+
+
+def _apply_aliases(name: str, aliases: list[tuple[str, str]]) -> str:
+    """按补充说明里的对应关系改写识别到的商品名（如「京东8号」→「8号纸箱」）。"""
+    name = (name or "").strip()
+    if not name or not aliases:
+        return name
+    norm = _norm_numerals(_tight(name))
+    for src, dst in aliases:
+        if _norm_numerals(_tight(src)) == norm:        # 整条名称就是别名（含「八/8」写法差异）
+            return dst
+    for src, dst in aliases:
+        if src and src in name:                        # 别名只是名称的一段
+            return name.replace(src, dst)
+    return name
+
+
 def _pack_key(s: str) -> str:
     """包材宽松名：去空白、去“纸/拖”等箱型限定词，用于「9号箱」↔「9号纸箱」的等价判断。"""
     return _tight(s).replace("纸", "").replace("拖", "")
@@ -814,8 +899,35 @@ def _user_msg(text: str) -> str:
     return f"今天是 {date.today().isoformat()}（务必以这个日期作为\"今天\"）。\n\n【用户描述】\n{text}"
 
 
+def _image_user_msg(text: str) -> str:
+    """构造图片识别的用户消息：日期 + 补充说明 + 「别名 -> 正式名称」对应表。
+
+    用户粘贴/上传票据图片时可以补一句说明（如「京东8号->8号纸箱」），
+    这里把显式写出的对应关系单独列出来，模型更不容易漏。
+    """
+    text = (text or "").strip()
+    alias_block = ""
+    aliases = _parse_aliases(text)
+    if aliases:
+        alias_block = (
+            "\n【名称对应关系（product 必须输出右边的正式名称，不要沿用图片里的别名）】\n"
+            + "\n".join(f"{s} -> {d}" for s, d in aliases)
+            + "\n同类名称请按同样的规律套用（例如给了「京东8号 -> 8号纸箱」，那「京东五号」就要输出「5号纸箱」）。"
+        )
+    return (
+        f"今天是 {date.today().isoformat()}（务必以这个日期作为\"今天\"）。"
+        "请识别这张采购票据图片。"
+        + (f"\n补充说明：{text}" if text else "")
+        + alias_block
+    )
+
+
 def _build_result(db: Session, parsed: dict, text: str) -> dict:
-    """把模型抽取结果规范化：校验类型/日期，匹配商品，换算单位。"""
+    """把模型抽取结果规范化：校验类型/日期，匹配商品，换算单位。
+
+    text（补充说明）里若写了「别名 -> 正式名称」对应关系，会在匹配前先改写商品名，
+    这样用户粘贴票据后可以补一句「京东8号->8号纸箱」来纠正识别结果。
+    """
     op_type = str(parsed.get("type", "")).strip().lower()
     if op_type not in ("inbound", "outbound"):
         raise HTTPException(400, "无法识别业务类型（入库/出库），请换个说法")
@@ -823,9 +935,15 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
     if not lines_in:
         raise HTTPException(400, "未能从描述中提取商品明细，请补充商品名称、数量与价格")
 
+    aliases = _parse_aliases(text)
     lines = []
     for ln in lines_in:
         name = ln.get("product", "")
+        if aliases:
+            real_name = _apply_aliases(name, aliases)
+            if real_name != name:
+                ln["product"] = real_name      # 按补充说明换成正式名称
+                name = real_name
         cat = _normalize_category(ln.get("category", ""))
         if not cat:
             cat = _guess_category(name)
@@ -1073,11 +1191,8 @@ async def parse_image_stream(
     # 保存票据图片，供确认框预览与记录备注引用
     image_url = _save_invoice(data, file.filename or "invoice.jpg")
 
-    user_msg = (
-        f"今天是 {date.today().isoformat()}（务必以这个日期作为\"今天\"）。"
-        "请识别这张采购票据图片。"
-        + (f"补充说明：{text}" if (text or "").strip() else "")
-    )
+    # 补充说明里若有「别名 -> 正式名称」，额外列一遍并提示可类推，让模型少犯错
+    user_msg = _image_user_msg(text)
 
     def event(obj: dict) -> str:
         return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"

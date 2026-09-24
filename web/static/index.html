@@ -111,9 +111,9 @@
         </div>
 
         <div class="card">
-          <div class="card-head"><h3><svg class="ic"><use href="#i-ai"/></svg> AI 智能录入</h3><span class="hint">用大白话描述入库/出库，AI 自动拆分成系统格式，确认后再提交；识别在后台进行，可先做别的</span></div>
+          <div class="card-head"><h3><svg class="ic"><use href="#i-ai"/></svg> AI 智能录入</h3><span class="hint">用大白话描述入库/出库，AI 自动拆分成系统格式，确认后再提交；<b>粘贴/上传票据图片时，输入框里的文字会作为补充说明一起发给 AI</b>（如「图里的京东箱子就是纸箱：京东8号-&gt;8号纸箱」）</span></div>
           <div class="toolbar">
-            <input id="aiText" placeholder='例如：今天入库了100斤木耳，25一斤；或 出库2单七彩土豆3斤，每单15元，客户张三' style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')aiParse()" />
+            <input id="aiText" placeholder='文字：今天入库了100斤木耳，25一斤 ｜ 图片补充说明：图里说的京东箱子就是纸箱箱子（京东8号-&gt;8号纸箱）' style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')aiParse()" />
             <button class="btn green" id="aiBtn" onclick="aiParse()"><svg class="ic"><use href="#i-ai"/></svg> 识别并录入</button>
             <button class="btn secondary" onclick="aiPickImage()"><svg class="ic"><use href="#i-paperclip"/></svg> 相册识别</button>
             <button class="btn secondary" onclick="aiCaptureImage()"><svg class="ic"><use href="#i-camera"/></svg> 拍照识别</button>

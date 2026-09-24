@@ -21,14 +21,15 @@
         <van-icon name="fire-o" color="#1989fa" /> AI 智能录入
       </div>
       <div class="muted" style="margin-bottom:8px;">
-        用大白话描述入库/出库，AI 自动拆成系统格式；识别后可核对再提交，也可拍票据多张连传。
+        用大白话描述入库/出库，AI 自动拆成系统格式；识别后可核对再提交，也可拍票据多张连传。<br />
+        <b>拍照/传图时，上面的文字会作为补充说明一起发给 AI</b>（如「图里的京东箱子就是纸箱：京东8号-&gt;8号纸箱」）。
       </div>
       <van-field
         v-model="aiText"
         type="textarea"
         rows="2"
         autosize
-        placeholder="例如：今天入库了100斤木耳，25一斤；或 出库2单七彩土豆3斤，每单15元，客户张三"
+        placeholder="文字：今天入库了100斤木耳，25一斤；图片补充说明：京东8号->8号纸箱"
       />
       <div class="quick-row">
         <van-button size="small" type="success" icon="fire-o" :loading="busy" @click="aiParse">识别并录入</van-button>
@@ -334,6 +335,9 @@ async function onFiles(e) {
     try {
       const fd = new FormData()
       fd.append('file', files[i])
+      // 输入框里的文字作为「补充说明」一起发给 AI（如「京东8号->8号纸箱」）
+      const extra = aiText.value.trim()
+      if (extra) fd.append('text', extra)
       const r = await aiStream('/api/ai/parse-image/stream', null, (d) => { thinking.value += d }, fd, abortCtrl.signal)
       openConfirm(r)
     } catch (err) {

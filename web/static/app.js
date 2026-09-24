@@ -1284,21 +1284,24 @@ function aiParseImage(src) {
 let _aiDoneResolve = null;   // 批量识别时，等待当前确认框关闭后再识别下一张
 async function aiParseImageFiles(files, label) {
   const total = files.length;
+  // 输入框里的文字会作为「补充说明」一起发给 AI（如「京东8号->8号纸箱」）
+  const extra = $("aiText").value.trim();
   if (total > 1) toast(`已选择 ${total} 张图片，逐张识别中…`);
   for (let i = 0; i < total; i++) {
     if (_batchAbort) { _batchAbort = false; break; }
     if (i > 0) await new Promise((r) => setTimeout(r, 400));
-    const ok = await aiRecognizeOne(files[i], i, total, label);
+    const ok = await aiRecognizeOne(files[i], i, total, label, extra);
     if (!ok) return;  // 识别失败或用户取消，停止剩余批次
   }
 }
 let _batchAbort = false;
-async function aiRecognizeOne(f, idx, total, label) {
+async function aiRecognizeOne(f, idx, total, label, extra) {
   const progress = total > 1 ? `（第 ${idx + 1}/${total} 张）` : "";
   aiStartTask(`<svg class="ic"><use href="#i-camera"/></svg> ${label}识别中 ${progress}`);
   try {
     const fd = new FormData();
     fd.append("file", f);
+    if (extra) fd.append("text", extra);
     const res = await fetch(routePath("/api/ai/parse-image/stream"), {
       method: "POST",
       body: fd,
