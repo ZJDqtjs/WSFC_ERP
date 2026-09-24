@@ -98,15 +98,16 @@
             </template>
           </van-field>
           <van-field :model-value="form.unit" readonly label="单位" placeholder="点击选择" @click="unitPickShow = true" />
-          <van-field v-model="form.sale_price" type="number" label="默认售价" placeholder="每基础单位" />
-          <van-field v-model="form.unit_cost" type="number" label="参考成本" placeholder="每基础单位" />
+          <van-field v-model="form.sale_price" type="number" :label="`默认售价（元/${formDispUnit}）`" :placeholder="`元/${formDispUnit}`" />
+          <van-field v-model="form.unit_cost" type="number" :label="`参考成本（元/${formDispUnit}）`" :placeholder="`元/${formDispUnit}`" />
           <van-field v-model="form.weight_kg" type="number" label="单件净重" placeholder="kg，用于算快递费">
             <template #button><span class="muted">kg</span></template>
           </van-field>
           <van-field v-model="form.spec" label="规格说明" placeholder="如：每个约150克；或每袋5斤" />
         </van-cell-group>
         <div class="muted" style="padding:0 4px 8px;">
-          重量类按克记账（1斤=500克），计数类按个记账；订单商品固定为「单」。单位换算表由所选单位自动生成。
+          重量类按克记账（1斤=500克），计数类按个记账；订单商品固定为「单」。单位换算表由所选单位自动生成。<br />
+          售价与参考成本都按「{{ formDispUnit }}」填<span v-if="formFactor !== 1">（1{{ formDispUnit }} = {{ fmtNum(formFactor) }}{{ formBaseUnit }}）</span>，存库自动折回基础单位；售价出库时带出，参考成本在无入库时按此结算。
         </div>
 
         <template v-if="form.product_type === 'order'">
@@ -182,6 +183,10 @@
             </template>
           </van-field>
         </van-cell-group>
+        <div class="muted" style="padding:0 4px 8px;">
+          售价 / 参考成本按<b>基础单位</b>填（重量类 = 元/克，计数类 = 元/个）；所选的多个商品默认单位可能不同，无法按默认单位统一换算。
+          只改单个商品时，建议在商品编辑页按默认单位填。
+        </div>
         <div class="sheet-foot">
           <van-button block plain @click="batchEditShow = false">取消</van-button>
           <van-button block type="primary" :loading="batchSaving" @click="submitBatchEdit">确认修改</van-button>
@@ -348,32 +353,60 @@ function deriveUnitPayload(pt, unit) {
   return { base_unit: '个', default_unit: unit, conversions: { 个: 1, [unit]: 1 } }
 }
 
+/* 售价 / 参考成本：界面上按「默认单位」填（与桌面端一致），存库时折回基础单位。
+   以前是按基础单位填（重量类即 元/克），填 5.8 会存成 5.8 元/克 = 5800 元/公斤，太反直觉。
+   formFactor = 1 个当前单位等于多少个基础单位。 */
+const formDispUnit = ref('斤')
+const formBaseUnit = ref('克')
+const formFactor = ref(1)
+function refreshFormUnit() {
+  const up = deriveUnitPayload(form.product_type, form.unit)
+  const du = up.default_unit || up.base_unit
+  formDispUnit.value = du
+  formBaseUnit.value = up.base_unit
+  // 编辑既有商品时优先用它自己的换算表，避免自定义换算被覆盖
+  const conv = Object.keys(form.conversions || {}).length ? form.conversions : up.conversions
+  formFactor.value = num(conv[du]) || num(up.conversions[du]) || 1
+}
+
 function openProduct(p, prefillName = '') {
   if (!p) {
     Object.assign(form, {
       id: 0, code: '', name: prefillName || '', category: pcat.value || '', product_type: 'stock', unit: '斤',
       sale_price: 0, unit_cost: 0, weight_kg: 0, spec: '', pack_items: [], pack_fee: 0,
-      stock_links: [], is_active: true,
+      stock_links: [], is_active: true, conversions: {},
     })
+    refreshFormUnit()
   } else {
     const u = p.default_unit || p.base_unit
     Object.assign(form, {
       id: p.id, code: p.code || '', name: p.name || '', category: p.category || '',
       product_type: p.product_type || 'stock',
       unit: p.product_type === 'order' ? '单' : (stockUnitOptions.includes(u) ? u : '斤'),
-      sale_price: p.sale_price || 0, unit_cost: p.unit_cost || 0, weight_kg: p.weight_kg || 0,
+      sale_price: 0, unit_cost: 0, weight_kg: p.weight_kg || 0,
       spec: p.spec || '', pack_fee: p.pack_fee || 0,
       stock_links: orderLinks(p).map((l) => ({ product_id: l.product_id, multiplier: l.multiplier })),
       is_active: p.is_active !== false,
       pack_items: (p.pack_items || []).map((it) => ({ product_id: it.product_id, quantity: it.quantity, unit: it.unit })),
+      conversions: p.conversions || {},
     })
+    refreshFormUnit()
+    // 存库的是基础单位价，界面按当前默认单位显示
+    form.sale_price = +(num(p.sale_price) * formFactor.value).toFixed(6)
+    form.unit_cost = +(num(p.unit_cost) * formFactor.value).toFixed(6)
   }
   editShow.value = true
 }
 
 function onTypeChange(v) {
+  const fOld = formFactor.value || 1
+  const baseSale = num(form.sale_price) / fOld
+  const baseCost = num(form.unit_cost) / fOld
   if (v === 'order') { form.unit = '单'; form.conversions = { 单: 1 }; form.base_unit = '单' }
-  else if (form.unit === '单') { form.unit = '斤'; form.stock_links = [] }
+  else if (form.unit === '单') { form.unit = '斤'; form.conversions = {}; form.stock_links = [] }
+  refreshFormUnit()
+  form.sale_price = +(baseSale * formFactor.value).toFixed(6)
+  form.unit_cost = +(baseCost * formFactor.value).toFixed(6)
 }
 
 async function save() {
@@ -404,8 +437,9 @@ async function save() {
     base_unit: payload.base_unit,
     default_unit: payload.default_unit,
     spec: form.spec,
-    sale_price: num(form.sale_price),
-    unit_cost: num(form.unit_cost),
+    // 界面按默认单位填，存库折回基础单位（与桌面端一致）
+    sale_price: +(num(form.sale_price) / (formFactor.value || 1)).toFixed(8),
+    unit_cost: +(num(form.unit_cost) / (formFactor.value || 1)).toFixed(8),
     weight_kg: num(form.weight_kg),
     conversions: payload.conversions,
     pack_items: form.pack_items.map((it) => ({ product_id: +it.product_id, quantity: num(it.quantity), unit: it.unit })),
@@ -480,7 +514,17 @@ const unitPickShow = ref(false)
 const unitActions = computed(() =>
   (form.product_type === 'order' ? ['单'] : stockUnitOptions).map((u) => ({ name: u, value: u }))
 )
-function onUnitPick(a) { form.unit = a.value }
+function onUnitPick(a) {
+  // 换单位：先把界面价折回基础单位，再按新单位显示，避免价格被凭空放大/缩小
+  const fOld = formFactor.value || 1
+  const baseSale = num(form.sale_price) / fOld
+  const baseCost = num(form.unit_cost) / fOld
+  form.unit = a.value
+  form.conversions = {}
+  refreshFormUnit()
+  form.sale_price = +(baseSale * formFactor.value).toFixed(6)
+  form.unit_cost = +(baseCost * formFactor.value).toFixed(6)
+}
 
 /* 库存大类选择（支持多个扣减关联：按行索引回填） */
 const stockLinkPickShow = ref(false)
