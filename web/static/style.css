@@ -1869,6 +1869,82 @@ th[data-key] .sort-arrow {
   .agg-table tfoot td { background: rgba(255, 255, 255, 0.05); }
 }
 
+/* ============ 芳谊放单仓：逐单刷单结算（导入确认框） ============ */
+.brush-box {
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: rgba(25, 137, 250, 0.06);
+}
+
+.brush-head {
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.brush-head .muted {
+  font-size: 12px;
+}
+
+.brush-wrap {
+  max-height: 38vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.brush-table th, .brush-table td {
+  padding: 7px 9px;
+  font-size: 13.5px;
+}
+
+.brush-table th {
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.brush-table tfoot td {
+  background: rgba(0, 0, 0, 0.03);
+  border-top: 1px solid var(--border);
+}
+
+.brush-table input.brush-cost,
+.brush-table input.brush-fee {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
+  text-align: right;
+}
+
+.brush-table input.brush-cost:focus,
+.brush-table input.brush-fee:focus {
+  border-color: var(--primary);
+  outline: none;
+}
+
+.brush-table input.brush-cost::placeholder {
+  text-align: right;
+  font-size: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .brush-table tfoot td { background: rgba(255, 255, 255, 0.05); }
+}
+
 tr.draft-off { 
   opacity: 0.45; 
 }

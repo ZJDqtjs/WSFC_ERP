@@ -4321,7 +4321,7 @@ function renderOutRow(o) {
       <td>${esc(o.customer) || "—"}</td>
       <td><button class="detail-toggle" onclick="toggleOutDetail(${o.id})">▸ 查看明细</button></td>
       <td class="num mono">${fmtMoney(o.final_amount != null ? o.final_amount : o.total_amount)}${o.adjust_amount ? `<div class="muted" style="font-size:11px;">调整 ${o.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(o.adjust_amount))}</div>` : ""}</td>
-      <td class="num mono">${fmtMoney(o.total_cogs)}</td>
+      <td class="num mono">${fmtMoney(o.total_cogs)}${o.brush_adjust ? `<div class="muted" style="font-size:11px;">刷单 ${fmtMoney(o.brush_adjust)}</div>` : ""}</td>
       <td class="num mono">${fmtMoney(o.total_fee)}</td>
       <td class="num mono" style="color:${o.net_profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(o.net_profit)}</td>
       <td>${o.date}</td>
@@ -4356,6 +4356,8 @@ function buildOutGroup(recs) {
     total_amount: recs.reduce((s, r) => s + (r.final_amount != null ? r.final_amount : (r.total_amount || 0)), 0),
     total_cogs: recs.reduce((s, r) => s + (r.total_cogs || 0), 0),
     total_fee: recs.reduce((s, r) => s + (r.total_fee || 0), 0),
+    // 芳谊放单仓刷单结算（非放单单为 0）：净利已扣掉它，列表里单独标一行便于核对
+    brush_adjust: recs.reduce((s, r) => s + (r.brush_adjust || 0), 0),
     net_profit: recs.reduce((s, r) => s + (r.net_profit || 0), 0),
     products: products.size,
   };
@@ -4371,7 +4373,7 @@ function renderOutGroupRow(g) {
         <span class="muted" style="font-size:12px;margin-left:6px;">${g.products}种商品</span>
       </td>
       <td class="num mono">${fmtMoney(g.total_amount)}</td>
-      <td class="num mono">${fmtMoney(g.total_cogs)}</td>
+      <td class="num mono">${fmtMoney(g.total_cogs)}${g.brush_adjust ? `<div class="muted" style="font-size:11px;">刷单 ${fmtMoney(g.brush_adjust)}</div>` : ""}</td>
       <td class="num mono">${fmtMoney(g.total_fee)}</td>
       <td class="num mono" style="color:${g.net_profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(g.net_profit)}</td>
       <td>${g.date}</td>
@@ -4421,7 +4423,8 @@ function costSplitText(r) {
   const labor = split ? (Number(r.labor_cogs) || 0) : 0;
   const material = split ? (Number(r.material_cogs) || 0) : 0;
   const other = split ? (Number(r.other_cogs) || 0) : 0;
-  if (!(r.is_dropship || oldPack || express || labor || material || other)) return "";
+  const brush = Number(r.brush_cogs) || 0;   // 芳谊放单仓刷单结算（分摊到该商品的部分）
+  if (!(r.is_dropship || oldPack || express || labor || material || other || brush)) return "";
   const parts = [`${r.is_dropship ? "代发成本" : "商品成本"} ${fmtMoney(goods)}`];
   if (split) {
     if (labor) parts.push(`打包人工 ${fmtMoney(labor)}`);
@@ -4431,6 +4434,7 @@ function costSplitText(r) {
     parts.push(`打包人工+耗材 ${fmtMoney(oldPack)}`);
   }
   if (express) parts.push(`快递费 ${fmtMoney(express)}`);
+  if (brush) parts.push(`刷单成本 ${fmtMoney(brush)}`);
   return parts.join(" ＋ ");
 }
 function outAggBy(rows, pool) {
@@ -4517,6 +4521,8 @@ function renderOutGroup() {
       a.material_cogs = a.material_cogs || 0; // 包材/耗材
       a.other_cogs = a.other_cogs || 0;      // 其他关联结算
       a.express_cogs = a.express_cogs || 0;  // 快递费
+      a.brush_cogs = a.brush_cogs || 0;      // 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差）
+
       let arr = byPid.get(a.pid);
       if (!arr) { arr = []; byPid.set(a.pid, arr); }
       arr.push(a);
@@ -4551,19 +4557,28 @@ function renderOutGroup() {
           }
         }
       }
+      // 芳谊放单仓刷单结算：整单金额按该单销售金额占比分摊到商品上（与后端 report.py 同口径）
+      if (o.brush_adjust && saleLines.length) {
+        for (const sl of saleLines) {
+          const share = totalAmt ? (sl.amount || 0) / totalAmt : 1 / saleLines.length;
+          spread(sl.product_id, (o.brush_adjust || 0) * share, "brush_cogs");
+        }
+      }
     }
     aggSale.forEach((a) => {
       a.pack_cogs = a.labor_cogs + a.material_cogs + a.other_cogs;
       a.base_cogs = a.cogs;
-      a.cogs = a.cogs + a.pack_cogs + a.express_cogs;
+      a.cogs = a.cogs + a.pack_cogs + a.express_cogs + a.brush_cogs;
     });
   }
   const total = {
     amt: rows.reduce((s, o) => s + (o.total_amount || 0), 0),
     cogs: rows.reduce((s, o) => s + (o.total_cogs || 0), 0),
     fee: rows.reduce((s, o) => s + (o.total_fee || 0), 0),
+    // 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差）：净利里已扣掉，单独列出便于核对
+    brush: rows.reduce((s, o) => s + (o.brush_adjust || 0), 0),
   };
-  const net = total.amt - total.cogs - total.fee;
+  const net = total.amt - total.cogs - total.fee - total.brush;
   $("ogTitle").textContent = `出库批次明细（${rows.length} 单）`;
   $("ogHint").textContent = "按商品聚合展示每种商品的单数/数量/金额或成本，可搜索、排序；耗材、人工、打包人工+耗材分开页签展示。";
   $("ogDelCount").textContent = rows.length;
@@ -4574,6 +4589,7 @@ function renderOutGroup() {
      <div class="stat"><div class="label">人工种数</div><div class="value">${outAggBy(rows, "labor").length}</div></div>
      <div class="stat"><div class="label">销售收入</div><div class="value">${fmtMoney(total.amt)}</div></div>
      <div class="stat"><div class="label">结转成本</div><div class="value">${fmtMoney(total.cogs)}</div></div>
+     ${total.brush ? `<div class="stat"><div class="label">刷单成本</div><div class="value" style="color:var(--red)">${fmtMoney(total.brush)}</div></div>` : ""}
      <div class="stat success"><div class="label">净利</div><div class="value" style="color:${net >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(net)}</div></div>`;
   const seg = segActive("ogSeg");
   let isSale = false, isLaborPack = false, emptyText = "无记录";
@@ -4998,6 +5014,7 @@ async function loadReport() {
   $("repStats").innerHTML = `
     <div class="stat blue"><div class="label">${pre}销售收入</div><div class="value">${fmtMoney(rep.revenue)}</div><div class="sub">${rep.order_count} 单${all ? ` · ${rep.warehouse_count || 0} 个分仓` : ""}</div></div>
     <div class="stat amber"><div class="label">${pre}结转成本</div><div class="value">${fmtMoney(rep.cogs)}</div><div class="sub">含关联结算 ${fmtMoney(packTotal)}</div></div>
+    ${rep.brush_cost ? `<div class="stat red"><div class="label">${pre}刷单成本</div><div class="value">${fmtMoney(rep.brush_cost)}</div><div class="sub">芳谊放单仓 · 已从毛利扣减</div></div>` : ""}
     <div class="stat green"><div class="label">${pre}毛利</div><div class="value">${fmtMoney(rep.gross_profit)}</div><div class="sub">${rep.revenue ? ((rep.gross_profit / rep.revenue) * 100).toFixed(1) + "%" : "—"}</div></div>
     <div class="stat red"><div class="label">${pre}期间费用</div><div class="value">${fmtMoney(rep.expense)}</div><div class="sub">其他开支 ${fmtMoney(rep.other_expense)} · 手工记账 ${fmtMoney(rep.manual_expense)}</div></div>
     <div class="stat ${rep.net_profit >= 0 ? "green" : "red"}"><div class="label">${pre}净利润</div><div class="value">${fmtMoney(rep.net_profit)}</div></div>
@@ -5096,20 +5113,24 @@ function renderCostBreakdown(rep) {
   const packs = rep.pack_costs || {};
   const packTotal = rep.pack_cost_total || 0;
   const goods = rep.goods_cogs != null ? rep.goods_cogs : cogs - packTotal;
+  // 芳谊放单仓刷单结算：不在 cogs 里（cogs 仍是商品/包材/快递的结转成本），单独一项展示并计入合计口径
+  const brush = rep.brush_cost || 0;
+  const total = cogs + brush;
   const hint = $("repCostHint");
-  if (hint) hint.textContent = cogs ? `合计 ${fmtMoney(cogs)}` : "";
+  if (hint) hint.textContent = total ? `合计 ${fmtMoney(total)}${brush ? `（含刷单 ${fmtMoney(brush)}）` : ""}` : "";
 
-  if (!cogs) {
+  if (!total) {
     box.innerHTML = `<div class="empty">本期无销售成本</div>`;
     return;
   }
-  const pctOf = (v) => (cogs ? (v / cogs) * 100 : 0);
-  const COLORS = { "包材耗材": "#ff976a", "人工打包费": "#7232dd", "快递运费": "#07c160", "其他关联结算": "#969799" };
+  const pctOf = (v) => (total ? (v / total) * 100 : 0);
+  const COLORS = { "包材耗材": "#ff976a", "人工打包费": "#7232dd", "快递运费": "#07c160", "其他关联结算": "#969799", "刷单成本": "#ee0a24" };
   const rows = [
     { name: "商品成本", value: goods, color: "#1989fa", tag: "" },
     ...Object.entries(packs)
       .sort((a, b) => b[1] - a[1])
       .map(([k, v]) => ({ name: k, value: v, color: COLORS[k] || "#969799", tag: "自动结算" })),
+    ...(brush ? [{ name: "刷单成本", value: brush, color: COLORS["刷单成本"], tag: "放单仓" }] : []),
   ];
   box.innerHTML = `
     <div class="cost-stack">
@@ -5123,13 +5144,15 @@ function renderCostBreakdown(rep) {
           ${r.tag ? `<span class="badge pack" style="margin-left:6px;">${r.tag}</span>` : ""}</td>
         <td class="num mono">${fmtMoney(r.value)}</td>
         <td class="num mono">${pctOf(r.value).toFixed(1)}%</td>
-        <td class="muted">${r.tag ? "出库时按包装清单自动结算，已计入结转成本" : "销售商品本身的先进先出成本"}</td>
+        <td class="muted">${r.name === "刷单成本"
+          ? "芳谊放单仓：导入确认时按单填写的刷单成本（+ 快递包装固定费覆盖差），已从毛利扣减"
+          : r.tag ? "出库时按包装清单自动结算，已计入结转成本" : "销售商品本身的先进先出成本"}</td>
       </tr>`).join("")}</tbody>
       <tfoot><tr>
-        <td><b>结转成本合计</b></td>
-        <td class="num mono"><b>${fmtMoney(cogs)}</b></td>
+        <td><b>成本合计</b></td>
+        <td class="num mono"><b>${fmtMoney(total)}</b></td>
         <td class="num mono">100%</td>
-        <td class="muted">关联结算合计 ${fmtMoney(packTotal)}</td>
+        <td class="muted">关联结算 ${fmtMoney(packTotal)}${brush ? ` · 刷单 ${fmtMoney(brush)}` : ""}</td>
       </tr></tfoot>
     </table></div>
     ${packTotal ? "" : `<div class="alert warn" style="margin-top:10px;">本期没有包材 / 人工 / 快递等关联结算成本。若商品已配置包装清单，请确认出库时是否生成了关联结算行。</div>`}`;
@@ -6958,9 +6981,13 @@ const BATCH_MODAL = {
     tpl: "",
     preview: "/api/jushuitan/import/preview",
     confirm: "/api/jushuitan/import/confirm",
-    hint: "上传聚水潭导出的「销售出库单_*.xlsx」，自动识别商品并按件数×每件规格结算。先解析预览（自动试算 AI 新增方案），确认后才出库。未关联商品可点「去新增商品」在新标签页新建，或一键确认 AI 自动新增。",
+    hint: "上传聚水潭导出的「销售出库单_*.xlsx」，自动识别商品并按件数×每件规格结算。先解析预览（自动试算 AI 新增方案），确认后才出库。未关联商品可点「去新增商品」在新标签页新建，或一键确认 AI 自动新增。「仓储方」为芳谊放单仓的订单，确认框里会逐单让你填刷单成本，并核算结算价与最终利润。",
   },
 };
+/* 放单仓名单（后端下发，见 backend/app/brush.py 的 BRUSH_WAREHOUSES）：
+   这些「仓储方」的聚水潭订单要在确认框里逐单填刷单成本，核算结算价与最终利润。 */
+let __BRUSH_WH__ = [];
+function isBrushOrder(o) { return !!o && !!o.warehouse && __BRUSH_WH__.includes(o.warehouse); }
 function openBatchModal(kind) {
   const cfg = BATCH_MODAL[kind];
   if (!cfg) return;
@@ -6998,6 +7025,7 @@ async function runBatchModal(kind) {
   if (box) box.innerHTML = `<div class="alert ok">⏳ 正在解析…（同一文件）</div>`;
   try {
     const r = await apiUpload(cfg.preview, file);
+    if (kind === "jushuitan") __BRUSH_WH__ = r.brush_warehouse_names || []; // 放单仓名单
     if (kind === "inbound") renderInboundReview(kind, r);
     else renderDraftReview(kind, r);
   } catch (e) {
@@ -7106,6 +7134,52 @@ function aggregateDraftLines(orders) {
     };
   }).sort((a, b) => b.amount - a.amount);
 }
+/* 芳谊放单仓：逐单刷单结算表（结算价 = 结算收入 − 快递+包装固定费；利润 = 结算价 − 刷单成本）
+   每单一行：单号 / 日期 / 商品 / 结算收入（已扣店铺扣点） / 固定费（可改，默认系统自动值）/ 刷单成本（我填）/ 利润 */
+function brushRowsHtml(orders) {
+  return orders.map((o) => {
+    const lines = o.lines || [];
+    const income = lines.reduce((s, l) => s + (+l.amount || 0), 0);
+    const goods = lines.map((l) => `${l.product_name || ""} × ${fmtNum(l.quantity)}${esc(l.unit || "")}`).join(" ／ ");
+    const fee = +(o.brush_fee_auto || 0);
+    return `<tr class="brush-row" data-doc="${esc(o.doc_no || "")}" data-income="${income.toFixed(2)}">
+      <td class="mono">${esc(o.doc_no || "（无单号）")}</td>
+      <td class="muted" style="white-space:nowrap;">${esc(o.date || "")}</td>
+      <td>${goods || "—"}</td>
+      <td class="num mono">${fmtMoney(income)}</td>
+      <td class="num"><input class="brush-fee" type="number" step="0.01" min="0" value="${fee.toFixed(2)}" oninput="brushCalc()" /></td>
+      <td class="num"><input class="brush-cost" type="number" step="0.01" min="0" placeholder="我刷这单的成本" oninput="brushCalc()" /></td>
+      <td class="num mono brush-profit">—</td>
+    </tr>`;
+  }).join("");
+}
+/* 实时算每单利润（结算收入 − 固定费 − 刷单成本）与合计 */
+function brushCalc() {
+  let income = 0, fee = 0, cost = 0, profit = 0;
+  document.querySelectorAll("#modalBox tr.brush-row").forEach((tr) => {
+    const inc = parseFloat(tr.dataset.income) || 0;
+    const f = parseFloat(tr.querySelector(".brush-fee")?.value) || 0;
+    const c = parseFloat(tr.querySelector(".brush-cost")?.value) || 0;
+    const gp = inc - f - c;
+    const cell = tr.querySelector(".brush-profit");
+    cell.textContent = fmtMoney(gp);
+    cell.style.color = gp >= 0 ? "var(--green)" : "var(--red)";
+    income += inc; fee += f; cost += c; profit += gp;
+  });
+  const set = (id, text, color) => {
+    const el = $(id);
+    if (!el) return;
+    el.textContent = text;
+    if (color) el.style.color = color;
+  };
+  set("brushSumIncome", fmtMoney(income));
+  set("brushSumFee", fmtMoney(fee));
+  set("brushSumCost", fmtMoney(cost));
+  set("brushSumProfit", fmtMoney(profit), profit >= 0 ? "var(--green)" : "var(--red)");
+  const filled = [...document.querySelectorAll("#modalBox tr.brush-cost")].filter((i) => parseFloat(i.value) > 0).length;
+  const c = $("brushFilled");
+  if (c) c.textContent = filled;
+}
 function renderAggregateReview(kind, orders, warn) {
   window.__DRAFT_ORDERS__ = orders; // 汇总视图不再逐单编辑，确认时按原单据整批出库
   const rows = aggregateDraftLines(orders);
@@ -7123,10 +7197,43 @@ function renderAggregateReview(kind, orders, warn) {
       <td class="num">${fmtMoney(x.perOrder)}</td>
       <td class="num"><b>${fmtMoney(x.amount)}</b></td>
     </tr>`).join("");
+  // 芳谊放单仓：逐单核算刷单成本（结算价 / 利润），确认时随单据一起落库并进报表
+  const brushOrders = orders.filter(isBrushOrder);
+  const brushSection = brushOrders.length ? `
+    <div class="brush-box">
+      <div class="brush-head">
+        💳 芳谊放单仓 · 逐单刷单结算（共 <b>${brushOrders.length}</b> 单）
+        <span class="muted" style="font-weight:normal;">结算价 = 结算收入（已扣店铺扣点） − 快递+包装固定费；利润 = 结算价 − 我刷这单的成本</span>
+      </div>
+      <div class="muted" style="font-size:12px;margin:6px 0;">
+        下面每一单都要填「刷单成本」；「快递+包装」默认按系统出库时自动结算的快递费+包材+人工（可改），
+        改了只影响这一单的结算口径。已填 <b id="brushFilled">0</b> / ${brushOrders.length} 单。这些金额会写进出库单，报表里一并从利润扣掉。
+      </div>
+      <div class="table-wrap brush-wrap">
+        <table class="subtable brush-table" style="width:100%;">
+          <thead><tr>
+            <th>出库单号</th><th style="width:96px;">日期</th><th>商品</th>
+            <th class="num" style="width:96px;">结算收入</th>
+            <th class="num" style="width:104px;">快递+包装</th>
+            <th class="num" style="width:132px;">刷单成本</th>
+            <th class="num" style="width:96px;">利润</th>
+          </tr></thead>
+          <tbody>${brushRowsHtml(brushOrders)}</tbody>
+          <tfoot><tr>
+            <td colspan="3" class="muted">合计 ${brushOrders.length} 单</td>
+            <td class="num"><b id="brushSumIncome">—</b></td>
+            <td class="num"><b id="brushSumFee">—</b></td>
+            <td class="num"><b id="brushSumCost">—</b></td>
+            <td class="num"><b id="brushSumProfit">—</b></td>
+          </tr></tfoot>
+        </table>
+      </div>
+    </div>` : "";
   $("modalBox").classList.add("wide");
   $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} — 商品汇总预览 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="alert ok">共 <b>${orders.length}</b> 单${range ? `（${esc(range)}）` : ""}，商品 <b>${rows.length}</b> 种，合计金额 <b>${fmtMoney(sumAmt)}</b>${packFee ? `（另有打包费 ${fmtMoney(packFee)}）` : ""}。确认后按原单据整批出库。</div>
     ${warn}
+    ${brushSection}
     <div class="draft-list">
       <table class="subtable agg-table" style="width:100%;">
         <thead><tr>
@@ -7152,6 +7259,7 @@ function renderAggregateReview(kind, orders, warn) {
       <button class="btn secondary" onclick="runBatchModal('jushuitan')">↻ 重新解析（同一文件）</button>
       <button class="btn green" onclick="confirmAggregate('${kind}')">✓ 确认出库（${orders.length} 单）</button>
     </div>`;
+  if (brushOrders.length) brushCalc();   // 初始化逐单利润与合计
 }
 /* 未关联商品：名称 + 「去新增商品」新标签页跳转按钮（新标签页直接打开新增商品弹窗并预填名称） */
 function openProductTab(name) {
@@ -7338,10 +7446,22 @@ async function confirmDraft(kind) {
 async function confirmAggregate(kind) {
   if (window.__CONFIRMING__) return; // 防止重复提交
   const packMap = window.__DRAFT_PACK__ || {};
+  // 芳谊放单仓逐单填的「刷单成本 / 快递+包装固定费」（按单号取回）
+  const brushMap = {};
+  document.querySelectorAll("#modalBox tr.brush-row").forEach((tr) => {
+    brushMap[tr.dataset.doc || ""] = {
+      cost: parseFloat(tr.querySelector(".brush-cost")?.value) || 0,
+      fee: parseFloat(tr.querySelector(".brush-fee")?.value) || 0,
+    };
+  });
   const orders = (window.__DRAFT_ORDERS__ || []).map((o) => ({
     doc_no: o.doc_no, date: o.date, customer: o.customer || "",
     operator: o.operator || "", remark: o.remark || "",
     pack_fee: +o.pack_fee || 0,
+    // 放单仓：仓储方 + 刷单成本 + 结算用的「快递+包装固定费」（其余单据为空值，口径不变）
+    warehouse: o.warehouse || "",
+    brush_cost: brushMap[o.doc_no || ""]?.cost || 0,
+    brush_fee: brushMap[o.doc_no || ""]?.fee || 0,
     pack_rule_id: o.pack_rule_id || null,
     pack_rule_name: o.pack_rule_name || "",
     pack_lines: packMap[o.doc_no] || [],

@@ -15,10 +15,12 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
+from ..brush import BRUSH_WAREHOUSES, is_brush_warehouse
 from ..database import get_db
 from ..models import CodeMapping, Deduction, PackRule, Product, User
 from .ai import _chat, _extract_json, _llm_config
 from ..services import (
+    build_order,
     create_inbound,
     create_outbound,
     default_conversions,
@@ -81,6 +83,8 @@ JUSHUITAN_COLS = {
     "track": ["快递单号"],
     "seller": ["业务员", "操作员"],
     "customer": ["线下客户", "买家账号"],
+    # 仓储方：值为「芳谊放单仓」时，导入确认框里要按单填刷单成本（口径见 app/brush.py）
+    "warehouse": ["仓储方"],
 }
 
 
@@ -510,6 +514,11 @@ class DraftOrder(BaseModel):
     pack_rule_id: int | None = None
     pack_rule_name: str = ""
     pack_lines: list = []  # 一单多货规则带出的包材/纸箱行 [{product_id, unit, quantity, name, sale_product_id, cogs}]
+    # 聚水潭「仓储方」：值为 芳谊放单仓 时，确认框里要给这单填刷单成本（口径见 app/brush.py）
+    warehouse: str = ""
+    brush_fee_auto: float = 0.0  # 预览用：系统自动算的「快递+包装固定费」（只放单仓订单有值，确认时不回传）
+    brush_cost: float = 0.0      # 确认时回传：我刷这单的成本
+    brush_fee: float = 0.0       # 确认时回传：本单结算用的「快递+包装固定费」（0=用系统自动值）
     lines: list[DraftLine] = []
 
 
@@ -540,6 +549,10 @@ def _confirm_orders(db: Session, user: User, orders: list[DraftOrder]) -> dict:
                     ],
                     "pack_lines": o.pack_lines or [],
                     "pack_fee_total": o.pack_fee or 0,
+                    # 芳谊放单仓刷单结算：成本与固定费由确认框传入（非放单仓订单为空值，口径不变）
+                    "warehouse": o.warehouse,
+                    "brush_cost": o.brush_cost,
+                    "brush_fee": o.brush_fee,
                 },
                 operator=user.name,
                 import_group=group,
@@ -740,6 +753,30 @@ def _line_price_weight(p: Product, qb: float, batch_unit_price: dict[int, float]
     return w
 
 
+def _brush_fee_auto(db: Session, draft: DraftOrder) -> float:
+    """放单仓订单「快递+包装固定费」的自动值：按出库口径试算（快递费按整单重量自动计 + 关联结算包材/人工）。
+
+    只读试算（build_order 不落库，入参口径与 _confirm_orders 保持一致）；
+    试算失败（商品缺换算、库存大类没关联结算等）返回 0，只是预览里的默认值不准，
+    不影响解析本身与后续确认（确认时服务端会按真实出库再算一遍）。
+    """
+    try:
+        built = build_order(db, _draft_line_dicts(draft.lines), draft.pack_lines, draft.pack_fee)
+    except Exception:
+        return 0.0
+    return round(float(built.get("pack_cogs", 0) or 0) + float(built.get("total_fee", 0) or 0), 2)
+
+
+def _draft_line_dicts(lines) -> list[dict]:
+    """草稿行 → build_order / create_outbound 要的 dict（字段与 _confirm_orders 一致）。"""
+    return [
+        {"product_id": l.product_id, "unit": l.unit, "quantity": l.quantity, "price": l.price,
+         "spec": l.spec, "stock_product_id": l.stock_product_id, "multiplier": l.multiplier,
+         "gross_sales": l.gross_sales}
+        for l in lines
+    ]
+
+
 def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: tuple | None = ("已出库",)) -> tuple[list[DraftOrder], list[dict], dict, set]:
     """解析聚水潭出库单 → 草稿单（不建单）。
 
@@ -810,7 +847,7 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                     operator=o["seller"] or user.name,
                     remark=f"聚水潭导入 单{o['doc_no']} {o['express']}{o['track']}（一单多货·规则：{rule.name}）{_shop_deduction_note(shop_rule) if deducted else ''}",
                     pack_fee=round(labor, 2), pack_rule_id=rule.id, pack_rule_name=rule.name,
-                    pack_lines=pack_lines, lines=draft_lines,
+                    pack_lines=pack_lines, lines=draft_lines, warehouse=o["warehouse"],
                 )
             )
             continue
@@ -905,9 +942,15 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                 customer=o["customer"] or o["shop"],
                 operator=o["seller"] or user.name,
                 remark=f"聚水潭导入 单{o['doc_no']} {o['express']}{o['track']}{_shop_deduction_note(shop_rule) if deducted else ''}",
-                pack_fee=0.0, lines=draft_lines,
+                pack_fee=0.0, lines=draft_lines, warehouse=o["warehouse"],
             )
         )
+    # 芳谊放单仓：确认框里要按「每一单」核算 刷单成本 vs 结算价，
+    # 所以在这里就按出库口径（build_order，不落库）试算出每单的「快递+包装固定费」自动值，
+    # 前端拿它当默认值展示，用户可覆盖；确认时服务端会再算一遍，不信任前端传值。
+    for d in drafts:
+        if is_brush_warehouse(d.warehouse):
+            d.brush_fee_auto = _brush_fee_auto(db, d)
     # 组装未关联商品明细：附带推荐候选，供导入页手动匹配
     unmapped_list = [
         {**unmapped_detail[code], "suggest": _suggest_candidates(db, code)}
@@ -932,6 +975,9 @@ def preview_import_jushuitan(file: UploadFile, db: Session = Depends(get_db), us
         "unmapped_codes": sorted(unmapped),
         "unmapped": unmapped_list,
         "unmatched_multi": unmatched_multi,
+        # 本次解析里命中的「放单仓」（芳谊放单仓…）：前端据此显示逐单刷单成本输入表
+        "brush_warehouses": sorted({d.warehouse for d in drafts if is_brush_warehouse(d.warehouse)}),
+        "brush_warehouse_names": list(BRUSH_WAREHOUSES),
     }
 
 
@@ -1298,6 +1344,7 @@ def jushuitan_rows(rows, statuses: tuple | None = ("已出库",)) -> list[dict]:
                 "track": cell(row, mapping.get("track")),
                 "seller": cell(row, mapping.get("seller")),
                 "customer": cell(row, mapping.get("customer")),
+                "warehouse": cell(row, mapping.get("warehouse")),
             }
         )
     return result, skip

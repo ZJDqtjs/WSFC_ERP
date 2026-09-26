@@ -4,6 +4,7 @@ from sqlalchemy import and_, case, exists, func, or_, select
 from sqlalchemy.orm import Session, aliased, selectinload
 
 from ..auth import get_current_user
+from ..brush import brush_adjust, brush_adjust_sql, brush_fee_of
 from ..database import (
     current_warehouse_name,
     get_db,
@@ -145,13 +146,15 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
         改成按「商品分类 + 名称」分组聚合，几十行就能算完；付款状态过滤也一并下推。
         """
         paid_o = func.coalesce(Outbound.pay_status, PAID) != "unpaid"
-        orders, revenue, cogs = db.execute(
+        orders, revenue, cogs, brush = db.execute(
             select(func.count(),
                    func.coalesce(func.sum(Outbound.total_amount), 0),
-                   func.coalesce(func.sum(Outbound.total_cogs), 0))
+                   func.coalesce(func.sum(Outbound.total_cogs), 0),
+                   # 芳谊放单仓刷单结算：刷单成本 + 固定费覆盖差（非放单仓订单为 0）
+                   func.coalesce(func.sum(brush_adjust_sql(Outbound)), 0))
             .where(Outbound.date >= f, Outbound.date <= t, paid_o)
         ).one()
-        revenue, cogs = float(revenue), float(cogs)
+        revenue, cogs, brush = float(revenue), float(cogs), round(float(brush), 2)
 
         # 期间费用 = 财务流水里手工登记的支出（不含采购支出，采购已计入库存成本）+ 其他开支
         manual_expense = float(db.execute(
@@ -181,10 +184,12 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
         fee = round(manual_expense + other_fee, 2)  # 期间费用含「其他开支」（与报表口径一致）
         return {
             "revenue": round(revenue, 2),
-            "gross": round(revenue - cogs, 2),
-            "net": round(revenue - cogs - fee, 2),
+            # 毛利 = 收入 − 商品/关联成本 − 刷单结算（芳谊放单仓的刷单成本与固定费）
+            "gross": round(revenue - cogs - brush, 2),
+            "net": round(revenue - cogs - brush - fee, 2),
             "orders": int(orders),
             "cogs": round(cogs, 2),
+            "brush_cost": brush,
             "expense": fee,
             "other_expense": other_fee,
             "pack_costs": packs,
@@ -235,7 +240,11 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
                     Outbound.import_group,
                     func.count(),
                     func.coalesce(func.sum(Outbound.total_amount), 0),
-                    func.coalesce(func.sum(Outbound.total_amount - Outbound.total_cogs - Outbound.total_fee), 0),
+                    # 净利同样扣掉刷单结算（芳谊放单仓的刷单成本 + 固定费覆盖差）
+                    func.coalesce(func.sum(
+                        Outbound.total_amount - Outbound.total_cogs - Outbound.total_fee
+                        - brush_adjust_sql(Outbound)
+                    ), 0),
                 ).where(Outbound.import_group.in_(keys)).group_by(Outbound.import_group)
             ):
                 stats[gk] = (int(cnt), float(amt), float(net))
@@ -254,7 +263,8 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
         for s in singles:
             entries.append({
                 "code": s.code, "customer": s.customer, "date": s.date, "operator": s.operator,
-                "amount": s.total_amount, "net": round(s.total_amount - s.total_cogs - s.total_fee, 2),
+                "amount": s.total_amount,
+                "net": round(s.total_amount - s.total_cogs - s.total_fee - brush_adjust(s), 2),
                 "_sort": s.id,
             })
         entries.sort(key=lambda e: -e["_sort"])
@@ -315,7 +325,12 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
 
     revenue = sum(o.total_amount for o in outbounds)
     cogs = sum(o.total_cogs for o in outbounds)
-    gross = round(revenue - cogs, 2)
+    # 芳谊放单仓刷单结算：刷单成本（我填的）+ 固定费覆盖差；非放单仓订单都是 0。
+    # 注意 cogs 里**不**含这笔钱（cogs 仍是商品/包材/快递的结转成本），毛利单独扣它，
+    # 这样「商品成本 goods_cogs」不会被刷单成本污染。
+    brush_cost = round(sum(float(getattr(o, "brush_cost", 0.0) or 0.0) for o in outbounds), 2)
+    brush_total = round(sum(brush_adjust(o) for o in outbounds), 2)
+    gross = round(revenue - cogs - brush_total, 2)
     # 期间费用 = 财务流水里手工登记的支出（不含采购支出，采购已计入库存成本）+ 其他开支
     manual_expense = sum(f.amount for f in finances if f.type == "expense" and f.category != "采购支出")
     # 其他开支原始金额始终统计，便于前端提示「已排除多少」；口径关闭时不计入任何支出/净利计算
@@ -357,6 +372,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "material_cogs": 0.0,  # 包材 / 耗材
                 "other_cogs": 0.0,  # 其他关联结算
                 "express_cogs": 0.0,  # 快递运费
+                "brush_cogs": 0.0,  # 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差，按销售金额占比分摊到单内商品）
             },
         )
 
@@ -472,15 +488,23 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     per_order: dict[int, list] = {}
     for r in sale_rows:
         per_order.setdefault(r.oid, []).append(r)
-    for oid, field, amt in unowned_rows:
+
+    def _spread(oid, field: str, amt: float) -> None:
+        """把一单上的整单金额按单内各销售行的销售金额占比分摊（金额为 0 时按行数平均）。"""
         rows_o = per_order.get(oid)
-        if not rows_o:
-            continue
+        if not rows_o or not amt:
+            return
         tot_amt = sum(float(x.amt or 0.0) for x in rows_o)
         tot_n = sum(int(x.n or 0) for x in rows_o)
         for x in rows_o:
             share = (float(x.amt or 0.0) / tot_amt) if tot_amt else ((int(x.n or 0) / tot_n) if tot_n else 0.0)
             _bucket(x.pid, x.spec, bool(x.dr), "")[field] += float(amt or 0.0) * share
+
+    for r in unowned_rows:
+        _spread(r.oid, r.field, float(r.amt or 0.0))
+    # 芳谊放单仓的刷单结算也按同一套算法归到该单的商品上，商品毛利才能扣掉它
+    for o in outbounds:
+        _spread(o.id, "brush_cogs", brush_adjust(o))
 
     product_rows = []
     for _key, d in sorted(by_product.items(), key=lambda kv: -kv[1]["amount"]):
@@ -490,7 +514,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         other = round(d["other_cogs"], 2)        # 其他关联结算
         pack = round(labor + material + other, 2)  # 兼容旧字段「打包人工+耗材」
         express = round(d["express_cogs"], 2)
-        total_cogs = round(goods + pack + express, 2)
+        brush = round(d["brush_cogs"], 2)  # 芳谊放单仓刷单结算（非放单仓商品为 0）
+        total_cogs = round(goods + pack + express + brush, 2)
         amount = round(d["amount"], 2)
         gross_sales = round(d["gross_sales"], 2)
         gp = round(amount - total_cogs, 2)
@@ -506,7 +531,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "qty": round(d["qty"], 4),
                 "amount": amount,
                 "gross_sales": gross_sales,
-                # cogs 语义升级为「总成本」，含商品成本 + 打包人工/耗材 + 快递费
+                # cogs 语义升级为「总成本」，含商品成本 + 打包人工/耗材 + 快递费 + 刷单结算
                 "cogs": total_cogs,
                 "goods_cogs": goods,
                 "pack_cogs": pack,
@@ -514,6 +539,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "material_cogs": material,  # 包材 / 耗材（从 pack_cogs 拆出）
                 "other_cogs": other,        # 其他关联结算
                 "express_cogs": express,
+                "brush_cogs": brush,        # 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差）
                 "total_cogs": total_cogs,
                 "gross_profit": gp,
                 "gp_rate": round(gp / denom * 100, 2) if denom else 0.0,
@@ -641,6 +667,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         "revenue": round(revenue, 2),
         "cogs": round(cogs, 2),
         "goods_cogs": goods_cogs,
+        # 刷单结算（芳谊放单仓）：刷单成本 + 固定费覆盖差，已从下面的毛利/净利里扣掉
+        "brush_cost": brush_total,
+        "brush_input_cost": brush_cost,   # 其中「我填的刷单成本」原值合计（展示用）
         "gross_profit": gross,
         # 期间费用 = 手工记账支出 + 其他开支，从毛利中扣减得到净利
         "expense": expense,
@@ -734,7 +763,7 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
 
     # ---- 商品：按「商品 + 规格 + 是否代发」归并，再用合并后的成本重算毛利/毛利率 ----
     num_fields = ("qty", "amount", "gross_sales", "goods_cogs", "pack_cogs",
-                  "labor_cogs", "material_cogs", "other_cogs", "express_cogs")
+                  "labor_cogs", "material_cogs", "other_cogs", "express_cogs", "brush_cogs")
     buckets: dict[tuple, dict] = {}
     for p in parts:
         for r in p.get("by_product") or []:
@@ -752,7 +781,8 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
         goods = round(d["goods_cogs"], 2)
         pack = round(d["pack_cogs"], 2)
         express = round(d["express_cogs"], 2)
-        total_cogs = round(goods + pack + express, 2)
+        brush = round(d["brush_cogs"], 2)   # 芳谊放单仓刷单结算（与单仓口径一致）
+        total_cogs = round(goods + pack + express + brush, 2)
         amount = round(d["amount"], 2)
         gross_sales = round(d["gross_sales"], 2)
         gp = round(amount - total_cogs, 2)
@@ -824,6 +854,9 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
         "revenue": s("revenue"),
         "cogs": s("cogs"),
         "goods_cogs": s("goods_cogs"),
+        # 刷单结算（芳谊放单仓）合计：各分仓已按同口径扣减，这里只相加
+        "brush_cost": s("brush_cost"),
+        "brush_input_cost": s("brush_input_cost"),
         "gross_profit": s("gross_profit"),
         "expense": s("expense"),
         "manual_expense": s("manual_expense"),
@@ -1097,12 +1130,14 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
         ).one()
         return int(cnt), float(amt or 0)
 
-    orders, revenue, cogs = db.execute(
+    orders, revenue, cogs, brush = db.execute(
         select(func.count(), func.coalesce(func.sum(Outbound.total_amount), 0),
-               func.coalesce(func.sum(Outbound.total_cogs), 0))
+               func.coalesce(func.sum(Outbound.total_cogs), 0),
+               # 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差），与 /report/summary 同口径
+               func.coalesce(func.sum(brush_adjust_sql(Outbound)), 0))
         .where(*_date_conds(Outbound), paid(Outbound))
     ).one()
-    revenue, cogs = float(revenue), float(cogs)
+    revenue, cogs, brush = float(revenue), float(cogs), round(float(brush), 2)
 
     manual_expense = float(db.execute(
         select(func.coalesce(func.sum(FinanceRecord.amount), 0))
@@ -1139,7 +1174,8 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
         "name": name,
         "revenue": round(revenue, 2),
         "cogs": round(cogs, 2),
-        "gross": round(revenue - cogs, 2),
+        "brush_cost": brush,
+        "gross": round(revenue - cogs - brush, 2),
         "expense": expense,
         "other_expense": other_expense,
         "manual_expense": round(manual_expense, 2),
@@ -1147,7 +1183,7 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
         "excluded_other_expense": other_raw,
         "purchase": round(purchase, 2),
         "total_expense": round(purchase + expense, 2),
-        "net_profit": round(revenue - cogs - expense, 2),
+        "net_profit": round(revenue - cogs - brush - expense, 2),
         "orders": int(orders),
         "inbounds": int(inb_cnt),
         "stock_value": stock_value,
@@ -1197,6 +1233,8 @@ def all_warehouses(
     total = {
         "revenue": s("revenue"),
         "cogs": s("cogs"),
+        # 刷单结算（芳谊放单仓）：各分仓已扣减，这里只相加
+        "brush_cost": s("brush_cost"),
         "gross": s("gross"),
         "expense": s("expense"),
         "other_expense": s("other_expense"),

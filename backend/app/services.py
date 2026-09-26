@@ -7,6 +7,7 @@ from collections import deque
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from .brush import is_brush_warehouse
 from .models import FinanceRecord, Inbound, OtherExpense, Outbound, OutboundLine, Product, StockMovement, Unit
 
 # 标准重量单位（克 为基础）
@@ -911,6 +912,8 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
         "total_amount": round(total_amount, 2),
         "total_cogs": round(total_cogs, 2),
         "total_fee": round(total_fee, 2),
+        # 关联结算合计（包材 + 人工 + 自动快递费）：芳谊放单仓「快递+包装固定费」的自动值口径
+        "pack_cogs": round(sum(r["cogs"] for r in pack_rows), 2),
         "gross_profit": round(total_amount - total_cogs, 2),
         "net_profit": round(total_amount - total_cogs - total_fee, 2),
         "warnings": warnings,
@@ -934,6 +937,10 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
     date = payload["date"]
     adjust = round(float(payload.get("adjust_amount") or 0), 2)   # 抹零/凑整：正=加收，负=抹零
     pay = pay_fields(payload, date)
+    # 芳谊放单仓刷单结算（口径见 app/brush.py）：只有放单仓的单子才记这三列，其余单据口径不变。
+    # brush_auto_fee 由服务端自己按出库口径算（= 关联结算快递/包材/人工 + 打包费），不信任前端传值。
+    brush = is_brush_warehouse(payload.get("warehouse"))
+    brush_auto_fee = round(float(order.get("pack_cogs", 0) or 0) + float(order["total_fee"] or 0), 2) if brush else 0.0
     rec = Outbound(
         code=gen_outbound_code(db, date),
         import_group=import_group,
@@ -947,6 +954,9 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
         adjust_amount=adjust,
         total_cogs=order["total_cogs"],
         total_fee=order["total_fee"],
+        brush_cost=round(float(payload.get("brush_cost") or 0), 2) if brush else 0.0,
+        brush_fee=round(float(payload.get("brush_fee") or 0), 2) if brush else 0.0,
+        brush_auto_fee=brush_auto_fee,
         **pay,
     )
     db.add(rec)

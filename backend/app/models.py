@@ -121,6 +121,13 @@ class Outbound(Base):
     adjust_amount: Mapped[float] = mapped_column(Float, default=0.0)
     total_cogs: Mapped[float] = mapped_column(Float, default=0.0)  # 商品成本+包装材料成本
     total_fee: Mapped[float] = mapped_column(Float, default=0.0)  # 人工/打包等固定费用
+    # 芳谊放单仓「刷单结算」（口径见 app/brush.py）：
+    #   brush_cost=我刷这单的成本（导入确认时手填）；brush_fee=本单结算用的「快递+包装固定费」
+    #   （0=用系统自动值，用户可覆盖）；brush_auto_fee=出库时系统自动算出的快递+包装费快照（用于还原覆盖差额）。
+    # 非放单仓订单三列都是 0，对利润无影响。
+    brush_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    brush_fee: Mapped[float] = mapped_column(Float, default=0.0)
+    brush_auto_fee: Mapped[float] = mapped_column(Float, default=0.0)
     # 付款状态：paid 已付款/已回款（默认，整单进报表）/ unpaid 待付款（未回款，整单先进待付款账单，不进报表）
     pay_status: Mapped[str] = mapped_column(String(8), default="paid")
     paid_at: Mapped[str] = mapped_column(String(10), default="")
