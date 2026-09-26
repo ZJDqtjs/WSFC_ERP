@@ -14,6 +14,7 @@ from ..database import (
     resolve_key,
 )
 from ..models import FinanceRecord, Inbound, OtherExpense, Outbound, OutboundLine, Product, User
+from ..services import INBOUND_FEE_REF
 
 router = APIRouter(prefix="/api", tags=["report"])
 
@@ -166,7 +167,9 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
         other_fee = round(float(db.execute(
             select(func.coalesce(func.sum(OtherExpense.amount), 0))
             .where(OtherExpense.date >= f, OtherExpense.date <= t,
-                   func.coalesce(OtherExpense.pay_status, PAID) != "unpaid")
+                   func.coalesce(OtherExpense.pay_status, PAID) != "unpaid",
+                   # 运费/装卸镜像行已计入批次成本，期间费用不重复扣（「其他开支」页仍可查）
+                   func.coalesce(OtherExpense.ref_type, "") != INBOUND_FEE_REF)
         ).scalar() or 0.0), 2)
 
         packs: dict[str, float] = {}
@@ -298,6 +301,11 @@ def summary(
     return _summary_of(db, date_from, date_to, resolve_key(wh), bool(exclude_other))
 
 
+def _inbound_landed(i) -> float:
+    """入库实际支出 = 货款 + 运费 + 装卸费（运费/装卸已计入批次成本，故期间费用不重复扣）。"""
+    return round((i.total_amount or 0.0) + (getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0), 2)
+
+
 def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_other: bool = False) -> dict:
     """单个分仓的经营汇总（「单仓总览」各分区的数据源）。
 
@@ -322,6 +330,11 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     )
     finances, unpaid_finances = _split_paid(list(db.execute(scope(FinanceRecord)).scalars()))
     others, unpaid_others = _split_paid(list(db.execute(scope(OtherExpense)).scalars()))
+    # 入库「运费/装卸费」镜像行已计入批次到岸成本（FIFO 结转随销量扣减，体现在该品毛利上），
+    # 期间费用口径（others → other_raw/other_fees/支出分区/excluded_other_expense）剔除它，
+    # 避免「成本 + 期间费用」重复扣减；待付款口径（unpaid_others → _pending_stats）保留，
+    # 与「待付款账单」页的应付金额（货款 + 调整 + 运费/装卸）保持一致。
+    others = [e for e in others if e.ref_type != INBOUND_FEE_REF]
 
     revenue = sum(o.total_amount for o in outbounds)
     cogs = sum(o.total_cogs for o in outbounds)
@@ -339,7 +352,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     other_total = 0.0 if exclude_other else other_raw
     expense = round(manual_expense + other_total, 2)
     purchase = sum(f.amount for f in finances if f.type == "expense" and f.category == "采购支出")
-    purchase_db = sum(i.total_amount for i in inbounds)
+    # 本期进货 = 货款 + 入库运费/装卸费（与「支出」分区的采购桶、支出合计口径一致）
+    purchase_db = sum(_inbound_landed(i) for i in inbounds)
     net = round(gross - expense, 2)
     stock_value = round(sum(p.stock_value for p in db.execute(select(Product)).scalars()), 2)
 
@@ -588,9 +602,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         b[kind] += amount or 0.0
         b["count"] += 1
 
-    for i in inbounds:  # 采购/进货（与顶部「本期进货」同源）
-        _add_expense(exp_day, i.date, "purchase", i.total_amount)
-        _add_expense(exp_month, (i.date or "")[:7], "purchase", i.total_amount)
+    for i in inbounds:  # 采购/进货（与顶部「本期进货」同源；含运费/装卸）
+        _add_expense(exp_day, i.date, "purchase", _inbound_landed(i))
+        _add_expense(exp_month, (i.date or "")[:7], "purchase", _inbound_landed(i))
     for e in others_in:
         _add_expense(exp_day, e.date, "other", e.amount)
         _add_expense(exp_month, (e.date or "")[:7], "other", e.amount)
@@ -631,10 +645,20 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
 
     expense_items: list[dict] = []
     for i in inbounds:
+        fee = round((getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0), 2)
+        note = i.supplier or i.remark or ""
+        if fee:
+            # 运费/装卸费已计入批次成本，这里并入采购支出金额并注明，和「逐日支出」的采购桶口径一致
+            parts = []
+            if getattr(i, "freight", 0.0):
+                parts.append(f"运费 ¥{round(i.freight, 2)}")
+            if getattr(i, "handling", 0.0):
+                parts.append(f"装卸费 ¥{round(i.handling, 2)}")
+            note = (note + " · " if note else "") + "、".join(parts) + "（已计入成本）"
         expense_items.append({
             "date": i.date, "source": "采购", "category": "采购支出",
-            "item": _inbound_label(i), "amount": round(i.total_amount or 0.0, 2),
-            "operator": i.operator or "", "remark": i.supplier or i.remark or "",
+            "item": _inbound_label(i), "amount": _inbound_landed(i),
+            "operator": i.operator or "", "remark": note,
             "ref": i.code or "", "auto": False,
         })
     for e in others_in:
@@ -1146,10 +1170,20 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
     ).scalar() or 0.0)
     other_raw = round(float(db.execute(
         select(func.coalesce(func.sum(OtherExpense.amount), 0))
-        .where(*_date_conds(OtherExpense), paid(OtherExpense))
+        .where(*_date_conds(OtherExpense), paid(OtherExpense),
+               # 运费/装卸镜像行已计入批次成本，期间费用不重复扣（「其他开支」页仍可查）
+               func.coalesce(OtherExpense.ref_type, "") != INBOUND_FEE_REF)
     ).scalar() or 0.0), 2)
     inb_cnt, purchase = db.execute(
-        select(func.count(), func.coalesce(func.sum(Inbound.total_amount), 0))
+        select(
+            func.count(),
+            # 本期进货 = 货款 + 入库运费/装卸费（与「支出」分区采购口径、支出合计一致）
+            func.coalesce(func.sum(
+                Inbound.total_amount
+                + func.coalesce(Inbound.freight, 0)
+                + func.coalesce(Inbound.handling, 0)
+            ), 0),
+        )
         .where(*_date_conds(Inbound), paid(Inbound))
     ).one()
     purchase = float(purchase)

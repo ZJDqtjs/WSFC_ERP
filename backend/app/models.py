@@ -89,6 +89,12 @@ class Inbound(Base):
     # 金额调整（抹零/凑整）：正=多付给供应商，负=少付。实付金额 = total_amount + adjust_amount；
     # 商品成本仍按 total_amount（不变），差额自动记一笔「金额调整」的其他开支（见 services.create_inbound）
     adjust_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    # 入库运费 / 装卸费（选填）：计入该批次的到岸成本（StockMovement.amount = 商品金额 + 这两项），
+    # FIFO 结转后自动体现在该品的毛利与库存均价上；同时在「其他开支」生成 ref_type="inbound_fee"
+    # 的镜像行供查询（报表期间费用会排除镜像行，避免与成本口径重复扣减，见 services/报告聚合）。
+    # 与金额调整不同：调整差额不改成本、只记开支；运费/装卸费改成本、镜像行不重复进期间费用。
+    freight: Mapped[float] = mapped_column(Float, default=0.0)
+    handling: Mapped[float] = mapped_column(Float, default=0.0)
     supplier: Mapped[str] = mapped_column(String(64), default="")
     operator: Mapped[str] = mapped_column(String(32), default="")
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD

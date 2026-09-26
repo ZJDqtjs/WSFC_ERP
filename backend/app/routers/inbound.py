@@ -31,6 +31,10 @@ class InboundIn(BaseModel):
     pay_status: str = "paid"  # paid 已付款（默认）/ unpaid 待付款（先进「待付款账单」）
     # 金额调整（抹零/凑整）：正=多付给供应商，负=少付。商品成本按原价不变，差额自动记「金额调整」其他开支
     adjust_amount: float = 0.0
+    # 运费 / 装卸费（选填，≥0）：计入该批次到岸成本（体现在这个品的毛利上），
+    # 并自动在「其他开支」生成镜像行供查询（ref_type="inbound_fee"，报表期间费用不重复扣）
+    freight: float = 0.0
+    handling: float = 0.0
 
 
 class InboundUpdate(BaseModel):
@@ -54,6 +58,12 @@ def _to_dict(r: Inbound) -> dict:
         "total_amount": r.total_amount,
         "adjust_amount": round(getattr(r, "adjust_amount", 0.0) or 0.0, 2),
         "final_amount": round((r.total_amount or 0.0) + (getattr(r, "adjust_amount", 0.0) or 0.0), 2),
+        # 运费/装卸费：已计入批次到岸成本（landed_amount = 货款 + 这两项），并在「其他开支」留有镜像行
+        "freight": round(getattr(r, "freight", 0.0) or 0.0, 2),
+        "handling": round(getattr(r, "handling", 0.0) or 0.0, 2),
+        "landed_amount": round(
+            (r.total_amount or 0.0) + (getattr(r, "freight", 0.0) or 0.0) + (getattr(r, "handling", 0.0) or 0.0), 2
+        ),
         "supplier": r.supplier,
         "operator": r.operator,
         "date": r.date,
@@ -123,8 +133,12 @@ def delete_inbound(rid: int, db: Session = Depends(get_db), user: User = Depends
         db.delete(m)
     for f in db.execute(select(FinanceRecord).where(FinanceRecord.ref_type == "inbound", FinanceRecord.ref_id == rid)).scalars():
         db.delete(f)
-    # 金额调整带出的其他开支一并删除，避免删单后报表还挂着这笔调整
-    for e in db.execute(select(OtherExpense).where(OtherExpense.ref_type == "inbound", OtherExpense.ref_id == rid)).scalars():
+    # 金额调整 / 运费装卸镜像行带出的其他开支一并删除，避免删单后报表或「其他开支」还挂着这些记录
+    for e in db.execute(
+        select(OtherExpense).where(
+            OtherExpense.ref_type.in_(["inbound", "inbound_fee"]), OtherExpense.ref_id == rid
+        )
+    ).scalars():
         db.delete(e)
     db.delete(rec)
     recompute_product(db, pid)

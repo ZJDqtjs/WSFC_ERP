@@ -22,6 +22,7 @@ router = APIRouter(prefix="/api", tags=["other-expense"])
 # 预设费用类型（前端下拉建议；也允许直接输入新类型，保存后自动进入建议列表）
 PRESET_CATEGORIES = [
     "金额调整",  # 入库/出库抹零·凑整自动生成（也可手动登记）
+    "运费", "装卸费",  # 入库单「运费/装卸费」自动生成镜像行（已计入批次成本，报表期间费用不重复扣）；也可手动登记
     "网线费", "安装费", "机器费", "样品费", "设备维修", "水电费", "搬运费", "办公用品", "其他",
 ]
 
@@ -200,6 +201,8 @@ def update_other_expense(
     e = db.get(OtherExpense, eid)
     if not e:
         raise HTTPException(404, "开支记录不存在")
+    if e.ref_type:
+        raise HTTPException(400, "该笔开支由单据自动带出（金额调整 / 入库运费·装卸费），请在来源单据中修改或删除")
     category, amount, day, remark, pay = _clean(data)
     e.category, e.amount, e.date, e.remark = category, amount, day, remark
     if pay != (e.pay_status or "paid"):
@@ -217,6 +220,9 @@ def delete_other_expense(
     e = db.get(OtherExpense, eid)
     if not e:
         raise HTTPException(404, "开支记录不存在")
+    if e.ref_type:
+        # 金额调整 / 入库运费·装卸镜像行随单据自动维护，删改请操作源单据（删单自动级联删除）
+        raise HTTPException(400, "该开支由单据自动带出，需在对应入库/出库单据中修改或删除")
     db.delete(e)
     db.commit()
     return {"ok": True}

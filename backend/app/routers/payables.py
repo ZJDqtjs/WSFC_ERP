@@ -144,7 +144,9 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
             "inbound", r.id, r.date,
             f"{name} × {_qty(r.quantity)}{r.unit or ''}".strip(),
             "供应商 " + r.supplier if r.supplier else "采购入库",
-            r.total_amount + (getattr(r, "adjust_amount", 0.0) or 0.0),  # 应付 = 实付（含抹零/凑整调整）
+            # 应付 = 实付（含抹零/凑整调整 + 运费/装卸费；后两者的「其他开支」镜像行不单独列为待办）
+            r.total_amount + (getattr(r, "adjust_amount", 0.0) or 0.0)
+            + (getattr(r, "freight", 0.0) or 0.0) + (getattr(r, "handling", 0.0) or 0.0),
             "out", r.pay_status, r.paid_at, r.operator, r.remark, r.code,
         ))
 
@@ -259,6 +261,12 @@ def pay_bill(data: PayIn, db: Session = Depends(get_db), user: User = Depends(ge
             select(FinanceRecord).where(FinanceRecord.ref_type == kind, FinanceRecord.ref_id == rec.id)
         ).scalars():
             f.pay_status, f.paid_at = rec.pay_status, rec.paid_at
+        # 单据带出的其他开支同样随主单结算：金额调整(ref_type=kind) + 入库运费/装卸镜像行
+        exp_types = [kind] + (["inbound_fee"] if kind == "inbound" else [])
+        for e in db.execute(
+            select(OtherExpense).where(OtherExpense.ref_type.in_(exp_types), OtherExpense.ref_id == rec.id)
+        ).scalars():
+            e.pay_status, e.paid_at = rec.pay_status, rec.paid_at
     db.commit()
     return {
         "ok": True,

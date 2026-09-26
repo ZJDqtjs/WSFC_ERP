@@ -489,6 +489,7 @@ def purge_inbounds(db: Session, ids: list[int]) -> tuple[int, int, set[int]]:
         _bulk_delete_ref(db, StockMovement, "inbound", part)
         _bulk_delete_ref(db, FinanceRecord, "inbound", part)
         _bulk_delete_ref(db, OtherExpense, "inbound", part)  # 金额调整带出的其他开支一并删除
+        _bulk_delete_ref(db, OtherExpense, INBOUND_FEE_REF, part)  # 运费/装卸费镜像行一并删除
         db.execute(delete(Inbound).where(Inbound.id.in_(part)).execution_options(synchronize_session=False))
     db.flush()
     for pid in affected:
@@ -600,6 +601,47 @@ def sync_adjust_expense(db: Session, kind: str, ref_id: int, code: str, date: st
     ))
 
 
+# 入库「运费 / 装卸费」带出的其他开支镜像行的 ref_type（与金额调整的 "inbound" 区分，互不误伤）
+INBOUND_FEE_REF = "inbound_fee"
+INBOUND_FEE_CATEGORIES = (("freight", "运费"), ("handling", "装卸费"))
+
+
+def sync_inbound_fee_expenses(db: Session, rec: "Inbound", product_name: str, pay: dict) -> None:
+    """维护入库单「运费 / 装卸费」对应的其他开支镜像行：每项 >0 各生成一行，清零则删除。
+
+    这两项费用已计入批次到岸成本（FIFO 结转随销量扣减，体现在该品毛利上）；这里的镜像行
+    只供「其他开支」页按类型/日期查询，报表的期间费用聚合一律排除 ref_type="inbound_fee"
+    （见 routers/report.py），避免「成本 + 期间费用」重复扣减。日期/付款状态随单据
+    同步维护（sync_doc_edit / pay_bill / 删除级联）。
+    """
+    for attr, label in INBOUND_FEE_CATEGORIES:
+        amount = round(float(getattr(rec, attr, 0.0) or 0.0), 2)
+        existing = list(db.execute(
+            select(OtherExpense).where(
+                OtherExpense.ref_type == INBOUND_FEE_REF,
+                OtherExpense.ref_id == rec.id,
+                OtherExpense.category == label,
+            )
+        ).scalars())
+        for stale in existing[1:]:
+            db.delete(stale)
+        if amount <= 0:
+            for e in existing[:1]:
+                db.delete(e)
+            continue
+        remark = f"入库 {rec.code} {label} · {product_name}（已计入批次成本）"
+        if existing:
+            e = existing[0]
+            e.amount, e.date, e.remark, e.operator = amount, rec.date, remark, rec.operator
+            e.pay_status, e.paid_at = pay["pay_status"], pay["paid_at"]
+        else:
+            db.add(OtherExpense(
+                category=label, amount=amount, date=rec.date, remark=remark,
+                operator=rec.operator, ref_type=INBOUND_FEE_REF, ref_id=rec.id,
+                pay_status=pay["pay_status"], paid_at=pay["paid_at"],
+            ))
+
+
 def sync_doc_edit(db: Session, kind: str, ref_id: int, date: str, operator: str, pay: dict) -> None:
     """单据被手动修改（供应商/客户、日期、付款状态）后，同步它带出的库存流水/财务流水/其他开支。
 
@@ -616,8 +658,10 @@ def sync_doc_edit(db: Session, kind: str, ref_id: int, date: str, operator: str,
     ).scalars():
         f.date, f.operator = date, operator
         f.pay_status, f.paid_at = pay["pay_status"], pay["paid_at"]
+    # 其他开支带出行：金额调整(ref_type=kind) + 入库的运费/装卸费镜像行(ref_type=inbound_fee)
+    fee_types = [kind] + ([INBOUND_FEE_REF] if kind == "inbound" else [])
     for e in db.execute(
-        select(OtherExpense).where(OtherExpense.ref_type == kind, OtherExpense.ref_id == ref_id)
+        select(OtherExpense).where(OtherExpense.ref_type.in_(fee_types), OtherExpense.ref_id == ref_id)
     ).scalars():
         e.date, e.operator = date, operator
         e.pay_status, e.paid_at = pay["pay_status"], pay["paid_at"]
@@ -635,8 +679,13 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     unit_price = float(payload["unit_price"])
     date = payload["date"]
     qty_base = unit_to_base(product, unit, quantity)
-    amount = round(quantity * unit_price, 2)   # 商品金额（= 批次成本），不随金额调整变化
+    amount = round(quantity * unit_price, 2)   # 商品金额（货款），不随金额调整变化
     adjust = round(float(payload.get("adjust_amount") or 0), 2)   # 抹零/凑整：正=多付，负=少付
+    freight = round(float(payload.get("freight") or 0), 2)    # 运费（选填，计入批次成本）
+    handling = round(float(payload.get("handling") or 0), 2)  # 装卸费（选填，计入批次成本）
+    if freight < 0 or handling < 0:
+        raise ValueError("运费 / 装卸费不能为负数")
+    landed = round(amount + freight + handling, 2)  # 批次到岸成本 = 货款 + 运费 + 装卸费（金额调整不计入）
     op = (payload.get("operator") or "").strip() or operator
 
     pay = pay_fields(payload, date)
@@ -649,6 +698,8 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
         unit_price=unit_price,
         total_amount=amount,
         adjust_amount=adjust,
+        freight=freight,
+        handling=handling,
         supplier=(payload.get("supplier") or "").strip(),
         operator=op,
         date=date,
@@ -661,12 +712,12 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
         product_id=product.id,
         move_type="in",
         quantity_base=qty_base,
-        amount=amount,
+        amount=landed,
         ref_type="inbound",
         ref_id=rec.id,
         date=date,
         operator=op,
-        remark=f"入库 {rec.code}",
+        remark=f"入库 {rec.code}" + (f"（含运费/装卸 ¥{round(freight + handling, 2)}）" if freight or handling else ""),
     )
     db.add(mv)
     db.flush()
@@ -685,6 +736,7 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
         )
     )
     sync_adjust_expense(db, "inbound", rec.id, rec.code, date, op, adjust, pay)
+    sync_inbound_fee_expenses(db, rec, product.name, pay)
     recompute_product(db, product.id)
     db.flush()
     return rec
