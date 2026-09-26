@@ -58,7 +58,7 @@
     "enabled": true,
     "base_url": "https://ai.yun.139.com/api/llm/102001/v1/chat/completions",
     "api_key": "",
-    "model": "blian_qwen35_plus"
+    "model": "blian_qwen38_flash"
   },
 
   "product_overrides": {}
