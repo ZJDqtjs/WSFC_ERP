@@ -1891,6 +1891,34 @@ th[data-key] .sort-arrow {
   font-size: 12px;
 }
 
+.brush-batch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  background: var(--card);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.brush-batch input {
+  width: 120px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
+  text-align: right;
+}
+
+.brush-batch input:focus {
+  border-color: var(--primary);
+  outline: none;
+}
+
 .brush-wrap {
   max-height: 38vh;
   overflow: auto;

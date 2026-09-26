@@ -335,6 +335,15 @@ const batchState = {
               结算价 = 结算收入（已扣店铺扣点） − 快递+包装固定费；利润 = 结算价 − 刷单成本。
               已填 {{ brushFilled }} / {{ brushOrders.length }} 单，未填按 0 计；这些金额会写进出库单并进报表。
             </div>
+            <!-- 一键批量：单子多时先统一填一个成本，再挑个别单改 -->
+            <div class="brush-batch">
+              <van-field v-model="batchBrushCost" type="number" placeholder="刷单成本，如 1475" input-align="right" style="flex:1;" />
+              <van-button size="mini" type="primary" @click="brushApply(false)">应用到全部 {{ brushOrders.length }} 单</van-button>
+            </div>
+            <div class="row" style="gap:8px;margin:6px 0 2px;">
+              <van-button size="mini" plain @click="brushApply(true)">只填未填的</van-button>
+              <van-button size="mini" plain @click="brushClearCost">清空成本</van-button>
+            </div>
             <div v-for="(o, bi) in brushOrders" :key="'brush' + bi" class="brush-row">
               <div class="row">
                 <span class="grow ellipsis bold">{{ o.doc_no || '（无单号）' }}</span>
@@ -388,7 +397,12 @@ const batchState = {
             </div>
           </div>
           <div v-if="batchKind === 'jushuitan'" style="margin-top:8px;">
-            <van-button size="mini" plain type="primary" :loading="aiPreviewing" @click="aiAutoPreview">重新生成 AI 方案</van-button>
+            <div v-if="brushHit.length" class="muted" style="font-size:12px;margin-bottom:6px;">
+              本文件含放单仓单据（{{ brushHit.join('、') }}），已<b>不自动</b>跑 AI 归并（放单仓商品名多是占位名，自动新增会建出垃圾商品）——这些商品请点「去新增商品」新建，或到「聚水潭关联」页手动关联。
+            </div>
+            <van-button size="mini" plain type="primary" :loading="aiPreviewing" @click="aiAutoPreview">
+              {{ brushHit.length ? '仍要跑一次 AI 归并' : '重新生成 AI 方案' }}
+            </van-button>
           </div>
         </div>
 
@@ -829,6 +843,8 @@ const aiPreviewing = ref(false)
 const aiApplying = ref(false)
 // 放单仓名单（后端下发，见 backend/app/brush.py）：这些「仓储方」的订单要逐单填刷单成本
 const brushWh = ref([])
+const brushHit = ref([])      // 本次解析命中的放单仓（有它就不自动跑 AI 归并）
+const batchBrushCost = ref('') // 一键批量要填的刷单成本
 
 const batchCfg = computed(() => BATCH_CFG[batchKind.value])
 const batchAllOn = computed(() => batchOrders.value.length > 0 && batchOrders.value.every((o) => o._on))
@@ -870,6 +886,23 @@ function brushGoods(o) {
 function brushProfit(o) { return brushIncome(o) - num(o.brush_fee) - num(o.brush_cost) }
 const brushTotalProfit = computed(() => brushOrders.value.reduce((s, o) => s + brushProfit(o), 0))
 const brushFilled = computed(() => brushOrders.value.filter((o) => num(o.brush_cost) > 0).length)
+/* 一键批量：同一个刷单成本填到各单（onlyBlank=true 只补还没填的），单子多时先统一填再挑个别改 */
+function brushApply(onlyBlank) {
+  if (String(batchBrushCost.value).trim() === '') { showToast('请先填一个刷单成本，如 1475'); return }
+  const v = num(batchBrushCost.value)
+  let n = 0
+  brushOrders.value.forEach((o) => {
+    if (onlyBlank && num(o.brush_cost) > 0) return
+    o.brush_cost = String(v)
+    n++
+  })
+  showToast(n ? `已把刷单成本 ${fmtMoney(v)} 填到 ${n} 单` : '没有需要填的单（都已填过）')
+}
+function brushClearCost() {
+  let n = 0
+  brushOrders.value.forEach((o) => { if (num(o.brush_cost) > 0) { o.brush_cost = ''; n++ } })
+  showToast(n ? `已清空 ${n} 单的刷单成本` : '本来就没填')
+}
 
 // 把当前解析状态写回模块级单例，供离开页面（去新增商品）后返回时恢复
 function syncBatch() {
@@ -899,6 +932,8 @@ function resetBatch(kind) {
   batchSkip.value = {}
   aiPlan.value = null
   brushWh.value = []
+  brushHit.value = []
+  batchBrushCost.value = ''
   batchState.aiSig = ''
   syncBatch()
 }
@@ -926,6 +961,7 @@ async function runParse(f) {
   try {
     const r = await upload(batchCfg.value.preview, f)
     brushWh.value = r.brush_warehouse_names || []
+    brushHit.value = r.brush_warehouses || []
     // 放单仓订单：带出「快递+包装固定费」的自动值（可改）与「刷单成本」输入位
     batchOrders.value = (r.orders || []).map((o) => ({
       ...o, _on: true,
@@ -937,8 +973,9 @@ async function runParse(f) {
     batchSkip.value = r.skip || {}
     syncBatch()
     if (!batchOrders.value.length) showToast('未解析出可出库的单据')
-    // 聚水潭：解析后自动试算 AI 新增方案（不落库），把方案交给用户确认；同一批未关联只自动试算一次
-    if (batchKind.value === 'jushuitan' && batchUnmapped.value.length) {
+    // 聚水潭：解析后自动试算 AI 新增方案（不落库），把方案交给用户确认；同一批未关联只自动试算一次。
+    // 放单仓单据（仓储方=芳谊放单仓）不自动跑：平台商品名多是放单仓占位名，自动新增会建出垃圾商品。
+    if (batchKind.value === 'jushuitan' && batchUnmapped.value.length && !brushHit.value.length) {
       const sig = batchUnmapped.value.slice().sort().join('\u0001')
       if (sig !== batchState.aiSig) { batchState.aiSig = sig; aiAutoPreview() }
     }
@@ -1056,6 +1093,8 @@ onActivated(() => { if (tab.value === 'list') loadList() })
 .agg-row .muted { font-size: 12px; }
 /* 芳谊放单仓逐单刷单结算 */
 .brush-box { background: #f0f7ff; border-radius: 8px; padding: 10px; margin-top: 8px; }
+.brush-batch { display: flex; align-items: center; gap: 8px; margin: 6px 0 2px; }
+.brush-batch :deep(.van-field) { padding: 4px 8px; background: #fff; border-radius: 6px; }
 .brush-row { padding: 8px 0; border-bottom: 1px solid #e8eef7; }
 .brush-row:last-of-type { border-bottom: none; }
 .brush-row .muted { font-size: 12px; }

@@ -6987,7 +6987,9 @@ const BATCH_MODAL = {
 /* 放单仓名单（后端下发，见 backend/app/brush.py 的 BRUSH_WAREHOUSES）：
    这些「仓储方」的聚水潭订单要在确认框里逐单填刷单成本，核算结算价与最终利润。 */
 let __BRUSH_WH__ = [];
+let __BRUSH_HIT__ = [];   // 本次解析里真正命中的放单仓（有它就不自动跑 AI 归并）
 function isBrushOrder(o) { return !!o && !!o.warehouse && __BRUSH_WH__.includes(o.warehouse); }
+function isBrushBatch() { return (__BRUSH_HIT__ || []).length > 0; }
 function openBatchModal(kind) {
   const cfg = BATCH_MODAL[kind];
   if (!cfg) return;
@@ -7025,7 +7027,10 @@ async function runBatchModal(kind) {
   if (box) box.innerHTML = `<div class="alert ok">⏳ 正在解析…（同一文件）</div>`;
   try {
     const r = await apiUpload(cfg.preview, file);
-    if (kind === "jushuitan") __BRUSH_WH__ = r.brush_warehouse_names || []; // 放单仓名单
+    if (kind === "jushuitan") {
+      __BRUSH_WH__ = r.brush_warehouse_names || [];   // 放单仓名单（配置）
+      __BRUSH_HIT__ = r.brush_warehouses || [];       // 本次解析命中的放单仓
+    }
     if (kind === "inbound") renderInboundReview(kind, r);
     else renderDraftReview(kind, r);
   } catch (e) {
@@ -7180,6 +7185,31 @@ function brushCalc() {
   const c = $("brushFilled");
   if (c) c.textContent = filled;
 }
+/* 一键批量把同一个「刷单成本」填到放单仓各单（onlyBlank=true 时只补还没填的），填完立即重算利润 */
+function brushApply(onlyBlank) {
+  const box = $("brushBatchCost");
+  const v = parseFloat(box && box.value);
+  if (!(v >= 0)) { toast("请先填一个刷单成本，如 1475"); if (box) box.focus(); return; }
+  let n = 0;
+  document.querySelectorAll("#modalBox tr.brush-row").forEach((tr) => {
+    const inp = tr.querySelector(".brush-cost");
+    if (!inp) return;
+    if (onlyBlank && parseFloat(inp.value) > 0) return;
+    inp.value = v;
+    n++;
+  });
+  brushCalc();
+  toast(n ? `已把刷单成本 ${fmtMoney(v)} 填到 ${n} 单` : "没有需要填的单（都已填过）");
+}
+/* 清空全部刷单成本（填错了从头来） */
+function brushApplyBlankClear() {
+  let n = 0;
+  document.querySelectorAll("#modalBox tr.brush-row .brush-cost").forEach((inp) => {
+    if (parseFloat(inp.value) > 0) { inp.value = ""; n++; }
+  });
+  brushCalc();
+  toast(n ? `已清空 ${n} 单的刷单成本` : "本来就没填");
+}
 function renderAggregateReview(kind, orders, warn) {
   window.__DRAFT_ORDERS__ = orders; // 汇总视图不再逐单编辑，确认时按原单据整批出库
   const rows = aggregateDraftLines(orders);
@@ -7208,6 +7238,15 @@ function renderAggregateReview(kind, orders, warn) {
       <div class="muted" style="font-size:12px;margin:6px 0;">
         下面每一单都要填「刷单成本」；「快递+包装」默认按系统出库时自动结算的快递费+包材+人工（可改），
         改了只影响这一单的结算口径。已填 <b id="brushFilled">0</b> / ${brushOrders.length} 单。这些金额会写进出库单，报表里一并从利润扣掉。
+      </div>
+      <!-- 一键批量：单子多的时候先统一填一个成本，再挑个别单改 -->
+      <div class="brush-batch">
+        <span class="muted" style="font-size:12px;white-space:nowrap;">一键批量填刷单成本</span>
+        <input id="brushBatchCost" type="number" step="0.01" min="0" placeholder="如 1475"
+               onkeydown="if(event.key==='Enter'){event.preventDefault();brushApply(false);}" />
+        <button class="btn sm" onclick="brushApply(false)">应用到全部 ${brushOrders.length} 单</button>
+        <button class="btn sm secondary" onclick="brushApply(true)">只填未填的</button>
+        <button class="btn sm secondary" onclick="brushApplyBlankClear()">清空成本</button>
       </div>
       <div class="table-wrap brush-wrap">
         <table class="subtable brush-table" style="width:100%;">
@@ -7283,10 +7322,22 @@ function scheduleAiAutoPreview(kind) {
   if (kind !== "jushuitan") return;
   const codes = (window.__LAST_UNMAPPED__ || []).filter(Boolean);
   if (!codes.length) return;
+  // 放单仓单据（仓储方=芳谊放单仓）不自动跑 AI 归并：平台商品名多是放单仓的占位名，
+  // 自动新增会建出一批垃圾商品；需要时点下面那个按钮手动跑一次。
+  if (isBrushBatch()) { renderAiBrushHint(); return; }
   const sig = codes.slice().sort().join("\u0001");
   if (sig === __AI_AUTO_SIG__) return;
   __AI_AUTO_SIG__ = sig;
   setTimeout(() => aiAutoPreview(kind), 0);
+}
+/* 放单仓单据：AI 位置改成提示 + 手动按钮（不自动触发） */
+function renderAiBrushHint() {
+  const box = $("bmAiBox");
+  if (!box) return;
+  box.innerHTML = `<div class="muted" style="font-size:12px;margin-top:6px;">
+    本文件含放单仓单据（${esc((__BRUSH_HIT__ || []).join("、"))}），已<b>不自动</b>跑 AI 归并（放单仓商品名多是占位名，自动新增会建出垃圾商品）。
+    这些商品请点「去新增商品」新建，或到「聚水潭关联」页手动关联。
+    <button class="btn sm secondary" onclick="aiAutoPreview('jushuitan')">🤖 仍要跑一次 AI 归并</button></div>`;
 }
 /* 只试算不落库：调用 AI 归并库存大类，把方案展示给用户确认 */
 async function aiAutoPreview(kind) {
