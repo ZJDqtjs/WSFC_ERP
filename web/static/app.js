@@ -2969,6 +2969,7 @@ async function pdataImportAll() {
     const r = await api("/api/product-data/import", "POST");
     renderPdataImportResult(r.results || []);
     loadPdataPage();
+    ensureUnits(0);   // 导入的 units.json 可能带进新单位，刷新前端缓存
   } catch (e) { toast("导入失败：" + e.message); }
 }
 async function pdataImportOne(kind) {
@@ -2977,6 +2978,7 @@ async function pdataImportOne(kind) {
     const r = await api("/api/product-data/import/" + kind, "POST");
     renderPdataImportResult([r]);
     loadPdataPage();
+    ensureUnits(0);   // 导入的 units.json 可能带进新单位，刷新前端缓存
   } catch (e) { toast("导入失败：" + e.message); }
 }
 function renderPdataImportResult(results) {
@@ -3022,6 +3024,7 @@ async function pdataUploadImport() {
     const r = await api("/api/product-data/import-one", "POST", { payload });
     renderPdataImportResult([r]);
     loadPdataPage();
+    ensureUnits(0);   // 导入的 units.json 可能带进新单位，刷新前端缓存
     toast("导入完成");
   } catch (e) { toast("导入失败：" + e.message); }
 }
@@ -3166,8 +3169,19 @@ async function renderProducts() {
 }
 
 /* ---------- 计量单位管理 ---------- */
+/* 单位表缓存。除了「计量单位管理」，AI 识图建商品、商品资料导入等入口也会往单位表加单位，
+   所以打开商品弹窗前统一按 TTL 取一次最新，避免出现「新增了却在商品里找不到」。 */
+let UNITS_TS = 0;
+async function ensureUnits(maxAgeMs = 30000) {
+  if (UNITS.length && Date.now() - UNITS_TS < maxAgeMs) return UNITS;
+  try {
+    UNITS = await api("/api/units");
+    UNITS_TS = Date.now();
+  } catch (e) { /* 拉取失败沿用旧缓存，不阻塞弹窗 */ }
+  return UNITS;
+}
 async function openUnitsModal() {
-  const units = await api("/api/units");
+  const units = await ensureUnits();
   openModal(`
     <h3>计量单位管理 <button class="close" onclick="closeModal()">✕</button>
       <button class="btn sm secondary" style="float:right;" onclick="pdataDownload('units')"><svg class="ic"><use href="#i-download"/></svg> 导出JSON</button></h3>
@@ -3199,12 +3213,13 @@ async function submitUnit() {
       name: $("unitName").value, category: $("unitCategory").value,
       gram_per_unit: $("unitCategory").value === "weight" ? (+$("unitGram").value || null) : null,
     });
-    toast("单位已新增"); closeModal(); UNITS = await api("/api/units");
+    await ensureUnits(0);   // 强制刷新：新单位要立刻能在商品表单里选到
+    toast("单位已新增"); closeModal();
   } catch (e) { toast("新增失败：" + e.message); }
 }
 async function deleteUnit(id, name) {
   if (!confirm(`确认删除单位「${name}」？`)) return;
-  try { await api("/api/units/" + id, "DELETE"); toast("已删除"); closeModal(); openUnitsModal(); }
+  try { await api("/api/units/" + id, "DELETE"); await ensureUnits(0); toast("已删除"); closeModal(); openUnitsModal(); }
   catch (e) { toast("删除失败：" + e.message); }
 }
 
@@ -3264,7 +3279,8 @@ function addPackRow() {
   bindSearchable(box);
 }
 
-function openProductModal(pid = 0, prefillName = "") {
+async function openProductModal(pid = 0, prefillName = "") {
+  await ensureUnits();   // 先取最新单位表，否则刚新增的单位不会出现在「单位（默认单位）」下拉里
   const p = pid ? PRODUCTS.find((x) => x.id === pid) : null;
   const ptype = p ? p.product_type : "stock";
   const curUnit = p ? (p.default_unit || p.base_unit) : "斤";
@@ -3272,7 +3288,8 @@ function openProductModal(pid = 0, prefillName = "") {
   const curName = p?.name || prefillName || "";
   // 售价/成本一律按「默认单位」填（以前按基础单位，如 元/克，太反直觉）；
   // 内部仍按基础单位存库，这里只是显示与录入时做一次换算。
-  const up0 = deriveUnitPayload(ptype, curUnit);
+  PM_EDIT_P = p;   // 记住正在编辑的原商品：保留它原有的单位，不因一次保存而丢
+  const up0 = deriveUnitPayload(ptype, curUnit, p);
   const du0 = up0.default_unit || up0.base_unit;
   const f0 = (up0.conversions || {})[du0] || 1;
   PM_UNIT_F = f0;
@@ -3333,10 +3350,45 @@ function openProductModal(pid = 0, prefillName = "") {
     $("stockLinkRows").innerHTML = "";
   }
 }
+/* 商品表单的单位一律取自「计量单位管理」(/api/units)，用户新增的单位要能直接选到。
+   以前这里是写死的清单，所以新增单位后在商品里根本找不到。 */
+let PM_EDIT_P = null;   // 当前弹窗正在编辑的原商品（新增为 null），用于保留它原有的单位
+const FALLBACK_UNITS = {
+  weight: ["克", "斤", "公斤", "千克"],
+  count: ["个", "袋", "包", "盒", "箱", "件", "份"],
+};
+function unitMeta(name) {
+  return (UNITS || []).find((u) => u.name === name) || null;
+}
+/* 是否重量类单位：优先看单位表，单位表没加载时按内置标准单位兜底 */
+function isWeightUnitName(name) {
+  const m = unitMeta(name);
+  if (m) return m.category === "weight";
+  return FALLBACK_UNITS.weight.includes(name);
+}
+/* 某类别的换算表：重量类以「克」为基础（系数取单位表里的每单位克数），计数类以「个」为基础 */
+function unitConversions(category) {
+  const convs = {};
+  (UNITS || []).forEach((u) => {
+    if (u.category !== category) return;
+    const f = category === "weight" ? Number(u.gram_per_unit) : 1;
+    if (f > 0) convs[u.name] = f;
+  });
+  const fb = category === "weight" ? { 克: 1, 斤: 500, 公斤: 1000, 千克: 1000 } : { 个: 1 };
+  Object.entries(fb).forEach(([k, v]) => { if (!(k in convs)) convs[k] = v; });
+  return convs;
+}
+/* 商品表单可选单位名（订单商品固定「单」）；extra = 老商品当前单位，保证它一定在选项里 */
+function productUnitNames(ptype, extra) {
+  if (ptype === "order") return ["单"];
+  const names = (UNITS || []).map((u) => u.name).filter(Boolean);
+  const base = names.length ? names : [...FALLBACK_UNITS.weight, ...FALLBACK_UNITS.count];
+  return (extra && !base.includes(extra)) ? base.concat(extra) : base;
+}
 function initProductUnitSelect(ptype, curUnit) {
-  const units = ptype === "order" ? ["单"] : ["克", "斤", "公斤", "千克", "个", "袋", "包", "盒", "箱", "件", "份", "单"];
+  const units = productUnitNames(ptype, curUnit);
   const sel = $("pUnit");
-  const cur = ptype === "order" ? "单" : (units.includes(curUnit) ? curUnit : "斤");
+  const cur = ptype === "order" ? "单" : (units.includes(curUnit) ? curUnit : (units.includes("斤") ? "斤" : units[0]));
   sel.innerHTML = units.map((u) => `<option value="${u}" ${u === cur ? "selected" : ""}>${u}</option>`).join("");
   sel.onchange = pUnitChanged;   // 换默认单位时，价格字段按新单位重算显示
 }
@@ -3353,7 +3405,7 @@ function updateProductPriceLabels(du, f, bu) {
 }
 /* 切换默认单位：先把手填的值折回基础单位，再按新单位显示，避免价格被单位搞乱 */
 function pUnitChanged() {
-  const up = deriveUnitPayload($("pType").value, $("pUnit").value);
+  const up = deriveUnitPayload($("pType").value, $("pUnit").value, PM_EDIT_P);
   const du = up.default_unit || up.base_unit;
   const f = (up.conversions || {})[du] || 1;
   const back = (id) => {
@@ -3368,12 +3420,25 @@ function pUnitChanged() {
   if ($("pUnitCost")) $("pUnitCost").value = +(PM_COST_BASE * f).toFixed(6);
   updateProductPriceLabels(du, f, up.base_unit);
 }
-function deriveUnitPayload(ptype, unit) {
-  if (ptype === "order" || unit === "单") return { base_unit: "单", default_unit: "单", conversions: { 单: 1 } };
-  if (["克", "斤", "公斤", "千克"].includes(unit))
-    return { base_unit: "克", default_unit: unit, conversions: { 克: 1, 斤: 500, 公斤: 1000, 千克: 1000 } };
-  const convs = { 个: 1, [unit]: 1 };
-  return { base_unit: "个", default_unit: unit, conversions: convs };
+/* 由「默认单位」推出基础单位与换算表：重量类归「克」、计数类归「个」，
+   换算系数取自单位表（新增的重量类单位按它填的每单位克数参与换算）。 */
+function deriveUnitPayload(ptype, unit, prev) {
+  let payload;
+  if (ptype === "order" || unit === "单") {
+    payload = { base_unit: "单", default_unit: "单", conversions: { 单: 1 } };
+  } else if (isWeightUnitName(unit)) {
+    payload = { base_unit: "克", default_unit: unit, conversions: unitConversions("weight") };
+  } else {
+    payload = { base_unit: "个", default_unit: unit, conversions: unitConversions("count") };
+  }
+  // 编辑同基础单位的老商品时，保留它原有的其它单位（如导入产生的 g/kg），避免一编辑就少单位
+  if (prev && prev.base_unit === payload.base_unit) {
+    Object.entries(prev.conversions || {}).forEach(([u, f]) => {
+      if (!(u in payload.conversions) && Number(f) > 0) payload.conversions[u] = Number(f);
+    });
+  }
+  if (!(unit in payload.conversions)) payload.conversions[unit] = 1;   // 兜底：单位表没加载时也要能存
+  return payload;
 }
 function pTypeChanged() {
   const t = $("pType").value;
@@ -3448,7 +3513,7 @@ function collectPacks() {
 async function saveProduct(pid) {
   const ptype = $("pType").value;
   const unit = $("pUnit") ? $("pUnit").value : "斤";
-  const unitPayload = deriveUnitPayload(ptype, unit);
+  const unitPayload = deriveUnitPayload(ptype, unit, PM_EDIT_P);
   // 订单商品可关联多个扣减库存商品（stock_links）；stock_product_id/multiplier 保留首项以兼容旧逻辑（扣点分类等）
   const stockLinks = ptype === "order" ? collectStockLinks() : [];
   const payload = {
@@ -6819,7 +6884,7 @@ function startMaintenanceWatch() {
   // 加载基础数据（失败不阻塞初始化，保证默认范围与首页可用）
   try {
     PRODUCTS = await api("/api/products");
-    UNITS = await api("/api/units");
+    await ensureUnits(0);   // 单位表走统一入口，顺带记下时间戳
   } catch (e) { PRODUCTS = PRODUCTS || []; UNITS = UNITS || []; }
   try {
     $("mvProduct").innerHTML = `<option value="0">全部商品</option>` +
