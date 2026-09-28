@@ -333,16 +333,26 @@ const batchState = {
             </div>
             <div class="muted" style="font-size:11px;margin:4px 0;">
               结算价 = 结算收入（已扣店铺扣点） − 快递+包装固定费；利润 = 结算价 − 刷单成本。
-              已填 {{ brushFilled }} / {{ brushOrders.length }} 单，未填按 0 计；这些金额会写进出库单并进报表。
+              已填 {{ brushFilled }} / {{ brushOrders.length }} 单，未填按 0 计；也可以只填「本次刷单总成本」用下面的「按总额分摊」自动摊到各单。
+              这些金额会写进出库单并进报表。
             </div>
-            <!-- 一键批量：单子多时先统一填一个成本，再挑个别单改 -->
+            <!-- 一键批量①：每单同一个成本 -->
             <div class="brush-batch">
-              <van-field v-model="batchBrushCost" type="number" placeholder="刷单成本，如 1475" input-align="right" style="flex:1;" />
+              <van-field v-model="batchBrushCost" type="number" placeholder="每单同一个成本，如 1475" input-align="right" style="flex:1;" />
               <van-button size="mini" type="primary" @click="brushApply(false)">应用到全部 {{ brushOrders.length }} 单</van-button>
             </div>
             <div class="row" style="gap:8px;margin:6px 0 2px;">
               <van-button size="mini" plain @click="brushApply(true)">只填未填的</van-button>
               <van-button size="mini" plain @click="brushClearCost">清空成本</van-button>
+            </div>
+            <!-- 一键批量②：只填本次刷单总成本，自动分摊到各单 -->
+            <div class="brush-batch">
+              <van-field v-model="batchBrushTotal" type="number" placeholder="本次刷单总成本，如 3000" input-align="right" style="flex:1;" />
+              <select v-model="brushSplitMode" class="brush-mode">
+                <option value="revenue">按结算收入占比</option>
+                <option value="avg">平均分摊</option>
+              </select>
+              <van-button size="mini" type="primary" @click="brushDistribute">按总额分摊</van-button>
             </div>
             <div v-for="(o, bi) in brushOrders" :key="'brush' + bi" class="brush-row">
               <div class="row">
@@ -844,7 +854,9 @@ const aiApplying = ref(false)
 // 放单仓名单（后端下发，见 backend/app/brush.py）：这些「仓储方」的订单要逐单填刷单成本
 const brushWh = ref([])
 const brushHit = ref([])      // 本次解析命中的放单仓（有它就不自动跑 AI 归并）
-const batchBrushCost = ref('') // 一键批量要填的刷单成本
+const batchBrushCost = ref('') // 一键批量①：每单同一个刷单成本
+const batchBrushTotal = ref('') // 一键批量②：本次刷单总成本
+const brushSplitMode = ref('revenue') // 总成本分摊方式：revenue 按结算收入占比 / avg 平均
 
 const batchCfg = computed(() => BATCH_CFG[batchKind.value])
 const batchAllOn = computed(() => batchOrders.value.length > 0 && batchOrders.value.every((o) => o._on))
@@ -898,6 +910,26 @@ function brushApply(onlyBlank) {
   })
   showToast(n ? `已把刷单成本 ${fmtMoney(v)} 填到 ${n} 单` : '没有需要填的单（都已填过）')
 }
+/* 只填「本次刷单总成本」，按结算收入占比（推荐）或平均分摊到各单，不用逐单输；
+   尾差落在最大的一单上，保证各单之和 == 你填的总额 */
+function brushDistribute() {
+  if (String(batchBrushTotal.value).trim() === '') { showToast('请先填本次刷单总成本，如 3000'); return }
+  const total = num(batchBrushTotal.value)
+  const list = brushOrders.value
+  if (!list.length) return
+  const w = list.map((o) => (brushSplitMode.value === 'avg' ? 1 : brushIncome(o)))
+  if (brushSplitMode.value !== 'avg' && !w.some((x) => x > 0)) { showToast('这些单没有结算收入，请改用「平均分摊」'); return }
+  const sum = w.reduce((s, x) => s + x, 0) || 1
+  const vals = w.map((x) => Math.round(total * (x / sum) * 100) / 100)
+  const diff = Math.round((total - vals.reduce((s, x) => s + x, 0)) * 100) / 100
+  if (diff) {
+    let k = 0
+    vals.forEach((v, i) => { if (v > vals[k]) k = i })
+    vals[k] = Math.round((vals[k] + diff) * 100) / 100
+  }
+  list.forEach((o, i) => { o.brush_cost = String(vals[i]) })
+  showToast(`已按${brushSplitMode.value === 'avg' ? '平均' : '结算收入占比'}把总额 ${fmtMoney(total)} 分摊到 ${list.length} 单`)
+}
 function brushClearCost() {
   let n = 0
   brushOrders.value.forEach((o) => { if (num(o.brush_cost) > 0) { o.brush_cost = ''; n++ } })
@@ -934,6 +966,7 @@ function resetBatch(kind) {
   brushWh.value = []
   brushHit.value = []
   batchBrushCost.value = ''
+  batchBrushTotal.value = ''
   batchState.aiSig = ''
   syncBatch()
 }
@@ -1093,8 +1126,10 @@ onActivated(() => { if (tab.value === 'list') loadList() })
 .agg-row .muted { font-size: 12px; }
 /* 芳谊放单仓逐单刷单结算 */
 .brush-box { background: #f0f7ff; border-radius: 8px; padding: 10px; margin-top: 8px; }
-.brush-batch { display: flex; align-items: center; gap: 8px; margin: 6px 0 2px; }
+.brush-batch { display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; }
 .brush-batch :deep(.van-field) { padding: 4px 8px; background: #fff; border-radius: 6px; }
+.brush-batch :deep(.van-button) { flex: none; }
+.brush-mode { padding: 5px 4px; font-size: 12px; border: none; border-radius: 6px; background: #fff; color: #323233; }
 .brush-row { padding: 8px 0; border-bottom: 1px solid #e8eef7; }
 .brush-row:last-of-type { border-bottom: none; }
 .brush-row .muted { font-size: 12px; }

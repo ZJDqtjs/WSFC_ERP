@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..auth import get_current_user
 from ..brush import brush_adjust, brush_fee_of
 from ..database import get_db
-from ..models import FinanceRecord, OtherExpense, Outbound, OutboundLine, Product, StockMovement, User
+from ..models import DropshipBill, FinanceRecord, OtherExpense, Outbound, OutboundLine, Product, StockMovement, User
 from ..services import build_order, create_outbound, pay_fields, purge_outbounds, recompute_product, sync_doc_edit
 
 router = APIRouter(prefix="/api/outbounds", tags=["outbound"])
@@ -203,6 +203,9 @@ def delete_outbound(oid: int, db: Session = Depends(get_db), user: User = Depend
     # 金额调整带出的其他开支一并删除，避免删单后报表还挂着这笔调整
     for e in db.execute(select(OtherExpense).where(OtherExpense.ref_type == "outbound", OtherExpense.ref_id == oid)).scalars():
         db.delete(e)
+    # 代发商品带出的应付账单一并删除
+    for b in db.execute(select(DropshipBill).where(DropshipBill.outbound_id == oid)).scalars():
+        db.delete(b)
     db.delete(rec)
     for pid in affected:
         recompute_product(db, pid)

@@ -171,6 +171,41 @@ class OutboundLine(Base):
     product: Mapped[Product] = relationship()
 
 
+class DropshipBill(Base):
+    """代发应付账单（待付款 → 代发页签的数据源）。
+
+    出库单里命中「代发商品」（订单小类没关联库存大类 stock_links）的销售行，按「商品 × 规格」
+    自动生成一条：金额 = 该行代发成本 cogs = 成本单价(每基础单位) × 基础数量。
+
+    口径说明：代发成本本来就已计入该出库单的结转成本（OutboundLine.cogs / Outbound.total_cogs，
+    报表毛利口径不变），这张表只是把「要付给代发方的钱」登记成待付款项，方便按规格核对付款；
+    因此它不参与报表的期间费用聚合。付款状态独立于出库单（出库单的 pay_status 是客户回款）。
+    随出库单同步：改日期/操作员跟着改，删单级联删除。
+    """
+
+    __tablename__ = "dropship_bills"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    outbound_id: Mapped[int] = mapped_column(ForeignKey("outbounds.id"), index=True)
+    outbound_code: Mapped[str] = mapped_column(String(32), default="")
+    date: Mapped[str] = mapped_column(String(10), index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
+    product_name: Mapped[str] = mapped_column(String(128), default="")  # 下单时的商品名快照
+    spec: Mapped[str] = mapped_column(String(64), default="")  # 规格（每件2斤 等；空=无规格）
+    unit: Mapped[str] = mapped_column(String(32), default="")
+    base_unit: Mapped[str] = mapped_column(String(32), default="")  # 基础单位快照（成本单价按它计）
+    quantity: Mapped[float] = mapped_column(Float, default=0.0)  # 单量（按下单单位）
+    quantity_base: Mapped[float] = mapped_column(Float, default=0.0)  # 折算基础单位数量
+    unit_cost: Mapped[float] = mapped_column(Float, default=0.0)  # 成本单价（每基础单位）
+    amount: Mapped[float] = mapped_column(Float, default=0.0)  # 应付金额 = 单价 × 量（= 该行 cogs）
+    sale_price: Mapped[float] = mapped_column(Float, default=0.0)  # 销售单价（核对参考，不计入应付）
+    sale_amount: Mapped[float] = mapped_column(Float, default=0.0)  # 销售金额（核对参考）
+    operator: Mapped[str] = mapped_column(String(32), default="")
+    pay_status: Mapped[str] = mapped_column(String(8), default="unpaid")  # unpaid 待付代发方 / paid 已付
+    paid_at: Mapped[str] = mapped_column(String(10), default="")  # 标记已支付那天（YYYY-MM-DD）
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 class StockMovement(Base):
     """库存流水（源数据）。move_type: in / out / pack_out / adjust / avg / ucost。quantity_base 有符号。"""
 

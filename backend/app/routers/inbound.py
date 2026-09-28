@@ -8,7 +8,14 @@ from sqlalchemy.orm import Session, selectinload
 from ..auth import get_current_user
 from ..database import get_db
 from ..models import FinanceRecord, Inbound, OtherExpense, Product, StockMovement, User
-from ..services import create_inbound, pay_fields, purge_inbounds, recompute_product, sync_doc_edit
+from ..services import (
+    create_inbound,
+    pay_fields,
+    purge_inbounds,
+    recompute_product,
+    sync_doc_edit,
+    sync_inbound_fee_expenses,
+)
 
 router = APIRouter(prefix="/api/inbounds", tags=["inbound"])
 
@@ -38,11 +45,15 @@ class InboundIn(BaseModel):
 
 
 class InboundUpdate(BaseModel):
-    """手动修改入库单：只允许改 供应商 / 日期 / 付款状态（其余字段须删除重建）。"""
+    """手动修改入库单：可改 供应商 / 日期 / 付款状态 / 运费 / 装卸费（数量、单价须删除重建）。"""
 
     supplier: str = ""
     date: str
     pay_status: str = "paid"
+    # 运费 / 装卸费（选填，≥0）：None = 不修改；填了会重算批次到岸成本与该品均价/毛利，
+    # 并同步「其他开支」镜像行（日期随入库单日期）。
+    freight: float | None = None
+    handling: float | None = None
 
 
 def _to_dict(r: Inbound) -> dict:
@@ -105,7 +116,13 @@ def create_inbound_api(data: InboundIn, db: Session = Depends(get_db), user: Use
 
 @router.put("/{rid}")
 def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """手动修改入库单：只允许改 供应商 / 日期 / 付款状态；操作员记为本次修改人。"""
+    """手动修改入库单：可改 供应商 / 日期 / 付款状态 / 运费 / 装卸费；操作员记为本次修改人。
+
+    运费/装卸费改动要连带三件事（口径见 services.create_inbound）：
+    ① 批次到岸成本 = 货款 + 运费 + 装卸 → 同步库存流水金额，并重算该品均价/库存货值/毛利；
+    ② 「其他开支」镜像行金额跟着改（日期、付款状态随入库单）；
+    ③ 报表「本期进货 / 支出明细 / 逐日支出」按到岸成本取值，自然跟着变。
+    """
     rec = db.get(Inbound, rid)
     if not rec:
         raise HTTPException(404, "入库单不存在")
@@ -117,7 +134,28 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
     rec.date = date
     rec.operator = user.name   # 记录为后来的修改人（忽略前端传值）
     rec.pay_status, rec.paid_at = pay["pay_status"], pay["paid_at"]
-    sync_doc_edit(db, "inbound", rid, date, user.name, pay)
+
+    # 运费/装卸费：不传 = 保持原值；传了就按新值算（选填，≥0）
+    old_fee = round(float(rec.freight or 0.0) + float(rec.handling or 0.0), 2)
+    freight = round(float(data.freight), 2) if data.freight is not None else round(float(rec.freight or 0.0), 2)
+    handling = round(float(data.handling), 2) if data.handling is not None else round(float(rec.handling or 0.0), 2)
+    if freight < 0 or handling < 0:
+        raise HTTPException(400, "运费 / 装卸费不能为负数")
+    rec.freight, rec.handling = freight, handling
+    new_fee = round(freight + handling, 2)
+
+    sync_doc_edit(db, "inbound", rid, date, user.name, pay)   # 日期/操作员/收付款状态（含运费镜像行）
+    if new_fee != old_fee:
+        landed = round((rec.total_amount or 0.0) + new_fee, 2)
+        for m in db.execute(
+            select(StockMovement).where(StockMovement.ref_type == "inbound", StockMovement.ref_id == rid)
+        ).scalars():
+            m.amount = landed
+            m.remark = f"入库 {rec.code}" + (f"（含运费/装卸 ¥{new_fee}）" if new_fee else "")
+        # 金额变了 → 重算该品 FIFO 批次/均价（后续出库的结转成本按新成本重放）
+        recompute_product(db, rec.product_id)
+    # 每项 >0 生成一行镜像、清零则删除（日期=入库单日期），幂等
+    sync_inbound_fee_expenses(db, rec, rec.product.name if rec.product else "", pay)
     db.commit()
     db.refresh(rec)
     return _to_dict(rec)

@@ -8,7 +8,17 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .brush import is_brush_warehouse
-from .models import FinanceRecord, Inbound, OtherExpense, Outbound, OutboundLine, Product, StockMovement, Unit
+from .models import (
+    DropshipBill,
+    FinanceRecord,
+    Inbound,
+    OtherExpense,
+    Outbound,
+    OutboundLine,
+    Product,
+    StockMovement,
+    Unit,
+)
 
 # 标准重量单位（克 为基础）
 STANDARD_WEIGHT_UNITS = [
@@ -456,6 +466,10 @@ def purge_outbounds(db: Session, ids: list[int]) -> tuple[int, int, set[int]]:
         _bulk_delete_ref(db, StockMovement, "outbound", part)
         _bulk_delete_ref(db, FinanceRecord, "outbound", part)
         _bulk_delete_ref(db, OtherExpense, "outbound", part)  # 金额调整带出的其他开支一并删除
+        # 代发应付账单（按 outbound_id 挂着）一并删除
+        db.execute(
+            delete(DropshipBill).where(DropshipBill.outbound_id.in_(part)).execution_options(synchronize_session=False)
+        )
         db.execute(
             delete(OutboundLine).where(OutboundLine.outbound_id.in_(part)).execution_options(synchronize_session=False)
         )
@@ -642,6 +656,84 @@ def sync_inbound_fee_expenses(db: Session, rec: "Inbound", product_name: str, pa
             ))
 
 
+def sync_dropship_bills(db: Session, rec: "Outbound", sale_lines: list) -> None:
+    """按出库单的代发销售行重建「代发」应付账单（待付款 → 代发页签）。
+
+    代发商品（订单小类没关联库存大类）出库时不扣库存，成本按商品「参考成本」计：
+    cogs = 基础数量 × unit_cost。这里把它登记成应付给代发方的钱，按「商品 × 规格」聚合成一条，
+    金额口径 = 单价(每基础单位) × 基础数量 = cogs。成本本身仍照旧计入本单结转成本，报表口径不变。
+
+    幂等：同一张单重复同步只更新数值，已结清的付款状态（pay_status/paid_at）保留；
+    行被改掉/金额变 0 的记录直接删除。
+
+    开头先 flush：同一会话里连续同步（批量导入逐单建单）时，未落库的新增/删除行也要能被下面的
+    查询看到，否则会重复插入（session 是 autoflush=False）。
+    """
+    db.flush()
+    want: dict[tuple[int, str], dict] = {}
+    for r in sale_lines or []:
+        if not r.get("is_dropship"):
+            continue
+        amount = round(float(r.get("cogs") or 0.0), 2)
+        if amount <= 0:   # 没填参考成本 → 没有应付额（导入时已给过告警）
+            continue
+        pid = int(r["product_id"])
+        key = (pid, (r.get("spec") or "").strip())
+        qty = float(r.get("quantity") or 0.0)
+        qty_base = float(r.get("quantity_base") or 0.0)
+        sale_amount = float(r.get("amount") or 0.0)
+        acc = want.get(key)
+        if acc:
+            acc["quantity"] += qty
+            acc["quantity_base"] += qty_base
+            acc["amount"] = round(acc["amount"] + amount, 2)
+            acc["sale_amount"] = round(acc["sale_amount"] + sale_amount, 2)
+        else:
+            want[key] = {
+                "product_id": pid,
+                "spec": key[1],
+                "unit": (r.get("unit") or "").strip(),
+                "base_unit": (r.get("base_unit") or "").strip(),
+                "quantity": qty,
+                "quantity_base": qty_base,
+                "amount": amount,
+                "sale_amount": sale_amount,
+            }
+    existing = list(db.execute(
+        select(DropshipBill).where(DropshipBill.outbound_id == rec.id)
+    ).scalars())
+    by_key = {(b.product_id, (b.spec or "").strip()): b for b in existing}
+    for key, v in want.items():
+        qty_base = v["quantity_base"]
+        unit_cost = round(v["amount"] / qty_base, 6) if qty_base else 0.0
+        sale_price = round(v["sale_amount"] / v["quantity"], 6) if v["quantity"] else 0.0
+        b = by_key.pop(key, None)
+        if b:   # 已结清状态保留，只刷新金额/数量等快照
+            b.quantity, b.quantity_base = v["quantity"], qty_base
+            b.unit_cost, b.amount = unit_cost, v["amount"]
+            b.sale_price, b.sale_amount = sale_price, v["sale_amount"]
+            b.date, b.operator, b.outbound_code = rec.date, rec.operator, rec.code
+            b.unit = v["unit"] or b.unit
+            b.base_unit = v["base_unit"] or b.base_unit
+        else:
+            db.add(DropshipBill(
+                outbound_id=rec.id, outbound_code=rec.code, date=rec.date,
+                product_id=v["product_id"], product_name=_product_name(db, v["product_id"]),
+                spec=v["spec"], unit=v["unit"], base_unit=v["base_unit"],
+                quantity=v["quantity"], quantity_base=qty_base,
+                unit_cost=unit_cost, amount=v["amount"],
+                sale_price=sale_price, sale_amount=v["sale_amount"],
+                operator=rec.operator, pay_status="unpaid", paid_at="",
+            ))
+    for stale in by_key.values():   # 该单已经不再是代发行（或金额为 0）→ 清掉
+        db.delete(stale)
+
+
+def _product_name(db: Session, pid: int) -> str:
+    p = db.get(Product, pid)
+    return (p.name if p else "") or ""
+
+
 def sync_doc_edit(db: Session, kind: str, ref_id: int, date: str, operator: str, pay: dict) -> None:
     """单据被手动修改（供应商/客户、日期、付款状态）后，同步它带出的库存流水/财务流水/其他开支。
 
@@ -665,6 +757,12 @@ def sync_doc_edit(db: Session, kind: str, ref_id: int, date: str, operator: str,
     ).scalars():
         e.date, e.operator = date, operator
         e.pay_status, e.paid_at = pay["pay_status"], pay["paid_at"]
+    # 代发应付账单：只跟日期/操作员（付款状态是「付给代发方」，与单据的收付款状态无关）
+    if kind == "outbound":
+        for b in db.execute(
+            select(DropshipBill).where(DropshipBill.outbound_id == ref_id)
+        ).scalars():
+            b.date, b.operator = date, operator
 
 
 def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
@@ -1101,6 +1199,8 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
             )
         )
     sync_adjust_expense(db, "outbound", rec.id, rec.code, date, op, adjust, pay)
+    # 代发商品（未关联库存大类）：成本自动登记成「待付款 → 代发」的应付账单，按商品 × 规格列明细
+    sync_dropship_bills(db, rec, order["sale_lines"])
     if defer_recompute:
         if affected_out is not None:
             affected_out.extend(affected)
