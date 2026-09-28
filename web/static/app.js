@@ -6153,8 +6153,6 @@ function renderDropshipBills() {
     const paid = g.pay_status !== "unpaid";
     // 规格已经写在商品名里（如「雪莲果大果8斤」）就不重复显示
     const specTxt = g.spec && !(g.product_name || "").includes(g.spec) ? ` <span class="muted">· ${esc(g.spec)}</span>` : "";
-    const range = g.date_from && g.date_to && g.date_from !== g.date_to
-      ? `${g.date_from} ~ ${g.date_to}` : (g.date_from || "");
     return `<tr${paid ? ' style="opacity:.55;"' : ""}>
       <td><input type="checkbox" class="ds-pick" value="${idx}" /></td>
       <td><b>${esc(g.product_name || "代发商品")}</b>${specTxt}
@@ -6162,10 +6160,12 @@ function renderDropshipBills() {
       <td class="num mono">${DS_NUM4(g.quantity)}${esc(g.unit || "")}</td>
       <td class="num mono">${fmtMoney(g.unit_price)}</td>
       <td class="num mono"><b style="color:var(--danger, #dc2626);">${fmtMoney(g.amount)}</b></td>
-      <td class="num muted">${g.order_count} 单${range ? `<div style="font-size:11px;">${esc(range)}</div>` : ""}</td>
-      <td>${paid ? `<span class="badge income">已付 ${esc(g.paid_at || "")}</span>` : `<span class="badge pack">待付代发</span>`}</td>
+      <td class="num muted">${g.order_count} 单</td>
+      <td class="num mono">${g.date_from === g.date_to || !g.date_to
+        ? esc(g.date_from || g.date_to || "")
+        : `${esc(g.date_from)}<div style="font-size:11px;">~ ${esc(g.date_to)}</div>`}</td>
       <td class="num">${paid
-        ? `<button class="btn sm secondary" onclick="dsMarkPaid(${idx}, false)">撤销</button>`
+        ? `<button class="btn sm secondary" title="已付 ${esc(g.paid_at || "")}，点此撤销" onclick="dsMarkPaid(${idx}, false)">已付·撤销</button>`
         : `<button class="btn sm green" onclick="dsMarkPaid(${idx}, true)">已支付</button>`}</td>
     </tr>`;
   });
@@ -6176,8 +6176,9 @@ function renderDropshipBills() {
       <th class="num" style="width:110px;">单量</th>
       <th class="num" style="width:100px;">单价</th>
       <th class="num" style="width:140px;">应付金额</th>
-      <th class="num" style="width:130px;">单据</th>
-      <th style="width:110px;">状态</th><th style="width:96px;"></th>
+      <th class="num" style="width:96px;">单据</th>
+      <th class="num" style="width:110px;">日期</th>
+      <th style="width:96px;"></th>
     </tr></thead><tbody>` +
     (rows.length ? rows.join("")
       : `<tr><td colspan="8" class="empty">${active
@@ -6187,12 +6188,12 @@ function renderDropshipBills() {
     (groups.length
       ? `<tfoot><tr>
           <td></td>
-          <td><b>${active ? "筛选合计" : "列出合计"}</b> <span class="muted">${groups.length} 款商品规格</span></td>
+          <td><b>${active ? "筛选合计" : "列出合计"}</b> <span class="muted">${groups.length} 款商品规格 · 待结清 ${pend.length} 款</span></td>
           <td></td>
           <td></td>
           <td class="num mono"><b>应付 ${fmtMoney(sum)}</b></td>
           <td class="num muted">${orders} 单</td>
-          <td class="muted">待结清 ${pend.length} 款</td>
+          <td></td>
           <td></td>
         </tr></tfoot>`
       : "");
