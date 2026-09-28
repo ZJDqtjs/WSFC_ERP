@@ -1349,6 +1349,30 @@ body.notice-on .login-mask { padding-top: 40px; }
   border-radius: 10px; font-size: 13px;
 }
 
+/* ============ 入库页：一行 = 一张完整入库单（原样式，可加多行） ============ */
+.in-block {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px 6px;
+  margin-bottom: 12px;
+  background: var(--card);
+}
+
+.in-block-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12.5px;
+}
+
+.in-block:only-of-type { border-style: solid; }
+
+.in-block-sum {
+  padding: 6px 0 2px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ============ 鲜货入库（二级页） ============ */
 #finTable td { vertical-align: middle; }
 #finTable td.num { white-space: nowrap; }

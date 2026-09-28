@@ -806,6 +806,12 @@ function setUser(u) {
     el.readOnly = true;
     el.title = "默认当前登录账号，不可修改";
   });
+  // 入库页每一行（可多行）的操作员同样回填并锁定
+  document.querySelectorAll(".in-operator").forEach((el) => {
+    el.value = disp;
+    el.readOnly = true;
+    el.title = "默认当前登录账号，不可修改";
+  });
 }
 /** 当前登录账号显示名（弹层里新建的操作员输入框用） */
 function operatorName() {
@@ -2184,8 +2190,17 @@ function finRowCalc(el, onlyCalc) {
   const tr = el && el.closest ? el.closest("tr") : null;
   if (!tr) return;
   if (!onlyCalc) finRemember(tr);
-  inRowCalc(el);   // 复用入库页的金额 / 换算口径（按行独立，不会动入库页的表）
-  const qty = parseFloat(tr.querySelector(".in-qty") ? tr.querySelector(".in-qty").value : 0) || 0;
+  const qty = parseFloat((tr.querySelector(".in-qty") || {}).value) || 0;
+  // 本行金额（与入库页同一口径：金额 + 有运费/装卸时补一行批次成本）
+  const price = parseFloat((tr.querySelector(".in-price") || {}).value) || 0;
+  const fee = (parseFloat((tr.querySelector(".in-freight") || {}).value) || 0)
+    + (parseFloat((tr.querySelector(".in-handling") || {}).value) || 0);
+  const cell = tr.querySelector(".in-amount-cell");
+  if (cell) {
+    const base = qty * price;
+    cell.innerHTML = `<b>¥${base.toFixed(2)}</b>`
+      + (fee ? `<div class="muted" style="font-size:11px;">批次成本 ¥${(base + fee).toFixed(2)}</div>` : "");
+  }
   tr.classList.toggle("fin-on", qty > 0);
   finUnitHint(tr);
   finSummary();
@@ -4103,105 +4118,175 @@ function inboundProducts() {
   return PRODUCTS.filter((p) => p.is_active && p.product_type === "stock" && !["人工", "快递"].includes(p.category));
 }
 function initInbound() {
-  if (!$("inDate").value) $("inDate").value = today();
-  if ($("inRowsBody") && !$("inRowsBody").children.length) addInboundRow();
-  refreshInboundRowCount();
+  if (!inboundBlocks().length) addInboundBlock();
+  updateInboundTotal();
   loadInbounds();
 }
-/* ---------- 入库商品行（一次可入多个商品，每行一张入库单） ---------- */
-function inboundRows() {
-  return [...document.querySelectorAll("#inRowsBody tr")];
+/* ---------- 入库单行（原来的整块样式：一行 = 一张入库单，各行独立填） ---------- */
+let IN_BLOCK_SEQ = 0;      // 行的唯一序号（备注 / 附件按它生成唯一 id）
+let IN_PICK_BLOCK = null;  // 商品选择器当前作用在哪一行
+
+function inboundBlocks() { return [...document.querySelectorAll("#inBlocks .in-block")]; }
+function inBlockOf(el) { return el && el.closest ? el.closest(".in-block") : null; }
+
+/** 一行 = 原来那张完整入库单（商品/单位/数量/单价/金额/调整/运费/装卸费/供应商/日期/操作员/付款状态/备注附件） */
+function inboundBlockHtml(idx) {
+  return `<div class="in-block" data-idx="${idx}">
+    <div class="in-block-head">
+      <span class="muted">第 ${idx} 张入库单</span>
+      <div class="grow"></div>
+      <button class="btn sm danger in-block-del" onclick="removeInboundBlock(this)">删除这一行</button>
+    </div>
+    <div class="form-grid">
+      <div class="field">
+        <label>商品 *</label>
+        <input class="in-pick-name" readonly placeholder="＋ 点击选择商品" onclick="openInboundPicker(this)" style="cursor:pointer;background:var(--primary-50);" />
+        <div class="field-hint in-stock-hint"></div>
+      </div>
+      <div class="field"><label>进货单位 *</label><select class="in-unit" onchange="inBlockUnitChanged(this)"></select><div class="field-hint in-unit-hint"></div></div>
+      <div class="field"><label>数量 *</label><input class="in-qty" type="number" min="0" step="any" placeholder="0" oninput="calcInboundBlock(this)" /></div>
+      <div class="field"><label>单价（所选单位）*</label><input class="in-price" type="number" min="0" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" /><div class="field-hint in-price-hint"></div></div>
+      <div class="field"><label>金额</label><input class="in-amount" readonly /></div>
+      <div class="field">
+        <label>调整（抹零 / 凑整）</label>
+        <input class="in-adjust" type="number" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" />
+        <div class="field-hint in-adjust-hint">正=多付，负=少付；差额自动记「金额调整」其他开支，商品成本不变</div>
+      </div>
+      <div class="field">
+        <label>运费（选填）</label>
+        <input class="in-freight" type="number" min="0" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" />
+        <div class="field-hint in-freight-hint">计入该批次成本 → 体现在这个品的毛利；并自动记入「其他开支」备查</div>
+      </div>
+      <div class="field">
+        <label>装卸费（选填）</label>
+        <input class="in-handling" type="number" min="0" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" />
+        <div class="field-hint">同运费：入成本、进「其他开支」，不强制填</div>
+      </div>
+      <div class="field"><label>供应商</label><input class="in-supplier" placeholder="供应商名称" /></div>
+      <div class="field"><label>日期 *</label><input class="in-date" type="date" /></div>
+      <div class="field"><label>操作员</label><input class="in-operator" readonly title="默认当前登录账号，不可修改" /></div>
+      <div class="field">
+        <label>付款状态</label>
+        ${payRadios("inPay_" + idx, "paid", "待付款：先进「待付款账单」，点「已支付」后才计入财务报表")}
+      </div>
+    </div>
+    <div class="field" style="margin-top:12px;">
+      <label>备注</label>
+      <textarea id="inRemark_${idx}" rows="1" placeholder="可选" onpaste="pasteRemarkFiles('inRemark_${idx}', event)"></textarea>
+      <div class="attach-bar">
+        <button type="button" class="btn sm secondary" onclick="$('inRemarkFile_${idx}').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 图片 / 附件</button>
+        <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），可直接 Ctrl+V 粘贴</span>
+        <input type="file" id="inRemarkFile_${idx}" multiple style="display:none;" onchange="uploadRemarkFiles('inRemark_${idx}', this)" />
+      </div>
+      <div class="attach-list" id="inRemark_${idx}Files"></div>
+    </div>
+    <div class="muted in-block-sum" style="font-size:12px;"></div>
+  </div>`;
 }
 
-function addInboundRow() {
-  const tbody = $("inRowsBody");
-  if (!tbody) return null;
-  const tr = document.createElement("tr");
-  tr.innerHTML = `
-    <td><input class="in-pick-name" readonly placeholder="＋ 点击选择商品" onclick="openInboundPicker(this)" style="cursor:pointer;background:var(--primary-50);" />
-      <div class="muted in-row-hint" style="font-size:11px;"></div></td>
-    <td><select class="searchable in-unit" onchange="inRowUnitChanged(this)"></select></td>
-    <td><input class="in-qty" type="number" min="0" step="any" placeholder="0" oninput="inRowCalc(this)" style="width:76px;" /></td>
-    <td><input class="in-price" type="number" min="0" step="any" placeholder="0.00" oninput="inRowCalc(this)" style="width:86px;" /></td>
-    <td class="num in-amount-cell">—</td>
-    <td><input class="in-freight" type="number" min="0" step="any" placeholder="0" oninput="inRowCalc(this)" style="width:76px;" title="运费（选填）：计入这一行的批次成本，并同步记入「其他开支」" /></td>
-    <td><input class="in-handling" type="number" min="0" step="any" placeholder="0" oninput="inRowCalc(this)" style="width:76px;" title="装卸费（选填）：同运费" /></td>
-    <td><input class="in-adjust" type="number" step="any" placeholder="0" oninput="inRowCalc(this)" style="width:76px;" title="抹零/凑整：正=多付，负=少付；差额记「金额调整」其他开支，商品成本不变" /></td>
-    <td><button class="btn sm danger" onclick="removeInboundRow(this)" title="删掉这一行">✕</button></td>`;
-  tbody.appendChild(tr);
-  try { bindSearchable(tr) } catch (e) { /* 单位下拉搜索绑定失败不影响录入 */ }
-  refreshInboundRowCount();
-  return tr;
+function addInboundBlock() {
+  const box = $("inBlocks");
+  if (!box) return null;
+  const idx = ++IN_BLOCK_SEQ;
+  const wrap = document.createElement("div");
+  wrap.innerHTML = inboundBlockHtml(idx);
+  const block = wrap.firstElementChild;
+  box.appendChild(block);
+  block.querySelector(".in-date").value = today();
+  block.querySelector(".in-operator").value = operatorName();
+  syncInboundBlocks();
+  return block;
 }
 
-function removeInboundRow(btn) {
-  const tr = btn.closest("tr");
-  if (tr) tr.remove();
-  if (!inboundRows().length) addInboundRow();   // 至少留一行
-  refreshInboundRowCount();
+function removeInboundBlock(btn) {
+  const b = inBlockOf(btn);
+  if (!b) return;
+  REMARK_ATTACH["inRemark_" + b.dataset.idx] = [];   // 顺手清掉这行的附件缓存
+  b.remove();
+  if (!inboundBlocks().length) addInboundBlock();     // 至少留一行
+  syncInboundBlocks();
 }
 
-/** 行数 + 合计（货款 / 运费装卸 / 调整 / 实付），实时提示 */
-function refreshInboundRowCount() {
-  const rows = inboundRows();
-  if ($("inRowCount")) $("inRowCount").textContent = rows.length;
-  updateInboundRowsTotal();
-}
-
-function updateInboundRowsTotal() {
-  const el = $("inRowsHint");
-  if (!el) return;
-  const rows = inboundRows();
-  if (!rows.length) { el.textContent = "还没有商品行，点下面「＋ 添加商品行」"; return; }
-  let goods = 0, fee = 0, adj = 0;
-  rows.forEach((tr) => {
-    goods += (parseFloat(tr.querySelector(".in-qty")?.value) || 0) * (parseFloat(tr.querySelector(".in-price")?.value) || 0);
-    fee += (parseFloat(tr.querySelector(".in-freight")?.value) || 0) + (parseFloat(tr.querySelector(".in-handling")?.value) || 0);
-    adj += parseFloat(tr.querySelector(".in-adjust")?.value) || 0;
+/** 序号文案 + 「删除这一行」显隐（只剩一行时不显示删除）+ 底部合计 */
+function syncInboundBlocks() {
+  const blocks = inboundBlocks();
+  blocks.forEach((b, i) => {
+    const label = b.querySelector(".in-block-head .muted");
+    if (label) label.textContent = `第 ${i + 1} 张入库单`;
+    const del = b.querySelector(".in-block-del");
+    if (del) del.style.display = blocks.length > 1 ? "" : "none";
   });
+  updateInboundTotal();
+}
+
+/** 底部合计（只统计选了商品且填了数量的行） */
+function updateInboundTotal() {
+  const el = $("inTotal");
+  if (!el) return;
+  let n = 0, goods = 0, fee = 0, adj = 0;
+  inboundBlocks().forEach((b) => {
+    if (!+(b.dataset.pid || 0)) return;
+    const qty = parseFloat((b.querySelector(".in-qty") || {}).value) || 0;
+    if (!(qty > 0)) return;
+    n++;
+    goods += qty * (parseFloat((b.querySelector(".in-price") || {}).value) || 0);
+    fee += (parseFloat((b.querySelector(".in-freight") || {}).value) || 0)
+      + (parseFloat((b.querySelector(".in-handling") || {}).value) || 0);
+    adj += parseFloat((b.querySelector(".in-adjust") || {}).value) || 0;
+  });
+  if (!n) { el.style.display = "none"; el.innerHTML = ""; return; }
   const pay = goods + fee + adj;
-  el.innerHTML = `共 ${rows.length} 行：货款 ¥${goods.toFixed(2)}`
-    + (fee ? ` ＋ 运费/装卸 ¥${fee.toFixed(2)}` : "")
-    + (adj ? ` ${adj > 0 ? "＋" : "－"} 调整 ¥${Math.abs(adj).toFixed(2)}` : "")
-    + ` = 实付 <b>¥${pay.toFixed(2)}</b>（每行各生成一张入库单，共用供应商 / 日期 / 付款状态 / 备注）`;
+  el.style.display = "block";
+  el.innerHTML = `本次填了 <b>${n}</b> 张入库单：货款 <b>¥${goods.toFixed(2)}</b>`
+    + (fee ? ` ＋ 运费/装卸 <b>¥${fee.toFixed(2)}</b>` : "")
+    + (adj ? ` ${adj > 0 ? "＋" : "－"} 调整 <b>¥${Math.abs(adj).toFixed(2)}</b>` : "")
+    + ` ＝ 实付 <b>¥${pay.toFixed(2)}</b> <span class="muted">（没选商品或没填数量的行不会入库）</span>`;
 }
 
 /** 换单位：价格要跟着换算，所以按新单位重填一次（用户改过就保留） */
-function inRowUnitChanged(sel) {
-  const tr = sel.closest("tr");
-  fillInboundRowPrice(tr);
-  inRowCalc(tr);
+function inBlockUnitChanged(sel) {
+  const b = inBlockOf(sel);
+  fillInboundRowPrice(b);
+  calcInboundBlock(b);
 }
 
-/** 逐行算金额：金额格显示 金额（有运费装卸时补一行批次成本，有调整时补实付） */
-function inRowCalc(el) {
-  const tr = el && el.closest ? el.closest("tr") : null;
-  if (!tr) return;
-  const p = PRODUCTS.find((x) => x.id === +(tr.dataset.pid || 0));
-  const unit = tr.querySelector(".in-unit")?.value || "";
-  const qty = parseFloat(tr.querySelector(".in-qty")?.value) || 0;
-  const price = parseFloat(tr.querySelector(".in-price")?.value) || 0;
+/** 逐行算金额与提示（就是原来单张入库单的口径：金额 / 调整 / 运费装卸批次成本 / 单位换算 / 本单小计） */
+function calcInboundBlock(el) {
+  const b = inBlockOf(el);
+  if (!b) return;
+  const p = PRODUCTS.find((x) => x.id === +(b.dataset.pid || 0));
+  const unit = (b.querySelector(".in-unit") || {}).value || "";
+  const qty = parseFloat((b.querySelector(".in-qty") || {}).value) || 0;
+  const price = parseFloat((b.querySelector(".in-price") || {}).value) || 0;
   const base = qty * price;
-  const fee = (parseFloat(tr.querySelector(".in-freight")?.value) || 0) + (parseFloat(tr.querySelector(".in-handling")?.value) || 0);
-  const adj = parseFloat(tr.querySelector(".in-adjust")?.value) || 0;
-  const cell = tr.querySelector(".in-amount-cell");
-  if (cell) {
-    let html = `<b>¥${base.toFixed(2)}</b>`;
-    if (fee) html += `<div class="muted" style="font-size:11px;">批次成本 ¥${(base + fee).toFixed(2)}</div>`;
-    if (adj) html += `<div class="muted" style="font-size:11px;">实付 ¥${(base + fee + adj).toFixed(2)}</div>`;
-    cell.innerHTML = html;
+  const adj = parseFloat((b.querySelector(".in-adjust") || {}).value) || 0;
+  const fee = (parseFloat((b.querySelector(".in-freight") || {}).value) || 0)
+    + (parseFloat((b.querySelector(".in-handling") || {}).value) || 0);
+  const amt = b.querySelector(".in-amount");
+  if (amt) amt.value = base.toFixed(2);
+  const setHint = (sel, html) => { const e = b.querySelector(sel); if (e) e.innerHTML = html; };
+  setHint(".in-adjust-hint", adj
+    ? `实付 ¥${(base + adj).toFixed(2)}（商品金额 ¥${base.toFixed(2)} ${adj > 0 ? "+" : "-"} ${Math.abs(adj).toFixed(2)}）· 差额记「金额调整」其他开支`
+    : "正=多付，负=少付；差额自动记「金额调整」其他开支，商品成本不变");
+  setHint(".in-freight-hint", fee > 0
+    ? `批次成本 ¥${(base + fee).toFixed(2)}（商品 ${base.toFixed(2)} + 运费/装卸 ${fee.toFixed(2)}）· 毛利随销量扣减，并同步记入「其他开支」`
+    : "计入该批次成本 → 体现在这个品的毛利；并自动记入「其他开支」备查");
+  const factor = p && unit ? (p.conversions || {})[unit] : null;
+  setHint(".in-unit-hint", factor ? `1${esc(unit)} = ${fmtNum(factor)} ${esc(p.base_unit)}` : "");
+  const sum = b.querySelector(".in-block-sum");
+  if (sum) {
+    sum.textContent = p
+      ? `本单：${fmtNum(qty)}${unit} × ${unit ? fmtMoney(price) : ""} = 货款 ${fmtMoney(base)}`
+        + (fee ? ` ＋ 运费/装卸 ${fmtMoney(fee)}` : "")
+        + (adj ? ` ${adj > 0 ? "＋" : "－"} 调整 ${fmtMoney(Math.abs(adj))}` : "")
+        + ` ＝ 实付 ${fmtMoney(base + fee + adj)}`
+      : "";
   }
-  const sel = tr.querySelector(".in-unit");
-  if (sel && p && unit) {
-    const factor = (p.conversions || {})[unit];
-    sel.title = factor ? `1${unit} = ${fmtNum(factor)} ${p.base_unit}` : "";
-  }
-  updateInboundRowsTotal();
+  updateInboundTotal();
 }
-/* 入库商品选择器（二级弹层：搜索 + 分类 + 卡片列表）；选好后填到对应那一行 */
-let IN_PICK_TR = null;
+/* 入库商品选择器（二级弹层：搜索 + 分类 + 卡片列表）；选好后填到对应的那一行 */
 function openInboundPicker(inp) {
-  IN_PICK_TR = inp && inp.closest ? inp.closest("tr") : null;
+  IN_PICK_BLOCK = inBlockOf(inp);
   const sp = inboundProducts();
   const cats = [...new Set(sp.map((p) => p.category).filter(Boolean))].sort();
   openModal(`
@@ -4233,62 +4318,45 @@ function renderInboundPicker() {
 }
 function pickInboundProduct(id) {
   const p = PRODUCTS.find((x) => x.id === id);
-  if (!p) return;
-  const tr = IN_PICK_TR;
-  if (!tr) return;
-  tr.dataset.pid = p.id;
-  const inp = tr.querySelector(".in-pick-name");
+  const b = IN_PICK_BLOCK;
+  if (!p || !b) return;
+  b.dataset.pid = p.id;
+  const inp = b.querySelector(".in-pick-name");
   inp.value = `[库存] ${p.name}（${p.category || "—"}）`;
   const du = p.default_unit || p.base_unit;
-  const sel = tr.querySelector(".in-unit");
+  const sel = b.querySelector(".in-unit");
   sel.innerHTML = unitOptions(p, du);
   sel.value = du;
   const factor = (p.conversions || {})[du] || 1;
   inp.title = `当前库存 ${fmtStock(p)}；1${du} = ${fmtNum(factor)} ${p.base_unit}`;
+  const sh = b.querySelector(".in-stock-hint");
+  if (sh) sh.textContent = `当前库存 ${fmtStock(p)}；1${du} = ${fmtNum(factor)} ${p.base_unit}`;
   closeModal();
-  fillInboundRowPrice(tr);   // 自动带出上次的价（没有入库记录就用参考成本），用户可改
-  inRowCalc(tr);
-}
-
-/** 行内小字提示：库存 / 单位换算 / 最近入库价 / 参考成本（可一键用参考成本） */
-function inRowHint(tr, p, unit) {
-  const el = tr.querySelector(".in-row-hint");
-  if (!el) return;
-  if (!p) { el.textContent = ""; return; }
-  const f = (p.conversions || {})[unit] || 1;
-  const lastBase = Number(p.last_in_price) || 0;
-  const refBase = Number(p.unit_cost) || 0;
-  const per = (base) => fmtNum(+(base * f).toFixed(4));
-  let t = `库存 ${fmtStock(p)} · 1${unit}=${fmtNum(f)}${p.base_unit}`;
-  if (lastBase > 0) t += ` · 最近入库价 ¥${per(lastBase)}/${unit}（${p.last_in_date || "—"}）`;
-  if (refBase > 0) {
-    el.innerHTML = esc(t) + ` · 参考成本 ¥${per(refBase)}/${unit}`
-      + ` <button class="btn sm ghost" onclick="useInboundRefCost(this)">用参考成本</button>`;
-  } else {
-    el.textContent = t;
-  }
+  fillInboundRowPrice(b);   // 自动带出上次的价（没有入库记录就用参考成本），用户可改
+  calcInboundBlock(b);
 }
 
 /* 一键改用参考成本（当最近入库价不是你想要的时候） */
 function useInboundRefCost(btn) {
-  const tr = btn.closest("tr");
-  if (!tr) return;
-  const p = PRODUCTS.find((x) => x.id === +(tr.dataset.pid || 0));
+  const b = inBlockOf(btn);
+  if (!b) return;
+  const p = PRODUCTS.find((x) => x.id === +(b.dataset.pid || 0));
   if (!p) return;
-  const unit = tr.querySelector(".in-unit").value || defaultUnit(p);
+  const unit = (b.querySelector(".in-unit") || {}).value || defaultUnit(p);
   const v = (Number(p.unit_cost) || 0) * ((p.conversions || {})[unit] || 1);
-  tr.querySelector(".in-price").value = v > 0 ? +v.toFixed(6) : "";
-  inRowCalc(tr);
+  b.querySelector(".in-price").value = v > 0 ? +v.toFixed(6) : "";
+  calcInboundBlock(b);
   toast("已改用参考成本，可直接修改");
 }
-/* 入库单价自动带出：优先用「最近一次录入的入库价」（按所选单位换算），没有入库记录时用参考成本。
-   只在重新选商品 / 换单位时重填，用户改了或清空后不再覆盖（真正落库由 submitInbound 校验）。 */
-function fillInboundRowPrice(tr) {
-  if (!tr) return;
-  const p = PRODUCTS.find((x) => x.id === +(tr.dataset.pid || 0));
-  const inp = tr.querySelector(".in-price");
+/* 单价自动带出：优先用「最近一次录入的入库价」（按所选单位换算），没有入库记录时用参考成本。
+   只在重新选商品 / 换单位时重填，用户改了或清空后不再覆盖（真正落库由 submitInbound 校验）。
+   传进来的 scope 可以是入库页的整行 .in-block，也可以是「鲜货入库」页的一行（两处共用同一套价口径）。 */
+function fillInboundRowPrice(scope) {
+  if (!scope) return;
+  const p = PRODUCTS.find((x) => x.id === +(scope.dataset.pid || 0));
+  const inp = scope.querySelector(".in-price");
   if (!p || !inp) return;
-  const unit = tr.querySelector(".in-unit").value || defaultUnit(p);
+  const unit = (scope.querySelector(".in-unit") || {}).value || defaultUnit(p);
   const f = (p.conversions || {})[unit] || 1;
   const lastBase = Number(p.last_in_price) || 0;   // 最近一次入库价（按基础单位）
   const refBase = Number(p.unit_cost) || 0;        // 参考成本（按基础单位）
@@ -4300,7 +4368,6 @@ function fillInboundRowPrice(tr) {
   } else {
     inp.value = "";
   }
-  // 表格行里放不下大段提示，改成单价框的悬停提示
   const money = (v) => `¥${fmtNum(+v.toFixed(4))}/${unit}`;
   if (lastBase > 0) {
     inp.title = `最近入库价 ${money(per(lastBase))}（${p.last_in_date || "—"}）`
@@ -4311,69 +4378,92 @@ function fillInboundRowPrice(tr) {
   } else {
     inp.title = "该商品还没入库过、也没设参考成本，请手动填单价";
   }
-  inRowHint(tr, p, unit);
-  inRowCalc(tr);
+  // 入库页单价下面那行小字（原样式）：最近入库价 / 参考成本 + 一键改用参考成本
+  const hint = scope.querySelector(".in-price-hint");
+  if (hint) {
+    if (lastBase > 0) {
+      hint.innerHTML = `最近入库价 ${esc(money(per(lastBase)))}（${esc(p.last_in_date || "")}）`
+        + (refBase > 0 ? `　参考成本 ${esc(money(per(refBase)))} <button class="btn sm ghost" onclick="useInboundRefCost(this)">用参考成本</button>` : "")
+        + `<div class="muted" style="font-size:11px;">可改可清；改了下次入库自动用新价</div>`;
+    } else if (refBase > 0) {
+      hint.innerHTML = `按参考成本填 ${esc(money(per(refBase)))}<div class="muted" style="font-size:11px;">该商品还没入库过；保存后即记住这个价</div>`;
+    } else {
+      hint.textContent = "该商品还没入库过、也没设参考成本，请手动填单价";
+    }
+  }
 }
 async function submitInbound() {
-  const rows = inboundRows();
-  if (!rows.length) { toast("请先添加商品行"); return; }
-  const date = $("inDate").value;
-  if (!date) { toast("请选择入库日期"); return; }
-  const supplier = $("inSupplier").value;
-  const remark = remarkValue("inRemark");
-  const payStatus = payOf("inPay");
-  const items = [], bad = [];
-  rows.forEach((tr, i) => {
+  const blocks = inboundBlocks();
+  if (!blocks.length) { toast("请先点「＋ 添加一行」"); return; }
+  const items = [], bad = [], picked = [];
+  blocks.forEach((b, i) => {
     const no = i + 1;
-    const pid = +(tr.dataset.pid || 0);
-    const unit = tr.querySelector(".in-unit").value;
-    const qty = parseFloat(tr.querySelector(".in-qty").value);
-    const price = parseFloat(tr.querySelector(".in-price").value);
-    const freight = parseFloat(tr.querySelector(".in-freight").value) || 0;
-    const handling = parseFloat(tr.querySelector(".in-handling").value) || 0;
-    const adjust = parseFloat(tr.querySelector(".in-adjust").value) || 0;
-    if (!pid) { bad.push(`第 ${no} 行没选商品`); return; }
+    const pid = +(b.dataset.pid || 0);
+    const qty = parseFloat((b.querySelector(".in-qty") || {}).value);
+    const price = parseFloat((b.querySelector(".in-price") || {}).value);
+    const adjust = parseFloat((b.querySelector(".in-adjust") || {}).value) || 0;
+    const freight = parseFloat((b.querySelector(".in-freight") || {}).value) || 0;
+    const handling = parseFloat((b.querySelector(".in-handling") || {}).value) || 0;
+    const date = ((b.querySelector(".in-date") || {}).value || "").trim();
+    const unit = ((b.querySelector(".in-unit") || {}).value || "").trim();
+    // 没选商品的行直接跳过（当没填）；选了商品就得填全，否则报出来
+    if (!pid) { if (qty > 0) bad.push(`第 ${no} 行没选商品`); return; }
     if (!unit || !(qty > 0)) { bad.push(`第 ${no} 行数量/单位没填全`); return; }
     if (isNaN(price)) { bad.push(`第 ${no} 行没填单价`); return; }
+    if (!date) { bad.push(`第 ${no} 行没选日期`); return; }
     if (freight < 0 || handling < 0) { bad.push(`第 ${no} 行运费/装卸费不能为负`); return; }
+    const idx = b.dataset.idx || no;
     items.push({
       product_id: pid, unit, quantity: qty, unit_price: price,
-      supplier, operator: $("inOperator").value, date, remark,
-      pay_status: payStatus, adjust_amount: adjust, freight, handling,
+      supplier: ((b.querySelector(".in-supplier") || {}).value || "").trim(),
+      operator: ((b.querySelector(".in-operator") || {}).value || "").trim() || operatorName(),
+      date, remark: remarkValue("inRemark_" + idx),
+      pay_status: payOf("inPay_" + idx), adjust_amount: adjust, freight, handling,
     });
+    picked.push({ block: b, idx, pay_name: "inPay_" + idx });
   });
   if (bad.length) { toast(bad[0] + (bad.length > 1 ? ` 等 ${bad.length} 处要改` : "")); return; }
+  if (!items.length) { toast("请先选商品并填数量（一行 = 一张入库单）"); return; }
 
   const goods = items.reduce((a, it) => a + it.quantity * it.unit_price, 0);
   const fee = items.reduce((a, it) => a + it.freight + it.handling, 0);
+  const adj = items.reduce((a, it) => a + it.adjust_amount, 0);
   const alertBox = $("inAlert");
   if (alertBox) { alertBox.style.display = "none"; alertBox.innerHTML = ""; }
   try {
     const r = await api("/api/inbounds/batch", "POST", { items });
     const tips = [];
-    if (r.created) tips.push(`已入库 ${r.created} 张单（货款 ¥${goods.toFixed(2)}${fee ? ` + 运费/装卸 ¥${fee.toFixed(2)}` : ""}）`);
+    if (r.created) tips.push(`已入库 ${r.created} 张单（货款 ¥${goods.toFixed(2)}${fee ? ` + 运费/装卸 ¥${fee.toFixed(2)}` : ""}${adj ? ` ${adj > 0 ? "+" : "-"} 调整 ¥${Math.abs(adj).toFixed(2)}` : ""}）`);
     if (r.failed_count) tips.push(`${r.failed_count} 行失败`);
-    if (payStatus === "unpaid") tips.push("待付款已进「待付款账单」");
+    if (items.some((it) => it.pay_status === "unpaid")) tips.push("待付款已进「待付款账单」");
     toast(tips.join("，") || "已提交");
     if (r.failed_count) {
       const box = $("inAlert");
       if (box) {
         box.className = "alert err";
         box.style.display = "block";
-        box.innerHTML = "以下行没入库成功：<br>" + r.failed.map((f) => `第 ${f.row} 行：${esc(f.reason)}`).join("<br>");
+        box.innerHTML = "以下行没入库成功（已保留，改完可再提交）：<br>"
+          + r.failed.map((f) => `第 ${f.row} 行：${esc(f.reason)}`).join("<br>");
       }
     }
     if (r.created) {
-      // 成功的行清掉、失败的行保留（好改完再提交），供应商 / 日期 / 付款状态不重置
+      // 提交成功的行清空（失败的行原样保留好改），商品 / 单位 / 供应商 / 日期 不动
       const badRows = new Set((r.failed || []).map((f) => f.row));
-      const keep = rows.filter((_tr, i) => badRows.has(i + 1));
-      const body = $("inRowsBody");
-      body.innerHTML = "";
-      if (keep.length) keep.forEach((tr) => body.appendChild(tr));
-      else addInboundRow();
-      refreshInboundRowCount();
-      clearRemarkField("inRemark");
-      setPay("inPay", "paid");   // 回到默认「已付款」
+      picked.forEach((p, i) => {
+        if (badRows.has(i + 1)) return;   // 只按成功/失败的行号清
+        const b = p.block;
+        ["in-qty", "in-price", "in-amount", "in-adjust", "in-freight", "in-handling"].forEach((cls) => {
+          const el = b.querySelector("." + cls);
+          if (el) el.value = "";
+        });
+        clearRemarkField("inRemark_" + p.idx);
+        setPay(p.pay_name, "paid");   // 回到默认「已付款」
+        calcInboundBlock(b);
+      });
+      // 清完的空行（没商品、没数量）收掉，只留一行空的
+      const empties = inboundBlocks().filter((b) => !+(b.dataset.pid || 0));
+      if (empties.length > 1) empties.slice(1).forEach((b) => b.remove());
+      syncInboundBlocks();
       loadInbounds(); loadStock();
       // 刷新商品缓存：下次选这个商品时会带上「这次录入的价」（最近价实时跟着变）
       api("/api/products").then((ps) => { PRODUCTS = ps; }).catch(() => {});
@@ -7596,8 +7686,7 @@ function startMaintenanceWatch() {
   } catch (e) {
     return; // 未登录，停留在登录页
   }
-  // 预设默认日期范围：入库记录本月，出库记录当天
-  $("inDate").value = today();
+  // 预设默认日期范围：入库记录本月，出库记录当天（入库单的日期在每行里各自默认今天）
   $("outDate").value = today();
   $("inDateFrom").value = monthStart();
   $("inDateTo").value = today();
