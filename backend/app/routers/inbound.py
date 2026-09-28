@@ -56,6 +56,12 @@ class InboundUpdate(BaseModel):
     handling: float | None = None
 
 
+class InboundBatchIn(BaseModel):
+    """一次录入多个商品：每行一张入库单（前端把共用的供应商/日期/付款状态/备注填进每一行）。"""
+
+    items: list[InboundIn] = []
+
+
 def _to_dict(r: Inbound) -> dict:
     return {
         "id": r.id,
@@ -93,6 +99,31 @@ def list_inbounds(date_from: str = "", date_to: str = "", db: Session = Depends(
     if date_to:
         q = q.where(Inbound.date <= date_to)
     return [_to_dict(r) for r in db.execute(q).scalars()]
+
+
+@router.post("/batch")
+def create_inbounds_batch(data: InboundBatchIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """一次录入多个商品：每行生成一张入库单（共用供应商 / 日期 / 付款状态 / 备注）。
+
+    单行失败不影响其它行（各自用 savepoint 包住），失败的连同行号一起返回，前端好提示。
+    """
+    created, failed, ids = 0, [], []
+    for i, it in enumerate(data.items or []):
+        no = i + 1
+        p = db.get(Product, it.product_id)
+        if p and p.product_type == "order":
+            failed.append({"row": no, "reason": f"「{p.name}」是订单商品（小类），请入库其关联的库存商品（大类）"})
+            continue
+        try:
+            with db.begin_nested():   # 单行失败只回滚这一行
+                rec = create_inbound(db, {**it.model_dump(), "operator": user.name}, operator=user.name)
+                db.flush()
+                ids.append(rec.id)
+            created += 1
+        except ValueError as e:
+            failed.append({"row": no, "reason": str(e)})
+    db.commit()
+    return {"ok": True, "created": created, "failed": failed, "failed_count": len(failed), "ids": ids}
 
 
 @router.post("")
