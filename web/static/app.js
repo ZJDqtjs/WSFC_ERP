@@ -5993,6 +5993,7 @@ function renderPayables() {
   const { rows, undated, active, f } = payFilterRows();
   paySyncDatePh();
   t.innerHTML = `<thead><tr>
+      <th style="width:34px;"><input type="checkbox" onchange="payToggleAll(this)" /></th>
       <th style="width:102px;">日期</th><th style="width:96px;">来源</th><th>具体事物 / 款项</th>
       <th class="num" style="width:150px;">金额</th><th style="width:88px;">操作员</th><th style="width:180px;"></th>
     </tr></thead><tbody>` +
@@ -6002,6 +6003,7 @@ function renderPayables() {
         const color = r.direction === "in" ? "var(--green, #16a34a)" : "var(--danger, #dc2626)";
         const money = `${r.direction === "in" ? "应收" : "应付"} ${fmtMoney(r.amount)}`;
         return `<tr${paid ? ' style="opacity:.55;"' : ""}>
+          <td><input type="checkbox" class="pay-pick" value="${esc(r.kind)}|${r.id}" /></td>
           <td class="mono">${esc(r.date)}</td>
           <td><span class="badge ${PAY_SRC_BADGE[r.source] || "adjust"}">${esc(r.source)}</span></td>
           <td><b>${esc(r.title)}</b>${r.code ? ` <span class="muted">${esc(r.code)}</span>` : ""}
@@ -6017,12 +6019,13 @@ function renderPayables() {
                </span>`}</td>
         </tr>`;
       }).join("")
-      : `<tr><td colspan="6" class="empty">${active && PAY_ROWS.length
+      : `<tr><td colspan="7" class="empty">${active && PAY_ROWS.length
         ? "没有符合筛选条件的账单（可点「清空筛选」看全部）"
         : (PAY_VIEW === "all" ? "没有账单" : "没有待结清的账单")}</td></tr>`) +
     `</tbody>` +
     (rows.length
       ? `<tfoot><tr>
+          <td></td>
           <td><b>${active ? "筛选合计" : "列出合计"}</b></td>
           <td class="muted" colspan="2">${rows.length} 笔${PAY_VIEW === "all" ? "（含已结清）" : ""}</td>
           <td class="num mono"><b>应付 ${fmtMoney(rows.filter((r) => r.direction !== "in").reduce((a, r) => a + r.amount, 0))}
@@ -6047,6 +6050,49 @@ async function payBill(kind, id, paid) {
     await loadPayablesPage();
     if (DS_LOADED) loadDropshipBills();   // 代发页签同源，跟着刷新
   } catch (e) { toast("操作失败：" + e.message); }
+}
+
+/* ---------- 待付款账单：账单列表的批量勾选 ---------- */
+function payToggleAll(cb) {
+  document.querySelectorAll("#payTable .pay-pick").forEach((x) => { x.checked = cb.checked; });
+}
+
+/** 勾选的账单 → [{kind, id}]（复选框值形如 "inbound|12"） */
+function payPicked() {
+  return [...document.querySelectorAll("#payTable .pay-pick")].filter((x) => x.checked).map((x) => {
+    const [kind, id] = String(x.value).split("|");
+    return { kind, id: Number(id) };
+  }).filter((x) => x.kind && Number.isFinite(x.id));
+}
+
+/** 批量标记已支付 / 撤销：按 kind 分组提交（代发按出库单整单结清，其余按单据自身） */
+async function payBatch(paid) {
+  const picked = payPicked();
+  if (!picked.length) { toast("请先勾选要处理的账单"); return; }
+  const amount = picked.reduce((a, p) => {
+    const r = PAY_ROWS.find((x) => x.kind === p.kind && x.id === p.id);
+    return a + (r ? r.amount : 0);
+  }, 0);
+  const tip = paid
+    ? "确认后这些将按原日期计入财务报表（代发只做付款核对、不进报表）。"
+    : "撤销后会从财务报表移出（代发只撤销付款标记）。";
+  if (!confirm(`${paid ? "批量标记已支付" : "批量撤销"}：${picked.length} 笔，合计 ${fmtMoney(amount)}？\n${tip}`)) return;
+  const byKind = new Map();
+  picked.forEach((p) => {
+    if (!byKind.has(p.kind)) byKind.set(p.kind, []);
+    byKind.get(p.kind).push(p.id);
+  });
+  let updated = 0, missing = 0;
+  try {
+    for (const [kind, ids] of byKind) {
+      const r = await api("/api/payables/pay-batch", "POST", { kind, ids, paid });
+      updated += r.updated || 0;
+      missing += r.missing || 0;
+    }
+    toast(`已处理 ${updated} 笔${missing ? `，${missing} 笔已不存在` : ""}`);
+    await loadPayablesPage();
+    if (DS_LOADED) loadDropshipBills();
+  } catch (e) { toast("批量操作失败：" + e.message); }
 }
 
 /* ---------- 待付款账单：代发页签 ----------
@@ -6155,15 +6201,15 @@ function renderDropshipBills() {
     const specTxt = g.spec && !(g.product_name || "").includes(g.spec) ? ` <span class="muted">· ${esc(g.spec)}</span>` : "";
     return `<tr${paid ? ' style="opacity:.55;"' : ""}>
       <td><input type="checkbox" class="ds-pick" value="${idx}" /></td>
+      <td class="num mono">${g.date_from === g.date_to || !g.date_to
+        ? esc(g.date_from || g.date_to || "")
+        : `${esc(g.date_from)}<div style="font-size:11px;">~ ${esc(g.date_to)}</div>`}</td>
       <td><b>${esc(g.product_name || "代发商品")}</b>${specTxt}
         <div class="muted" style="font-size:11px;color:var(--danger);">代发成本 ${fmtMoney(g.amount)}</div></td>
       <td class="num mono">${DS_NUM4(g.quantity)}${esc(g.unit || "")}</td>
       <td class="num mono">${fmtMoney(g.unit_price)}</td>
       <td class="num mono"><b style="color:var(--danger, #dc2626);">${fmtMoney(g.amount)}</b></td>
       <td class="num muted">${g.order_count} 单</td>
-      <td class="num mono">${g.date_from === g.date_to || !g.date_to
-        ? esc(g.date_from || g.date_to || "")
-        : `${esc(g.date_from)}<div style="font-size:11px;">~ ${esc(g.date_to)}</div>`}</td>
       <td class="num">${paid
         ? `<button class="btn sm secondary" title="已付 ${esc(g.paid_at || "")}，点此撤销" onclick="dsMarkPaid(${idx}, false)">已付·撤销</button>`
         : `<button class="btn sm green" onclick="dsMarkPaid(${idx}, true)">已支付</button>`}</td>
@@ -6172,12 +6218,12 @@ function renderDropshipBills() {
 
   t.innerHTML = `<thead><tr>
       <th style="width:34px;"><input type="checkbox" onchange="dsToggleAll(this)" /></th>
+      <th class="num" style="width:110px;">日期</th>
       <th>商品 / 规格</th>
       <th class="num" style="width:110px;">单量</th>
       <th class="num" style="width:100px;">单价</th>
       <th class="num" style="width:140px;">应付金额</th>
       <th class="num" style="width:96px;">单据</th>
-      <th class="num" style="width:110px;">日期</th>
       <th style="width:96px;"></th>
     </tr></thead><tbody>` +
     (rows.length ? rows.join("")
@@ -6188,13 +6234,10 @@ function renderDropshipBills() {
     (groups.length
       ? `<tfoot><tr>
           <td></td>
-          <td><b>${active ? "筛选合计" : "列出合计"}</b> <span class="muted">${groups.length} 款商品规格 · 待结清 ${pend.length} 款</span></td>
-          <td></td>
-          <td></td>
+          <td><b>${active ? "筛选合计" : "列出合计"}</b></td>
+          <td class="muted" colspan="3">${groups.length} 款商品规格 · 待结清 ${pend.length} 款 · ${orders} 单</td>
           <td class="num mono"><b>应付 ${fmtMoney(sum)}</b></td>
-          <td class="num muted">${orders} 单</td>
-          <td></td>
-          <td></td>
+          <td colspan="2"></td>
         </tr></tfoot>`
       : "");
 }

@@ -799,6 +799,9 @@
                 <span class="date-pick"><input id="payTo" type="date" onchange="renderPayables()" /><span class="date-ph">结束</span></span>
               </span>
               <button class="btn sm secondary" onclick="payClearFilter()">清空筛选</button>
+              <span class="grow"></span>
+              <button class="btn sm green" onclick="payBatch(true)"><svg class="ic"><use href="#i-check"/></svg> 批量标记已支付</button>
+              <button class="btn sm secondary" onclick="payBatch(false)">批量撤销</button>
             </div>
             <!-- 筛选结果实时合计（按日期 / 关键词筛选后立刻重算） -->
             <div class="pay-sum" id="paySum"></div>
