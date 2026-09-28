@@ -31,6 +31,9 @@ def _config_file() -> Path:
 # 鲜货分类（可扩充）
 FRESH_CATS = ["蔬菜", "干货"]
 
+# 这些分类在「商品」页默认不显示（各自有独立入口），候选商品与商品页保持一致，不列进来
+EXCLUDED_CATS = ["包材", "人工", "快递"]
+
 
 def _unit(p: Product) -> str:
     return p.default_unit or p.base_unit
@@ -65,6 +68,25 @@ def _fresh_rows(db: Session) -> dict[int, Product]:
     return {p.id: p for p in q.all()}
 
 
+def _list_rows(db: Session, ids: list[int]) -> list[Product]:
+    """按展示清单取商品，**不限分类**，顺序跟随清单。
+
+    「鲜货入库」页用它：清单里挑过的商品（哪怕是常温/包材）都要能入库，
+    所以这里不按 FRESH_CATS 过滤；已停用 / 不存在 / 非库存商品的 id 直接跳过。
+    """
+    if not ids:
+        return []
+    rows = {
+        p.id: p
+        for p in db.query(Product)
+        .filter(
+            Product.id.in_(ids), Product.product_type == "stock", Product.is_active.is_(True)
+        )
+        .all()
+    }
+    return [rows[i] for i in ids if i in rows]
+
+
 def _serialize(p: Product) -> dict:
     du, f = _unit(p), _factor(p, _unit(p))
     return {
@@ -93,7 +115,8 @@ def fresh_stock(
     rows = _fresh_rows(db)
     ids = _load_config()
     if only_list:
-        ordered = [rows[i] for i in ids if i in rows]
+        # 清单里挑过什么就返回什么（不限分类，常温/包材也能进「鲜货入库」）
+        ordered = _list_rows(db, ids)
     elif ids:
         ordered = [rows[i] for i in ids if i in rows]
         ordered += sorted((p for p in rows.values() if p.id not in ids), key=lambda p: p.name)
@@ -103,16 +126,31 @@ def fresh_stock(
 
 
 @router.get("/options")
-def fresh_options(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """全部可选的鲜货商品（用于管理展示清单）。"""
-    q = db.query(Product).filter(
-        Product.category.in_(FRESH_CATS), Product.product_type == "stock", Product.is_active.is_(True)
-    ).order_by(Product.name)
+def fresh_options(
+    scope: str = "fresh",
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """可加入展示清单的候选商品（用于「管理展示商品」）。
+
+    scope=fresh（默认）：只列鲜货分类（蔬菜/干货）；
+    scope=all：所有在用的库存商品（不限分类，**与「商品」页口径一致**：
+    排除 包材/人工/快递 —— 这几个分类各自有入口，不该混进鲜货入库），
+    这样任意正经商品都能放进展示清单、走「鲜货入库」流程。
+    """
+    q = db.query(Product).filter(Product.product_type == "stock", Product.is_active.is_(True))
+    if scope == "all":
+        q = q.filter(Product.category.not_in(EXCLUDED_CATS))
+    else:
+        q = q.filter(Product.category.in_(FRESH_CATS))
+    rows = q.order_by(Product.category, Product.name).all()
     return {
         "items": [
             {"id": p.id, "name": p.name, "category": p.category, "unit": p.default_unit or p.base_unit}
-            for p in q.all()
-        ]
+            for p in rows
+        ],
+        "scope": scope,
+        "fresh_cats": FRESH_CATS,
     }
 
 

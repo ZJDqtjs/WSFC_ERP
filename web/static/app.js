@@ -2008,21 +2008,27 @@ function renderFreshTable(items) {
   if (!items.length) t.innerHTML = `<tr><td colspan="7" class="empty">暂无鲜货商品，可点「管理展示商品」添加</td></tr>`;
 }
 
-/* ---------- 鲜货展示清单管理（可自主增删/排序） ---------- */
+/* ---------- 展示清单管理（可自主增删/排序） ---------- */
 let FC_SEL = [];   // 当前展示清单（有序商品 id）
-let FC_ALL = [];   // 全部可选鲜货商品
+let FC_ALL = [];   // 全部可选商品（所有在用库存商品，不限分类）
+let FC_CATS = [];  // 鲜货分类（蔬菜/干货），供「只看鲜货分类」筛选
 async function openFreshConfig() {
   try {
-    const [opts, cur] = await Promise.all([api("/api/fresh/options"), api("/api/fresh")]);
+    // scope=all：候选商品列出全部在用商品（不再只限蔬菜/干货），任意商品都能加进清单
+    const [opts, cur] = await Promise.all([api("/api/fresh/options?scope=all"), api("/api/fresh")]);
     FC_ALL = opts.items || [];
+    FC_CATS = opts.fresh_cats || [];
     FC_SEL = (cur.ids || []).slice();
     openModal(`
       <h3>管理展示商品 <button class="close" onclick="closeModal()">✕</button></h3>
-      <p class="hint" style="margin-bottom:10px;">左侧勾选要展示的鲜货商品（点击顺序即展示顺序），右侧可调整顺序或移除；参考订货单品类清单。</p>
+      <p class="hint" style="margin-bottom:10px;">左侧列出的是<b>全部在用商品</b>（与「商品」页口径一致，不含 包材/人工/快递，可搜索）；勾选即加入展示清单，点击顺序即展示顺序，右侧可调整顺序或移除。清单里的商品会出现在「鲜货入库」表格里，可随时调整。</p>
       <div class="fc-wrap">
         <div class="fc-pane">
-          <div class="fc-label">候选商品</div>
-          <input id="fcSearch" placeholder="🔍 搜索…" oninput="renderFreshConfig()" style="margin-bottom:8px;" />
+          <div class="fc-label">
+            候选商品（<b id="fcCount">0</b> 个）
+            <label style="float:right;font-weight:400;cursor:pointer;"><input type="checkbox" id="fcFreshOnly" onchange="renderFreshConfig()" /> 只看鲜货分类</label>
+          </div>
+          <input id="fcSearch" placeholder="🔍 搜索名称 / 分类…" oninput="renderFreshConfig()" style="margin-bottom:8px;" />
           <div id="fcOptions" class="fc-list"></div>
         </div>
         <div class="fc-pane">
@@ -2039,17 +2045,23 @@ async function openFreshConfig() {
 }
 function renderFreshConfig() {
   const kw = ($("fcSearch")?.value || "").trim().toLowerCase();
+  const freshOnly = !!($("fcFreshOnly") || {}).checked;
   const selSet = new Set(FC_SEL);
-  const optHtml = FC_ALL
-    .filter((p) => !kw || p.name.toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw))
+  const rows = FC_ALL
+    .filter((p) => !freshOnly || FC_CATS.includes(p.category))   // 「只看鲜货分类」按蔬菜/干货筛
+    .filter((p) => !kw || p.name.toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw));
+  const optHtml = rows
     .map((p) => `<div class="fc-opt ${selSet.has(p.id) ? "on" : ""}" onclick="fcToggle(${p.id})">${esc(p.name)} <span class="muted">${esc(p.category)}</span></div>`)
     .join("");
+  const cnt = $("fcCount");
+  if (cnt) cnt.textContent = rows.length;
   $("fcOptions").innerHTML = optHtml || '<div class="empty" style="padding:14px;">无匹配商品</div>';
   const selHtml = FC_SEL.map((id, i) => {
     const p = FC_ALL.find((x) => x.id === id);
-    if (!p) return "";
+    // 已停用 / 不在候选里的（历史清单遗留）也给出来，方便直接移除
+    const label = p ? esc(p.name) : `<span class="muted">（包材/人工/快递 或已停用 #${id}）</span>`;
     return `<div class="fc-sel-item">
-      <span class="grow">${i + 1}. ${esc(p.name)}</span>
+      <span class="grow">${i + 1}. ${label}</span>
       <button class="btn sm" onclick="fcMove(${i},-1)" title="上移">↑</button>
       <button class="btn sm" onclick="fcMove(${i},1)" title="下移">↓</button>
       <button class="btn sm danger" onclick="fcDel(${i})" title="移除">✕</button>
@@ -2184,7 +2196,7 @@ function renderFreshInbound() {
     + (ids.length ? ids.map(finRowHtml).join("")
       : `<tr><td colspan="10" class="empty">${hidden.length
         ? `今天的鲜货都入完啦 ✅（${hidden.length} 个商品已入库、先从列表隐藏，明天 0 点自动回来；也可以点上面「显示今日已入库」核对）`
-        : "还没挑商品：点右上「管理展示商品」把要入库的鲜货挑进来，这里就会出现"}</td></tr>`)
+        : "还没挑商品：点右上「管理展示商品」把要入库的商品挑进来（候选含全部在用商品，不限分类），这里就会出现"}</td></tr>`)
     + `</tbody>`;
   // 单价没填过的行先自动带出（最近入库价 → 参考成本），再算一遍金额
   ids.forEach((id) => {
