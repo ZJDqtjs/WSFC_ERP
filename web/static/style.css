@@ -1348,6 +1348,83 @@ body.notice-on .login-mask { padding-top: 40px; }
   background: var(--primary-50, #eef4ff); border: 1px solid var(--primary-light, #d6e4ff);
   border-radius: 10px; font-size: 13px;
 }
+
+/* ============ 入库页：一行 = 一张完整入库单（原样式，可加多行） ============ */
+.in-block {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px 6px;
+  margin-bottom: 12px;
+  background: var(--card);
+}
+
+.in-block-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12.5px;
+}
+
+.in-block:only-of-type { border-style: solid; }
+
+.in-block-sum {
+  padding: 6px 0 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============ 鲜货入库（二级页） ============ */
+#finTable td { vertical-align: middle; }
+/* 勾选列窄一点，商品列留宽（避免商品名被单位下拉挤成多行） */
+#finTable td.cb-col { width: 34px; }
+#finTable td:nth-child(2) { min-width: 168px; }
+#finTable .in-unit { width: 100%; max-width: 104px; }
+/* 备注列：窄格子里的文本框 + 「图片」按钮 + 附件小标签 */
+#finTable td.fin-remark-cell { min-width: 150px; }
+#finTable .fin-remark {
+  width: 100%;
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  resize: vertical;
+}
+#finTable .fin-remark:focus { border-color: var(--primary); outline: none; }
+#finTable td.fin-remark-cell .attach-bar { margin-top: 4px; gap: 6px; }
+#finTable td.fin-remark-cell .attach-bar .btn { padding: 2px 7px; font-size: 12px; }
+#finTable td.fin-remark-cell .attach-list { margin-top: 4px; gap: 4px; }
+#finTable td.fin-remark-cell .attach-chip { max-width: 100%; padding: 2px 6px; font-size: 11px; }
+
+/* 今日已入库：点「入库」后这一行先隐藏（第二天 0 点自动回来），顶部给一条提示 + 开关 */
+#finTable tr.fin-done-bar td {
+  padding: 6px 9px;
+  background: var(--green-light);
+  font-size: 12.5px;
+}
+
+#finTable tr.fin-done-bar .btn {
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+#finTable tr.fin-row-done {
+  opacity: 0.55;
+}
+
+#finTable tr.fin-row-done td {
+  background: transparent;
+}
+#finTable td.num { white-space: nowrap; }
+#finTable input[type="number"] { text-align: right; }
+/* 填了数量的行高亮：一眼看出今天哪些要入库 */
+#finTable tr.fin-row.fin-on { background: rgba(25, 137, 250, 0.07); }
+#finTable tr.fin-row.fin-on > td { border-top: 1px solid rgba(25, 137, 250, 0.3); }
+#finTable tr.fin-row.fin-on b { color: var(--primary); }
 /* 展示清单管理弹层 */
 .fc-wrap { display: flex; gap: 12px; }
 .fc-pane { flex: 1; min-width: 0; }
@@ -1869,6 +1946,120 @@ th[data-key] .sort-arrow {
   .agg-table tfoot td { background: rgba(255, 255, 255, 0.05); }
 }
 
+/* ============ 芳谊放单仓：逐单刷单结算（导入确认框） ============ */
+.brush-box {
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: rgba(25, 137, 250, 0.06);
+}
+
+.brush-head {
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.brush-head .muted {
+  font-size: 12px;
+}
+
+.brush-batch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  background: var(--card);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.brush-batch input {
+  width: 120px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
+  text-align: right;
+}
+
+.brush-batch input:focus,
+.brush-batch select:focus {
+  border-color: var(--primary);
+  outline: none;
+}
+
+.brush-batch select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
+}
+
+.brush-wrap {
+  max-height: 38vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.brush-table th, .brush-table td {
+  padding: 7px 9px;
+  font-size: 13.5px;
+}
+
+.brush-table th {
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.brush-table tfoot td {
+  background: rgba(0, 0, 0, 0.03);
+  border-top: 1px solid var(--border);
+}
+
+.brush-table input.brush-cost,
+.brush-table input.brush-fee {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
+  text-align: right;
+}
+
+.brush-table input.brush-cost:focus,
+.brush-table input.brush-fee:focus {
+  border-color: var(--primary);
+  outline: none;
+}
+
+.brush-table input.brush-cost::placeholder {
+  text-align: right;
+  font-size: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .brush-table tfoot td { background: rgba(255, 255, 255, 0.05); }
+}
+
 tr.draft-off { 
   opacity: 0.45; 
 }
@@ -2014,6 +2205,84 @@ tr.draft-off {
   display: flex;
   gap: 6px;
   justify-content: flex-end;
+}
+
+/* 待付款账单：日期区间（开始 ~ 结束） */
+.date-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.date-range .muted {
+  font-size: 13px;
+}
+
+/* 日期框为空时，隐藏浏览器自带的「年/月/日」掩码，改用自己的占位文案 */
+.date-pick {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.date-pick .date-ph {
+  position: absolute;
+  left: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+/* 已有值时不显示占位；聚焦时收起占位，露出原生掩码方便键盘输入 */
+.date-pick.has-value .date-ph,
+.date-pick:focus-within .date-ph {
+  display: none;
+}
+
+.date-pick:not(.has-value) input[type="date"]:not(:focus)::-webkit-datetime-edit {
+  color: transparent;
+}
+
+/* 待付款账单：筛选结果实时合计条 */
+.pay-sum {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--primary-50);
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.pay-sum .pay-sum-label {
+  color: var(--muted);
+}
+
+.pay-sum b {
+  font-weight: 600;
+}
+
+.pay-sum .pay-sum-total {
+  color: var(--text-secondary);
+}
+
+.pay-sum .pay-sum-total b {
+  font-size: 18px;
+  color: var(--primary);
+}
+
+.pay-sum .grow {
+  flex: 1;
+}
+
+@media (prefers-color-scheme: dark) {
+  .pay-sum {
+    background: rgba(255, 255, 255, 0.04);
+  }
 }
 
 /* 销售成本构成：堆叠占比条 + 图例圆点 */

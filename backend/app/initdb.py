@@ -427,8 +427,19 @@ _PAY_COLUMNS = (
 # 各表需要补齐的新增列（幂等）：{表名: ((列, DDL), ...)}
 _EXTRA_COLUMNS = {
     # 金额调整（抹零/凑整）：单据金额仍按商品原价，差额单独记「金额调整」的其他开支
-    "inbounds": _PAY_COLUMNS + (("adjust_amount", "FLOAT DEFAULT 0"),),
-    "outbounds": _PAY_COLUMNS + (("adjust_amount", "FLOAT DEFAULT 0"),),
+    # freight/handling：入库运费/装卸费（选填），计入批次成本，并镜像记入「其他开支」供查询
+    "inbounds": _PAY_COLUMNS + (
+        ("adjust_amount", "FLOAT DEFAULT 0"),
+        ("freight", "FLOAT DEFAULT 0"),
+        ("handling", "FLOAT DEFAULT 0"),
+    ),
+    "outbounds": _PAY_COLUMNS + (
+        ("adjust_amount", "FLOAT DEFAULT 0"),
+        # 芳谊放单仓刷单结算：刷单成本 / 结算固定费（快递+包装） / 系统自动固定费快照
+        ("brush_cost", "FLOAT DEFAULT 0"),
+        ("brush_fee", "FLOAT DEFAULT 0"),
+        ("brush_auto_fee", "FLOAT DEFAULT 0"),
+    ),
     # 其他开支：来源单据（入库/出库金额调整自动生成）——单据删除/改日期时按此同步
     "other_expenses": _PAY_COLUMNS + (
         ("ref_type", "VARCHAR(16) DEFAULT ''"),

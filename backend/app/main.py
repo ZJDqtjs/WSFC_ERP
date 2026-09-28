@@ -19,7 +19,7 @@ from .database import (
 from .initdb import ensure_schema, init_warehouse
 from .maintenance import on_service_start, record_request, should_record, start_activity_store
 from .routers import ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, jst_auto, maintenance, others, outbound, pack_rules, payables, product_data, products, report, uploads, warehouse_in, warehouses
-from .routers.backup import create_backup_file, load_config
+from .routers.backup import create_backup_file, create_json_backup_file, load_config
 
 # 桌面 Web 前端目录（WSFC_ERP/web/static，前后端分离；SERVE_STATIC=1 时后端顺带托管）
 STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "web" / "static"
@@ -62,7 +62,7 @@ class WarehouseScopeMiddleware:
 
 
 def _backup_all_warehouses() -> None:
-    """逐个分仓备份。
+    """逐个分仓备份，随后备份 backend/json 目录。
 
     分仓改为"随登录会话"之后，服务端已不存在唯一的"当前仓"，因此自动备份必须覆盖全部
     已注册分仓，否则只有默认仓有备份。
@@ -72,6 +72,14 @@ def _backup_all_warehouses() -> None:
             create_backup_file(w["key"])
         except Exception as e:  # 单个仓失败不影响其他仓
             print(f"[自动备份] {w.get('key')} 失败:", e)
+    # json 目录（含不在 .db 里的业务配置）整目录备份，无变化则内部自动跳过
+    if load_config().get("json_backup_enabled", True):
+        try:
+            name = create_json_backup_file()
+            if name:
+                print(f"[自动备份] json 目录已打包：{name}")
+        except Exception as e:  # noqa: BLE001
+            print("[自动备份] json 目录备份失败:", e)
 
 
 async def auto_backup_loop():

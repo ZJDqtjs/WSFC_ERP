@@ -11,6 +11,7 @@
         <div class="stat"><div class="label">人工种数</div><div class="value">{{ aggLabor.length }}</div></div>
         <div class="stat"><div class="label">销售收入</div><div class="value">{{ fmtMoney(total.amount) }}</div></div>
         <div class="stat"><div class="label">结转成本</div><div class="value">{{ fmtMoney(total.cogs) }}</div></div>
+        <div v-if="total.brush" class="stat danger"><div class="label">刷单成本</div><div class="value">{{ fmtMoney(total.brush) }}</div></div>
         <div class="stat success"><div class="label">净利</div><div class="value">{{ fmtMoney(total.net) }}</div></div>
       </div>
 
@@ -93,19 +94,21 @@ const rows = ref([])
 const kw = ref('')
 const seg = ref('sale')
 
-/** 成本构成小字：代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 其他关联结算 ＋ 快递费（有哪项列哪项） */
+/** 成本构成小字：代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 其他关联结算 ＋ 快递费 ＋ 刷单成本（有哪项列哪项） */
 function costSplitText(a) {
   const express = num(a.express_cogs)
   const labor = num(a.labor_cogs)
   const material = num(a.material_cogs)
   const other = num(a.other_cogs)
-  if (!(a.is_dropship || labor || material || other || express)) return ''
+  const brush = num(a.brush_cogs)   // 芳谊放单仓刷单结算
+  if (!(a.is_dropship || labor || material || other || express || brush)) return ''
   const goods = num(a.base_cogs != null ? a.base_cogs : a.cogs)
   const parts = [`${a.is_dropship ? '代发成本' : '商品成本'} ${fmtMoney(goods)}`]
   if (labor) parts.push(`打包人工 ${fmtMoney(labor)}`)
   if (material) parts.push(`耗材 ${fmtMoney(material)}`)
   if (other) parts.push(`其他关联结算 ${fmtMoney(other)}`)
   if (express) parts.push(`快递费 ${fmtMoney(express)}`)
+  if (brush) parts.push(`刷单成本 ${fmtMoney(brush)}`)
   return parts.join(' ＋ ')
 }
 
@@ -125,7 +128,9 @@ const total = computed(() => {
   const amount = rows.value.reduce((s, o) => s + num(o.total_amount), 0)
   const cogs = rows.value.reduce((s, o) => s + num(o.total_cogs), 0)
   const fee = rows.value.reduce((s, o) => s + num(o.total_fee), 0)
-  return { amount, cogs, fee, net: amount - cogs - fee }
+  // 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差）：净利里已扣掉，单独列出便于核对
+  const brush = rows.value.reduce((s, o) => s + num(o.brush_adjust), 0)
+  return { amount, cogs, fee, brush, net: amount - cogs - fee - brush }
 })
 
 /* ---------------- 聚合（与桌面端口径一致） ---------------- */
@@ -210,6 +215,7 @@ const aggSale = computed(() => {
     a.material_cogs = 0
     a.other_cogs = 0
     a.express_cogs = 0
+    a.brush_cogs = 0   // 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差）
     if (!byPid.has(a.pid)) byPid.set(a.pid, [])
     byPid.get(a.pid).push(a)
   })
@@ -243,11 +249,18 @@ const aggSale = computed(() => {
         }
       }
     }
+    // 芳谊放单仓刷单结算：整单金额按该单销售金额占比分摊到商品（与后端 report.py 同口径）
+    if (num(o.brush_adjust) && saleLines.length) {
+      for (const sl of saleLines) {
+        const share = totalAmt ? num(sl.amount) / totalAmt : 1 / saleLines.length
+        spread(sl.product_id, num(o.brush_adjust) * share, 'brush_cogs')
+      }
+    }
   }
   return data.map((a) => {
     const base_cogs = a.cogs
     a.pack_cogs = a.labor_cogs + a.material_cogs + a.other_cogs   // 兼容旧字段：人工+耗材
-    const cogs = base_cogs + a.pack_cogs + a.express_cogs
+    const cogs = base_cogs + a.pack_cogs + a.express_cogs + a.brush_cogs
     const denom = a.gross_sales || a.amount || 0
     const gp = a.amount - cogs
     return { ...a, base_cogs, cogs, gpRate: denom ? (gp / denom) * 100 : 0 }

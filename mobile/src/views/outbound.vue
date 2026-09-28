@@ -325,6 +325,56 @@ const batchState = {
             </div>
             <div v-if="p.deduct" class="muted" style="font-size:11px;">{{ p.deduct }}</div>
           </div>
+
+          <!-- 芳谊放单仓：逐单填「我刷这单的成本」，实时算结算价与最终利润 -->
+          <div v-if="brushOrders.length" class="brush-box">
+            <div class="bold" style="font-size:13.5px;">
+              💳 {{ brushWh.join('、') }} · 逐单刷单结算（{{ brushOrders.length }} 单）
+            </div>
+            <div class="muted" style="font-size:11px;margin:4px 0;">
+              结算价 = 结算收入（已扣店铺扣点） − 快递+包装固定费；利润 = 结算价 − 刷单成本。
+              已填 {{ brushFilled }} / {{ brushOrders.length }} 单，未填按 0 计；也可以只填「本次刷单总成本」用下面的「按总额分摊」自动摊到各单。
+              这些金额会写进出库单并进报表。
+            </div>
+            <!-- 一键批量①：每单同一个成本 -->
+            <div class="brush-batch">
+              <van-field v-model="batchBrushCost" type="number" placeholder="每单同一个成本，如 1475" input-align="right" style="flex:1;" />
+              <van-button size="mini" type="primary" @click="brushApply(false)">应用到全部 {{ brushOrders.length }} 单</van-button>
+            </div>
+            <div class="row" style="gap:8px;margin:6px 0 2px;">
+              <van-button size="mini" plain @click="brushApply(true)">只填未填的</van-button>
+              <van-button size="mini" plain @click="brushClearCost">清空成本</van-button>
+            </div>
+            <!-- 一键批量②：只填本次刷单总成本，自动分摊到各单 -->
+            <div class="brush-batch">
+              <van-field v-model="batchBrushTotal" type="number" placeholder="本次刷单总成本，如 3000" input-align="right" style="flex:1;" />
+              <select v-model="brushSplitMode" class="brush-mode">
+                <option value="revenue">按结算收入占比</option>
+                <option value="avg">平均分摊</option>
+              </select>
+              <van-button size="mini" type="primary" @click="brushDistribute">按总额分摊</van-button>
+            </div>
+            <div v-for="(o, bi) in brushOrders" :key="'brush' + bi" class="brush-row">
+              <div class="row">
+                <span class="grow ellipsis bold">{{ o.doc_no || '（无单号）' }}</span>
+                <span class="muted">{{ o.date }}</span>
+              </div>
+              <div class="muted ellipsis" style="font-size:11px;">{{ brushGoods(o) }}</div>
+              <div class="row" style="gap:6px;align-items:center;margin-top:4px;">
+                <span class="muted" style="font-size:11px;white-space:nowrap;">结算 {{ fmtMoney(brushIncome(o)) }}</span>
+                <van-field v-model="o.brush_fee" type="number" label="快递+包装" label-width="66" input-align="right" style="flex:1;" />
+                <van-field v-model="o.brush_cost" type="number" label="刷单成本" label-width="66" input-align="right" placeholder="我刷这单的成本" style="flex:1.2;" />
+              </div>
+              <div class="row" style="justify-content:flex-end;gap:4px;">
+                <span class="muted" style="font-size:12px;">利润</span>
+                <span class="bold" :style="{ color: brushProfit(o) >= 0 ? '#07c160' : '#ee0a24' }">{{ fmtMoney(brushProfit(o)) }}</span>
+              </div>
+            </div>
+            <div class="row" style="justify-content:space-between;border-top:1px dashed #e5e5e5;padding-top:6px;">
+              <span class="bold">合计利润</span>
+              <span class="bold" :style="{ color: brushTotalProfit >= 0 ? '#07c160' : '#ee0a24' }">{{ fmtMoney(brushTotalProfit) }}</span>
+            </div>
+          </div>
         </template>
 
         <template v-else-if="batchOrders.length">
@@ -357,7 +407,12 @@ const batchState = {
             </div>
           </div>
           <div v-if="batchKind === 'jushuitan'" style="margin-top:8px;">
-            <van-button size="mini" plain type="primary" :loading="aiPreviewing" @click="aiAutoPreview">重新生成 AI 方案</van-button>
+            <div v-if="brushHit.length" class="muted" style="font-size:12px;margin-bottom:6px;">
+              本文件含放单仓单据（{{ brushHit.join('、') }}），已<b>不自动</b>跑 AI 归并（放单仓商品名多是占位名，自动新增会建出垃圾商品）——这些商品请点「去新增商品」新建，或到「聚水潭关联」页手动关联。
+            </div>
+            <van-button size="mini" plain type="primary" :loading="aiPreviewing" @click="aiAutoPreview">
+              {{ brushHit.length ? '仍要跑一次 AI 归并' : '重新生成 AI 方案' }}
+            </van-button>
           </div>
         </div>
 
@@ -779,7 +834,7 @@ const BATCH_CFG = {
     tpl: '',
     preview: '/api/jushuitan/import/preview',
     confirm: '/api/jushuitan/import/confirm',
-    hint: '上传聚水潭导出的「销售出库单_*.xlsx」，自动识别商品并按件数×每件规格结算。先解析预览（自动试算 AI 新增方案），确认后才出库。未关联商品可点「去新增商品」新建，或一键确认 AI 自动新增。',
+    hint: '上传聚水潭导出的「销售出库单_*.xlsx」，自动识别商品并按件数×每件规格结算。先解析预览（自动试算 AI 新增方案），确认后才出库。未关联商品可点「去新增商品」新建，或一键确认 AI 自动新增。「仓储方」为芳谊放单仓的订单，确认框里会逐单让你填刷单成本并核算利润。',
   },
 }
 const batchKind = ref(batchState.kind)
@@ -796,6 +851,12 @@ const batchSkip = ref(batchState.skip)
 const aiPlan = ref(batchState.aiPlan)
 const aiPreviewing = ref(false)
 const aiApplying = ref(false)
+// 放单仓名单（后端下发，见 backend/app/brush.py）：这些「仓储方」的订单要逐单填刷单成本
+const brushWh = ref([])
+const brushHit = ref([])      // 本次解析命中的放单仓（有它就不自动跑 AI 归并）
+const batchBrushCost = ref('') // 一键批量①：每单同一个刷单成本
+const batchBrushTotal = ref('') // 一键批量②：本次刷单总成本
+const brushSplitMode = ref('revenue') // 总成本分摊方式：revenue 按结算收入占比 / avg 平均
 
 const batchCfg = computed(() => BATCH_CFG[batchKind.value])
 const batchAllOn = computed(() => batchOrders.value.length > 0 && batchOrders.value.every((o) => o._on))
@@ -828,6 +889,53 @@ const aggProducts = computed(() => {
 })
 const aggTotalAmount = computed(() => aggProducts.value.reduce((s, x) => s + x.amount, 0))
 
+/* ---------- 芳谊放单仓：逐单刷单结算（结算价 = 结算收入 − 快递+包装固定费；利润 = 结算价 − 刷单成本） ---------- */
+const brushOrders = computed(() => batchOrders.value.filter((o) => o.warehouse && brushWh.value.includes(o.warehouse)))
+function brushIncome(o) { return (o.lines || []).reduce((s, l) => s + num(l.amount), 0) }
+function brushGoods(o) {
+  return (o.lines || []).map((l) => `${l.product_name || ''} × ${fmtNum(l.quantity)}${l.unit || ''}`).join(' ／ ')
+}
+function brushProfit(o) { return brushIncome(o) - num(o.brush_fee) - num(o.brush_cost) }
+const brushTotalProfit = computed(() => brushOrders.value.reduce((s, o) => s + brushProfit(o), 0))
+const brushFilled = computed(() => brushOrders.value.filter((o) => num(o.brush_cost) > 0).length)
+/* 一键批量：同一个刷单成本填到各单（onlyBlank=true 只补还没填的），单子多时先统一填再挑个别改 */
+function brushApply(onlyBlank) {
+  if (String(batchBrushCost.value).trim() === '') { showToast('请先填一个刷单成本，如 1475'); return }
+  const v = num(batchBrushCost.value)
+  let n = 0
+  brushOrders.value.forEach((o) => {
+    if (onlyBlank && num(o.brush_cost) > 0) return
+    o.brush_cost = String(v)
+    n++
+  })
+  showToast(n ? `已把刷单成本 ${fmtMoney(v)} 填到 ${n} 单` : '没有需要填的单（都已填过）')
+}
+/* 只填「本次刷单总成本」，按结算收入占比（推荐）或平均分摊到各单，不用逐单输；
+   尾差落在最大的一单上，保证各单之和 == 你填的总额 */
+function brushDistribute() {
+  if (String(batchBrushTotal.value).trim() === '') { showToast('请先填本次刷单总成本，如 3000'); return }
+  const total = num(batchBrushTotal.value)
+  const list = brushOrders.value
+  if (!list.length) return
+  const w = list.map((o) => (brushSplitMode.value === 'avg' ? 1 : brushIncome(o)))
+  if (brushSplitMode.value !== 'avg' && !w.some((x) => x > 0)) { showToast('这些单没有结算收入，请改用「平均分摊」'); return }
+  const sum = w.reduce((s, x) => s + x, 0) || 1
+  const vals = w.map((x) => Math.round(total * (x / sum) * 100) / 100)
+  const diff = Math.round((total - vals.reduce((s, x) => s + x, 0)) * 100) / 100
+  if (diff) {
+    let k = 0
+    vals.forEach((v, i) => { if (v > vals[k]) k = i })
+    vals[k] = Math.round((vals[k] + diff) * 100) / 100
+  }
+  list.forEach((o, i) => { o.brush_cost = String(vals[i]) })
+  showToast(`已按${brushSplitMode.value === 'avg' ? '平均' : '结算收入占比'}把总额 ${fmtMoney(total)} 分摊到 ${list.length} 单`)
+}
+function brushClearCost() {
+  let n = 0
+  brushOrders.value.forEach((o) => { if (num(o.brush_cost) > 0) { o.brush_cost = ''; n++ } })
+  showToast(n ? `已清空 ${n} 单的刷单成本` : '本来就没填')
+}
+
 // 把当前解析状态写回模块级单例，供离开页面（去新增商品）后返回时恢复
 function syncBatch() {
   batchState.kind = batchKind.value
@@ -855,6 +963,10 @@ function resetBatch(kind) {
   batchUnmapped.value = []
   batchSkip.value = {}
   aiPlan.value = null
+  brushWh.value = []
+  brushHit.value = []
+  batchBrushCost.value = ''
+  batchBrushTotal.value = ''
   batchState.aiSig = ''
   syncBatch()
 }
@@ -881,14 +993,22 @@ async function runParse(f) {
   aiPlan.value = null
   try {
     const r = await upload(batchCfg.value.preview, f)
-    batchOrders.value = (r.orders || []).map((o) => ({ ...o, _on: true }))
+    brushWh.value = r.brush_warehouse_names || []
+    brushHit.value = r.brush_warehouses || []
+    // 放单仓订单：带出「快递+包装固定费」的自动值（可改）与「刷单成本」输入位
+    batchOrders.value = (r.orders || []).map((o) => ({
+      ...o, _on: true,
+      brush_fee: o.brush_fee_auto != null ? String(o.brush_fee_auto) : '0',
+      brush_cost: '',
+    }))
     batchFailed.value = r.failed || []
     batchUnmapped.value = r.unmapped_codes || []
     batchSkip.value = r.skip || {}
     syncBatch()
     if (!batchOrders.value.length) showToast('未解析出可出库的单据')
-    // 聚水潭：解析后自动试算 AI 新增方案（不落库），把方案交给用户确认；同一批未关联只自动试算一次
-    if (batchKind.value === 'jushuitan' && batchUnmapped.value.length) {
+    // 聚水潭：解析后自动试算 AI 新增方案（不落库），把方案交给用户确认；同一批未关联只自动试算一次。
+    // 放单仓单据（仓储方=芳谊放单仓）不自动跑：平台商品名多是放单仓占位名，自动新增会建出垃圾商品。
+    if (batchKind.value === 'jushuitan' && batchUnmapped.value.length && !brushHit.value.length) {
       const sig = batchUnmapped.value.slice().sort().join('\u0001')
       if (sig !== batchState.aiSig) { batchState.aiSig = sig; aiAutoPreview() }
     }
@@ -951,6 +1071,10 @@ async function confirmBatch() {
         pack_rule_id: o.pack_rule_id || null,
         pack_rule_name: o.pack_rule_name || '',
         pack_lines: o.pack_lines || [],
+        // 放单仓：仓储方 + 我刷这单的成本 + 本单结算用的「快递+包装固定费」
+        warehouse: o.warehouse || '',
+        brush_cost: num(o.brush_cost),
+        brush_fee: num(o.brush_fee),
       }
     })
     .filter((o) => o.lines.length)
@@ -1000,6 +1124,17 @@ onActivated(() => { if (tab.value === 'list') loadList() })
 .agg-row:last-child { border-bottom: none; }
 .agg-row .bold { font-size: 13.5px; }
 .agg-row .muted { font-size: 12px; }
+/* 芳谊放单仓逐单刷单结算 */
+.brush-box { background: #f0f7ff; border-radius: 8px; padding: 10px; margin-top: 8px; }
+.brush-batch { display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; }
+.brush-batch :deep(.van-field) { padding: 4px 8px; background: #fff; border-radius: 6px; }
+.brush-batch :deep(.van-button) { flex: none; }
+.brush-mode { padding: 5px 4px; font-size: 12px; border: none; border-radius: 6px; background: #fff; color: #323233; }
+.brush-row { padding: 8px 0; border-bottom: 1px solid #e8eef7; }
+.brush-row:last-of-type { border-bottom: none; }
+.brush-row .muted { font-size: 12px; }
+.brush-row :deep(.van-field) { padding: 2px 6px; background: #fff; border-radius: 6px; }
+.brush-row :deep(.van-field__label) { font-size: 11px; color: #969799; }
 .detail-box { background: #f7f8fa; border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
 .detail-line { padding: 5px 0; border-bottom: 1px solid #ececec; font-size: 13px; }
 .detail-line:last-child { border-bottom: none; }

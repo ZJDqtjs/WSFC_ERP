@@ -6,8 +6,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_user
+from ..brush import brush_adjust, brush_fee_of
 from ..database import get_db
-from ..models import FinanceRecord, OtherExpense, Outbound, OutboundLine, Product, StockMovement, User
+from ..models import DropshipBill, FinanceRecord, OtherExpense, Outbound, OutboundLine, Product, StockMovement, User
 from ..services import build_order, create_outbound, pay_fields, purge_outbounds, recompute_product, sync_doc_edit
 
 router = APIRouter(prefix="/api/outbounds", tags=["outbound"])
@@ -65,6 +66,9 @@ class BatchIds(BaseModel):
 def _to_dict(o: Outbound) -> dict:
     remark = o.remark or ""
     is_multi = "一单多货" in remark
+    # 实收金额（收入 + 抹零/凑整）与工单刷单结算的额外扣减（非放单仓订单 adj=0）
+    brush_final = round((o.total_amount or 0.0) + (getattr(o, "adjust_amount", 0.0) or 0.0), 2)
+    adj = brush_adjust(o)
     multi_rule = o.pack_rule_name or ""
     if not multi_rule and "一单多货·规则：" in remark:
         multi_rule = remark.split("一单多货·规则：", 1)[1].split("）", 1)[0]
@@ -89,9 +93,20 @@ def _to_dict(o: Outbound) -> dict:
         "total_fee": o.total_fee,
         "pay_status": getattr(o, "pay_status", "paid") or "paid",
         "paid_at": getattr(o, "paid_at", "") or "",
-        # 毛利/净利按实收口径（total_amount + 抹零/凑整调整），与列表「收入」列自洽
-        "gross_profit": round((o.total_amount or 0.0) + (getattr(o, "adjust_amount", 0.0) or 0.0) - o.total_cogs, 2),
-        "net_profit": round((o.total_amount or 0.0) + (getattr(o, "adjust_amount", 0.0) or 0.0) - o.total_cogs - o.total_fee, 2),
+        # 毛利/净利按实收口径（total_amount + 抹零/凑整调整），与列表「收入」列自洽；
+        # 芳谊放单仓的单子再扣掉「刷单结算」（刷单成本 + 固定费覆盖差，见 app/brush.py）
+        "gross_profit": round(brush_final - o.total_cogs - adj, 2),
+        "net_profit": round(brush_final - o.total_cogs - o.total_fee - adj, 2),
+        # 刷单结算（非放单仓订单三列都是 0）：brush_cost=我刷这单的成本，
+        # brush_fee=本单结算用的「快递+包装固定费」（= brush_auto_fee 时表示没覆盖），
+        # settle_amount=这单结算给我多少（收入 − 固定费），brush_profit=结算 − 刷单成本
+        "brush_cost": round(float(getattr(o, "brush_cost", 0.0) or 0.0), 2),
+        "brush_fee": round(brush_fee_of(o), 2),
+        "brush_auto_fee": round(float(getattr(o, "brush_auto_fee", 0.0) or 0.0), 2),
+        "is_brush_order": bool(getattr(o, "brush_auto_fee", 0.0)),
+        "brush_adjust": adj,
+        "settle_amount": round(brush_final - brush_fee_of(o), 2),
+        "brush_profit": round(brush_final - brush_fee_of(o) - float(getattr(o, "brush_cost", 0.0) or 0.0), 2),
         # 是否含代发行（订单商品未关联库存大类：不扣库存，只记代发数量/成本）
         "has_dropship": any(bool(getattr(l, "is_dropship", False)) for l in o.lines),
         "lines": [
@@ -188,6 +203,9 @@ def delete_outbound(oid: int, db: Session = Depends(get_db), user: User = Depend
     # 金额调整带出的其他开支一并删除，避免删单后报表还挂着这笔调整
     for e in db.execute(select(OtherExpense).where(OtherExpense.ref_type == "outbound", OtherExpense.ref_id == oid)).scalars():
         db.delete(e)
+    # 代发商品带出的应付账单一并删除
+    for b in db.execute(select(DropshipBill).where(DropshipBill.outbound_id == oid)).scalars():
+        db.delete(b)
     db.delete(rec)
     for pid in affected:
         recompute_product(db, pid)

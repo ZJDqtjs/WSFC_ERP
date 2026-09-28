@@ -89,6 +89,12 @@ class Inbound(Base):
     # 金额调整（抹零/凑整）：正=多付给供应商，负=少付。实付金额 = total_amount + adjust_amount；
     # 商品成本仍按 total_amount（不变），差额自动记一笔「金额调整」的其他开支（见 services.create_inbound）
     adjust_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    # 入库运费 / 装卸费（选填）：计入该批次的到岸成本（StockMovement.amount = 商品金额 + 这两项），
+    # FIFO 结转后自动体现在该品的毛利与库存均价上；同时在「其他开支」生成 ref_type="inbound_fee"
+    # 的镜像行供查询（报表期间费用会排除镜像行，避免与成本口径重复扣减，见 services/报告聚合）。
+    # 与金额调整不同：调整差额不改成本、只记开支；运费/装卸费改成本、镜像行不重复进期间费用。
+    freight: Mapped[float] = mapped_column(Float, default=0.0)
+    handling: Mapped[float] = mapped_column(Float, default=0.0)
     supplier: Mapped[str] = mapped_column(String(64), default="")
     operator: Mapped[str] = mapped_column(String(32), default="")
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
@@ -121,6 +127,13 @@ class Outbound(Base):
     adjust_amount: Mapped[float] = mapped_column(Float, default=0.0)
     total_cogs: Mapped[float] = mapped_column(Float, default=0.0)  # 商品成本+包装材料成本
     total_fee: Mapped[float] = mapped_column(Float, default=0.0)  # 人工/打包等固定费用
+    # 芳谊放单仓「刷单结算」（口径见 app/brush.py）：
+    #   brush_cost=我刷这单的成本（导入确认时手填）；brush_fee=本单结算用的「快递+包装固定费」
+    #   （0=用系统自动值，用户可覆盖）；brush_auto_fee=出库时系统自动算出的快递+包装费快照（用于还原覆盖差额）。
+    # 非放单仓订单三列都是 0，对利润无影响。
+    brush_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    brush_fee: Mapped[float] = mapped_column(Float, default=0.0)
+    brush_auto_fee: Mapped[float] = mapped_column(Float, default=0.0)
     # 付款状态：paid 已付款/已回款（默认，整单进报表）/ unpaid 待付款（未回款，整单先进待付款账单，不进报表）
     pay_status: Mapped[str] = mapped_column(String(8), default="paid")
     paid_at: Mapped[str] = mapped_column(String(10), default="")
@@ -156,6 +169,41 @@ class OutboundLine(Base):
 
     outbound: Mapped[Outbound] = relationship(back_populates="lines")
     product: Mapped[Product] = relationship()
+
+
+class DropshipBill(Base):
+    """代发应付账单（待付款 → 代发页签的数据源）。
+
+    出库单里命中「代发商品」（订单小类没关联库存大类 stock_links）的销售行，按「商品 × 规格」
+    自动生成一条：金额 = 该行代发成本 cogs = 成本单价(每基础单位) × 基础数量。
+
+    口径说明：代发成本本来就已计入该出库单的结转成本（OutboundLine.cogs / Outbound.total_cogs，
+    报表毛利口径不变），这张表只是把「要付给代发方的钱」登记成待付款项，方便按规格核对付款；
+    因此它不参与报表的期间费用聚合。付款状态独立于出库单（出库单的 pay_status 是客户回款）。
+    随出库单同步：改日期/操作员跟着改，删单级联删除。
+    """
+
+    __tablename__ = "dropship_bills"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    outbound_id: Mapped[int] = mapped_column(ForeignKey("outbounds.id"), index=True)
+    outbound_code: Mapped[str] = mapped_column(String(32), default="")
+    date: Mapped[str] = mapped_column(String(10), index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
+    product_name: Mapped[str] = mapped_column(String(128), default="")  # 下单时的商品名快照
+    spec: Mapped[str] = mapped_column(String(64), default="")  # 规格（每件2斤 等；空=无规格）
+    unit: Mapped[str] = mapped_column(String(32), default="")
+    base_unit: Mapped[str] = mapped_column(String(32), default="")  # 基础单位快照（成本单价按它计）
+    quantity: Mapped[float] = mapped_column(Float, default=0.0)  # 单量（按下单单位）
+    quantity_base: Mapped[float] = mapped_column(Float, default=0.0)  # 折算基础单位数量
+    unit_cost: Mapped[float] = mapped_column(Float, default=0.0)  # 成本单价（每基础单位）
+    amount: Mapped[float] = mapped_column(Float, default=0.0)  # 应付金额 = 单价 × 量（= 该行 cogs）
+    sale_price: Mapped[float] = mapped_column(Float, default=0.0)  # 销售单价（核对参考，不计入应付）
+    sale_amount: Mapped[float] = mapped_column(Float, default=0.0)  # 销售金额（核对参考）
+    operator: Mapped[str] = mapped_column(String(32), default="")
+    pay_status: Mapped[str] = mapped_column(String(8), default="unpaid")  # unpaid 待付代发方 / paid 已付
+    paid_at: Mapped[str] = mapped_column(String(10), default="")  # 标记已支付那天（YYYY-MM-DD）
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
 class StockMovement(Base):

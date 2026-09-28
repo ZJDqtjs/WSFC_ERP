@@ -238,47 +238,17 @@
       <section id="page-inbound" class="page">
         <div class="card">
           <div class="card-head">
-            <h3>新增入库单</h3><span class="hint">按采购单位录入，系统自动折算到基础单位</span>
-            <button class="btn secondary" style="margin-left:auto;" onclick="openBatchModal('inbound')"><svg class="ic"><use href="#i-download"/></svg> 批量入库</button>
+            <h3>新增入库单</h3><span class="hint">按采购单位录入；一行 = 一张入库单</span>
+            <button class="btn secondary" style="margin-left:auto;" onclick="openFreshInbound()" title="每天把要入库的鲜货数量填进去；陈列哪些商品可自行挑选"><svg class="ic"><use href="#i-in"/></svg> 鲜货入库</button>
+            <button class="btn secondary" onclick="openBatchModal('inbound')"><svg class="ic"><use href="#i-download"/></svg> 批量入库</button>
           </div>
-          <div class="form-grid">
-            <div class="field">
-              <label>商品 *</label>
-              <input id="inProduct" readonly placeholder="＋ 点击选择商品" onclick="openInboundPicker()" style="cursor:pointer;background:var(--primary-50);" />
-              <div class="field-hint" id="inStockHint"></div>
-            </div>
-            <div class="field"><label>进货单位 *</label><select id="inUnit" class="searchable"></select><div class="field-hint" id="inUnitHint"></div></div>
-            <div class="field"><label>数量 *</label><input id="inQty" type="number" min="0" step="any" placeholder="0" oninput="calcInbound()" /></div>
-            <div class="field"><label>单价（所选单位）*</label><input id="inPrice" type="number" min="0" step="any" placeholder="0.00" oninput="calcInbound()" /><div class="field-hint" id="inPriceHint"></div></div>
-            <div class="field"><label>金额</label><input id="inAmount" readonly /></div>
-            <div class="field">
-              <label>调整（抹零 / 凑整）</label>
-              <input id="inAdjust" type="number" step="any" placeholder="0.00" oninput="calcInbound()" />
-              <div class="field-hint" id="inAdjustHint">正=多付，负=少付；差额自动记「金额调整」其他开支，商品成本不变</div>
-            </div>
-            <div class="field"><label>供应商</label><input id="inSupplier" placeholder="供应商名称" /></div>
-            <div class="field"><label>日期 *</label><input id="inDate" type="date" /></div>
-            <div class="field"><label>操作员</label><input id="inOperator" readonly title="默认当前登录账号，不可修改" /></div>
-            <div class="field">
-              <label>付款状态</label>
-              <div class="pay-radios">
-                <label class="pay-radio on"><input type="radio" name="inPay" value="paid" checked onchange="payRadioSync(this)" /> 已付款</label>
-                <label class="pay-radio"><input type="radio" name="inPay" value="unpaid" onchange="payRadioSync(this)" /> 待付款</label>
-              </div>
-              <div class="field-hint">待付款：先进「待付款账单」，点「已支付」后才计入财务报表</div>
-            </div>
-          </div>
-          <div class="field" style="margin-top:12px;">
-            <label>备注</label>
-            <textarea id="inRemark" rows="1" placeholder="可选" onpaste="pasteRemarkFiles('inRemark', event)"></textarea>
-            <div class="attach-bar">
-              <button type="button" class="btn sm secondary" onclick="$('inRemarkFile').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 图片 / 附件</button>
-              <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），可直接 Ctrl+V 粘贴</span>
-              <input type="file" id="inRemarkFile" multiple style="display:none;" onchange="uploadRemarkFiles('inRemark', this)" />
-            </div>
-            <div class="attach-list" id="inRemarkFiles"></div>
+          <div id="inBlocks"></div>
+          <div class="toolbar" style="margin-top:4px;">
+            <button class="btn secondary" onclick="addInboundBlock()">＋ 添加一行</button>
+            <span class="muted">一行 = 一张入库单：商品 / 进货单位 / 数量 / 单价 / 金额 / 调整 / 运费 / 装卸费 / 供应商 / 日期 / 操作员 / 付款状态 / 备注附件</span>
           </div>
           <div id="inAlert" class="alert" style="display:none;"></div>
+          <div id="inTotal" class="fresh-summary" style="display:none;"></div>
           <div class="form-actions"><button class="btn green" onclick="submitInbound()">✓ 确认入库</button></div>
         </div>
 
@@ -762,21 +732,66 @@
         <div class="card">
           <div class="card-head">
             <h3><svg class="ic"><use href="#i-bill"/></svg> 待付款账单</h3>
-            <span class="hint" id="payHint">入库 / 入仓 / 出库 / 其他开支 / 手动记账 里勾了「待付款」的单据都汇总在这里；点「已支付」后按原日期纳入财务报表</span>
+            <span class="hint" id="payHint">入库 / 入仓 / 出库 / 其他开支 / 手动记账 里勾了「待付款」的单据，以及出库单里代发商品自动带出的「代发成本」，都汇总在这里；点「已支付」后按原日期纳入财务报表。上方统计卡是全部待结清，下方「合计」随日期 / 关键词筛选实时更新；已结清只载入最近 30 天</span>
             <div class="grow"></div>
             <button class="btn secondary" onclick="loadPayablesPage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
           </div>
           <div class="toolbar">
-            <div class="seg" id="paySeg" style="margin-bottom:0;">
-              <button class="seg-item active" data-view="unpaid" onclick="paySwitchView(this)">待结清</button>
-              <button class="seg-item" data-view="all" onclick="paySwitchView(this)">含最近已结清</button>
+            <div class="seg" id="payTabSeg" style="margin-bottom:0;">
+              <button class="seg-item active" data-panel="pay-panel-bill" onclick="payTab(this)">账单</button>
+              <button class="seg-item" data-panel="pay-panel-dropship" onclick="payTab(this)">代发</button>
             </div>
-            <input id="paySearch" placeholder="🔍 筛选 款项 / 单据 / 客户 / 操作员..." oninput="renderPayables()" />
-            <div class="grow"></div>
-            <span class="muted" id="paySum"></span>
+            <span class="grow"></span>
+            <span class="muted" id="payTabHint"></span>
           </div>
-          <div id="payAlert" class="alert warn" style="display:none;"></div>
-          <div class="table-wrap"><table id="payTable"></table></div>
+
+          <!-- 账单：各处勾了「待付款」的单据；点「已支付」后纳入财务报表 -->
+          <div id="pay-panel-bill">
+            <div class="toolbar">
+              <div class="seg" id="paySeg" style="margin-bottom:0;">
+                <button class="seg-item active" data-view="unpaid" onclick="paySwitchView(this)">待结清</button>
+                <button class="seg-item" data-view="all" onclick="paySwitchView(this)">含最近已结清</button>
+              </div>
+              <input id="paySearch" placeholder="🔍 筛选 款项 / 单据 / 客户 / 操作员..." style="flex:1 1 220px;min-width:220px;" oninput="renderPayables()" />
+              <span class="date-range" title="按单据日期筛选">
+                <span class="date-pick"><input id="payFrom" type="date" onchange="renderPayables()" /><span class="date-ph">开始</span></span>
+                <span class="muted">至</span>
+                <span class="date-pick"><input id="payTo" type="date" onchange="renderPayables()" /><span class="date-ph">结束</span></span>
+              </span>
+              <button class="btn sm secondary" onclick="payClearFilter()">清空筛选</button>
+              <span class="grow"></span>
+              <button class="btn sm green" onclick="payBatch(true)"><svg class="ic"><use href="#i-check"/></svg> 批量标记已支付</button>
+              <button class="btn sm secondary" onclick="payBatch(false)">批量撤销</button>
+            </div>
+            <!-- 筛选结果实时合计（按日期 / 关键词筛选后立刻重算） -->
+            <div class="pay-sum" id="paySum"></div>
+            <div id="payAlert" class="alert warn" style="display:none;"></div>
+            <div class="table-wrap"><table id="payTable"></table></div>
+          </div>
+
+          <!-- 代发：出库单里命中代发商品（关联结算未挂库存大类）的成本，按出库单列出每款规格的「单价 × 单量 = 金额」 -->
+          <div id="pay-panel-dropship" style="display:none;">
+            <div class="toolbar">
+              <div class="seg" id="dsSeg" style="margin-bottom:0;">
+                <button class="seg-item active" data-view="unpaid" onclick="dsSwitchView(this)">待结清</button>
+                <button class="seg-item" data-view="all" onclick="dsSwitchView(this)">含已结清</button>
+              </div>
+              <input id="dsSearch" placeholder="🔍 筛选 商品 / 规格 / 出库单 / 操作员..." style="flex:1 1 220px;min-width:220px;" oninput="renderDropshipBills()" />
+              <span class="date-range" title="按出库单日期筛选">
+                <span class="date-pick"><input id="dsFrom" type="date" onchange="renderDropshipBills()" /><span class="date-ph">开始</span></span>
+                <span class="muted">至</span>
+                <span class="date-pick"><input id="dsTo" type="date" onchange="renderDropshipBills()" /><span class="date-ph">结束</span></span>
+              </span>
+              <button class="btn sm secondary" onclick="dsClearFilter()">清空筛选</button>
+              <span class="grow"></span>
+              <button class="btn sm green" onclick="dsBatchPay(true)"><svg class="ic"><use href="#i-check"/></svg> 批量标记已支付</button>
+              <button class="btn sm secondary" onclick="dsBatchPay(false)">批量撤销</button>
+            </div>
+            <div class="pay-sum" id="dsSum"></div>
+            <div id="dsAlert" class="alert warn" style="display:none;"></div>
+            <p class="hint" style="margin-top:4px;">同一种商品和规格已合并成一行：应付 = 成本单价 × 单量 = 代发成本（出库单里代发商品的成本，已计入结转成本、毛利口径不变）；这里只做「付给代发方」的核对，付款状态不影响财务报表。</p>
+            <div class="table-wrap"><table id="dsTable"></table></div>
+          </div>
         </div>
       </section>
 
@@ -838,9 +853,27 @@
               <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
                 保留 <input type="number" id="bkKeep" min="1" style="width:72px;" /> 份
               </label>
+              <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
+                <input type="checkbox" id="bkRemoteEnabled" onchange="toggleRemoteBackup()" /> 开启远程备份
+              </label>
+              <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;" title="把 backend/json 目录（含 jst_auto/店铺扣点/鲜货清单等不在数据库里的配置）打包，随每次备份一并保存到 data/backups 并推送远程">
+                <input type="checkbox" id="bkJsonEnabled" /> 备份 json 目录
+              </label>
               <button class="btn" onclick="saveBkConfig()">保存设置</button>
               <div class="grow"></div>
               <button class="btn green" onclick="createBackup()"><svg class="ic"><use href="#i-save"/></svg> 立即备份</button>
+            </div>
+            <div id="bkRemoteBox" style="display:none;margin-top:10px;padding:10px 12px;border:1px dashed #c9ced6;border-radius:8px;">
+              <div class="toolbar">
+                <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
+                  目标服务器 <input type="text" id="bkRemoteUrl" placeholder="如 1.2.3.4:8080/cloudback" style="width:280px;" />
+                </label>
+                <button class="btn" onclick="downloadRemoteScript('deploy')"><svg class="ic"><use href="#i-save"/></svg> 下载部署脚本</button>
+                <button class="btn" onclick="downloadRemoteScript('stop')">下载停止脚本</button>
+              </div>
+              <p class="hint" style="margin-top:8px;">
+                填写接收端地址：<code>ip:端口/路径</code>（如 <code>1.2.3.4:8080/cloudback</code>，对应接收端监听端口与路径前缀）。保存设置后点「下载部署脚本」，上传到备份服务器执行即可一键部署接收端；远程服务器最多保留 100 份，超出的旧备份自动清理。
+              </p>
             </div>
             <p class="hint" id="bkStatus" style="margin-top:10px;"></p>
           </div>
@@ -1153,6 +1186,49 @@
           </div>
           <div class="fresh-summary" id="freshSummary" style="display:none;"></div>
           <div class="table-wrap"><table id="freshTable"></table></div>
+        </div>
+      </section>
+
+      <!-- 鲜货入库（二级页，入口在「出库 / 销售」页右上角） -->
+      <section id="page-fresh-in" class="page">
+        <div class="card">
+          <div class="card-head">
+            <h3>鲜货入库</h3>
+            <span class="hint">只有在「管理展示商品」里挑过的鲜货才会出现在下面表格；填数量即可入库，单价自动带出（最近入库价 → 参考成本，可改），运费 / 装卸费默认空</span>
+            <button class="btn secondary" style="margin-left:auto;" onclick="openFreshConfig()"><svg class="ic"><use href="#i-sliders"/></svg> 管理展示商品</button>
+            <button class="btn secondary" onclick="loadFreshInbound()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+            <button class="btn secondary" onclick="goPage('outbound');loadOutbounds()">← 返回出库列表</button>
+          </div>
+          <div class="form-grid">
+            <div class="field"><label>日期 *</label><input id="finDate" type="date" /></div>
+            <div class="field"><label>供应商</label><input id="finSupplier" placeholder="供应商名称（选填）" /></div>
+            <div class="field"><label>操作员</label><input id="finOperator" readonly title="默认当前登录账号，不可修改" /></div>
+            <div class="field">
+              <label>付款状态</label>
+              <div class="pay-radios">
+                <label class="pay-radio on"><input type="radio" name="finPay" value="paid" checked onchange="payRadioSync(this)" /> 已付款</label>
+                <label class="pay-radio"><input type="radio" name="finPay" value="unpaid" onchange="payRadioSync(this)" /> 待付款</label>
+              </div>
+              <div class="field-hint">待付款：先进「待付款账单」，点「已支付」后才计入财务报表</div>
+            </div>
+          </div>
+          <div class="toolbar" style="margin-top:10px;">
+            <input id="finSearch" placeholder="🔍 筛选下面表格里的商品（只影响显示，已填数量不会丢）" oninput="renderFreshInbound()" style="flex:1 1 260px;min-width:220px;" />
+            <button class="btn secondary" onclick="finClearAllQty()">清空已填数量</button>
+            <div class="grow"></div>
+            <span class="muted">填了数量的行会高亮；没填数量的行不会入库</span>
+          </div>
+          <div class="table-wrap"><table id="finTable"></table></div>
+          <div class="fresh-summary" id="finSummary" style="display:none;"></div>
+          <div class="field" style="margin-top:10px;">
+            <label>备注</label>
+            <textarea id="finRemark" rows="1" placeholder="可选：本次入库的每一张单共用"></textarea>
+          </div>
+          <div class="toolbar" style="margin-top:10px;">
+            <span class="muted">运费 / 装卸费默认留空：填了会算进该商品的批次成本（体现在它的毛利上），并同步「其他开支」备查；商品类别若配了扣点，入库单价会自动按 原价×(1−扣点%) 折算</span>
+            <div class="grow"></div>
+            <button class="btn green" id="finSubmitBtn" onclick="submitFreshInbound()">✓ 全部入库</button>
+          </div>
         </div>
       </section>
 
