@@ -1914,9 +1914,19 @@ th[data-key] .sort-arrow {
   text-align: right;
 }
 
-.brush-batch input:focus {
+.brush-batch input:focus,
+.brush-batch select:focus {
   border-color: var(--primary);
   outline: none;
+}
+
+.brush-batch select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
 }
 
 .brush-wrap {

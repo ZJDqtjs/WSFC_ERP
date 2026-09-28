@@ -1553,6 +1553,13 @@ let AI_CONFIRM = null;   // 当前确认框对应的识别结果（供提交时�
 function openAiConfirm(r) {
   AI_CONFIRM = r;
   const isIn = r.type === "inbound";
+  const docDate = r.date || today();
+  // 逐行日期：票据每行各有单据日期时，这里按行显示、可单独修改
+  (r.lines || []).forEach((ln) => { ln.date = ln.date || docDate; });
+  const dateSet = [...new Set((r.lines || []).map((ln) => ln.date || docDate))].sort();
+  const dateHint = dateSet.length > 1
+    ? `<span class="badge" style="background:var(--primary-light);color:var(--primary);margin-left:6px;">已按票据逐行取日期：${esc(dateSet[0])} ~ ${esc(dateSet[dateSet.length - 1])}（共 ${dateSet.length} 天）</span>`
+    : "";
   const linesHtml = (r.lines || []).map((ln, i) => {
     const cat = (["stock", "order", "pack", "labor"].includes(ln.category) ? ln.category : (isIn ? "stock" : "order"));
     const np = ln.new_product || null;
@@ -1581,6 +1588,7 @@ function openAiConfirm(r) {
     return `<tr data-idx="${i}">
       <td><select class="ai-cat" onchange="aiCatChanged(${i})" style="width:92px;">${aiCatOptions(cat)}</select></td>
       <td style="min-width:250px;">${prodSel}${aiNewNameHtml(ln)}<div style="margin-top:4px;">${ambiBadge}${np ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 提交后新增</span>' : ""}</div></td>
+      <td><input type="date" class="ai-date" value="${esc(ln.date || docDate)}" style="width:138px;" title="这一行的单据日期（对账单/送货单逐行日期）" /></td>
       <td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.quantity)}" style="width:90px;" /></td>
       <td><input class="ai-unit" value="${esc(ln.unit || "")}" style="width:70px;" />${unitBadge}</td>
       <td class="ai-price-cell"><input type="number" step="any" class="ai-price" value="${ln.unit_price ? ln.unit_price : ""}" placeholder="可留空" style="width:100px;" />${ln.price_defaulted ? '<span class="ai-price-badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按最近价</span>' : ""}</td>
@@ -1600,20 +1608,23 @@ function openAiConfirm(r) {
   openModal(`
     <h3>确认录入（${isIn ? "入库" : "出库"}） <button class="close" onclick="closeModal()">✕</button></h3>
     ${invImg}
-    <p class="hint" style="margin-bottom:12px;">已自动识别以下内容，请核对（可修改/可删除行）后提交；🆕 标记的商品为新物品，点「确认提交」后才会新增商品档案（取消不会创建）。单价可留空，提交后在单据里补也行。每行默认<b>已付款</b>，可点成「待付款」把该笔列入「待付款账单」。</p>
+    <p class="hint" style="margin-bottom:12px;">已自动识别以下内容，请核对（可修改/可删除行）后提交；🆕 标记的商品为新物品，点「确认提交」后才会新增商品档案（取消不会创建）。单价可留空，提交后在单据里补也行。<b>每行日期取自票据该行的「单据日期」</b>，可逐行改；对账单等多日期票据会按各自日期生成单据。每行默认<b>已付款</b>，可点成「待付款」把该笔列入「待付款账单」。</p>
     ${thinkHtml}
     <div class="form-grid">
       <div class="field"><label>业务类型</label><select id="aiType" onchange="aiTypeChanged()">
         <option value="inbound" ${isIn ? "selected" : ""}>入库（进货）</option>
         <option value="outbound" ${isIn ? "" : "selected"}>出库（销售）</option>
       </select></div>
-      <div class="field"><label>日期</label><input type="date" id="aiDate" value="${esc(r.date)}" /></div>
+      <div class="field"><label>整单日期</label>
+        <input type="date" id="aiDate" value="${esc(docDate)}" />${dateHint}
+        <button class="btn-link" style="font-size:12px;margin-left:6px;" onclick="aiApplyDateAll()">应用到所有行</button>
+      </div>
       <div class="field"><label>${isIn ? "供应商" : "客户"}</label><input id="aiParty" value="${esc(isIn ? r.supplier : r.customer)}" /></div>
       <div class="field"><label>备注</label><input id="aiRemark" value="${esc(r.remark)}" /></div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>分类</th><th>商品</th><th>数量</th><th>单位</th><th>${isIn ? "单价" : "售价"}</th><th>付款</th><th>说明</th><th>操作</th></tr></thead>
-      <tbody id="aiLines">${linesHtml || '<tr><td colspan="8" class="empty">未识别到明细</td></tr>'}</tbody>
+      <thead><tr><th>分类</th><th>商品</th><th>日期</th><th>数量</th><th>单位</th><th>${isIn ? "单价" : "售价"}</th><th>付款</th><th>说明</th><th>操作</th></tr></thead>
+      <tbody id="aiLines">${linesHtml || '<tr><td colspan="9" class="empty">未识别到明细</td></tr>'}</tbody>
     </table></div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
@@ -1643,6 +1654,13 @@ function aiTogglePay(i) {
     lbl.classList.toggle("off", !next);
   }
   if (line) line.paid = next;
+}
+// 把顶部「整单日期」应用到所有明细行（识别日期不对时一键统一）
+function aiApplyDateAll() {
+  const d = $("aiDate").value;
+  if (!d) { toast("请先选日期"); return; }
+  document.querySelectorAll("#aiLines tr[data-idx] .ai-date").forEach((el) => { el.value = d; });
+  toast("已把 " + d + " 应用到所有明细行");
 }
 // 待新增商品的名字输入框：选中「🆕 新建」时出现，可自己改名字
 function aiNewNameHtml(ln) {
@@ -1694,9 +1712,11 @@ async function aiSubmit() {
       unit_price: priceRaw === "" ? 0 : parseFloat(priceRaw),   // 单价允许留空，提交后可在单据里补
       auto_created: !!line.auto_created,
       paid: line.paid !== false,   // 默认已付款；点成「待付款」则这笔入「待付款账单」
+      date: (tr.querySelector(".ai-date") || {}).value || date,   // 该行单据日期（对账单逐行日期）
     };
   }).filter((r) => r.product_id || r.new_product);
   if (!rows.length) { toast("请至少填写一条商品"); return; }
+  if (rows.some((r) => !r.date)) { toast("每行都要有日期，请检查"); return; }
   if (rows.some((r) => !(r.quantity > 0) || !r.unit)) { toast("请填写数量与单位（单价可留空，提交后在单据里补）"); return; }
   if (rows.some((r) => isNaN(r.unit_price))) { toast("单价填的不是数字，请检查"); return; }
   const op = (CURRENT_USER && (CURRENT_USER.name || CURRENT_USER.username)) || "";
@@ -1720,17 +1740,20 @@ async function aiSubmit() {
     if (type === "inbound") {
       for (const r of rows) {
         const rmk = [inv, r.auto_created ? "[AI自动新增]" : "", remark].filter(Boolean).join(" ");
-        await api("/api/inbounds", "POST", { product_id: r.product_id, unit: r.unit, quantity: r.quantity, unit_price: r.unit_price, supplier: party, operator: op, date, remark: rmk, pay_status: r.paid ? "paid" : "unpaid" });
+        // 逐行用各自的单据日期（对账单每行日期不同）
+        await api("/api/inbounds", "POST", { product_id: r.product_id, unit: r.unit, quantity: r.quantity, unit_price: r.unit_price, supplier: party, operator: op, date: r.date, remark: rmk, pay_status: r.paid ? "paid" : "unpaid" });
       }
     } else {
-      // 已付款 / 待付款 分单：这样「待付款」的各笔会独立进入「待付款账单」，其余进报表
-      const groups = { paid: [], unpaid: [] };
-      rows.forEach((r) => groups[r.paid ? "paid" : "unpaid"].push(r));
-      for (const st of ["paid", "unpaid"]) {
-        const g = groups[st];
-        if (!g.length) continue;
-        const lines = g.map((r) => ({ product_id: r.product_id, unit: r.unit, quantity: r.quantity, price: r.unit_price }));
-        await api("/api/outbounds", "POST", { customer: party, operator: op, date, remark: [inv, remark].filter(Boolean).join(" "), lines, pack_lines: [], pay_status: st });
+      // 按「日期 + 已付款/待付款」分单：日期不同的各成一单，待付款的独立进「待付款账单」
+      const groups = new Map();
+      rows.forEach((r) => {
+        const key = `${r.date}|${r.paid ? "paid" : "unpaid"}`;
+        if (!groups.has(key)) groups.set(key, { date: r.date, pay: r.paid ? "paid" : "unpaid", rows: [] });
+        groups.get(key).rows.push(r);
+      });
+      for (const g of groups.values()) {
+        const lines = g.rows.map((r) => ({ product_id: r.product_id, unit: r.unit, quantity: r.quantity, price: r.unit_price }));
+        await api("/api/outbounds", "POST", { customer: party, operator: op, date: g.date, remark: [inv, remark].filter(Boolean).join(" "), lines, pack_lines: [], pay_status: g.pay });
       }
     }
     closeModal();
@@ -4001,7 +4024,7 @@ async function deleteInbound(id) {
   try { await api("/api/inbounds/" + id, "DELETE"); toast("已删除"); loadInbounds(); loadStock(); }
   catch (e) { toast("删除失败：" + e.message); }
 }
-/* 手动修改入库单：只允许改 供应商 / 入库日期 / 付款状态；保存后操作员记为修改人 */
+/* 手动修改入库单：可改 供应商 / 入库日期 / 付款状态 / 运费 / 装卸费；保存后操作员记为修改人 */
 function editInbound(id) {
   const r = ($("inTable")._rows || []).find((x) => x.id === id);
   if (!r) { toast("未找到该入库单，请刷新列表"); return; }
@@ -4009,32 +4032,57 @@ function editInbound(id) {
     <h3>修改入库单 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="muted" style="margin-bottom:12px;">
       ${esc(r.code)} · ${esc(r.product_name)} ${fmtNum(r.quantity)}${esc(r.unit || "")} · 金额 ${fmtMoney(r.total_amount)}${r.adjust_amount ? `（调整 ${r.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(r.adjust_amount))}）` : ""}
-      ${(r.freight || r.handling) ? `<div style="margin-top:4px;">运费 ${fmtMoney(r.freight || 0)} · 装卸费 ${fmtMoney(r.handling || 0)}（已计入批次成本并同步「其他开支」；如需更正请删单重建）</div>` : ""}
     </div>
     <div class="form-grid">
       <div class="field"><label>供应商</label><input id="edInSupplier" value="${esc(r.supplier || "")}" placeholder="供应商名称" /></div>
       <div class="field"><label>入库日期 *</label><input id="edInDate" type="date" value="${esc(r.date || "")}" /></div>
+      <div class="field">
+        <label>运费</label>
+        <input id="edInFreight" type="number" min="0" step="any" value="${r.freight || ""}" placeholder="0.00" oninput="edInCalc(${r.total_amount || 0})" />
+        <div class="field-hint">选填；计入该批次成本（体现在这个品的毛利），并同步记入「其他开支」</div>
+      </div>
+      <div class="field">
+        <label>装卸费</label>
+        <input id="edInHandling" type="number" min="0" step="any" value="${r.handling || ""}" placeholder="0.00" oninput="edInCalc(${r.total_amount || 0})" />
+        <div class="field-hint">选填；日期随入库单日期，清零即删掉对应的「其他开支」</div>
+      </div>
       <div class="field" style="grid-column:1/-1;">
         <label>付款状态</label>
         ${payRadios("edInPay", r.pay_status, "待付款：先进「待付款账单」，点「已支付」后才计入财务报表")}
       </div>
     </div>
-    <p class="hint">只能修改以上三项；保存后操作员记为当前登录账号（${esc(operatorName())}）。数量 / 单价 / 金额如需更正，请删除后重新入库。</p>
+    <p class="hint" id="edInHint"></p>
+    <p class="hint">保存后操作员记为当前登录账号（${esc(operatorName())}）。数量 / 单价 / 商品如需更正，请删除后重新入库；运费与装卸费之后随时可改（会重算该批次成本与该品毛利）。</p>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
       <button class="btn green" onclick="saveInboundEdit(${id})">✓ 保存</button>
     </div>`);
+  edInCalc(Number(r.total_amount) || 0);
+}
+
+/** 改单时实时显示「货款 + 运费 + 装卸 = 批次到岸成本」，避免改完不知道成本变成多少 */
+function edInCalc(total) {
+  const el = $("edInHint");
+  if (!el) return;
+  const fee = (parseFloat($("edInFreight")?.value) || 0) + (parseFloat($("edInHandling")?.value) || 0);
+  el.innerHTML = fee > 0
+    ? `批次成本 = 货款 ${fmtMoney(total)} + 运费/装卸 ${fmtMoney(fee)} = <b>${fmtMoney(total + fee)}</b>（按 FIFO 随销量扣减，同步更新该品毛利与「其他开支」）`
+    : "不填=没有运费/装卸费（对应「其他开支」里的运费、装卸费记录会一并清掉）";
 }
 async function saveInboundEdit(id) {
   const date = $("edInDate").value;
   if (!date) { toast("请选择入库日期"); return; }
+  const freight = parseFloat($("edInFreight").value) || 0;
+  const handling = parseFloat($("edInHandling").value) || 0;
+  if (freight < 0 || handling < 0) { toast("运费 / 装卸费不能为负数"); return; }
   try {
     await api(`/api/inbounds/${id}`, "PUT", {
-      supplier: $("edInSupplier").value, date, pay_status: payOf("edInPay"),
+      supplier: $("edInSupplier").value, date, pay_status: payOf("edInPay"), freight, handling,
     });
     closeModal();
-    toast(`已保存，操作员记为 ${operatorName()}`);
+    toast(`已保存，操作员记为 ${operatorName()}${freight + handling > 0 ? `；运费/装卸 ${fmtMoney(freight + handling)} 已计入成本` : ""}`);
     loadInbounds();
+    loadStock();   // 成本变了，库存列表的均价/货值跟着刷新
   } catch (e) { toast("保存失败：" + e.message); }
 }
 
@@ -5831,7 +5879,7 @@ async function oeDelete(id) {
 /* =============== 待付款账单（各处勾了「待付款」的单据汇总） =============== */
 let PAY_ROWS = [];       // 当前列表（待结清 ± 最近已结清）
 let PAY_VIEW = "unpaid"; // unpaid 只看待结清 / all 含最近已结清
-const PAY_SRC_BADGE = { "入库": "in", "入仓": "income", "出库": "out", "其他开支": "expense", "手动记账": "adjust" };
+const PAY_SRC_BADGE = { "入库": "in", "入仓": "income", "出库": "out", "其他开支": "expense", "手动记账": "adjust", "代发": "pack" };
 
 async function loadPayablesPage() {
   try {
@@ -5841,6 +5889,8 @@ async function loadPayablesPage() {
     renderPayables();
     renderPayBadge(d.total || {});
     payAlertMsg("");
+    // 停在「代发」页签时，刷新按钮/其它页面的操作都要让代发列表同步刷新
+    if (DS_LOADED && $("pay-panel-dropship") && $("pay-panel-dropship").style.display !== "none") loadDropshipBills();
   } catch (e) {
     payAlertMsg("加载待付款账单失败：" + e.message);
     $("payTable").innerHTML = `<tbody><tr><td class="empty">加载失败：${esc(e.message)}</td></tr></tbody>`;
@@ -5986,13 +6036,208 @@ function renderPayables() {
 async function payBill(kind, id, paid) {
   const r = PAY_ROWS.find((x) => x.kind === kind && x.id === id);
   const label = r ? `${r.source}「${r.title}」${fmtMoney(r.amount)}` : "";
-  if (paid && !confirm(`确认已支付？\n${label}\n确认后这笔将按原日期计入财务报表。`)) return;
-  if (!paid && !confirm(`确认撤销？\n${label}\n撤销后它会移出财务报表，回到待付款账单。`)) return;
+  const isDs = kind === "dropship";
+  if (paid && !confirm(`确认已支付？\n${label}\n${isDs ? "（代发成本只做付款核对，不影响财务报表）" : "确认后这笔将按原日期计入财务报表。"}`)) return;
+  if (!paid && !confirm(`确认撤销？\n${label}\n${isDs ? "（只撤销付款核对标记）" : "撤销后它会移出财务报表，回到待付款账单。"}`)) return;
   try {
     await api("/api/payables/pay", "POST", { kind, id, paid });
-    toast(paid ? "已标记已支付，已按原日期计入财务报表" : "已撤销，已移出财务报表");
+    toast(paid
+      ? (isDs ? "已标记代发成本已支付" : "已标记已支付，已按原日期计入财务报表")
+      : (isDs ? "已撤销付款标记" : "已撤销，已移出财务报表"));
+    await loadPayablesPage();
+    if (DS_LOADED) loadDropshipBills();   // 代发页签同源，跟着刷新
+  } catch (e) { toast("操作失败：" + e.message); }
+}
+
+/* ---------- 待付款账单：代发页签 ----------
+   出库单里命中「代发商品」（关联结算没挂库存大类）的成本自动登记成应付给代发方的账单；
+   这里按出库单分组，逐规格列「单价 × 单量 = 金额」，方便核对付款。付款状态不影响财务报表。 */
+let DS_GROUPS = [];      // 当前代发列表（按「商品 + 规格 + 单位」跨单合并）
+let DS_VIEW = "unpaid";  // unpaid 只看待结清 / all 含已结清
+let DS_LOADED = false;   // 是否已拉取过（切回来时无需重复拉取，除非有操作）
+let DS_TOTAL = {};
+
+function payTab(btn) {
+  const panel = btn.dataset.panel;
+  document.querySelectorAll("#payTabSeg .seg-item").forEach((x) => x.classList.toggle("active", x === btn));
+  if ($("pay-panel-bill")) $("pay-panel-bill").style.display = panel === "pay-panel-bill" ? "" : "none";
+  if ($("pay-panel-dropship")) $("pay-panel-dropship").style.display = panel === "pay-panel-dropship" ? "" : "none";
+  const hint = $("payTabHint");
+  if (hint) hint.textContent = panel === "pay-panel-dropship"
+    ? "代发：同一种商品和规格已合并，按「单价 × 单量 = 代发成本」核对付款"
+    : "";
+  if (panel === "pay-panel-dropship") loadDropshipBills();
+}
+
+async function loadDropshipBills() {
+  try {
+    const d = await api(`/api/payables/dropship?include_paid=${DS_VIEW === "all" ? 1 : 0}`);
+    DS_GROUPS = d.groups || [];
+    DS_TOTAL = d.total || {};
+    DS_LOADED = true;
+    dsAlert("");
+    renderDropshipBills();
+  } catch (e) {
+    dsAlert("加载代发应付失败：" + e.message);
+    const t = $("dsTable");
+    if (t) t.innerHTML = `<tbody><tr><td colspan="8" class="empty">加载失败：${esc(e.message)}</td></tr></tbody>`;
+  }
+}
+
+function dsSwitchView(btn) {
+  $("dsSeg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
+  DS_VIEW = btn.dataset.view === "all" ? "all" : "unpaid";
+  loadDropshipBills();
+}
+
+function dsClearFilter() {
+  if ($("dsSearch")) $("dsSearch").value = "";
+  if ($("dsFrom")) $("dsFrom").value = "";
+  if ($("dsTo")) $("dsTo").value = "";
+  renderDropshipBills();
+}
+
+function dsAlert(msg) {
+  const el = $("dsAlert");
+  if (!el) return;
+  el.style.display = msg ? "block" : "none";
+  el.textContent = msg || "";
+}
+
+/** 关键词 / 日期筛选（按合并后的行；日期与「该组跨的单据区间」有交集即保留） */
+function dsFilterGroups() {
+  const kw = ($("dsSearch") ? $("dsSearch").value : "").trim().toLowerCase();
+  const from = $("dsFrom") ? $("dsFrom").value : "";
+  const to = $("dsTo") ? $("dsTo").value : "";
+  let groups = DS_GROUPS;
+  if (kw) {
+    groups = groups.filter((g) =>
+      [g.product_name, g.spec, g.unit, g.operator].join(" ").toLowerCase().includes(kw));
+  }
+  if (from || to) {
+    groups = groups.filter((g) => {
+      const a = g.date_from || g.date_to, b = g.date_to || g.date_from;
+      if (!a || !b) return false;
+      return (!to || a <= to) && (!from || b >= from);
+    });
+  }
+  return { groups, active: !!(kw || from || to) };
+}
+
+const DS_NUM4 = (v) => { const s = Number(v || 0).toFixed(4).replace(/0+$/, "").replace(/\.$/, ""); return s || "0"; };
+
+let DS_ROWS = [];   // 当前渲染（筛选后）的行，勾选项用它的下标索引
+
+function renderDropshipBills() {
+  const t = $("dsTable");
+  if (!t) return;
+  const { groups, active } = dsFilterGroups();
+  DS_ROWS = groups;
+  const sum = groups.reduce((a, g) => a + (g.amount || 0), 0);
+  const pend = groups.filter((g) => g.pay_status === "unpaid");
+  const pendAmt = pend.reduce((a, g) => a + (g.amount || 0), 0);
+  const orders = groups.reduce((a, g) => a + (g.order_count || 0), 0);
+  const sumEl = $("dsSum");
+  if (sumEl) {
+    sumEl.innerHTML =
+      `<span class="pay-sum-label">${active ? "筛选结果" : "当前列表"}</span>` +
+      `<span><b>${groups.length}</b> 款商品规格 <span class="muted">/ ${orders} 单</span></span>` +
+      `<span class="pay-sum-total">合计 <b class="mono">${fmtMoney(sum)}</b></span>` +
+      `<span class="muted">待结清 <b class="mono" style="color:var(--danger, #dc2626);">${fmtMoney(pendAmt)}</b></span>` +
+      (DS_VIEW === "all" ? `<span class="muted">已结清 <b class="mono" style="color:var(--green, #16a34a);">${fmtMoney(sum - pendAmt)}</b></span>` : "") +
+      `<span class="grow"></span>` +
+      (active ? `<span class="muted">已按 ${[$("dsFrom")?.value || $("dsTo")?.value ? "日期" : "", $("dsSearch")?.value.trim() ? "关键词" : ""].filter(Boolean).join(" + ")} 筛选</span>` : "");
+  }
+
+  const rows = groups.map((g, idx) => {
+    const paid = g.pay_status !== "unpaid";
+    // 规格已经写在商品名里（如「雪莲果大果8斤」）就不重复显示
+    const specTxt = g.spec && !(g.product_name || "").includes(g.spec) ? ` <span class="muted">· ${esc(g.spec)}</span>` : "";
+    const range = g.date_from && g.date_to && g.date_from !== g.date_to
+      ? `${g.date_from} ~ ${g.date_to}` : (g.date_from || "");
+    return `<tr${paid ? ' style="opacity:.55;"' : ""}>
+      <td><input type="checkbox" class="ds-pick" value="${idx}" /></td>
+      <td><b>${esc(g.product_name || "代发商品")}</b>${specTxt}
+        <div class="muted" style="font-size:11px;color:var(--danger);">代发成本 ${fmtMoney(g.amount)}</div></td>
+      <td class="num mono">${DS_NUM4(g.quantity)}${esc(g.unit || "")}</td>
+      <td class="num mono">${fmtMoney(g.unit_price)}</td>
+      <td class="num mono"><b style="color:var(--danger, #dc2626);">${fmtMoney(g.amount)}</b></td>
+      <td class="num muted">${g.order_count} 单${range ? `<div style="font-size:11px;">${esc(range)}</div>` : ""}</td>
+      <td>${paid ? `<span class="badge income">已付 ${esc(g.paid_at || "")}</span>` : `<span class="badge pack">待付代发</span>`}</td>
+      <td class="num">${paid
+        ? `<button class="btn sm secondary" onclick="dsMarkPaid(${idx}, false)">撤销</button>`
+        : `<button class="btn sm green" onclick="dsMarkPaid(${idx}, true)">已支付</button>`}</td>
+    </tr>`;
+  });
+
+  t.innerHTML = `<thead><tr>
+      <th style="width:34px;"><input type="checkbox" onchange="dsToggleAll(this)" /></th>
+      <th>商品 / 规格</th>
+      <th class="num" style="width:110px;">单量</th>
+      <th class="num" style="width:100px;">单价</th>
+      <th class="num" style="width:140px;">应付金额</th>
+      <th class="num" style="width:130px;">单据</th>
+      <th style="width:110px;">状态</th><th style="width:96px;"></th>
+    </tr></thead><tbody>` +
+    (rows.length ? rows.join("")
+      : `<tr><td colspan="8" class="empty">${active
+        ? "没有符合筛选条件的代发应付（可点「清空筛选」看全部）"
+        : (DS_VIEW === "all" ? "还没有代发应付账单" : "没有待结清的代发应付")}</td></tr>`) +
+    `</tbody>` +
+    (groups.length
+      ? `<tfoot><tr>
+          <td></td>
+          <td><b>${active ? "筛选合计" : "列出合计"}</b> <span class="muted">${groups.length} 款商品规格</span></td>
+          <td></td>
+          <td></td>
+          <td class="num mono"><b>应付 ${fmtMoney(sum)}</b></td>
+          <td class="num muted">${orders} 单</td>
+          <td class="muted">待结清 ${pend.length} 款</td>
+          <td></td>
+        </tr></tfoot>`
+      : "");
+}
+
+function dsToggleAll(cb) {
+  document.querySelectorAll("#dsTable .ds-pick").forEach((x) => { x.checked = cb.checked; });
+}
+
+/** 勾选的行 → 它们名下所有出库单的代发账单行 id（跨单合并后一行对应多张单） */
+function dsPickedBillIds() {
+  return [...document.querySelectorAll("#dsTable .ds-pick")].filter((x) => x.checked)
+    .map((x) => DS_ROWS[Number(x.value)]).filter(Boolean)
+    .flatMap((g) => g.bill_ids || []);
+}
+
+/** 标记某款商品规格（可能跨多张出库单）的代发成本已付/撤销 */
+async function dsMarkPaid(idx, paid) {
+  const g = DS_ROWS[idx];
+  if (!g) return;
+  const label = `${g.product_name}${g.spec ? " · " + g.spec : ""}（${g.order_count} 单，代发成本 ${fmtMoney(g.amount)}）`;
+  if (!confirm(`${paid ? "确认这批代发成本已付清？" : "确认撤销已付标记？"}\n${label}\n（只影响代发付款核对，不影响财务报表）`)) return;
+  try {
+    await api("/api/payables/pay-batch", "POST", { kind: "dropship_item", ids: g.bill_ids || [], paid });
+    toast(paid ? "已标记代发成本已支付" : "已撤销");
+    await loadDropshipBills();
     await loadPayablesPage();
   } catch (e) { toast("操作失败：" + e.message); }
+}
+
+/** 批量标记勾选的商品规格 */
+async function dsBatchPay(paid) {
+  const picked = [...document.querySelectorAll("#dsTable .ds-pick")].filter((x) => x.checked)
+    .map((x) => DS_ROWS[Number(x.value)]).filter(Boolean);
+  const ids = picked.flatMap((g) => g.bill_ids || []);
+  if (!ids.length) { toast("请先勾选要处理的商品规格"); return; }
+  const amount = picked.reduce((a, g) => a + (g.amount || 0), 0);
+  const orders = picked.reduce((a, g) => a + (g.order_count || 0), 0);
+  if (!confirm(`${paid ? "批量标记已支付" : "批量撤销"}：${picked.length} 款商品规格 / ${orders} 张出库单，代发成本合计 ${fmtMoney(amount)}？\n（只影响代发付款核对，不影响财务报表）`)) return;
+  try {
+    const r = await api("/api/payables/pay-batch", "POST", { kind: "dropship_item", ids, paid });
+    toast(`已处理 ${r.updated ?? ids.length} 行${r.missing ? `，${r.missing} 行已不存在` : ""}`);
+    await loadDropshipBills();
+    await loadPayablesPage();
+  } catch (e) { toast("批量操作失败：" + e.message); }
 }
 
 /** 侧边栏角标：待结清笔数 */

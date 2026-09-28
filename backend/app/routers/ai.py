@@ -7,7 +7,7 @@
 """
 import json
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -57,6 +57,9 @@ SYSTEM_PROMPT = """你是「企业台账系统」的自然语言录入解析器�
    - "人工"：打包人工/劳务（如 某某打包、人工打包费）
    无法判断时不输出该字段（省略）。
 5. 日期 date：用户没说具体日期就用"今天"（今天的日期见用户消息），格式 YYYY-MM-DD。
+   - 一句话里不同商品可能各有日期（如「8月17日入库木耳100斤，8月20日入库自封袋10丝37公斤」）：
+     把各自的日期写进对应行的 date 字段；顶层 date 写其中出现最多（或最后一个）的日期。
+   - 只有一个日期时只写顶层 date，行里不用重复写 date。
 6. supplier（入库时的供应商）/ customer（出库时的客户）/ remark（备注）：有则提取，没有给空字符串。
 7. 一句话可能包含多行/多个商品，lines 里逐行列出；单价统一理解为"每 unit 单位的金额"。
 
@@ -71,7 +74,7 @@ JSON 结构：
   "customer": "",
   "remark": "",
   "lines": [
-    { "category": "库存商品", "product": "商品名称", "quantity": 100, "unit": "斤", "unit_price": 25 }
+    { "category": "库存商品", "product": "商品名称", "quantity": 100, "unit": "斤", "unit_price": 25, "date": "YYYY-MM-DD" }
   ]
 }""" + ZH_LANG_RULE
 
@@ -88,6 +91,10 @@ IMAGE_SYSTEM_PROMPT = """你是「企业台账系统」的采购票据识别助�
    - 给的是举例时（如只给了「京东8号->8号纸箱」），请按同样规律套用到同类条目（京东四号→4号纸箱、京东11号→11号纸箱）。
 5. supplier：票据上的销方（卖方）公司名称；customer 留空。
 6. 日期 date：票据上若有日期就用它（格式 YYYY-MM-DD），没有就用"今天"（今天的日期见用户消息）。
+   - 重点：对账单 / 汇总送货单常是「逐行单据日期」（每行第一列写着 2026-08-17、2026-08-25……），
+     必须把每一行的单据日期写进该行 lines 的 date 字段，禁止整单统一成今天或只取表头日期；
+   - 顶层 date 取表头日期；表头没有日期时，给出现次数最多的那个行日期；
+   - 行里的 date 仅在需要区分（与顶层不同）时输出即可。
 7. remark：可留空。
 8. 票据可能有多张/多条，lines 逐条列出；金额合计不用输出。
 
@@ -102,7 +109,7 @@ JSON 结构：
   "customer": "",
   "remark": "",
   "lines": [
-    { "category": "库存商品", "product": "商品名称", "quantity": 100, "unit": "个", "unit_price": 0.5 }
+    { "category": "库存商品", "product": "商品名称", "quantity": 100, "unit": "个", "unit_price": 0.5, "date": "YYYY-MM-DD" }
   ]
 }""" + ZH_LANG_RULE
 
@@ -402,6 +409,9 @@ def _extract_json(content: str) -> dict:
     return _repair_truncated_json(content)
 
 
+# 文本里带明确日期（「8月17日」「2026-08-17」「2026年8月17日」）→ 不用本地快速解析，交给大模型按行分配
+_EXPLICIT_DATE_RE = re.compile(r"\d{4}[-/年]\d{1,2}[-/月]\d{1,2}|\d{1,2}月\d{1,2}[日号]")
+
 # 快速解析时误并入商品名开头的动作词/时间词（「入库苹果10箱」→「苹果」）
 _QUICK_LEAD_RE = re.compile(
     r"^(?:今天|昨天|前天|今早|上午|下午|晚上|早上|刚才|刚刚)?"
@@ -425,6 +435,15 @@ def _quick_parse_text(text: str) -> dict | None:
     s = re.sub(r"\s+", "", str(text or "")).strip()
     if not s:
         return None
+    # 带明确日期（「8月17日」「2026-08-17」）的交给大模型：只有它能把日期落到具体每一行。
+    # 相对日期（昨天/前天）本地就能算，不用劳烦大模型。
+    if _EXPLICIT_DATE_RE.search(s):
+        return None
+    base_date = date.today()
+    for kw, days in (("大前天", 3), ("前天", 2), ("昨天", 1)):
+        if kw in s:
+            base_date = date.today() - timedelta(days=days)
+            break
     lowered = s.lower()
     if any(k in lowered for k in ("入库", "进货", "采购", "进仓", "收货")):
         op_type = "inbound"
@@ -501,7 +520,7 @@ def _quick_parse_text(text: str) -> dict | None:
 
     return {
         "type": op_type,
-        "date": date.today().isoformat(),
+        "date": base_date.isoformat(),
         "supplier": "",
         "customer": "",
         "remark": "",
@@ -994,6 +1013,24 @@ def _image_user_msg(text: str) -> str:
     )
 
 
+def _safe_date(v, fallback):
+    """把模型给的日期字符串转成 date。
+
+    - 空串 / 格式非法 / 明显是幻觉（未来日期）→ 返回 fallback（fallback=None 表示"无效"）
+    - 只接受 ISO（YYYY-MM-DD），与前端 <input type="date"> 对齐；避免模型给「2026/8/17」「8月17日」
+    """
+    try:
+        s = str(v or "").strip()
+        if not s:
+            return fallback
+        d = date.fromisoformat(s)
+    except ValueError:
+        return fallback
+    if d > date.today() + timedelta(days=1):   # 未来日期基本是模型幻觉
+        return fallback
+    return d
+
+
 def _build_result(db: Session, parsed: dict, text: str) -> dict:
     """把模型抽取结果规范化：校验类型/日期，匹配商品，换算单位。
 
@@ -1008,6 +1045,13 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
         raise HTTPException(400, "未能从描述中提取商品明细，请补充商品名称、数量与价格")
 
     aliases = _parse_aliases(text)
+    # ---- 日期：顶层（表头）日期 + 逐行（单据）日期 ----
+    # 对账单/汇总送货单每行各有「单据日期」，只取表头会全部落成同一天（用户反馈过这个问题）。
+    line_dates = [_safe_date(ln.get("date"), None) for ln in lines_in]
+    valid_line_dates = [x for x in line_dates if x]
+    # 顶层缺失时，用出现最多的行日期兜底
+    common_date = max(set(valid_line_dates), key=valid_line_dates.count) if valid_line_dates else None
+    doc_date = _safe_date(parsed.get("date"), None) or common_date or date.today()
     lines = []
     for ln in lines_in:
         name = ln.get("product", "")
@@ -1148,18 +1192,13 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
                 ln_out["unit_price"] = first["last_price"]
                 ln_out["price_defaulted"] = True
                 ln_out["hint"] += f"；已按默认候选「{first['name']}」最近价 {first['last_price']} 填入，请核对"
+        # 该行的单据日期（没有就用顶层/表头日期），提交时按行落到各自单据上
+        ln_out["date"] = (_safe_date(ln.get("date"), doc_date) or doc_date).isoformat()
         lines.append(ln_out)
-
-    # 日期校验：格式非法/为空时回退为今天，避免模型幻觉日期
-    try:
-        pd = str(parsed.get("date") or "").strip()
-        d = date.fromisoformat(pd) if pd else date.today()
-    except ValueError:
-        d = date.today()
 
     return {
         "type": op_type,
-        "date": d.isoformat(),
+        "date": doc_date.isoformat(),
         "supplier": str(parsed.get("supplier") or ""),
         "customer": str(parsed.get("customer") or ""),
         "remark": str(parsed.get("remark") or ""),

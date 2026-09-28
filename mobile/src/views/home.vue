@@ -198,7 +198,14 @@
         <img v-if="aiForm.image_url" :src="assetUrl(aiForm.image_url)" class="ai-img" />
 
         <van-cell-group inset>
-          <van-field v-model="aiForm.date" label="日期" type="date" />
+          <van-field v-model="aiForm.date" label="整单日期" type="date">
+            <template #button>
+              <van-button size="mini" plain @click="applyDateAll">应用到所有行</van-button>
+            </template>
+          </van-field>
+          <div v-if="dateCount > 1" class="muted" style="padding:0 16px 8px;">
+            已按票据逐行取日期：{{ dateRange[0] }} ~ {{ dateRange[dateRange.length - 1] }}（共 {{ dateCount }} 天），每行可单独改
+          </div>
           <van-field v-if="aiForm.type === 'inbound'" v-model="aiForm.supplier" label="供应商" placeholder="可留空" />
           <van-field v-else v-model="aiForm.customer" label="客户" placeholder="可留空" />
           <van-field v-model="aiForm.remark" label="备注" placeholder="可留空" />
@@ -229,6 +236,10 @@
             <van-field v-model="ln.quantity" type="number" label="数量" />
             <van-field v-model="ln.unit" label="单位" style="max-width:86px;" />
             <van-field v-model="ln.unit_price" type="number" label="单价" placeholder="可留空" />
+          </div>
+          <!-- 该行的单据日期（对账单/送货单逐行日期），提交时按它生成单据 -->
+          <div class="row mt8">
+            <van-field v-model="ln.date" type="date" label="单据日期" style="max-width:210px;" />
           </div>
           <div v-if="ln.price_defaulted" class="muted" style="margin-top:4px;">单价未识别，已按该商品最近一次录入价回填，请核对</div>
           <div v-if="ln.hint" class="muted" style="margin-top:4px;">{{ ln.hint }}</div>
@@ -474,9 +485,18 @@ function openConfirm(r) {
       price_defaulted,
       hint: ln.hint || '',
       paid: true,   // 默认已付款；可关掉把该笔列入「待付款账单」
+      date: ln.date || aiForm.date,   // 该行的单据日期（票据逐行日期）
     }
   })
   confirmShow.value = true
+}
+
+// 逐行日期统计（对账单常常一行一个日期）
+const dateCount = computed(() => new Set(aiForm.lines.map((l) => l.date || aiForm.date)).size)
+const dateRange = computed(() => [...new Set(aiForm.lines.map((l) => l.date || aiForm.date))].sort())
+function applyDateAll() {
+  aiForm.lines.forEach((l) => { l.date = aiForm.date })
+  showToast('已把整单日期应用到所有行')
 }
 
 async function replaceLine(i) {
@@ -530,30 +550,32 @@ async function submitAI() {
           quantity: +ln.quantity,
           unit_price: +ln.unit_price || 0,
           supplier: aiForm.supplier,
-          date: aiForm.date,
+          date: ln.date || aiForm.date,   // 逐行用各自的单据日期
           remark: [inv, ln.auto_created ? '[AI自动新增]' : '', aiForm.remark].filter(Boolean).join(' '),
           pay_status: ln.paid === false ? 'unpaid' : 'paid',
         })
       }
     } else {
-      // 已付款 / 待付款 分单：这样「待付款」的各笔会独立进入「待付款账单」，其余进报表
-      const groups = { paid: [], unpaid: [] }
-      ok.forEach((ln) => groups[ln.paid === false ? 'unpaid' : 'paid'].push(ln))
-      for (const st of ['paid', 'unpaid']) {
-        const g = groups[st]
-        if (!g.length) continue
+      // 按「日期 + 已付款/待付款」分单：日期不同的各成一单，待付款的独立进「待付款账单」
+      const groups = new Map()
+      ok.forEach((ln) => {
+        const key = `${ln.date || aiForm.date}|${ln.paid === false ? 'unpaid' : 'paid'}`
+        if (!groups.has(key)) groups.set(key, { date: ln.date || aiForm.date, pay: ln.paid === false ? 'unpaid' : 'paid', lines: [] })
+        groups.get(key).lines.push(ln)
+      })
+      for (const g of groups.values()) {
         await api('/api/outbounds', 'POST', {
           customer: aiForm.customer,
-          date: aiForm.date,
+          date: g.date,
           remark: [inv, aiForm.remark].filter(Boolean).join(' '),
-          lines: g.map((ln) => ({
+          lines: g.lines.map((ln) => ({
             product_id: +ln.product_id,
             unit: ln.unit || '个',
             quantity: +ln.quantity,
             price: +ln.unit_price || 0,
           })),
           pack_lines: [],
-          pay_status: st,
+          pay_status: g.pay,
         })
       }
     }
