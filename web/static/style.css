@@ -1375,6 +1375,50 @@ body.notice-on .login-mask { padding-top: 40px; }
 
 /* ============ 鲜货入库（二级页） ============ */
 #finTable td { vertical-align: middle; }
+/* 勾选列窄一点，商品列留宽（避免商品名被单位下拉挤成多行） */
+#finTable td.cb-col { width: 34px; }
+#finTable td:nth-child(2) { min-width: 168px; }
+#finTable .in-unit { width: 100%; max-width: 104px; }
+/* 备注列：窄格子里的文本框 + 「图片」按钮 + 附件小标签 */
+#finTable td.fin-remark-cell { min-width: 150px; }
+#finTable .fin-remark {
+  width: 100%;
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  resize: vertical;
+}
+#finTable .fin-remark:focus { border-color: var(--primary); outline: none; }
+#finTable td.fin-remark-cell .attach-bar { margin-top: 4px; gap: 6px; }
+#finTable td.fin-remark-cell .attach-bar .btn { padding: 2px 7px; font-size: 12px; }
+#finTable td.fin-remark-cell .attach-list { margin-top: 4px; gap: 4px; }
+#finTable td.fin-remark-cell .attach-chip { max-width: 100%; padding: 2px 6px; font-size: 11px; }
+
+/* 今日已入库：点「入库」后这一行先隐藏（第二天 0 点自动回来），顶部给一条提示 + 开关 */
+#finTable tr.fin-done-bar td {
+  padding: 6px 9px;
+  background: var(--green-light);
+  font-size: 12.5px;
+}
+
+#finTable tr.fin-done-bar .btn {
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+#finTable tr.fin-row-done {
+  opacity: 0.55;
+}
+
+#finTable tr.fin-row-done td {
+  background: transparent;
+}
 #finTable td.num { white-space: nowrap; }
 #finTable input[type="number"] { text-align: right; }
 /* 填了数量的行高亮：一眼看出今天哪些要入库 */

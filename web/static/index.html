@@ -1194,7 +1194,7 @@
         <div class="card">
           <div class="card-head">
             <h3>鲜货入库</h3>
-            <span class="hint">每天把今天要入库的鲜货数量填进去：单价自动带出（最近入库价 → 参考成本，可改），运费 / 装卸费默认空；每个填了数量的商品各生成一张入库单</span>
+            <span class="hint">只有在「管理展示商品」里挑过的鲜货才会出现在下面表格；填数量即可入库，单价自动带出（最近入库价 → 参考成本，可改），运费 / 装卸费默认空</span>
             <button class="btn secondary" style="margin-left:auto;" onclick="openFreshConfig()"><svg class="ic"><use href="#i-sliders"/></svg> 管理展示商品</button>
             <button class="btn secondary" onclick="loadFreshInbound()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
             <button class="btn secondary" onclick="goPage('outbound');loadOutbounds()">← 返回出库列表</button>
@@ -1213,8 +1213,7 @@
             </div>
           </div>
           <div class="toolbar" style="margin-top:10px;">
-            <input id="finSearch" placeholder="🔍 筛选商品（只影响显示，已填的数量不会丢）" oninput="renderFreshInbound()" style="min-width:220px;" />
-            <button class="btn secondary" onclick="finAddProduct()"><svg class="ic"><use href="#i-plus"/></svg> 加一个商品</button>
+            <input id="finSearch" placeholder="🔍 筛选下面表格里的商品（只影响显示，已填数量不会丢）" oninput="renderFreshInbound()" style="flex:1 1 260px;min-width:220px;" />
             <button class="btn secondary" onclick="finClearAllQty()">清空已填数量</button>
             <div class="grow"></div>
             <span class="muted">填了数量的行会高亮；没填数量的行不会入库</span>

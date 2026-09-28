@@ -79,11 +79,22 @@ def _serialize(p: Product) -> dict:
 
 
 @router.get("")
-def fresh_stock(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """按展示清单顺序返回鲜货库存；清单外仍属鲜货分类的商品追加在末尾。"""
+def fresh_stock(
+    only_list: bool = False,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """按展示清单顺序返回鲜货库存。
+
+    默认（only_list=false）：清单外仍属鲜货分类的商品追加在末尾（鲜货现采页看全量库存用）；
+    only_list=true：只返回展示清单里的商品，清单为空就返回空——
+    「鲜货入库」页用它，保证「没在清单里挑过的商品不会自己冒出来让入库」。
+    """
     rows = _fresh_rows(db)
     ids = _load_config()
-    if ids:
+    if only_list:
+        ordered = [rows[i] for i in ids if i in rows]
+    elif ids:
         ordered = [rows[i] for i in ids if i in rows]
         ordered += sorted((p for p in rows.values() if p.id not in ids), key=lambda p: p.name)
     else:
