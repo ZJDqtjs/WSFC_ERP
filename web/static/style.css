@@ -1348,6 +1348,15 @@ body.notice-on .login-mask { padding-top: 40px; }
   background: var(--primary-50, #eef4ff); border: 1px solid var(--primary-light, #d6e4ff);
   border-radius: 10px; font-size: 13px;
 }
+
+/* ============ 鲜货入库（二级页） ============ */
+#finTable td { vertical-align: middle; }
+#finTable td.num { white-space: nowrap; }
+#finTable input[type="number"] { text-align: right; }
+/* 填了数量的行高亮：一眼看出今天哪些要入库 */
+#finTable tr.fin-row.fin-on { background: rgba(25, 137, 250, 0.07); }
+#finTable tr.fin-row.fin-on > td { border-top: 1px solid rgba(25, 137, 250, 0.3); }
+#finTable tr.fin-row.fin-on b { color: var(--primary); }
 /* 展示清单管理弹层 */
 .fc-wrap { display: flex; gap: 12px; }
 .fc-pane { flex: 1; min-width: 0; }

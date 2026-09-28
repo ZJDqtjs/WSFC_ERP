@@ -242,30 +242,6 @@
             <button class="btn secondary" style="margin-left:auto;" onclick="openBatchModal('inbound')"><svg class="ic"><use href="#i-download"/></svg> 批量入库</button>
           </div>
           <div class="form-grid">
-            <div class="field">
-              <label>商品 *</label>
-              <input id="inProduct" readonly placeholder="＋ 点击选择商品" onclick="openInboundPicker()" style="cursor:pointer;background:var(--primary-50);" />
-              <div class="field-hint" id="inStockHint"></div>
-            </div>
-            <div class="field"><label>进货单位 *</label><select id="inUnit" class="searchable"></select><div class="field-hint" id="inUnitHint"></div></div>
-            <div class="field"><label>数量 *</label><input id="inQty" type="number" min="0" step="any" placeholder="0" oninput="calcInbound()" /></div>
-            <div class="field"><label>单价（所选单位）*</label><input id="inPrice" type="number" min="0" step="any" placeholder="0.00" oninput="calcInbound()" /><div class="field-hint" id="inPriceHint"></div></div>
-            <div class="field"><label>金额</label><input id="inAmount" readonly /></div>
-            <div class="field">
-              <label>调整（抹零 / 凑整）</label>
-              <input id="inAdjust" type="number" step="any" placeholder="0.00" oninput="calcInbound()" />
-              <div class="field-hint" id="inAdjustHint">正=多付，负=少付；差额自动记「金额调整」其他开支，商品成本不变</div>
-            </div>
-            <div class="field">
-              <label>运费（选填）</label>
-              <input id="inFreight" type="number" min="0" step="any" placeholder="0.00" oninput="calcInbound()" />
-              <div class="field-hint" id="inFreightHint">计入该批次成本 → 体现在这个品的毛利；并自动记入「其他开支」备查</div>
-            </div>
-            <div class="field">
-              <label>装卸费（选填）</label>
-              <input id="inHandling" type="number" min="0" step="any" placeholder="0.00" oninput="calcInbound()" />
-              <div class="field-hint">同运费：入成本、进「其他开支」，不强制填</div>
-            </div>
             <div class="field"><label>供应商</label><input id="inSupplier" placeholder="供应商名称" /></div>
             <div class="field"><label>日期 *</label><input id="inDate" type="date" /></div>
             <div class="field"><label>操作员</label><input id="inOperator" readonly title="默认当前登录账号，不可修改" /></div>
@@ -278,6 +254,28 @@
               <div class="field-hint">待付款：先进「待付款账单」，点「已支付」后才计入财务报表</div>
             </div>
           </div>
+
+          <h4 class="block-title">入库商品行 <span class="hint" id="inRowsHint">每行生成一张入库单，共用上面的供应商 / 日期 / 付款状态 / 备注</span></h4>
+          <div class="table-wrap">
+            <table id="inRowsTable">
+              <thead><tr>
+                <th style="width:20%;">商品</th>
+                <th style="width:9%;">进货单位</th>
+                <th style="width:8%;">数量</th>
+                <th style="width:10%;">单价</th>
+                <th style="width:13%;" class="num">金额</th>
+                <th style="width:9%;">运费</th>
+                <th style="width:9%;">装卸费</th>
+                <th style="width:9%;">调整</th>
+                <th></th>
+              </tr></thead>
+              <tbody id="inRowsBody"></tbody>
+            </table>
+          </div>
+          <div class="toolbar" style="margin-top:12px;">
+            <button class="btn secondary" onclick="addInboundRow()">＋ 添加商品行</button>
+            <span class="muted">运费 / 装卸费 / 调整按行填：运费与装卸费计入该行批次成本（体现在这个品的毛利）并同步「其他开支」；调整是抹零凑整，只记「金额调整」其他开支、不改成本</span>
+          </div>
           <div class="field" style="margin-top:12px;">
             <label>备注</label>
             <textarea id="inRemark" rows="1" placeholder="可选" onpaste="pasteRemarkFiles('inRemark', event)"></textarea>
@@ -289,7 +287,7 @@
             <div class="attach-list" id="inRemarkFiles"></div>
           </div>
           <div id="inAlert" class="alert" style="display:none;"></div>
-          <div class="form-actions"><button class="btn green" onclick="submitInbound()">✓ 确认入库</button></div>
+          <div class="form-actions"><button class="btn green" onclick="submitInbound()">✓ 确认入库（<span id="inRowCount">1</span> 行）</button></div>
         </div>
 
         <div class="card">
@@ -313,7 +311,8 @@
         <div class="card">
           <div class="card-head">
             <h3>新增出库 / 销售单</h3><span class="hint">卖商品自动结转关联包装材料与打包费</span>
-            <button class="btn" style="margin-left:auto;" onclick="openBatchModal('jushuitan')"><svg class="ic"><use href="#i-download"/></svg> 导入聚水潭出库单</button>
+            <button class="btn secondary" style="margin-left:auto;" onclick="openFreshInbound()" title="每天把要入库的鲜货数量填进去；陈列哪些商品可自行挑选"><svg class="ic"><use href="#i-in"/></svg> 鲜货入库</button>
+            <button class="btn" onclick="openBatchModal('jushuitan')"><svg class="ic"><use href="#i-download"/></svg> 导入聚水潭出库单</button>
             <button class="btn secondary" id="jstPendingBtn" onclick="openJstPending()" title="聚水潭新商品没规则匹配 / 需要验证码时，在这里处理">待办处理</button>
             <button class="btn secondary" onclick="openBatchModal('outbound')"><svg class="ic"><use href="#i-out"/></svg> 批量出库</button>
           </div>
@@ -1226,6 +1225,50 @@
           </div>
           <div class="fresh-summary" id="freshSummary" style="display:none;"></div>
           <div class="table-wrap"><table id="freshTable"></table></div>
+        </div>
+      </section>
+
+      <!-- 鲜货入库（二级页，入口在「出库 / 销售」页右上角） -->
+      <section id="page-fresh-in" class="page">
+        <div class="card">
+          <div class="card-head">
+            <h3>鲜货入库</h3>
+            <span class="hint">每天把今天要入库的鲜货数量填进去：单价自动带出（最近入库价 → 参考成本，可改），运费 / 装卸费默认空；每个填了数量的商品各生成一张入库单</span>
+            <button class="btn secondary" style="margin-left:auto;" onclick="openFreshConfig()"><svg class="ic"><use href="#i-sliders"/></svg> 管理展示商品</button>
+            <button class="btn secondary" onclick="loadFreshInbound()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+            <button class="btn secondary" onclick="goPage('outbound');loadOutbounds()">← 返回出库列表</button>
+          </div>
+          <div class="form-grid">
+            <div class="field"><label>日期 *</label><input id="finDate" type="date" /></div>
+            <div class="field"><label>供应商</label><input id="finSupplier" placeholder="供应商名称（选填）" /></div>
+            <div class="field"><label>操作员</label><input id="finOperator" readonly title="默认当前登录账号，不可修改" /></div>
+            <div class="field">
+              <label>付款状态</label>
+              <div class="pay-radios">
+                <label class="pay-radio on"><input type="radio" name="finPay" value="paid" checked onchange="payRadioSync(this)" /> 已付款</label>
+                <label class="pay-radio"><input type="radio" name="finPay" value="unpaid" onchange="payRadioSync(this)" /> 待付款</label>
+              </div>
+              <div class="field-hint">待付款：先进「待付款账单」，点「已支付」后才计入财务报表</div>
+            </div>
+          </div>
+          <div class="toolbar" style="margin-top:10px;">
+            <input id="finSearch" placeholder="🔍 筛选商品（只影响显示，已填的数量不会丢）" oninput="renderFreshInbound()" style="min-width:220px;" />
+            <button class="btn secondary" onclick="finAddProduct()"><svg class="ic"><use href="#i-plus"/></svg> 加一个商品</button>
+            <button class="btn secondary" onclick="finClearAllQty()">清空已填数量</button>
+            <div class="grow"></div>
+            <span class="muted">填了数量的行会高亮；没填数量的行不会入库</span>
+          </div>
+          <div class="table-wrap"><table id="finTable"></table></div>
+          <div class="fresh-summary" id="finSummary" style="display:none;"></div>
+          <div class="field" style="margin-top:10px;">
+            <label>备注</label>
+            <textarea id="finRemark" rows="1" placeholder="可选：本次入库的每一张单共用"></textarea>
+          </div>
+          <div class="toolbar" style="margin-top:10px;">
+            <span class="muted">运费 / 装卸费默认留空：填了会算进该商品的批次成本（体现在它的毛利上），并同步「其他开支」备查；商品类别若配了扣点，入库单价会自动按 原价×(1−扣点%) 折算</span>
+            <div class="grow"></div>
+            <button class="btn green" id="finSubmitBtn" onclick="submitFreshInbound()">✓ 全部入库</button>
+          </div>
         </div>
       </section>
 
