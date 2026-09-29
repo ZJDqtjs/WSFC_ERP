@@ -5660,49 +5660,9 @@ async function loadReport() {
   renderExpenseTables(rep);
   renderExpenseItems(rep);
 
-  const pt = $("repProductTable");
-  let prodRows = applyTableSort(pt, rep.by_product || []);
-  // 成本为「总成本」= 商品成本 + 打包人工/耗材 + 快递费（后端 by_product 已按销售商品归属；
-  // 无归属的快递费等按该单销售金额占比分摊）。毛利率分母用扣点前销售金额 gross_sales。
-  const gpRateOf = (p) => {
-    const denom = Number(p.gross_sales) || Number(p.amount) || 0;
-    if (!denom) return "—";
-    const total = Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
-    const rate = p.gp_rate != null ? Number(p.gp_rate) : ((Number(p.amount) - total) / denom) * 100;
-    return rate.toFixed(1) + "%";
-  };
-  if (!prodRows.length) pt.innerHTML = `<tr><td class="empty" colspan="8">本期无销售</td></tr>`;
-  else pt.innerHTML = `<thead><tr>
-    <th data-key="name">商品${sortArrow("repProductTable", "name")}</th>
-    <th data-key="spec">规格${sortArrow("repProductTable", "spec")}</th>
-    <th data-key="is_dropship">出库方式${sortArrow("repProductTable", "is_dropship")}</th>
-    <th data-key="qty" class="num">销量${sortArrow("repProductTable", "qty")}</th>
-    <th data-key="amount" class="num">收入${sortArrow("repProductTable", "amount")}</th>
-    <th data-key="cogs" class="num">总成本${sortArrow("repProductTable", "cogs")}</th>
-    <th data-key="gross" class="num">毛利${sortArrow("repProductTable", "gross")}</th>
-    <th class="num">毛利率</th></tr></thead><tbody>` +
-    prodRows.map((p) => {
-      const total = Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
-      const gp = (Number(p.amount) || 0) - total;
-      const color = gp >= 0 ? "var(--green)" : "var(--red)";
-      // 成本构成：代发行也要列出来（代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 其他关联结算 ＋ 快递费）
-      const splitText = costSplitText(p);
-      const split = splitText ? `<div class="muted" style="font-size:11px;">${splitText}</div>` : "";
-      // 出库方式：代发（别人发货，不扣本仓库存）单独标出，不和库存商品混在一起
-      const way = p.is_dropship
-        ? '<span class="badge income">代发</span>'
-        : '<span class="badge adjust">库存出库</span>';
-      return `<tr>
-      <td>${esc(p.name)}${split}</td>
-      <td class="muted">${esc(p.spec) || "—"}</td>
-      <td>${way}</td>
-      <td class="num mono">${fmtNum(p.qty)}</td>
-      <td class="num mono">${fmtMoney(p.amount)}</td><td class="num mono">${fmtMoney(total)}</td>
-      <td class="num mono" style="color:${color}">${fmtMoney(gp)}</td>
-      <td class="num mono" style="color:${color}">${gpRateOf(p)}</td></tr>`;
-    }).join("") + `</tbody>`;
-  pt._rows = prodRows;
-  pt._render = loadReport;
+  // 商品销售明细：先缓存原始行，再由 renderReportGoods() 按「商品名称筛选」渲染（输入即过滤）
+  REP_PROD_ROWS = rep.by_product || [];
+  renderReportGoods();
   renderSalesBySpec(from, to, whQs);   // 出库明细：每天 × 每种规格卖了多少单（含代发数量/代发成本）
 
   const ft = $("financeTable");
@@ -5789,6 +5749,91 @@ function renderCostBreakdown(rep) {
     </table></div>
     ${packTotal ? "" : `<div class="alert warn" style="margin-top:10px;">本期没有包材 / 人工 / 快递等关联结算成本。若商品已配置包装清单，请确认出库时是否生成了关联结算行。</div>`}`;
 }
+/* 商品销售明细表：带「商品名称筛选」（与移动端财务报表同一套口径——名称 / 规格任一包含关键词即命中）。
+   输入即过滤、点表头排序都只重渲染这张表，不再请求后端；筛选词在重新查询后保留。 */
+let REP_PROD_ROWS = null;   // 最近一次报表的商品明细原始行（未筛选、未排序）
+function renderReportGoods() {
+  const pt = $("repProductTable");
+  if (!pt) return;
+  const all = REP_PROD_ROWS || [];
+  const kwEl = $("repGoodsKw");
+  const kw = ((kwEl && kwEl.value) || "").trim();
+  const k = kw.toLowerCase();
+  const hit = k ? all.filter((p) => `${p.name || ""} ${p.spec || ""}`.toLowerCase().includes(k)) : all;
+  const prodRows = applyTableSort(pt, hit);
+  const hint = $("repGoodsHint");
+  if (hint) hint.textContent = all.length ? (k ? `匹配 ${prodRows.length} / ${all.length} 个商品` : `共 ${all.length} 个商品`) : "";
+  // 成本为「总成本」= 商品成本 + 打包人工/耗材 + 快递费（后端 by_product 已按销售商品归属；
+  // 无归属的快递费等按该单销售金额占比分摊）。毛利率分母用扣点前销售金额 gross_sales。
+  const gpRateOf = (p) => {
+    const denom = Number(p.gross_sales) || Number(p.amount) || 0;
+    if (!denom) return "—";
+    const total = Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
+    const rate = p.gp_rate != null ? Number(p.gp_rate) : ((Number(p.amount) - total) / denom) * 100;
+    return rate.toFixed(1) + "%";
+  };
+  if (!prodRows.length) {
+    pt.innerHTML = `<tr><td class="empty" colspan="8">${all.length ? `没有匹配「${esc(kw)}」的商品，换个关键词试试` : "本期无销售"}</td></tr>`;
+    pt._rows = [];
+    pt._render = renderReportGoods;
+    return;
+  }
+  const sum = prodRows.reduce((a, p) => {
+    a.qty += Number(p.qty) || 0;
+    a.amount += Number(p.amount) || 0;
+    a.cogs += Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
+    return a;
+  }, { qty: 0, amount: 0, cogs: 0 });
+  const sumGp = sum.amount - sum.cogs;
+  const sumColor = sumGp >= 0 ? "var(--green)" : "var(--red)";
+  pt.innerHTML = `<thead><tr>
+    <th data-key="name">商品${sortArrow("repProductTable", "name")}</th>
+    <th data-key="spec">规格${sortArrow("repProductTable", "spec")}</th>
+    <th data-key="is_dropship">出库方式${sortArrow("repProductTable", "is_dropship")}</th>
+    <th data-key="qty" class="num">销量${sortArrow("repProductTable", "qty")}</th>
+    <th data-key="amount" class="num">收入${sortArrow("repProductTable", "amount")}</th>
+    <th data-key="cogs" class="num">总成本${sortArrow("repProductTable", "cogs")}</th>
+    <th data-key="gross" class="num">毛利${sortArrow("repProductTable", "gross")}</th>
+    <th class="num">毛利率</th></tr></thead><tbody>` +
+    prodRows.map((p) => {
+      const total = Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
+      const gp = (Number(p.amount) || 0) - total;
+      const color = gp >= 0 ? "var(--green)" : "var(--red)";
+      // 成本构成：代发行也要列出来（代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 其他关联结算 ＋ 快递费）
+      const splitText = costSplitText(p);
+      const split = splitText ? `<div class="muted" style="font-size:11px;">${splitText}</div>` : "";
+      // 出库方式：代发（别人发货，不扣本仓库存）单独标出，不和库存商品混在一起
+      const way = p.is_dropship
+        ? '<span class="badge income">代发</span>'
+        : '<span class="badge adjust">库存出库</span>';
+      return `<tr>
+      <td>${esc(p.name)}${split}</td>
+      <td class="muted">${esc(p.spec) || "—"}</td>
+      <td>${way}</td>
+      <td class="num mono">${fmtNum(p.qty)}</td>
+      <td class="num mono">${fmtMoney(p.amount)}</td><td class="num mono">${fmtMoney(total)}</td>
+      <td class="num mono" style="color:${color}">${fmtMoney(gp)}</td>
+      <td class="num mono" style="color:${color}">${gpRateOf(p)}</td></tr>`;
+    }).join("") + `</tbody>
+    <tfoot><tr>
+      <td><b>${k ? "筛选合计" : "本期合计"}</b> <span class="muted">${prodRows.length} 个商品</span></td>
+      <td></td><td></td>
+      <td class="num mono"><b>${fmtNum(sum.qty)}</b></td>
+      <td class="num mono"><b>${fmtMoney(sum.amount)}</b></td>
+      <td class="num mono"><b>${fmtMoney(sum.cogs)}</b></td>
+      <td class="num mono" style="color:${sumColor}"><b>${fmtMoney(sumGp)}</b></td>
+      <td class="num mono" style="color:${sumColor}"><b>${sum.amount ? ((sumGp / sum.amount) * 100).toFixed(1) + "%" : "—"}</b></td>
+    </tr></tfoot>`;
+  pt._rows = prodRows;
+  pt._render = renderReportGoods;   // 点表头排序 / 再输入关键词都只重渲染这张表
+}
+/** 清空商品名称筛选 */
+function clearRepGoodsKw() {
+  const el = $("repGoodsKw");
+  if (el) el.value = "";
+  renderReportGoods();
+}
+
 /** 出库明细：每天 × 每种规格卖了多少单（含代发行的代发数量/代发成本） */
 async function renderSalesBySpec(from, to, whQs) {
   const t = $("repSpecTable");
