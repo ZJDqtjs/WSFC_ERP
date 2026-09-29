@@ -277,7 +277,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onActivated } from 'vue'
+import { ref, reactive, computed, onMounted, onActivated } from 'vue'
 import { showToast, showImagePreview } from 'vant'
 import api, { aiStream, assetUrl } from '../api'
 import ProductPicker from '../components/ProductPicker.vue'
