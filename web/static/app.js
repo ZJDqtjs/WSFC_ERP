@@ -1460,6 +1460,40 @@ function aiPriceBadge(tr, line) {
     badge.remove();
   }
 }
+/**
+ * 兜底补价：把「已命中已有商品、但单价为空」的行按该商品最近一次录入价填上。
+ * 正常后端在识别时就会填（_normalize_line），这里覆盖漏填的情形：
+ * 从待办页打开的历史结果、单位没能换算的行、以前存下的旧结果等。
+ * 只填空行，票据/用户已填的价一律不动；待新增商品（pid=0）没有历史价，跳过。
+ */
+async function aiFillMissingPrices() {
+  const rows = [...document.querySelectorAll("#aiLines tr[data-idx]")];
+  for (const tr of rows) {
+    const sel = tr.querySelector(".ai-pid");
+    const priceEl = tr.querySelector(".ai-price");
+    if (!sel || !priceEl) continue;
+    const pid = +sel.value || 0;
+    if (!pid) continue;
+    const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[+tr.dataset.idx] : null;
+    // 手动填的、票据带来的价不动；之前是「自动按最近价」填的，换入库/出库口径后允许刷新
+    if (!(line && line.price_defaulted) && priceEl.value !== "" && +priceEl.value !== 0) continue;
+    let price = 0;
+    const opt = sel.options[sel.selectedIndex];
+    if (opt && opt.dataset && opt.dataset.price) price = +opt.dataset.price || 0;
+    if (!price) {
+      try {
+        const d = await api(`/api/ai/last-price?product_id=${pid}&op_type=${$("aiType").value}`);
+        price = (d && d.price) || 0;
+      } catch (e) { price = 0; }
+    }
+    if (price > 0) {
+      priceEl.value = price;
+      const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[+tr.dataset.idx] : null;
+      if (line) line.price_defaulted = true;
+      aiPriceBadge(tr, line);
+    }
+  }
+}
 // 切换商品（分类下拉/相似候选/新商品占位）后：若单价为空，回填该商品最近一次录入价
 async function aiProdChanged(i) {
   const tr = document.querySelector(`#aiLines tr[data-idx="${i}"]`);
@@ -1520,14 +1554,15 @@ function openAiConfirm(r) {
       if (!ln.candidates.some((c) => c.product_id === ln.product_id)) ln.product_id = ln.candidates[0].product_id;
       const cur = ln.candidates.find((c) => c.product_id === ln.product_id) || ln.candidates[0];
       if (!(+ln.unit_price) && cur.last_price) { ln.unit_price = cur.last_price; ln.price_defaulted = true; }
-      prodSel = `<select class="ai-pid" style="border-color:var(--amber);" onchange="aiProdChanged(${i})">
+      // searchable：和普通下拉一样支持「点击选择 / 输入筛选」（漏了它就只能滚原生下拉，无法输入搜索）
+      prodSel = `<select class="searchable ai-pid" style="border-color:var(--amber);" onchange="aiProdChanged(${i})">
           <option value="0">🆕 新建：${esc(ln.recognized_name || ln.product_name || "")}</option>
           ${ln.candidates.map((c) => `<option value="${c.product_id}" ${c.product_id === ln.product_id ? "selected" : ""} data-price="${c.last_price || 0}">〔${({ stock: "库存", order: "订单", pack: "包材", labor: "人工" }[c.category] || "库存")}〕${esc(c.name)}${c.last_price ? `（最近 ${c.last_price}）` : ""}</option>`).join("")}
         </select>`;
     } else if (np) {
       // 待新增商品：仅在「确认提交」后才建档，取消不会污染商品资料
       ln.product_id = 0;
-      prodSel = `<select class="ai-pid" onchange="aiProdChanged(${i})">${aiProductOptions(0, cat, `<option value="0" selected>🆕 新建：${esc(np.name)}</option>`)}</select>`;
+      prodSel = `<select class="searchable ai-pid" onchange="aiProdChanged(${i})">${aiProductOptions(0, cat, `<option value="0" selected>🆕 新建：${esc(np.name)}</option>`)}</select>`;
     } else {
       const head = ln.product_id ? "" : `<option value="0" selected>— 请选择商品 —</option>`;
       prodSel = `<select class="searchable ai-pid" onchange="aiProdChanged(${i})">${aiProductOptions(ln.product_id, cat, head)}</select>`;
@@ -1582,6 +1617,8 @@ function openAiConfirm(r) {
       <button class="btn green" onclick="aiSubmit()">✓ 确认提交</button>
     </div>`);
   $("modalBox").classList.add("wide");   // 明细列多，弹窗放宽，避免信息被挤没
+  // 打开后兜底补价：已命中商品但单价为空的行，自动带出最近录入价（票据自带的价不动）
+  setTimeout(() => aiFillMissingPrices(), 60);
 }
 // 每行「是否已付款」开关：默认已付款；点成「待付款」后该笔提交时计入「待付款账单」
 function aiPayHtml(ln, i) {
@@ -1632,6 +1669,8 @@ function aiTypeChanged() {
     if (!["stock", "order", "pack", "labor"].includes(cat)) catSel.value = isIn ? "stock" : "order";
     aiCatChanged(+tr.dataset.idx);
   });
+  // 入库/出库切换后价格口径不同：重新给空单价的已命中行补价
+  setTimeout(() => aiFillMissingPrices(), 60);
 }
 async function aiSubmit() {
   const type = $("aiType").value;
