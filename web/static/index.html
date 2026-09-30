@@ -111,7 +111,7 @@
         </div>
 
         <div class="card">
-          <div class="card-head"><h3><svg class="ic"><use href="#i-ai"/></svg> AI 智能录入</h3><span class="hint">用大白话描述入库/出库，AI 自动拆分成系统格式；<b>粘贴/选择票据图片后先预览，按回车或点「识别并录入」加入队列</b>，AI 在后台逐条识别（可以连续录入，不用等），识别完到「<a href="javascript:;" onclick="goPage('eva')">待办处理</a>」批量审核修改后提交；输入框里的文字会作为补充说明一起发给 AI（如「图里的京东箱子就是纸箱：京东8号-&gt;8号纸箱」）</span></div>
+          <div class="card-head"><h3><svg class="ic"><use href="#i-ai"/></svg> AI 智能录入</h3><span class="hint">用大白话描述入库/出库，AI 自动拆分成系统格式；<b>说「盘点」时按盘点处理</b>（按「实盘数 − 当前库存」调整库存，不是入/出库）；<b>粘贴/选择票据图片后先预览，按回车或点「识别并录入」加入队列</b>，AI 在后台逐条识别（可以连续录入，不用等），识别完到「<a href="javascript:;" onclick="goPage('eva')">待办处理</a>」批量审核修改后提交；输入框里的文字会作为补充说明一起发给 AI（如「图里的京东箱子就是纸箱：京东8号-&gt;8号纸箱」）</span></div>
           <div class="toolbar">
             <input id="aiText" placeholder='文字：今天入库了100斤木耳，25一斤 ｜ 图片补充说明：图里说的京东箱子就是纸箱箱子（京东8号-&gt;8号纸箱）' style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')aiRun()" oninput="if(AI_PENDING.length)aiRenderPending()" />
             <button class="btn green" id="aiBtn" onclick="aiRun()"><svg class="ic"><use href="#i-ai"/></svg> 识别并录入</button>
@@ -168,6 +168,7 @@
           <button class="seg-item active" data-tab="ai" onclick="evaTab('ai')">AI 识别队列<span class="badge" id="evaTabAi"></span></button>
           <button class="seg-item" data-tab="in" onclick="evaTab('in')">入库待办<span class="badge" id="evaTabIn"></span></button>
           <button class="seg-item" data-tab="out" onclick="evaTab('out')">出库待办<span class="badge" id="evaTabOut"></span></button>
+          <button class="seg-item" data-tab="st" onclick="evaTab('st')">盘点待办<span class="badge" id="evaTabSt"></span></button>
         </div>
 
         <div class="stat-grid" id="evaStats"></div>
@@ -212,6 +213,16 @@
             <button class="btn green" onclick="evaSubmitChecked('outbound')"><svg class="ic"><use href="#i-check"/></svg> 批量提交出库</button>
           </div>
           <div id="evaOutList"></div>
+        </div>
+
+        <div class="card eva-panel" id="evaPanelSt" style="display:none;">
+          <div class="card-head">
+            <h3><svg class="ic"><use href="#i-sliders"/></svg> 盘点待办</h3>
+            <span class="hint">AI 识别的盘点结果：按「实盘数 − 当前库存」算好增减量，点任务按钮可改；提交走「库存 → 盘点调整」的增减模式（可在盘点记录里回退）。</span>
+            <div class="grow"></div>
+            <button class="btn green" onclick="evaSubmitChecked('stocktake')"><svg class="ic"><use href="#i-check"/></svg> 批量提交盘点</button>
+          </div>
+          <div id="evaStList"></div>
         </div>
       </section>
 

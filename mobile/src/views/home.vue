@@ -457,6 +457,15 @@ function cancelAI() {
 
 function openConfirm(r) {
   if (!r) return
+  // 盘点（stocktake）要按「增减量」调整库存，移动端这版还没做这个界面：
+  // 直接拦住，避免被当成"入库"提交（错误地增加库存）
+  if (r.type === 'stocktake') {
+    showToast('这是盘点结果，请在电脑端「待办处理 → 盘点待办」里确认提交')
+    aiForm.lines = []
+    confirmShow.value = false
+    if (waitNext) { waitNext(); waitNext = null }
+    return
+  }
   aiForm.type = r.type === 'outbound' ? 'outbound' : 'inbound'
   aiForm.date = r.date || todayStr()
   aiForm.supplier = r.supplier || ''

@@ -47,7 +47,10 @@ SYSTEM_PROMPT = """你是「企业台账系统」的自然语言录入解析器�
 - 出库：出库2单七彩土豆3斤，每单15元，客户叫张三
 
 处理要求：
-1. 判断业务类型 type：入库 -> "inbound"；出库 -> "outbound"。按用户第一个明确的动作词判断。
+1. 判断业务类型 type：入库 -> "inbound"；出库 -> "outbound"；盘点（盘库/盘点库存/清点/实盘/校对库存）-> "stocktake"。按用户第一个明确的动作词判断。
+   - stocktake（盘点）时：quantity 默认是「实盘数量」（盘点后的库存数），系统会按「实盘数 − 当前库存」换算成增减量去调整库存；unit 照写；unit_price 一律填 0；不需要供应商/客户。
+   - 若用户说的是增减（「多了 100 个 / 少了 3 斤 / 盘盈 / 盘亏」），quantity 就填那个增减量，并在该行加 "rel": true。
+   - 用户没提「盘点 / 盘库 / 实盘 / 结存」等词时，一律不要输出 stocktake（否则会凭空调整库存）。
 2. 商品名称 product：输出用户提到的商品名称（原词即可，简洁，不要加多余说明）。
 3. 数量、单位、单价：直接保留用户表述的数字与单位（如 quantity=100, unit="斤", unit_price=25），禁止自行换算单位、禁止改数字。
 4. category 商品分类：逐条判断该商品属于哪一类，按以下四选一输出原词：
@@ -81,7 +84,9 @@ JSON 结构：
 IMAGE_SYSTEM_PROMPT = """你是「企业台账系统」的采购票据识别助手。用户会提供一张采购发票 / 送货单 / 销货单的图片（如公司进货凭证），请从中提取采购信息。
 
 处理要求：
-1. 业务类型一律为入库（inbound）：这些票据代表公司采购了货物进入仓库。
+1. 业务类型默认是入库（inbound）：这些票据代表公司采购了货物进入仓库。
+   - 例外：如果图片是「库存盘点表 / 实盘单 / 结存表」（只有品名 + 实盘数量，没有单价/金额，或标题写着 盘点/实盘/结存/盘库），
+     则 type 用 "stocktake"：quantity 取该行的实盘数量（系统会据此换算成增减量调整库存），unit 照写，unit_price 一律 0，不需要供应商。
 2. 逐条提取每条采购商品的：商品名称（product）、数量（quantity）、单位（unit，如 张/个/斤/公斤/袋/箱）、单价（unit_price，每单位的金额，保留小数）。
    - product 必须逐字照抄票据上的名称（保留括号、规格、编号等），不要改写、缩写、纠错，也不要自行补「干货」等字样；名称中不要插入空格。
    - quantity 取票据上直接列出的数量（如「数额」列）为准；若数量写成算式（如「2960-1500-1308=152」「2214-1587=627个」），取等号后面的结果作为 quantity。不要用「计算明细」里的算式重算；票据上没有单价的，unit_price 一律填 0，禁止拿明细里的数字当单价。
@@ -976,7 +981,8 @@ def _normalize_line(db: Session, p: Product | None, line: dict, op_type: str, au
         out["hint"] += f"；⚠ {out['unit_conflict_msg']}"
 
     # 用户未录入单价（仍为 0）：按该商品上次录入的价格默认填入（已是默认单位，不再换算）
-    if not out["unit_price"]:
+    # 盘点（stocktake）只关心数量，不填价
+    if not out["unit_price"] and op_type != "stocktake":
         last = _last_price_default(db, p, op_type)
         if last:
             out["unit_price"] = round(last, 4)
@@ -1038,8 +1044,8 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
     这样用户粘贴票据后可以补一句「京东8号->8号纸箱」来纠正识别结果。
     """
     op_type = str(parsed.get("type", "")).strip().lower()
-    if op_type not in ("inbound", "outbound"):
-        raise HTTPException(400, "无法识别业务类型（入库/出库），请换个说法")
+    if op_type not in ("inbound", "outbound", "stocktake"):
+        raise HTTPException(400, "无法识别业务类型（入库 / 出库 / 盘点），请换个说法")
     lines_in = parsed.get("lines") or []
     if not lines_in:
         raise HTTPException(400, "未能从描述中提取商品明细，请补充商品名称、数量与价格")
@@ -1144,8 +1150,8 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
         # 非完全命中（含仅「包含」命中）或存在其他候选 => 歧义：不自动新增，交由用户确认
         ambiguous = (not exact_hit) and (p is not None or bool(similar))
         pending_new = None
-        if p is None and not ambiguous and op_type == "inbound":
-            # 入库的新物品（无任何相似商品）：识别阶段只生成「待新增档案」预览，绝不写库。
+        if p is None and not ambiguous and op_type in ("inbound", "stocktake"):
+            # 入库 / 盘点遇到的新物品（无任何相似商品）：识别阶段只生成「待新增档案」预览，绝不写库。
             # 用户点「确认提交」时才真正建档（见 materialize_products），取消则不产生任何商品/包材数据。
             pending_new = _new_product_meta(_tight(name), cat or "stock")
             auto = True
@@ -1194,6 +1200,22 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
                 ln_out["hint"] += f"；已按默认候选「{first['name']}」最近价 {first['last_price']} 填入，请核对"
         # 该行的单据日期（没有就用顶层/表头日期），提交时按行落到各自单据上
         ln_out["date"] = (_safe_date(ln.get("date"), doc_date) or doc_date).isoformat()
+        # 盘点：算好「当前库存 / 增减量 / 盘点后」，确认框里显示并可修改；
+        # 提交走既有 /api/inventory/adjust 的 +/- 增减模式（不做覆盖）
+        if op_type == "stocktake":
+            _conv = (p.conversions or {}) if p is not None else {}
+            _du = (p.default_unit or p.base_unit) if p is not None else (ln_out.get("unit") or "")
+            _f = _conv.get(_du, 1) or 1
+            _before = round(((p.stock or 0) / _f) if p is not None else 0.0, 4)
+            _qty = round(float(ln_out.get("quantity") or 0), 4)
+            # 默认按「实盘数 − 当前库存」算增减；用户明确说了增减（rel=true）时，数量本身就是增减量
+            _adjust = _qty if ln.get("rel") else round(_qty - _before, 4)
+            ln_out["stock_before"] = _before
+            ln_out["stock_unit"] = _du
+            ln_out["stock_adjust"] = _adjust
+            ln_out["stock_after"] = round(_before + _adjust, 4)
+            ln_out["unit_price"] = 0.0
+            ln_out["hint"] = f"当前库存 {_before:g}{_du}，调整 {_adjust:+g}{_du} → 盘点后 {_before + _adjust:g}{_du}"
         lines.append(ln_out)
 
     return {
@@ -1406,3 +1428,7 @@ def last_price(
         raise HTTPException(404, "商品不存在")
     price = _last_price_default(db, p, "outbound" if op_type == "outbound" else "inbound")
     return {"product_id": p.id, "price": price, "unit": p.default_unit or p.base_unit, "op_type": op_type}
+
+
+# 注：AI 盘点没有单独的接口——前端直接调用既有的 POST /api/inventory/adjust
+# （+/- 增减模式），与手工盘点完全同一套库存流水、FIFO 批次与成本口径，可在盘点记录里回退。

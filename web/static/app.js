@@ -1538,6 +1538,7 @@ let AI_CONFIRM = null;   // 当前确认框对应的识别结果（供提交时�
 function openAiConfirm(r) {
   AI_CONFIRM = r;
   const isIn = r.type === "inbound";
+  const isStock = r.type === "stocktake";   // 盘点：用识别到的数量覆盖当前库存（不是入/出库）
   const docDate = r.date || today();
   // 逐行日期：票据每行各有单据日期时，这里按行显示、可单独修改
   (r.lines || []).forEach((ln) => { ln.date = ln.date || docDate; });
@@ -1571,14 +1572,22 @@ function openAiConfirm(r) {
       ? '<span class="badge" style="background:#fff3cd;color:#8a6d00;margin-left:6px;">⚠ 相似商品待确认</span>' : "";
     const unitBadge = ln.unit_conflict
       ? '<span class="badge" style="background:#fde2e0;color:#b3261e;margin-left:6px;" title="' + esc(ln.unit_conflict_msg || "") + '">⚠ 单位不一致</span>' : "";
+    // 盘点：数量列改「增减量（±）」，单价列换成「当前库存 → 盘点后」，不显示付款状态
+    const qtyCell = isStock
+      ? `<td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.stock_adjust || 0)}" style="width:104px;" title="增减量：正数增加、负数减少（默认已按 实盘数 − 当前库存 算好，可自行修改）" /></td>`
+      : `<td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.quantity)}" style="width:90px;" /></td>`;
+    const priceCell = isStock
+      ? `<td class="muted" style="white-space:nowrap;" title="当前库存 → 盘点后">当前 <b>${fmtNum(ln.stock_before || 0)}</b> → ${fmtNum(ln.stock_after || 0)} ${esc(ln.stock_unit || ln.unit || "")}</td>`
+      : `<td class="ai-price-cell"><input type="number" step="any" class="ai-price" value="${ln.unit_price ? ln.unit_price : ""}" placeholder="可留空" style="width:100px;" />${ln.price_defaulted ? '<span class="ai-price-badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按最近价</span>' : ""}</td>`;
+    const payCell = isStock ? "" : `<td>${aiPayHtml(ln, i)}</td>`;
     return `<tr data-idx="${i}">
       <td><select class="ai-cat" onchange="aiCatChanged(${i})" style="width:92px;">${aiCatOptions(cat)}</select></td>
       <td style="min-width:250px;">${prodSel}${aiNewNameHtml(ln)}<div style="margin-top:4px;">${ambiBadge}${np ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 提交后新增</span>' : ""}</div></td>
       <td><input type="date" class="ai-date" value="${esc(ln.date || docDate)}" style="width:138px;" title="这一行的单据日期（对账单/送货单逐行日期）" /></td>
-      <td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.quantity)}" style="width:90px;" /></td>
+      ${qtyCell}
       <td><input class="ai-unit" value="${esc(ln.unit || "")}" style="width:70px;" />${unitBadge}</td>
-      <td class="ai-price-cell"><input type="number" step="any" class="ai-price" value="${ln.unit_price ? ln.unit_price : ""}" placeholder="可留空" style="width:100px;" />${ln.price_defaulted ? '<span class="ai-price-badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按最近价</span>' : ""}</td>
-      <td>${aiPayHtml(ln, i)}</td>
+      ${priceCell}
+      ${payCell}
       <td class="muted" style="font-size:12px;min-width:200px;">${esc(ln.hint || "")}</td>
       <td style="white-space:nowrap;"><button class="btn secondary" style="padding:4px 8px;" title="删除这一行" onclick="aiDelLine(${i})">🗑 删除</button></td>
     </tr>`;
@@ -1592,25 +1601,26 @@ function openAiConfirm(r) {
          <pre>${esc(AI_THINK_TEXT.length > 12000 ? "…（前面内容略）\n" + AI_THINK_TEXT.slice(-12000) : AI_THINK_TEXT)}</pre></details>`
     : "";
   openModal(`
-    <h3>确认录入（${isIn ? "入库" : "出库"}） <button class="close" onclick="closeModal()">✕</button></h3>
+    <h3>确认${isStock ? "盘点（调整库存）" : (isIn ? "入库" : "出库")} <button class="close" onclick="closeModal()">✕</button></h3>
     ${invImg}
     <p class="hint" style="margin-bottom:12px;">已自动识别以下内容，请核对（可修改/可删除行）后提交；🆕 标记的商品为新物品，点「确认提交」后才会新增商品档案（取消不会创建）。单价可留空，提交后在单据里补也行。<b>每行日期取自票据该行的「单据日期」</b>，可逐行改；对账单等多日期票据会按各自日期生成单据。每行默认<b>已付款</b>，可点成「待付款」把该笔列入「待付款账单」。</p>
     ${thinkHtml}
     <div class="form-grid">
       <div class="field"><label>业务类型</label><select id="aiType" onchange="aiTypeChanged()">
-        <option value="inbound" ${isIn ? "selected" : ""}>入库（进货）</option>
-        <option value="outbound" ${isIn ? "" : "selected"}>出库（销售）</option>
+        <option value="inbound" ${r.type === "inbound" ? "selected" : ""}>入库（进货）</option>
+        <option value="outbound" ${r.type === "outbound" ? "selected" : ""}>出库（销售）</option>
+        <option value="stocktake" ${isStock ? "selected" : ""}>盘点（增减调整库存）</option>
       </select></div>
       <div class="field"><label>整单日期</label>
         <input type="date" id="aiDate" value="${esc(docDate)}" />${dateHint}
         <button class="btn-link" style="font-size:12px;margin-left:6px;" onclick="aiApplyDateAll()">应用到所有行</button>
       </div>
-      <div class="field"><label>${isIn ? "供应商" : "客户"}</label><input id="aiParty" value="${esc(isIn ? r.supplier : r.customer)}" /></div>
+      ${isStock ? "" : `<div class="field"><label>${isIn ? "供应商" : "客户"}</label><input id="aiParty" value="${esc(isIn ? r.supplier : r.customer)}" /></div>`}
       <div class="field"><label>备注</label><input id="aiRemark" value="${esc(r.remark)}" /></div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>分类</th><th>商品</th><th>日期</th><th>数量</th><th>单位</th><th>${isIn ? "单价" : "售价"}</th><th>付款</th><th>说明</th><th>操作</th></tr></thead>
-      <tbody id="aiLines">${linesHtml || '<tr><td colspan="9" class="empty">未识别到明细</td></tr>'}</tbody>
+      <thead><tr><th>分类</th><th>商品</th><th>日期</th><th>${isStock ? "调整(±)" : "数量"}</th><th>单位</th><th>${isStock ? "当前库存 → 盘点后" : (isIn ? "单价" : "售价")}</th>${isStock ? "" : "<th>付款</th>"}<th>说明</th><th>操作</th></tr></thead>
+      <tbody id="aiLines">${linesHtml || `<tr><td colspan="${isStock ? 8 : 9}" class="empty">未识别到明细</td></tr>`}</tbody>
     </table></div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
@@ -1675,7 +1685,8 @@ function aiTypeChanged() {
 async function aiSubmit() {
   const type = $("aiType").value;
   const date = $("aiDate").value;
-  const party = $("aiParty").value.trim();
+  const partyEl = $("aiParty");                       // 盘点模式没有供应商/客户输入框
+  const party = partyEl ? partyEl.value.trim() : "";
   const remark = $("aiRemark").value.trim();
   const autoFlags = (AI_CONFIRM && AI_CONFIRM.lines) || [];
   let rows = [...document.querySelectorAll("#aiLines tr[data-idx]")].map((tr) => {
@@ -1691,7 +1702,8 @@ async function aiSubmit() {
       category: line.category || "stock",
       unit: tr.querySelector(".ai-unit").value.trim() || line.recognized_unit || "个",
     } : null;
-    const priceRaw = tr.querySelector(".ai-price").value.trim();
+    const priceEl2 = tr.querySelector(".ai-price");           // 盘点模式没有单价输入框
+    const priceRaw = priceEl2 ? priceEl2.value.trim() : "";
     return {
       product_id: pid,
       // 待新增商品：提交时才建档，避免用户取消也污染商品资料（含商品类型/包材）
@@ -1706,8 +1718,13 @@ async function aiSubmit() {
   }).filter((r) => r.product_id || r.new_product);
   if (!rows.length) { toast("请至少填写一条商品"); return; }
   if (rows.some((r) => !r.date)) { toast("每行都要有日期，请检查"); return; }
-  if (rows.some((r) => !(r.quantity > 0) || !r.unit)) { toast("请填写数量与单位（单价可留空，提交后在单据里补）"); return; }
-  if (rows.some((r) => isNaN(r.unit_price))) { toast("单价填的不是数字，请检查"); return; }
+  if (type === "stocktake") {
+    // 盘点是「增减量」：允许负数，0 表示不动（提交时跳过）
+    if (rows.some((r) => !r.quantity || !r.unit)) { toast("请填写增减量与单位（正数=增加，负数=减少）"); return; }
+  } else if (rows.some((r) => !(r.quantity > 0) || !r.unit)) {
+    toast("请填写数量与单位（单价可留空，提交后在单据里补）"); return;
+  }
+  if (type !== "stocktake" && rows.some((r) => isNaN(r.unit_price))) { toast("单价填的不是数字，请检查"); return; }
   const op = (CURRENT_USER && (CURRENT_USER.name || CURRENT_USER.username)) || "";
   try {
     const n = await submitDocRows({
@@ -1721,7 +1738,8 @@ async function aiSubmit() {
     }
     closeModal();
     AI_CONFIRM = null;
-    toast(type === "inbound" ? `入库成功（${n} 行）` : `出库成功（${n} 行）`);
+    toast(type === "stocktake" ? `盘点完成（调整 ${n} 行）`
+      : (type === "inbound" ? `入库成功（${n} 行）` : `出库成功（${n} 行）`));
     loadDashboard(); loadStock(); refreshEvaBadge();
     $("aiText").value = "";
   } catch (e) { toast("提交失败：" + e.message); }
@@ -1905,9 +1923,9 @@ function refreshEvaBadge() {
 /* ---------- 待办页渲染 ---------- */
 let EVA_TAB = "ai";   // 顶部三个横向按钮：ai 识别队列 / in 入库待办 / out 出库待办
 function evaTab(tab) {
-  EVA_TAB = ["ai", "in", "out"].includes(tab) ? tab : "ai";
+  EVA_TAB = ["ai", "in", "out", "st"].includes(tab) ? tab : "ai";
   document.querySelectorAll("#evaSeg .seg-item").forEach((b) => b.classList.toggle("active", b.dataset.tab === EVA_TAB));
-  [["ai", "evaPanelAi"], ["in", "evaPanelIn"], ["out", "evaPanelOut"]].forEach(([k, id]) => {
+  [["ai", "evaPanelAi"], ["in", "evaPanelIn"], ["out", "evaPanelOut"], ["st", "evaPanelSt"]].forEach(([k, id]) => {
     const el = $(id);
     if (el) el.style.display = k === EVA_TAB ? "" : "none";
   });
@@ -1927,19 +1945,22 @@ function renderEva() {
   const waiting = AI_QUEUE.filter((j) => j.status === "waiting");
   const errors = AI_QUEUE.filter((j) => j.status === "error");
   const done = AI_QUEUE.filter((j) => j.status === "done");
-  const ins = done.filter((j) => (j.result || {}).type !== "outbound");
+  const ins = done.filter((j) => !["outbound", "stocktake"].includes((j.result || {}).type));
   const outs = done.filter((j) => (j.result || {}).type === "outbound");
+  const stocks = done.filter((j) => (j.result || {}).type === "stocktake");
   const submitted = AI_QUEUE.filter((j) => j.status === "submitted").length;
   $("evaStats").innerHTML = `
     <div class="stat"><div class="label">识别中 / 排队</div><div class="value">${running.length} / ${waiting.length}</div></div>
     <div class="stat accent"><div class="label">入库待办</div><div class="value">${ins.length}</div></div>
     <div class="stat warn"><div class="label">出库待办</div><div class="value">${outs.length}</div></div>
+    <div class="stat"><div class="label">盘点待办</div><div class="value">${stocks.length}</div></div>
     <div class="stat ${errors.length ? "danger" : "success"}"><div class="label">识别失败</div><div class="value">${errors.length}</div><div class="sub">已提交 ${submitted} 条</div></div>`;
   // 顶部三个横向按钮上的角标（没活就不显示，一眼看出哪一类有待办）
   const setBadge = (id, n) => { const el = $(id); if (!el) return; el.textContent = String(n); el.style.display = n ? "" : "none"; };
   setBadge("evaTabAi", running.length + waiting.length + errors.length);
   setBadge("evaTabIn", ins.length);
   setBadge("evaTabOut", outs.length);
+  setBadge("evaTabSt", stocks.length);
   const aiItems = [...running, ...waiting, ...errors];
   // 任务一律「按钮左右排列」，点按钮才展开处理，避免纵向堆一大片
   const row = (items, zone, empty) => items.length
@@ -1948,6 +1969,7 @@ function renderEva() {
   $("evaAiList").innerHTML = row(aiItems, "ai", "队列为空。回到「工作台 → AI 智能录入」粘贴票据或输入描述，会自动加入这里。");
   $("evaInList").innerHTML = row(ins, "inbound", "暂无待审核的入库识别结果");
   $("evaOutList").innerHTML = row(outs, "outbound", "暂无待审核的出库识别结果");
+  $("evaStList").innerHTML = row(stocks, "stocktake", "暂无待审核的盘点结果（说「盘点…」或传盘点表就会出现在这里）");
   // 聚水潭待办（新商品没规则 / 要验证码）：在既有待办弹层里处理，这里只做入口与计数
   const jb = $("evaJstBtn");
   if (jb) {
@@ -1958,8 +1980,13 @@ function renderEva() {
 }
 /** 一条待办 = 一个按钮（左右排列）；点主按钮打开审核/详情，旁边的 ↻ 重试、✕ 删除 */
 function evaItemHtml(j, zone) {
+  const r0 = j.result || {};
+  const isStockJob = r0.type === "stocktake";
+  const stockSum = (r0.lines || []).reduce((a, ln) => a + (+ln.stock_adjust || 0), 0);
   const meta = j.status === "done"
-    ? `${((j.result || {}).lines || []).length} 行 · ${fmtMoney(evaMoney(j))} · ${evaDateSpan(j)}`
+    ? (isStockJob
+        ? `${(r0.lines || []).length} 行 · 净调整 ${stockSum >= 0 ? "+" : ""}${fmtNum(stockSum)} · ${evaDateSpan(j)}`
+        : `${(r0.lines || []).length} 行 · ${fmtMoney(evaMoney(j))} · ${evaDateSpan(j)}`)
     : (j.status === "running" ? "识别中…" : (j.status === "waiting" ? "等待识别…" : ""));
   const ck = zone === "ai" ? "" : `<input type="checkbox" class="eva-ck" data-id="${j.id}" title="勾选后可批量提交" />`;
   const side = zone === "ai"
@@ -2009,8 +2036,9 @@ function evaRowsOf(job) {
   return (r.lines || []).filter((ln) => ln.product_id || ln.new_product).map((ln) => ({
     product_id: ln.product_id || 0,
     new_product: ln.product_id ? null : (ln.new_product || { name: ln.recognized_name || ln.product_name || "", category: ln.category || "stock", unit: ln.unit || "个" }),
-    quantity: +ln.quantity || 0,
-    unit: ln.unit || "个",
+    // 盘点：数量用「增减量」（后端已按 实盘数 − 当前库存 算好）
+    quantity: r.type === "stocktake" ? (+ln.stock_adjust || 0) : (+ln.quantity || 0),
+    unit: (r.type === "stocktake" ? (ln.stock_unit || ln.unit) : ln.unit) || "个",
     unit_price: +ln.unit_price || 0,
     paid: ln.paid !== false,
     date: ln.date || r.date || today(),
@@ -2019,21 +2047,26 @@ function evaRowsOf(job) {
 }
 /** 勾选后批量提交（入库/出库各自成单；出库按「日期+付款状态」分单） */
 async function evaSubmitChecked(type) {
-  const boxId = type === "inbound" ? "evaInList" : "evaOutList";
+  const boxId = { inbound: "evaInList", outbound: "evaOutList", stocktake: "evaStList" }[type] || "evaInList";
+  const label = { inbound: "入库", outbound: "出库", stocktake: "盘点" }[type] || "入库";
   const ids = [...document.querySelectorAll(`#${boxId} .eva-ck:checked`)].map((x) => x.dataset.id);
   if (!ids.length) { toast("请先勾选要提交的待办（也可以在每条上点「审核提交」逐个核对）"); return; }
   const jobs = ids.map((id) => AI_QUEUE.find((j) => j.id === id)).filter((j) => j && j.result);
   if (!jobs.length) return;
   const bad = jobs.filter((j) => !evaRowsOf(j).length);
   if (bad.length) { toast(`有 ${bad.length} 条没有可提交的明细行，请先逐条审核`); return; }
-  if (!confirm(`批量提交 ${jobs.length} 条${type === "inbound" ? "入库" : "出库"}待办？\n（按识别结果直接提交，日期用每行自己的单据日期；要改明细请点「审核提交」）`)) return;
+  const tip = type === "stocktake"
+    ? "：按增减量调整库存（可在「库存 → 盘点记录」回退）"
+    : "，日期用每行自己的单据日期";
+  if (!confirm(`批量提交 ${jobs.length} 条${label}待办？\n（按识别结果直接提交${tip}；要改明细请点「审核提交」）`)) return;
   const op = (CURRENT_USER && (CURRENT_USER.name || CURRENT_USER.username)) || "";
   let okN = 0;
   for (const j of jobs) {
     const r = j.result || {};
     try {
       await submitDocRows({
-        type, party: type === "inbound" ? (r.supplier || "") : (r.customer || ""),
+        type,
+        party: type === "outbound" ? (r.customer || "") : (type === "inbound" ? (r.supplier || "") : ""),   // 盘点不需要客户/供应商
         remark: r.remark || "", imageUrl: r.image_url || "", rows: evaRowsOf(j), op,
       });
       j.status = "submitted";
@@ -2068,7 +2101,23 @@ async function submitDocRows({ type, party, remark, imageUrl, rows, op }) {
   }
   const ok = rows.filter((r) => r.product_id);
   if (!ok.length) throw new Error("商品创建失败，请稍后重试");
-  // 2) 写单据：入库逐行建单（各带自己的日期）；出库按「日期 + 付款状态」分单
+  // 2) 写单据：盘点走既有「盘点调整」的 +/- 增减模式；入库逐行建单；出库按「日期 + 付款状态」分单
+  if (type === "stocktake") {
+    let n = 0;
+    for (const r of ok) {
+      const d = +r.quantity || 0;                       // 增减量（±，按展示单位）
+      if (!d) continue;                                 // 增减为 0：等于没调整，跳过
+      await api("/api/inventory/adjust", "POST", {
+        product_id: r.product_id,
+        date: r.date,
+        quantity: `${d > 0 ? "+" : ""}${+d.toFixed(6)}`,  // 既有接口要求带符号的相对调整串
+        unit: r.unit,
+        remark: [remark, inv].filter(Boolean).join(" ") || "AI盘点",
+      });
+      n++;
+    }
+    return n;
+  }
   if (type === "inbound") {
     for (const r of ok) {
       const rmk = [inv, r.auto_created ? "[AI自动新增]" : "", remark].filter(Boolean).join(" ");
