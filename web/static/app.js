@@ -1522,11 +1522,50 @@ function aiStockRefresh(i) {
   if (!line.stock_rel && counted != null) adj = +(counted - before).toFixed(4);
   line.stock_adjust = adj;
   line.stock_after = +(before + adj).toFixed(4);
-  line.hint = `当前库存 ${fmtNum(before)}${unit}，调整 ${adj > 0 ? "+" : ""}${fmtNum(adj)}${unit} → 盘点后 ${fmtNum(line.stock_after)}${unit}`;
+  line.hint = [`当前库存 ${fmtNum(before)}${unit}，调整 ${adj > 0 ? "+" : ""}${fmtNum(adj)}${unit} → 盘点后 ${fmtNum(line.stock_after)}${unit}`,
+    line.unit_note || ""].filter(Boolean).join("；");
   if (cell) cell.innerHTML = `当前 <b>${fmtNum(before)}</b> → ${fmtNum(line.stock_after)} ${esc(unit)}`;
   const hintEl = tr.querySelector(".ai-hint");
   if (hintEl) hintEl.textContent = line.hint;
   if (qtyEl) qtyEl.value = fmtNum(adj);
+}
+/* 单位候选（datalist）：商品换算表里的单位 + 基础/默认单位 + 当前值（可下拉选，也可手填别的） */
+function aiUnitSuggest(pid, curUnit) {
+  const p = PRODUCTS.find((x) => x.id === (+pid || 0)) || null;
+  const set = [];
+  const push = (u) => { u = String(u || "").trim(); if (u && !set.includes(u)) set.push(u); };
+  if (p) {
+    Object.keys(p.conversions || {}).forEach(push);
+    push(p.base_unit);
+    push(p.default_unit);
+  }
+  push(curUnit);
+  return set.map((u) => `<option value="${esc(u)}"></option>`).join("");
+}
+/* 手动改单位：能换算就按换算表把「实盘数」一起换（92袋 × 25公斤/袋 → 2300公斤），并重算库存基线 */
+function aiUnitChanged(i) {
+  const tr = document.querySelector(`#aiLines tr[data-idx="${i}"]`);
+  const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[i] : null;
+  if (!tr || !line) return;
+  const inp = tr.querySelector(".ai-unit");
+  const unit = (inp ? inp.value : "").trim();
+  const oldUnit = (line.stock_unit || line.unit || "").trim();
+  if (unit && unit !== oldUnit) {
+    const p = PRODUCTS.find((x) => x.id === (+tr.querySelector(".ai-pid").value || 0)) || null;
+    const conv = (p && p.conversions) || {};
+    const fOld = +conv[oldUnit] || 0, fNew = +conv[unit] || 0;
+    if (fOld && fNew && line.stock_counted != null) {
+      line.stock_counted = +((line.stock_counted * fOld) / fNew).toFixed(4);
+      line.unit_note = `单位「${oldUnit}」→「${unit}」，数量已按换算表同步换算`;
+    } else {
+      line.unit_note = `单位「${oldUnit || "空"}」→「${unit}」，数量请核对（该商品换算表里没有这两个单位，无法自动换算）`;
+    }
+    line.unit = unit;
+    line.stock_unit = unit;
+    aiStockRefresh(i);
+  } else if (line) {
+    line.unit = unit;
+  }
 }
 // 切换商品（分类下拉/相似候选/新商品占位）后：若单价为空，回填该商品最近一次录入价
 async function aiProdChanged(i) {
@@ -1544,6 +1583,32 @@ async function aiProdChanged(i) {
   }
   if (!pid && line && line.recognized_unit) {
     tr.querySelector(".ai-unit").value = line.recognized_unit;
+  }
+  // 换成真实商品：识别到的单位若不在该商品的可选单位里（如占位的「袋」 vs 商品的「公斤」），
+  // 自动改成商品的默认单位 —— 否则商品的「公斤」会被「袋」盖住，库存与增减量全按错单位算
+  if (pid) {
+    const p = PRODUCTS.find((x) => x.id === pid) || null;
+    const unitInp = tr.querySelector(".ai-unit");
+    const cur = (unitInp && unitInp.value || "").trim();
+    const conv = (p && p.conversions) || {};
+    const valid = !!cur && (cur in conv || cur === defaultUnit(p) || cur === (p && p.base_unit));
+    if (p && unitInp && !valid) {
+      const du = defaultUnit(p);
+      const fOld = +conv[cur] || 0, fNew = +conv[du] || 0;
+      if (du && du !== cur) {
+        if (fOld && fNew && line && line.stock_counted != null) {
+          line.stock_counted = +((line.stock_counted * fOld) / fNew).toFixed(4);
+          line.unit_note = `单位已按商品「${p.name}」改为「${du}」（识别单位「${cur || "空"}」不适用），数量已按换算表同步换算`;
+        } else if (line) {
+          line.unit_note = `单位已按商品「${p.name}」改为「${du}」（识别单位「${cur || "空"}」不适用），数量请核对`;
+        }
+        unitInp.value = du;
+        if (line) line.unit = du;
+      }
+    }
+    // 单位候选（datalist）跟着商品更新：换商品后可选单位不同
+    const dl = tr.querySelector("datalist");
+    if (dl) dl.innerHTML = aiUnitSuggest(pid, (unitInp && unitInp.value) || "");
   }
   // 盘点行：换了商品/分类就必须重算「当前库存 → 盘点后」与增减量
   aiStockRefresh(i);
@@ -1624,7 +1689,7 @@ function openAiConfirm(r) {
       <td style="min-width:250px;">${prodSel}${aiNewNameHtml(ln)}<div style="margin-top:4px;">${ambiBadge}${np ? '<span class="badge ai-newbadge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 提交后新增</span>' : ""}</div></td>
       <td><input type="date" class="ai-date" value="${esc(ln.date || docDate)}" style="width:138px;" title="这一行的单据日期（对账单/送货单逐行日期）" /></td>
       ${qtyCell}
-      <td><input class="ai-unit" value="${esc(ln.unit || "")}" style="width:70px;" />${unitBadge}</td>
+      <td><input class="ai-unit" list="aiUnitList-${i}" value="${esc(ln.unit || "")}" style="width:84px;" title="单位：可下拉选该商品已有单位，也可手填；改动会立即重算库存" onchange="aiUnitChanged(${i})" /><datalist id="aiUnitList-${i}">${aiUnitSuggest(ln.product_id, ln.unit)}</datalist>${unitBadge}</td>
       ${priceCell}
       ${payCell}
       <td class="muted ai-hint" style="font-size:12px;min-width:200px;">${esc(ln.hint || "")}</td>
