@@ -998,11 +998,20 @@ function openAdjust(pid = 0) {
     </div>
     <div class="field" style="grid-column:1/-1;"><span class="muted">当前均价：<b id="adjNowAvg" style="color:var(--danger)">—</b></span>　→　<span class="muted">均价调整后：<b id="adjAfterAvg" style="color:var(--primary)">—</b></span></div>
     <div class="field" style="grid-column:1/-1;"><span class="muted">当前成本单价：<b id="adjNowUc" style="color:var(--danger)">—</b></span>　→　<span class="muted">成本单价调整后：<b id="adjAfterUc" style="color:var(--primary)">—</b></span></div>
-    <div class="field" style="margin-top:10px;"><label>原因</label><input id="adjRemark" placeholder="如：盘点差异/损耗" /></div>
+    <div class="field" style="margin-top:10px;"><label>原因 / 备注（可贴盘点照片）</label>
+      <textarea id="adjRemark" rows="1" placeholder="如：盘点差异/损耗；可直接 Ctrl+V 粘贴图片" onpaste="pasteRemarkFiles('adjRemark', event)"></textarea>
+      <div class="attach-bar">
+        <button type="button" class="btn sm secondary" onclick="$('adjRemarkFile').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 图片 / 附件</button>
+        <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），可直接 Ctrl+V 粘贴</span>
+        <input type="file" id="adjRemarkFile" multiple style="display:none;" onchange="uploadRemarkFiles('adjRemark', this)" />
+      </div>
+      <div class="attach-list" id="adjRemarkFiles"></div>
+    </div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
       <button class="btn" onclick="submitAdjust()">确认调整</button>
     </div>`);
+  clearRemarkField("adjRemark");   // 每次打开都清空上一次的附件
   adjPreview();
 }
 function adjPreview() {
@@ -1052,7 +1061,7 @@ async function submitAdjust() {
       unit_cost_adj: uraw,
       date: $("adjDate").value,
       operator: $("adjOperator").value,
-      remark: $("adjRemark").value,
+      remark: remarkValue("adjRemark"),   // 纯文本 + 附件路径（图片/PDF），与其它单据备注同一格式
     });
     closeModal();
     toast(r && r.message ? r.message : (raw || araw || uraw ? "盘点调整成功" : "无调整"));
@@ -1107,7 +1116,7 @@ async function loadAdjustments() {
         <td class="num mono" style="color:${r.avg_cost_delta ? (r.avg_cost_delta > 0 ? "var(--green)" : "var(--red)") : ""}">${deltaHtml(r.avg_cost_delta, r.unit)}</td>
         <td class="num mono" style="color:${r.unit_cost_delta ? (r.unit_cost_delta > 0 ? "var(--green)" : "var(--red)") : ""}">${deltaHtml(r.unit_cost_delta, r.unit)}</td>
         <td>${esc(r.operator) || "—"}</td>
-        <td class="muted">${esc(r.remark)}</td>
+        <td class="muted">${renderRemarkHtml(r.remark)}</td>
         <td class="line-actions"><button class="btn sm danger" onclick="deleteAdjustment(${r.id})">删除回退</button></td>
       </tr>`;
     }).join("") + `</tbody>`;
@@ -1684,23 +1693,27 @@ function aiMergeDupLines(r) {
   if (!r || !Array.isArray(r.lines) || r.lines.length < 2) return r;
   const isStock = r.type === "stocktake";
   const seen = new Map();
-  const out = [];
+  // 合并 = 把被并掉的行标记 _deleted，数组本身不缩短：
+  // 行上的 data-idx 就是数组下标，数组一变短，下面各行改商品时就会取到「下一行」的商品与库存
   r.lines.forEach((ln) => {
+    if (ln._deleted) return;
     const pid = +ln.product_id || 0;
-    if (!pid) { out.push(ln); return; }        // 待新增/未匹配：可能对应不同档案，不合并
+    if (!pid) return;                          // 待新增/未匹配：可能对应不同档案，不合并
     const key = isStock
       ? `s|${pid}|${ln.stock_unit || ln.unit || ""}`
       : `d|${pid}|${ln.unit || ""}|${+(ln.unit_price || 0)}|${ln.date || ""}|${ln.paid !== false}`;
     const first = seen.get(key);
-    if (!first) { seen.set(key, ln); out.push(ln); return; }
+    if (!first) { seen.set(key, ln); return; }
     first.quantity = +(((+first.quantity || 0) + (+ln.quantity || 0)).toFixed(4));
     if (first.stock_counted != null && ln.stock_counted != null) {
       first.stock_counted = +((+first.stock_counted + +ln.stock_counted).toFixed(4));
     }
     first.merged_count = (+first.merged_count || 1) + 1;
+    ln._deleted = true;                        // 被合并掉的行不再显示，但下标原位保留
   });
   // 合并过的行：按累加后的数量重算（提交读的是 stock_adjust / quantity）
-  out.forEach((ln) => {
+  r.lines.forEach((ln) => {
+    if (ln._deleted) return;
     const n = +ln.merged_count || 1;
     if (n <= 1) return;
     if (isStock) {
@@ -1719,7 +1732,6 @@ function aiMergeDupLines(r) {
       ln.hint = (ln.hint || "") + `；已把 ${n} 行合并为一行（数量累加）`;
     }
   });
-  r.lines = out;
   return r;
 }
 function openAiConfirm(r) {
@@ -1734,6 +1746,9 @@ function openAiConfirm(r) {
     ? `<span class="badge" style="background:var(--primary-light);color:var(--primary);margin-left:6px;">已按票据逐行取日期：${esc(dateSet[0])} ~ ${esc(dateSet[dateSet.length - 1])}（共 ${dateSet.length} 天）</span>`
     : "";
   const linesHtml = (r.lines || []).map((ln, i) => {
+    // 删除的行只标记不摘除：行上的 data-idx 必须与数组下标一一对应，
+    // 否则删过行之后，下面各行再改商品/单位就会取到「下一行」的商品与库存
+    if (ln._deleted) return "";
     const cat = (["stock", "order", "pack", "labor"].includes(ln.category) ? ln.category : (isIn ? "stock" : "order"));
     const np = ln.new_product || null;
     let prodSel;
@@ -1809,7 +1824,15 @@ function openAiConfirm(r) {
         <button class="btn-link" style="font-size:12px;margin-left:6px;" onclick="aiApplyDateAll()">应用到所有行</button>
       </div>
       ${isStock ? "" : `<div class="field"><label>${isIn ? "供应商" : "客户"}</label><input id="aiParty" value="${esc(isIn ? r.supplier : r.customer)}" /></div>`}
-      <div class="field"><label>备注</label><input id="aiRemark" value="${esc(r.remark)}" /></div>
+      <div class="field"><label>备注（可贴盘点照片）</label>
+        <textarea id="aiRemark" rows="1" placeholder="可选；可直接 Ctrl+V 粘贴图片" onpaste="pasteRemarkFiles('aiRemark', event)"></textarea>
+        <div class="attach-bar">
+          <button type="button" class="btn sm secondary" onclick="$('aiRemarkFile').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 图片 / 附件</button>
+          <span class="attach-tip">识别到的票据也会显示在这里，可再加图</span>
+          <input type="file" id="aiRemarkFile" multiple style="display:none;" onchange="uploadRemarkFiles('aiRemark', this)" />
+        </div>
+        <div class="attach-list" id="aiRemarkFiles"></div>
+      </div>
     </div>
     <div class="table-wrap"><table>
       <thead><tr><th>分类</th><th>商品</th><th>日期</th><th>${isStock ? "实盘数" : "数量"}</th><th>单位</th><th>${isStock ? "当前 → 调整 → 盘点后" : (isIn ? "单价" : "售价")}</th>${isStock ? "" : "<th>付款</th>"}<th>说明</th><th>操作</th></tr></thead>
@@ -1822,6 +1845,7 @@ function openAiConfirm(r) {
       <button class="btn green" onclick="aiSubmit()">✓ 确认提交</button>
     </div>`);
   $("modalBox").classList.add("wide");   // 明细列多，弹窗放宽，避免信息被挤没
+  setRemarkValue("aiRemark", r.remark);  // 备注里的 /uploads/xxx（如识别票据）拆成可点开的附件标签
   // 盘点行按「当前库存」重新刷一遍（暂存/重新打开时库存可能已变，避免显示过期对比）
   if (isStock) setTimeout(() => {
     document.querySelectorAll("#aiLines tr[data-idx]").forEach((tr) => aiStockRefresh(+tr.dataset.idx));
@@ -1846,10 +1870,10 @@ function aiSaveDraft(silent) {
     if (!silent) toast("这条识别结果不在待办队列里，改完直接点「确认提交」即可");
     return false;
   }
-  const lines = [];
+  // 逐行把界面上的值写回「同一个行对象」（按 data-idx 取，下标与数组一一对应）
   [...body.querySelectorAll("tr[data-idx]")].forEach((tr) => {
     const ln = (AI_CONFIRM.lines || [])[+tr.dataset.idx];
-    if (!ln) return;                    // 已删除的行不再写回（重开后保持删除）
+    if (!ln) return;
     ln.product_id = +tr.querySelector(".ai-pid").value || 0;
     const catEl = tr.querySelector(".ai-cat");
     if (catEl) ln.category = catEl.value;
@@ -1878,10 +1902,8 @@ function aiSaveDraft(silent) {
     if (nameEl && !ln.product_id) ln.recognized_name = nameEl.value.trim() || ln.recognized_name;
     const hintEl = tr.querySelector(".ai-hint");
     if (hintEl) ln.hint = hintEl.textContent;
-    lines.push(ln);
   });
   job.result = job.result || {};
-  job.result.lines = lines;
   job.result.type = typeSel.value;      // 类型可能被改过（入库/出库/盘点）
   const topDate = $("aiDate");
   if (topDate && topDate.value) job.result.date = topDate.value;
@@ -1891,8 +1913,9 @@ function aiSaveDraft(silent) {
     else job.result.supplier = partyEl.value.trim();
   }
   const rmEl = $("aiRemark");
-  if (rmEl) job.result.remark = rmEl.value.trim();
-  AI_CONFIRM.lines = lines;
+  if (rmEl) job.result.remark = remarkValue("aiRemark");   // 含附件（票据 / 新加的图），重开后按同一套拆成标签
+  // 注意：这里不替换 lines 数组（上面已按 data-idx 原地写回），
+  // 数组一换长度，行上的 data-idx 与数组下标就会错位，改商品时会取到下一行的商品/库存
   job.draft_at = new Date().toISOString();
   aiQueueSave();
   if (!silent) toast("✅ 已暂存：中途离开或刷新后，打开这条待办还能接着改");
@@ -1937,6 +1960,9 @@ function aiNewNameHtml(ln) {
 function aiDelLine(i) {
   const tr = document.querySelector(`#aiLines tr[data-idx="${i}"]`);
   if (tr) tr.remove();
+  // 只标记删除、不从数组里摘掉：数组下标要始终与行的 data-idx 对齐
+  const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[i] : null;
+  if (line) line._deleted = true;
 }
 function aiTypeChanged() {
   // 切换类型时，未显式归类的行按业务类型重设默认分类（入库库存优先，出库订单优先）
@@ -1955,7 +1981,7 @@ async function aiSubmit() {
   const date = $("aiDate").value;
   const partyEl = $("aiParty");                       // 盘点模式没有供应商/客户输入框
   const party = partyEl ? partyEl.value.trim() : "";
-  const remark = $("aiRemark").value.trim();
+  const remark = remarkValue("aiRemark");   // 纯文本 + 附件（含识别票据），与其它单据备注同一格式
   const autoFlags = (AI_CONFIRM && AI_CONFIRM.lines) || [];
   let rows = [...document.querySelectorAll("#aiLines tr[data-idx]")].map((tr) => {
     const idx = +tr.dataset.idx;                      // 按行号取回识别结果，删行后也不会串位
@@ -2322,7 +2348,7 @@ function evaRetry(id) {
 function evaRowsOf(job) {
   const r = job.result || {};
   aiMergeDupLines(r);   // 老结果兜底：同种商品合并成一行（数量累加），批量提交才不会在同一商品上反复调整
-  return (r.lines || []).filter((ln) => ln.product_id || ln.new_product).map((ln) => ({
+  return (r.lines || []).filter((ln) => !ln._deleted && (ln.product_id || ln.new_product)).map((ln) => ({
     product_id: ln.product_id || 0,
     new_product: ln.product_id ? null : (ln.new_product || { name: ln.recognized_name || ln.product_name || "", category: ln.category || "stock", unit: ln.unit || "个" }),
     // 盘点：数量用「增减量」（后端已按 实盘数 − 当前库存 算好）
