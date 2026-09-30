@@ -1037,6 +1037,63 @@ def _safe_date(v, fallback):
     return d
 
 
+def _merge_duplicate_lines(lines: list[dict], op_type: str) -> list[dict]:
+    """同种商品的多行合并成一行（数量累加），不再分开。
+
+    盘点是「一个商品一个实盘数」：同一个商品出多行、各自按「实盘 − 当前库存」提交，
+    会在同一个商品上反复调整（如 +3500 再 −16000，净额就错了），所以必须累加；
+    入库/出库只合并完全同口径（同商品/单位/单价/日期/付款）的重复行，不动分批单据。
+    待新增/未匹配（product_id=0）的行不合并 —— 它们可能对应不同的商品档案。
+    """
+    if not lines:
+        return lines
+    kept: dict[tuple, dict] = {}
+    out: list[dict] = []
+    for ln in lines:
+        pid = int(ln.get("product_id") or 0)
+        if not pid:
+            out.append(ln)
+            continue
+        if op_type == "stocktake":
+            key = ("stocktake", pid, ln.get("stock_unit") or ln.get("unit") or "")
+        else:
+            key = (op_type, pid, ln.get("unit") or "",
+                   round(float(ln.get("unit_price") or 0), 6), ln.get("date") or "", bool(ln.get("paid", True)))
+        first = kept.get(key)
+        if first is None:
+            kept[key] = ln
+            out.append(ln)
+            continue
+        first["quantity"] = round(float(first.get("quantity") or 0) + float(ln.get("quantity") or 0), 4)
+        if first.get("stock_counted") is not None and ln.get("stock_counted") is not None:
+            first["stock_counted"] = round(float(first["stock_counted"]) + float(ln["stock_counted"]), 4)
+        first["merged_count"] = int(first.get("merged_count") or 1) + 1
+
+    # 合并过的行：按累加后的数量重算（批量提交读的就是这里的 stock_adjust / quantity）
+    for ln in out:
+        n = int(ln.get("merged_count") or 1)
+        if n <= 1:
+            continue
+        if op_type == "stocktake":
+            before = float(ln.get("stock_before") or 0)
+            du = ln.get("stock_unit") or ln.get("unit") or ""
+            counted = ln.get("stock_counted")
+            if counted is not None:
+                adj = round(float(counted) - before, 4)
+                ln["stock_adjust"] = adj
+                ln["stock_after"] = round(before + adj, 4)
+                ln["hint"] = (f"已把 {n} 行合并为一行（实盘数累加）：当前库存 {before:g}{du}，"
+                              f"实盘 {float(counted):g}{du}，调整 {adj:+g}{du} → 盘点后 {before + adj:g}{du}")
+            else:
+                adj = round(float(ln.get("quantity") or 0), 4)
+                ln["stock_adjust"] = adj
+                ln["stock_after"] = round(before + adj, 4)
+                ln["hint"] = f"已把 {n} 行合并为一行（增减量累加）：调整 {adj:+g}{du} → 盘点后 {before + adj:g}{du}"
+        else:
+            ln["hint"] = (ln.get("hint") or "") + f"；已把 {n} 行合并为一行（数量累加）"
+    return out
+
+
 def _build_result(db: Session, parsed: dict, text: str) -> dict:
     """把模型抽取结果规范化：校验类型/日期，匹配商品，换算单位。
 
@@ -1221,6 +1278,9 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
             ln_out["unit_price"] = 0.0
             ln_out["hint"] = f"当前库存 {_before:g}{_du}，调整 {_adjust:+g}{_du} → 盘点后 {_before + _adjust:g}{_du}"
         lines.append(ln_out)
+
+    # 同种商品合并成一行（数量累加）：避免同一个商品上反复调整（盘点尤其必须）
+    lines = _merge_duplicate_lines(lines, op_type)
 
     return {
         "type": op_type,
