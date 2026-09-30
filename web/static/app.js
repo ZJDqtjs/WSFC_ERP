@@ -1494,6 +1494,40 @@ async function aiFillMissingPrices() {
     }
   }
 }
+/* ---------- 盘点行：换商品后重算「当前库存 → 盘点后」与增减量 ----------
+ * 后端只在识别时按「当时匹配到的商品」算过一遍；用户在确认框里手动换成别的商品后必须重算，
+ * 否则会拿新商品的实盘数去减旧商品的库存（甚至是新建商品的 0），增减量就完全不对了
+ * （例：识别成"小香菇"、实盘 135，当前库存算成 0 → +135；换回"香菇干货"应变成 135 − 420 = −285）。 */
+function aiStockRefresh(i) {
+  const tr = document.querySelector(`#aiLines tr[data-idx="${i}"]`);
+  const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[i] : null;
+  const typeSel = $("aiType");
+  if (!tr || !line || !typeSel || typeSel.value !== "stocktake") return;
+  const qtyEl = tr.querySelector(".ai-qty");
+  const sel = tr.querySelector(".ai-pid");
+  const cell = tr.querySelector(".ai-stock-cell");
+  const pid = sel ? (+sel.value || 0) : 0;
+  const p = PRODUCTS.find((x) => x.id === pid) || null;
+  const unit = (tr.querySelector(".ai-unit") || {}).value || line.stock_unit || "";
+  // 商品库存以基础单位存，按当前行单位换算（如商品按公斤记录、行单位是斤 → 1公斤=2斤）
+  const before = p ? +((Number(p.stock) || 0) / (unitFactor(p, unit) || 1)).toFixed(4) : 0;
+  line.product_id = pid;
+  line.stock_before = before;
+  line.stock_unit = unit;
+  // 有「实盘数」→ 按 实盘 − 当前 重算；用户说的是增减（stock_rel）时数量本身就是增减量，保持不变
+  // （旧结果没有 stock_counted，用 quantity —— 盘点行它就是识别到的实盘数）
+  const oldResult = line.stock_counted == null && line.stock_rel == null;
+  const counted = line.stock_counted != null ? line.stock_counted : (oldResult ? +line.quantity : null);
+  let adj = +((qtyEl || {}).value) || 0;
+  if (!line.stock_rel && counted != null) adj = +(counted - before).toFixed(4);
+  line.stock_adjust = adj;
+  line.stock_after = +(before + adj).toFixed(4);
+  line.hint = `当前库存 ${fmtNum(before)}${unit}，调整 ${adj > 0 ? "+" : ""}${fmtNum(adj)}${unit} → 盘点后 ${fmtNum(line.stock_after)}${unit}`;
+  if (cell) cell.innerHTML = `当前 <b>${fmtNum(before)}</b> → ${fmtNum(line.stock_after)} ${esc(unit)}`;
+  const hintEl = tr.querySelector(".ai-hint");
+  if (hintEl) hintEl.textContent = line.hint;
+  if (qtyEl) qtyEl.value = fmtNum(adj);
+}
 // 切换商品（分类下拉/相似候选/新商品占位）后：若单价为空，回填该商品最近一次录入价
 async function aiProdChanged(i) {
   const tr = document.querySelector(`#aiLines tr[data-idx="${i}"]`);
@@ -1511,6 +1545,11 @@ async function aiProdChanged(i) {
   if (!pid && line && line.recognized_unit) {
     tr.querySelector(".ai-unit").value = line.recognized_unit;
   }
+  // 盘点行：换了商品/分类就必须重算「当前库存 → 盘点后」与增减量
+  aiStockRefresh(i);
+  // 已选中真实商品：去掉「🆕 提交后新增」徽标（它是按识别时的"待新增"渲染的，换商品后就不对了）
+  const newBadge = tr.querySelector(".ai-newbadge");
+  if (newBadge) newBadge.style.display = pid ? "none" : "";
   const priceEl = tr.querySelector(".ai-price");
   if (!pid || !priceEl) { aiPriceBadge(tr, line); return; }   // 待新增商品：暂无历史价
   // 用户手填的价格不动；自动填入的价格在换商品后要跟着换成新商品的价格
@@ -1577,18 +1616,18 @@ function openAiConfirm(r) {
       ? `<td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.stock_adjust || 0)}" style="width:104px;" title="增减量：正数增加、负数减少（默认已按 实盘数 − 当前库存 算好，可自行修改）" /></td>`
       : `<td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.quantity)}" style="width:90px;" /></td>`;
     const priceCell = isStock
-      ? `<td class="muted" style="white-space:nowrap;" title="当前库存 → 盘点后">当前 <b>${fmtNum(ln.stock_before || 0)}</b> → ${fmtNum(ln.stock_after || 0)} ${esc(ln.stock_unit || ln.unit || "")}</td>`
+      ? `<td class="muted ai-stock-cell" style="white-space:nowrap;" title="当前库存 → 盘点后">当前 <b>${fmtNum(ln.stock_before || 0)}</b> → ${fmtNum(ln.stock_after || 0)} ${esc(ln.stock_unit || ln.unit || "")}</td>`
       : `<td class="ai-price-cell"><input type="number" step="any" class="ai-price" value="${ln.unit_price ? ln.unit_price : ""}" placeholder="可留空" style="width:100px;" />${ln.price_defaulted ? '<span class="ai-price-badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按最近价</span>' : ""}</td>`;
     const payCell = isStock ? "" : `<td>${aiPayHtml(ln, i)}</td>`;
     return `<tr data-idx="${i}">
       <td><select class="ai-cat" onchange="aiCatChanged(${i})" style="width:92px;">${aiCatOptions(cat)}</select></td>
-      <td style="min-width:250px;">${prodSel}${aiNewNameHtml(ln)}<div style="margin-top:4px;">${ambiBadge}${np ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 提交后新增</span>' : ""}</div></td>
+      <td style="min-width:250px;">${prodSel}${aiNewNameHtml(ln)}<div style="margin-top:4px;">${ambiBadge}${np ? '<span class="badge ai-newbadge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 提交后新增</span>' : ""}</div></td>
       <td><input type="date" class="ai-date" value="${esc(ln.date || docDate)}" style="width:138px;" title="这一行的单据日期（对账单/送货单逐行日期）" /></td>
       ${qtyCell}
       <td><input class="ai-unit" value="${esc(ln.unit || "")}" style="width:70px;" />${unitBadge}</td>
       ${priceCell}
       ${payCell}
-      <td class="muted" style="font-size:12px;min-width:200px;">${esc(ln.hint || "")}</td>
+      <td class="muted ai-hint" style="font-size:12px;min-width:200px;">${esc(ln.hint || "")}</td>
       <td style="white-space:nowrap;"><button class="btn secondary" style="padding:4px 8px;" title="删除这一行" onclick="aiDelLine(${i})">🗑 删除</button></td>
     </tr>`;
   }).join("");

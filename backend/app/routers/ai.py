@@ -1214,6 +1214,10 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
             ln_out["stock_unit"] = _du
             ln_out["stock_adjust"] = _adjust
             ln_out["stock_after"] = round(_before + _adjust, 4)
+            # 实盘数（原始识别值）：用户在确认框里换成别的商品后，前端据此重新算增减量
+            # （否则会拿新商品的实盘数去减旧商品的库存，增减量就错了）
+            ln_out["stock_counted"] = None if ln.get("rel") else _qty
+            ln_out["stock_rel"] = bool(ln.get("rel"))
             ln_out["unit_price"] = 0.0
             ln_out["hint"] = f"当前库存 {_before:g}{_du}，调整 {_adjust:+g}{_du} → 盘点后 {_before + _adjust:g}{_du}"
         lines.append(ln_out)
