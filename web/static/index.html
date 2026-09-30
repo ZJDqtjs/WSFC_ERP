@@ -111,7 +111,7 @@
         </div>
 
         <div class="card">
-          <div class="card-head"><h3><svg class="ic"><use href="#i-ai"/></svg> AI 智能录入</h3><span class="hint">用大白话描述入库/出库，AI 自动拆分成系统格式，确认后再提交；<b>粘贴/选择票据图片后先预览，按回车或点「识别并录入」才开始识别</b>；识别时输入框里的文字会作为补充说明一起发给 AI（如「图里的京东箱子就是纸箱：京东8号-&gt;8号纸箱」）</span></div>
+          <div class="card-head"><h3><svg class="ic"><use href="#i-ai"/></svg> AI 智能录入</h3><span class="hint">用大白话描述入库/出库，AI 自动拆分成系统格式；<b>粘贴/选择票据图片后先预览，按回车或点「识别并录入」加入队列</b>，AI 在后台逐条识别（可以连续录入，不用等），识别完到「<a href="javascript:;" onclick="goPage('eva')">待办处理</a>」批量审核修改后提交；输入框里的文字会作为补充说明一起发给 AI（如「图里的京东箱子就是纸箱：京东8号-&gt;8号纸箱」）</span></div>
           <div class="toolbar">
             <input id="aiText" placeholder='文字：今天入库了100斤木耳，25一斤 ｜ 图片补充说明：图里说的京东箱子就是纸箱箱子（京东8号-&gt;8号纸箱）' style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')aiRun()" oninput="if(AI_PENDING.length)aiRenderPending()" />
             <button class="btn green" id="aiBtn" onclick="aiRun()"><svg class="ic"><use href="#i-ai"/></svg> 识别并录入</button>
@@ -122,6 +122,8 @@
           </div>
           <!-- 待识别图片预览：粘贴/选图后先在这里预览，按回车或点「识别并录入」才开始识别 -->
           <div id="aiPending" class="ai-pending" style="display:none;"></div>
+          <!-- 队列状态：识别在后台逐条跑，结果进「待办处理」审核提交 -->
+          <div id="aiQueueBar" class="ai-queue-bar" style="display:none;"></div>
           <div id="aiThinking" class="ai-thinking" style="display:none;">
             <div class="ai-think-head">
               <span class="ai-think-title"><svg class="ic"><use href="#i-ai"/></svg> <span id="aiThinkTitle">AI 思考中</span></span>
@@ -157,6 +159,59 @@
             </div>
             <div id="dashActivity"></div>
           </div>
+        </div>
+      </section>
+
+      <!-- 待办处理（#/eva）：顶部三个横向按钮切换「AI 识别队列 / 入库待办 / 出库待办」 -->
+      <section id="page-eva" class="page">
+        <div class="seg eva-seg" id="evaSeg">
+          <button class="seg-item active" data-tab="ai" onclick="evaTab('ai')">AI 识别队列<span class="badge" id="evaTabAi"></span></button>
+          <button class="seg-item" data-tab="in" onclick="evaTab('in')">入库待办<span class="badge" id="evaTabIn"></span></button>
+          <button class="seg-item" data-tab="out" onclick="evaTab('out')">出库待办<span class="badge" id="evaTabOut"></span></button>
+        </div>
+
+        <div class="stat-grid" id="evaStats"></div>
+
+        <div class="card eva-panel" id="evaPanelAi">
+          <div class="card-head">
+            <h3><svg class="ic"><use href="#i-ai"/></svg> AI 识别队列</h3>
+            <span class="hint">粘贴/输入的识别任务在后台逐条跑（票据图片较慢，约 1~2 分钟一张）。失败的可以重新识别或删除；识别成功的会按业务类型自动落到「入库待办」「出库待办」，点任务按钮可先核对修改。</span>
+            <div class="grow"></div>
+            <button class="btn secondary" id="evaJstBtn" onclick="openJstPending()" title="聚水潭待办：新商品没规则匹配 / 要验证码">聚水潭待办</button>
+            <button class="btn secondary" onclick="evaRunQueue()"><svg class="ic"><use href="#i-ai"/></svg> 继续识别</button>
+            <button class="btn secondary" onclick="evaRefresh()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+          </div>
+          <div class="card" id="evaLiveCard" style="display:none;background:var(--primary-light);">
+            <div class="card-head">
+              <h3>⏳ 正在识别</h3>
+              <span class="hint" id="evaLiveHead"></span>
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="evaCancelCurrent()"><svg class="ic"><use href="#i-x"/></svg> 取消当前识别</button>
+            </div>
+            <div class="ai-think-stage" id="evaLiveStage"></div>
+            <pre class="ai-think-body eva-live-think" id="evaLiveThink"></pre>
+          </div>
+          <div id="evaAiList"></div>
+        </div>
+
+        <div class="card eva-panel" id="evaPanelIn" style="display:none;">
+          <div class="card-head">
+            <h3><svg class="ic"><use href="#i-in"/></svg> 入库待办</h3>
+            <span class="hint">AI 判为入库的识别结果：点任务按钮进确认框核对，或勾选后「批量提交入库」（提交时按每行自己的单据日期分别生成入库单）。</span>
+            <div class="grow"></div>
+            <button class="btn green" onclick="evaSubmitChecked('inbound')"><svg class="ic"><use href="#i-check"/></svg> 批量提交入库</button>
+          </div>
+          <div id="evaInList"></div>
+        </div>
+
+        <div class="card eva-panel" id="evaPanelOut" style="display:none;">
+          <div class="card-head">
+            <h3><svg class="ic"><use href="#i-out"/></svg> 出库待办</h3>
+            <span class="hint">AI 判为出库的识别结果（客户 / 售价）：同样支持逐条审核或批量提交。</span>
+            <div class="grow"></div>
+            <button class="btn green" onclick="evaSubmitChecked('outbound')"><svg class="ic"><use href="#i-check"/></svg> 批量提交出库</button>
+          </div>
+          <div id="evaOutList"></div>
         </div>
       </section>
 

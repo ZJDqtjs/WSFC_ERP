@@ -323,8 +323,8 @@ function daysAgo(n) {
 
 /* ---------- 导航 ---------- */
 const PAGE_TITLES = {
-  home: "工作台", stock: "库存管理", inbound: "入库", outbound: "出库 / 销售",
-  "warehouse-in": "入仓", "wingroup": "入仓批次明细",
+  home: "工作台", stock: "库存管理",   inbound: "入库", outbound: "出库 / 销售",
+  "warehouse-in": "入仓", "wingroup": "入仓批次明细", eva: "待办处理",
   products: "商品", report: "财务报表", otherexp: "其他开支", payables: "待付款账单",
   import: "批量导入", jushuitan: "聚水潭关联",
   backup: "备份与恢复",
@@ -353,6 +353,7 @@ function goPage(name) {
     "fresh-in": loadFreshInbound,   // 鲜货入库（二级页，从出库/销售页进入，也可用 #/fresh-in 深链）
     deduction: loadDeductionPage, express: loadExpressPage, settings: loadSettingsPage,
     otherexp: loadOtherExpensePage, payables: loadPayablesPage,
+    eva: loadEva,   // 待办处理（AI 识别队列 / 入库待办 / 出库待办），也可用 #/eva 深链
   };
   (loaders[name] || (() => {}))();
 }
@@ -872,7 +873,11 @@ function openModal(html) {
   $("modalMask").classList.add("show");
   bindSearchable($("modalBox"));
 }
-function closeModal() { $("modalMask").classList.remove("show"); $("modalBox").classList.remove("wide"); const r = _aiDoneResolve; _aiDoneResolve = null; if (r) r(); }
+function closeModal() {
+  $("modalMask").classList.remove("show");
+  $("modalBox").classList.remove("wide");
+  AI_QUEUE_CURRENT = null;   // 关掉确认框就不再认为"正在提交某条待办"
+}
 $("modalMask").addEventListener("click", (e) => { if (e.target.id === "modalMask") closeModal(); });
 
 /* ---------- 付款状态（已付款 / 待付款，默认已付款）---------- */
@@ -1183,9 +1188,6 @@ let AI_THINK_TEXT = "";    // 累计的「思考过程」原文（确认框里�
 let AI_ANSWER_TEXT = "";   // 累计的模型正式输出（中文「思路」+ JSON）
 const AI_THINK_MAX = 20000; // 面板最多保留的字符数（票据识别的思考常有 1.5 万字），超出只留尾部
 let AI_THINK_OPEN = false;  // 原始思考（该模型只能用英文）默认收起，点「展开英文思考」才看
-let _batchAbort = false;    // 多图批量识别是否已被取消
-let _aiDoneResolve = null;  // 批量识别时，等待当前确认框关闭后再识别下一张
-
 function aiShowThinking() {
   AI_THINK_TEXT = "";
   AI_ANSWER_TEXT = "";
@@ -1254,29 +1256,28 @@ function aiAppendAnswer(s) {          // 模型正式输出：中文「思路」
   _aiFill($("aiAnswerBody"), AI_ANSWER_TEXT);
 }
 function aiCancel() {
+  if (AI_QUEUE_CTRL) AI_QUEUE_CTRL.abort();   // 队列里正在跑的那条（识别中的取消按钮）
   if (AI_CTRL) AI_CTRL.abort();
-  // 批量识别的「等确认框关闭」阶段没有在途请求，abort 拦不住，必须自己打断并放行等待
-  _batchAbort = true;
-  const done = _aiDoneResolve;
-  _aiDoneResolve = null;
-  if (done) done();
   aiHideThinking();
-  aiResetBtn();          // 关键：取消后按钮恢复可用（原来漏了，会一直停在"识别中…"且点不动）
+  aiResetBtn();          // 取消后按钮恢复可用
   toast("已取消识别");
-}
-function aiStartTask(btnHtml = '<svg class="ic"><use href="#i-ai"/></svg> 识别中…') {
-  if (AI_CTRL) AI_CTRL.abort();           // 取消上一次任务
-  AI_CTRL = new AbortController();
-  $("aiBtn").disabled = true;
-  $("aiBtn").innerHTML = btnHtml;
-  aiShowThinking();
 }
 function aiResetBtn() {
   AI_CTRL = null;
   $("aiBtn").disabled = false;
   $("aiBtn").innerHTML = '<svg class="ic"><use href="#i-ai"/></svg> 识别并录入';
 }
-async function aiCollectStream(res) {
+/**
+ * 读取识别接口的 SSE 流。
+ * sink 可注入：默认把思考/结果写进工作台的「AI 思考」面板；队列识别时会传入自己的 sink，
+ * 把内容同时写到任务对象（待办页展示）而不打开确认框。
+ */
+async function aiCollectStream(res, sink) {
+  const out = sink || {
+    think: (s) => aiAppendThink(s),
+    answer: (s) => aiAppendAnswer(s),
+    stage: (s) => aiSetStage(s),
+  };
   if (res.status === 401) { showLogin(); throw new Error("请先登录"); }
   if (!res.ok) {
     let msg = "识别失败";
@@ -1300,11 +1301,11 @@ async function aiCollectStream(res) {
       let obj;
       try { obj = JSON.parse(data); } catch (e) { continue; }
       if (obj.think) {
-        aiAppendThink(obj.think);          // 模型的思考过程，实时逐字展示
+        out.think(obj.think);              // 模型的思考过程，实时逐字展示
       } else if (obj.stage) {
-        aiSetStage(obj.stage);             // 当前阶段提示
+        out.stage(obj.stage);              // 当前阶段提示
       } else if (obj.delta) {
-        aiAppendAnswer(obj.delta);         // 模型正式输出（JSON）
+        out.answer(obj.delta);             // 模型正式输出（中文思路 + JSON）
       } else if (obj.result) {
         if (!result || obj.source === "quick") result = obj.result;
       } else if (obj.error) {
@@ -1315,36 +1316,8 @@ async function aiCollectStream(res) {
   if (!result) throw new Error("识别未返回结果");
   return result;
 }
-async function aiFinishOk(result) {
-  // 不隐藏思考过程面板：识别完成后仍可回看（标题转完成态）
-  aiFinishThinking("识别完成（可「展开英文思考」看模型原始推理）");
-  // 刷新商品列表，保证确认框里的候选/分类下拉是最新的
-  PRODUCTS = await api("/api/products");
-  openAiConfirm(result);
-  aiResetBtn();
-}
-function aiFinishErr(e) {
-  if (e.name === "AbortError") return;     // 用户手动取消
-  aiSetStage("识别失败：" + e.message);
-  aiAppendThink("\n⚠ 识别失败：" + e.message);
-  aiFinishThinking("识别失败");
-  toast("识别失败：" + e.message);
-  aiResetBtn();
-}
-async function aiParse() {
-  const text = $("aiText").value.trim();
-  if (!text) { toast("请输入入库/出库描述"); return; }
-  aiStartTask();
-  try {
-    const res = await fetch(routePath("/api/ai/parse/stream"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-      signal: AI_CTRL.signal,
-    });
-    await aiFinishOk(await aiCollectStream(res));
-  } catch (e) { aiFinishErr(e); }
-}
+/* 注：原来「识别完立刻弹确认框」的 aiParse / aiRecognizeOne 已由队列识别取代
+   （见下方「AI 识别队列 · 待办处理」：入队 → 后台识别 → /eva 审核提交）。 */
 function aiPickImage() { $("aiImgFile").click(); }
 function aiCaptureImage() { $("aiCamFile").click(); }
 
@@ -1392,53 +1365,24 @@ function aiParseImage(src) {
   if (!files.length) return;
   aiAddPending(files, src === "cam" ? "拍照" : "相册");
 }
-// 回车 /「识别并录入」的统一入口：有待识别图片就先识别图片，否则解析文字
+// 回车 /「识别并录入」：把当前输入加入队列，AI 后台识别；识别完到「待办处理」批量审核提交
 function aiRun() {
-  if (AI_CTRL) { toast("正在识别中，可先点「取消」"); return; }
+  const text = $("aiText").value.trim();
   if (AI_PENDING.length) {
-    aiParseImageFiles(AI_PENDING.map((it) => it.file), AI_PENDING_LABEL || "已选");
+    const files = AI_PENDING.map((it) => it.file);
+    const label = AI_PENDING_LABEL || "已选";
+    files.forEach((f) => aiQueueAdd({ kind: "image", text, image_name: f.name, source: label, file: f }));
+    aiClearPending();
+    $("aiText").value = "";     // 补充说明已随任务带走，清空方便继续录入
+    toast(`已加入队列 ${files.length} 张图片，AI 后台识别中（可继续录入）`);
     return;
   }
-  aiParse();
+  if (!text) { toast("请输入入库/出库描述，或先粘贴/选择票据图片"); return; }
+  aiQueueAdd({ kind: "text", text, source: "文字" });
+  $("aiText").value = "";
+  toast("已加入队列，AI 后台识别中（可继续录入）");
 }
-async function aiParseImageFiles(files, label) {
-  _batchAbort = false;   // 每批开始前复位，避免上次取消留下的标记把新一批直接掐掉
-  const total = files.length;
-  // 输入框里的文字会作为「补充说明」一起发给 AI（如「京东8号->8号纸箱」）
-  const extra = $("aiText").value.trim();
-  if (total > 1) toast(`已选择 ${total} 张图片，逐张识别中…`);
-  for (let i = 0; i < total; i++) {
-    if (_batchAbort) { _batchAbort = false; break; }
-    if (i > 0) await new Promise((r) => setTimeout(r, 400));
-    const ok = await aiRecognizeOne(files[i], i, total, label, extra);
-    // 识别失败或用户取消：保留预览图，方便改完补充说明后按回车重试
-    if (!ok) return;
-  }
-  aiClearPending();   // 整批识别完成，清掉待识别预览
-}
-async function aiRecognizeOne(f, idx, total, label, extra) {
-  const progress = total > 1 ? `（第 ${idx + 1}/${total} 张）` : "";
-  aiStartTask(`<svg class="ic"><use href="#i-camera"/></svg> ${label}识别中 ${progress}`);
-  try {
-    const fd = new FormData();
-    fd.append("file", f);
-    if (extra) fd.append("text", extra);
-    const res = await fetch(routePath("/api/ai/parse-image/stream"), {
-      method: "POST",
-      body: fd,
-      signal: AI_CTRL.signal,
-    });
-    const result = await aiCollectStream(res);
-    await aiFinishOk(result);
-    if (total > 1) await new Promise((resolve) => { _aiDoneResolve = resolve; }); // 等用户确认/取消后再识别下一张
-    return true;
-  } catch (e) {
-    if (e.name === "AbortError") { _batchAbort = true; aiFinishErr(e); }  // 用户取消：终止整批
-    else aiFinishErr(e);
-    return false;
-  }
-}
-// Ctrl+V 粘贴图片：只加入「待识别」预览，按回车或点「识别并录入」才开始识别（不再粘贴即识别）
+// Ctrl+V 粘贴图片：只加入「待识别」预览，按回车或点「识别并录入」加入队列（不再粘贴即识别）
 document.addEventListener("paste", (e) => {
   // 粘贴目标若是「备注/附件」输入框：交给其自身 onpaste 走附件上传，不加入 AI 待识别
   const _pt = e.target;
@@ -1694,7 +1638,6 @@ async function aiSubmit() {
   const date = $("aiDate").value;
   const party = $("aiParty").value.trim();
   const remark = $("aiRemark").value.trim();
-  const inv = (AI_CONFIRM && AI_CONFIRM.image_url) ? `[票据] ${AI_CONFIRM.image_url}` : "";
   const autoFlags = (AI_CONFIRM && AI_CONFIRM.lines) || [];
   let rows = [...document.querySelectorAll("#aiLines tr[data-idx]")].map((tr) => {
     const idx = +tr.dataset.idx;                      // 按行号取回识别结果，删行后也不会串位
@@ -1728,47 +1671,389 @@ async function aiSubmit() {
   if (rows.some((r) => isNaN(r.unit_price))) { toast("单价填的不是数字，请检查"); return; }
   const op = (CURRENT_USER && (CURRENT_USER.name || CURRENT_USER.username)) || "";
   try {
-    // 1) 先创建确认为新物品的商品档案（同名已存在则复用）
-    const pend = rows.filter((r) => !r.product_id && r.new_product);
-    if (pend.length) {
-      const d = await api("/api/ai/products", "POST", {
-        items: pend.map((r) => ({
-          name: r.new_product.name,
-          category: r.new_product.category || "stock",
-          unit: r.unit || r.new_product.unit || "个",
-        })),
-      });
-      (d.items || []).forEach((it, k) => { if (pend[k]) pend[k].product_id = it.product_id; });
-      PRODUCTS = await api("/api/products");
-    }
-    rows = rows.filter((r) => r.product_id);
-    if (!rows.length) { toast("商品创建失败，请稍后重试"); return; }
-    // 2) 再写入单据
-    if (type === "inbound") {
-      for (const r of rows) {
-        const rmk = [inv, r.auto_created ? "[AI自动新增]" : "", remark].filter(Boolean).join(" ");
-        // 逐行用各自的单据日期（对账单每行日期不同）
-        await api("/api/inbounds", "POST", { product_id: r.product_id, unit: r.unit, quantity: r.quantity, unit_price: r.unit_price, supplier: party, operator: op, date: r.date, remark: rmk, pay_status: r.paid ? "paid" : "unpaid" });
-      }
-    } else {
-      // 按「日期 + 已付款/待付款」分单：日期不同的各成一单，待付款的独立进「待付款账单」
-      const groups = new Map();
-      rows.forEach((r) => {
-        const key = `${r.date}|${r.paid ? "paid" : "unpaid"}`;
-        if (!groups.has(key)) groups.set(key, { date: r.date, pay: r.paid ? "paid" : "unpaid", rows: [] });
-        groups.get(key).rows.push(r);
-      });
-      for (const g of groups.values()) {
-        const lines = g.rows.map((r) => ({ product_id: r.product_id, unit: r.unit, quantity: r.quantity, price: r.unit_price }));
-        await api("/api/outbounds", "POST", { customer: party, operator: op, date: g.date, remark: [inv, remark].filter(Boolean).join(" "), lines, pack_lines: [], pay_status: g.pay });
-      }
+    const n = await submitDocRows({
+      type, party, remark, imageUrl: (AI_CONFIRM && AI_CONFIRM.image_url) || "", rows, op,
+    });
+    // 这次是从「待办处理」打开的：提交成功就把该待办标记为已完成，从待办列表消失
+    if (AI_QUEUE_CURRENT) {
+      const job = AI_QUEUE.find((x) => x.id === AI_QUEUE_CURRENT);
+      if (job) { job.status = "submitted"; job.submitted_at = new Date().toISOString(); aiQueueSave(); }
+      AI_QUEUE_CURRENT = null;
     }
     closeModal();
     AI_CONFIRM = null;
-    toast(type === "inbound" ? "入库成功" : "出库成功");
-    loadDashboard(); loadStock();
+    toast(type === "inbound" ? `入库成功（${n} 行）` : `出库成功（${n} 行）`);
+    loadDashboard(); loadStock(); refreshEvaBadge();
     $("aiText").value = "";
   } catch (e) { toast("提交失败：" + e.message); }
+}
+
+/* =============== AI 识别队列 · 待办处理（#/eva） ===============
+   粘贴/输入不再直接弹确认框，而是入队（localStorage 持久化，刷新不丢已识别结果）；
+   后台一次只跑一条，跑完自动取下一条；识别成功的按业务类型落到「入库待办 / 出库待办」，
+   在 /eva 逐条审核或批量提交（提交逻辑与确认框共用 submitDocRows）。 */
+const AI_QUEUE_KEY = "ai_queue_v1";
+const AI_QUEUE_MAX = 60;            // 队列最多保留条数（超出丢最早的）
+const AI_QUEUE_THINK_KEEP = 4000;   // 每条任务最多保留的思考字数（持久化用）
+let AI_QUEUE = [];                  // [{id,kind,text,image_name,source,status,result,error,think,answer,...}]
+const AI_QUEUE_FILES = new Map();   // id -> File（图片任务原图，只在内存；刷新后需重选）
+let AI_QUEUE_CTRL = null;           // 正在识别那条的 AbortController
+let AI_QUEUE_TICKING = false;
+let AI_QUEUE_CURRENT = null;        // 从待办页打开确认框时记录任务 id，提交成功后标记该待办已完成
+let AI_QUEUE_LIVE_T = null;
+
+function aiQueueUid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function evaTitle(j) {
+  if (j.kind === "image") return (j.image_name || "票据图片") + (j.text ? ` · ${j.text.slice(0, 16)}` : "");
+  return (j.text || "").slice(0, 30) || "（空描述）";
+}
+function evaMoney(j) {
+  return ((j.result && j.result.lines) || []).reduce((a, ln) => a + (+ln.quantity || 0) * (+ln.unit_price || 0), 0);
+}
+function evaDateSpan(j) {
+  const r = j.result || {};
+  const ds = [...new Set((r.lines || []).map((ln) => ln.date || r.date || ""))].filter(Boolean).sort();
+  if (!ds.length) return "—";
+  return ds.length > 1 ? `${ds[0]} ~ ${ds[ds.length - 1]}（${ds.length} 天）` : ds[0];
+}
+function aiQueueSave() {
+  try {
+    const items = AI_QUEUE.slice(-AI_QUEUE_MAX).map((j) => ({
+      id: j.id, kind: j.kind, text: j.text || "", image_name: j.image_name || "", source: j.source || "",
+      status: j.status, result: j.result || null, error: j.error || "",
+      think: (j.think || "").slice(-AI_QUEUE_THINK_KEEP), answer: (j.answer || "").slice(-4000),
+      created_at: j.created_at, finished_at: j.finished_at || "", submitted_at: j.submitted_at || "",
+      elapsed: j.elapsed || 0,
+    }));
+    localStorage.setItem(AI_QUEUE_KEY, JSON.stringify(items));
+  } catch (e) { /* 配额满等：不影响主流程 */ }
+}
+function aiQueueLoad() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(AI_QUEUE_KEY) || "[]");
+    AI_QUEUE = Array.isArray(arr) ? arr.filter((j) => j && j.id) : [];
+  } catch (e) { AI_QUEUE = []; }
+  AI_QUEUE.forEach((j) => {
+    if (j.status === "running") j.status = "waiting";            // 上次没跑完 → 重新排队
+    if (j.kind === "image" && ["waiting", "running"].includes(j.status)) {
+      j.status = "error";                                        // 原图只在内存里，刷新后无法续跑
+      j.error = "页面刷新后原图已丢失，请回到工作台重新粘贴这张图片";
+    }
+  });
+  refreshEvaBadge();
+}
+/** 入队：文字或图片（图片需把 File 传进来，内部登记到 AI_QUEUE_FILES） */
+function aiQueueAdd(job) {
+  const j = {
+    id: aiQueueUid(), kind: job.kind, text: job.text || "", image_name: job.image_name || "",
+    source: job.source || "", status: "waiting", result: null, error: "", think: "", answer: "",
+    created_at: new Date().toISOString(), finished_at: "", submitted_at: "", elapsed: 0,
+  };
+  AI_QUEUE.push(j);
+  if (job.file) AI_QUEUE_FILES.set(j.id, job.file);
+  aiQueueSave();
+  refreshEvaBadge();
+  aiQueueTick();
+  return j.id;
+}
+/** 后台逐条识别：一次一条，跑完自动取下一条（不占用工作台的「识别中」按钮，可继续录入） */
+async function aiQueueTick() {
+  if (AI_QUEUE_TICKING) return;
+  const job = AI_QUEUE.find((j) => j.status === "waiting");
+  if (!job) { renderAiQueueBar(); refreshEvaBadge(); return; }
+  AI_QUEUE_TICKING = true;
+  job.status = "running";
+  job.think = "";
+  job.answer = "";
+  job.error = "";
+  aiQueueSave();
+  refreshEvaBadge();
+  if ($("page-eva").classList.contains("active")) renderEva();
+
+  AI_QUEUE_CTRL = new AbortController();
+  const started = Date.now();
+  aiShowThinking();                       // 工作台的面板同步显示当前这条
+  aiSetStage(`队列识别中：${evaTitle(job)}`);
+  const sink = {
+    think: (s) => {
+      job.think = (job.think + s).slice(-AI_QUEUE_THINK_KEEP);
+      aiAppendThink(s);
+      evaRenderLive();
+    },
+    stage: (s) => { job.stage = s; aiSetStage(s); evaRenderLive(); },
+    answer: (s) => {
+      job.answer = (job.answer + s).slice(-4000);
+      aiAppendAnswer(s);
+      evaRenderLive();
+    },
+  };
+  try {
+    let result;
+    if (job.kind === "image") {
+      const f = AI_QUEUE_FILES.get(job.id);
+      if (!f) throw new Error("页面刷新后原图已丢失，请重新粘贴/选择这张图片");
+      const fd = new FormData();
+      fd.append("file", f);
+      if (job.text) fd.append("text", job.text);
+      const res = await fetch(routePath("/api/ai/parse-image/stream"), { method: "POST", body: fd, signal: AI_QUEUE_CTRL.signal });
+      result = await aiCollectStream(res, sink);
+    } else {
+      const res = await fetch(routePath("/api/ai/parse/stream"), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: job.text }), signal: AI_QUEUE_CTRL.signal,
+      });
+      result = await aiCollectStream(res, sink);
+    }
+    job.status = "done";
+    job.result = result;
+    job.finished_at = new Date().toISOString();
+    job.elapsed = Math.round((Date.now() - started) / 1000);
+    aiFinishThinking("队列识别完成");
+    AI_QUEUE_FILES.delete(job.id);        // 原图用完即弃，避免内存堆积
+  } catch (e) {
+    job.status = "error";
+    if (e && e.name === "AbortError") { job.error = "已取消"; aiHideThinking(); }
+    else { job.error = (e && e.message) || String(e); aiFinishThinking("队列识别失败"); }
+  } finally {
+    AI_QUEUE_CTRL = null;
+    AI_QUEUE_TICKING = false;
+    aiQueueSave();
+    refreshEvaBadge();
+    if ($("page-eva").classList.contains("active")) renderEva();
+    setTimeout(aiQueueTick, 300);         // 接着跑下一条
+  }
+}
+/** 待办页「正在识别」卡片（节流 400ms，只更新这一块，避免整页重绘） */
+function evaRenderLive() {
+  if (AI_QUEUE_LIVE_T) return;
+  AI_QUEUE_LIVE_T = setTimeout(() => {
+    AI_QUEUE_LIVE_T = null;
+    const card = $("evaLiveCard");
+    if (!card) return;
+    const job = AI_QUEUE.find((j) => j.status === "running");
+    if (!job) { card.style.display = "none"; return; }
+    card.style.display = "";
+    $("evaLiveHead").textContent = `${evaTitle(job)}${job.source ? "（" + job.source + "）" : ""}`;
+    $("evaLiveStage").textContent = job.stage || "识别中…";
+    const t = $("evaLiveThink");
+    if (t) { t.textContent = (job.think || "").slice(-600) || "（等待模型输出…）"; t.scrollTop = t.scrollHeight; }
+  }, 400);
+}
+function renderAiQueueBar() {
+  const el = $("aiQueueBar");
+  if (!el) return;
+  const waiting = AI_QUEUE.filter((j) => j.status === "waiting").length;
+  const running = AI_QUEUE.filter((j) => j.status === "running").length;
+  const done = AI_QUEUE.filter((j) => j.status === "done").length;
+  const errs = AI_QUEUE.filter((j) => j.status === "error").length;
+  if (!(waiting + running + done + errs)) { el.style.display = "none"; el.innerHTML = ""; return; }
+  el.style.display = "";
+  el.innerHTML =
+    `<span class="grow">${running ? "⏳ 正在识别… · " : ""}排队 ${waiting} 项 · <b>待处理 ${done} 项</b>${errs ? ` · 失败 ${errs} 项` : ""}</span>` +
+    `<button class="btn sm" onclick="goPage('eva')">去待办处理 →</button>`;
+}
+/** AI 识别待办条数：排队 / 识别中 / 待审核（不含已提交与失败） */
+function aiQueuePendingCount() {
+  return AI_QUEUE.filter((j) => ["waiting", "running", "done"].includes(j.status)).length;
+}
+/** 待办总数（既有「待办处理」按钮上显示）：聚水潭待办 + AI 识别待办 */
+function evaPendingTotal() { return (JST_PENDING_N || 0) + aiQueuePendingCount(); }
+function refreshEvaBadge() {
+  jstPendingBtnState();   // 出库页那个「待办处理（N）」按钮：N = 聚水潭 + AI
+  renderAiQueueBar();
+}
+
+/* ---------- 待办页渲染 ---------- */
+let EVA_TAB = "ai";   // 顶部三个横向按钮：ai 识别队列 / in 入库待办 / out 出库待办
+function evaTab(tab) {
+  EVA_TAB = ["ai", "in", "out"].includes(tab) ? tab : "ai";
+  document.querySelectorAll("#evaSeg .seg-item").forEach((b) => b.classList.toggle("active", b.dataset.tab === EVA_TAB));
+  [["ai", "evaPanelAi"], ["in", "evaPanelIn"], ["out", "evaPanelOut"]].forEach(([k, id]) => {
+    const el = $(id);
+    if (el) el.style.display = k === EVA_TAB ? "" : "none";
+  });
+  if (EVA_TAB !== "ai") { const c = $("evaLiveCard"); if (c) c.style.display = "none"; }
+  else evaRenderLive();
+}
+function loadEva() { renderEva(); evaTab(EVA_TAB); }
+function evaRefresh() { renderEva(); refreshEvaBadge(); aiQueueTick(); }
+function evaRunQueue() {
+  const waiting = AI_QUEUE.filter((j) => j.status === "waiting").length;
+  toast(waiting ? `队列里还有 ${waiting} 项，继续识别…` : "队列已全部识别完");
+  aiQueueTick();
+}
+function evaCancelCurrent() { if (AI_QUEUE_CTRL) { AI_QUEUE_CTRL.abort(); toast("已取消当前识别"); } }
+function renderEva() {
+  const running = AI_QUEUE.filter((j) => j.status === "running");
+  const waiting = AI_QUEUE.filter((j) => j.status === "waiting");
+  const errors = AI_QUEUE.filter((j) => j.status === "error");
+  const done = AI_QUEUE.filter((j) => j.status === "done");
+  const ins = done.filter((j) => (j.result || {}).type !== "outbound");
+  const outs = done.filter((j) => (j.result || {}).type === "outbound");
+  const submitted = AI_QUEUE.filter((j) => j.status === "submitted").length;
+  $("evaStats").innerHTML = `
+    <div class="stat"><div class="label">识别中 / 排队</div><div class="value">${running.length} / ${waiting.length}</div></div>
+    <div class="stat accent"><div class="label">入库待办</div><div class="value">${ins.length}</div></div>
+    <div class="stat warn"><div class="label">出库待办</div><div class="value">${outs.length}</div></div>
+    <div class="stat ${errors.length ? "danger" : "success"}"><div class="label">识别失败</div><div class="value">${errors.length}</div><div class="sub">已提交 ${submitted} 条</div></div>`;
+  // 顶部三个横向按钮上的角标（没活就不显示，一眼看出哪一类有待办）
+  const setBadge = (id, n) => { const el = $(id); if (!el) return; el.textContent = String(n); el.style.display = n ? "" : "none"; };
+  setBadge("evaTabAi", running.length + waiting.length + errors.length);
+  setBadge("evaTabIn", ins.length);
+  setBadge("evaTabOut", outs.length);
+  const aiItems = [...running, ...waiting, ...errors];
+  // 任务一律「按钮左右排列」，点按钮才展开处理，避免纵向堆一大片
+  const row = (items, zone, empty) => items.length
+    ? `<div class="eva-btn-row">${items.map((j) => evaItemHtml(j, zone)).join("")}</div>`
+    : `<div class="empty">${empty}</div>`;
+  $("evaAiList").innerHTML = row(aiItems, "ai", "队列为空。回到「工作台 → AI 智能录入」粘贴票据或输入描述，会自动加入这里。");
+  $("evaInList").innerHTML = row(ins, "inbound", "暂无待审核的入库识别结果");
+  $("evaOutList").innerHTML = row(outs, "outbound", "暂无待审核的出库识别结果");
+  // 聚水潭待办（新商品没规则 / 要验证码）：在既有待办弹层里处理，这里只做入口与计数
+  const jb = $("evaJstBtn");
+  if (jb) {
+    jb.textContent = JST_PENDING_N ? `聚水潭待办（${JST_PENDING_N}）` : "聚水潭待办";
+    jb.className = JST_PENDING_N ? "btn danger" : "btn secondary";
+  }
+  evaRenderLive();
+}
+/** 一条待办 = 一个按钮（左右排列）；点主按钮打开审核/详情，旁边的 ↻ 重试、✕ 删除 */
+function evaItemHtml(j, zone) {
+  const meta = j.status === "done"
+    ? `${((j.result || {}).lines || []).length} 行 · ${fmtMoney(evaMoney(j))} · ${evaDateSpan(j)}`
+    : (j.status === "running" ? "识别中…" : (j.status === "waiting" ? "等待识别…" : ""));
+  const ck = zone === "ai" ? "" : `<input type="checkbox" class="eva-ck" data-id="${j.id}" title="勾选后可批量提交" />`;
+  const side = zone === "ai"
+    ? `<button class="btn sm secondary eva-chip-mini" title="重新识别" onclick="evaRetry('${j.id}')">↻</button>
+       <button class="btn sm secondary eva-chip-mini" title="删除这条待办" onclick="evaDelete('${j.id}')">✕</button>`
+    : `<button class="btn sm secondary eva-chip-mini" title="删除这条待办" onclick="evaDelete('${j.id}')">✕</button>`;
+  const label = `${esc(j.source || (j.kind === "image" ? "票据" : "文字"))} · ${esc(evaTitle(j).slice(0, 16))}`;
+  return `<span class="eva-chip s-${j.status}">
+      ${ck}
+      <button class="eva-chip-main" title="${esc(j.error || "点开核对 / 提交：" + evaTitle(j))}" onclick="evaOpen('${j.id}')">${label}<span class="muted">${esc(meta)}</span></button>
+      ${side}
+    </span>`;
+}
+/** 点待办按钮：已识别好的直接打开审核框；失败的重试；其余只是提示 */
+function evaOpen(id) {
+  const j = AI_QUEUE.find((x) => x.id === id);
+  if (!j) return;
+  if (j.status === "done") evaReview(id);
+  else if (j.status === "error") evaRetry(id);
+  else toast(j.status === "running" ? "这条正在识别中…" : "这条还在排队，识别完会自动出现在待办里");
+}
+function evaReview(id) {
+  const j = AI_QUEUE.find((x) => x.id === id);
+  if (!j || !j.result) return;
+  AI_QUEUE_CURRENT = id;
+  AI_THINK_TEXT = j.think || "";        // 让确认框里的「思考过程」显示这条任务的
+  openAiConfirm(j.result);
+}
+function evaDelete(id) {
+  const j = AI_QUEUE.find((x) => x.id === id);
+  if (!j) return;
+  if (!confirm(`删除这条待办？\n${evaTitle(j)}`)) return;
+  AI_QUEUE = AI_QUEUE.filter((x) => x.id !== id);
+  AI_QUEUE_FILES.delete(id);
+  aiQueueSave(); renderEva(); refreshEvaBadge();
+}
+function evaRetry(id) {
+  const j = AI_QUEUE.find((x) => x.id === id);
+  if (!j) return;
+  if (j.kind === "image" && !AI_QUEUE_FILES.has(j.id)) { toast("原图已丢失，请回到工作台重新粘贴这张图片"); return; }
+  j.status = "waiting"; j.error = ""; j.think = ""; j.answer = "";
+  aiQueueSave(); renderEva(); refreshEvaBadge(); aiQueueTick();
+}
+/** 待办结果 → 提交用的明细行（与确认框里的行结构一致） */
+function evaRowsOf(job) {
+  const r = job.result || {};
+  return (r.lines || []).filter((ln) => ln.product_id || ln.new_product).map((ln) => ({
+    product_id: ln.product_id || 0,
+    new_product: ln.product_id ? null : (ln.new_product || { name: ln.recognized_name || ln.product_name || "", category: ln.category || "stock", unit: ln.unit || "个" }),
+    quantity: +ln.quantity || 0,
+    unit: ln.unit || "个",
+    unit_price: +ln.unit_price || 0,
+    paid: ln.paid !== false,
+    date: ln.date || r.date || today(),
+    auto_created: !!ln.auto_created,
+  }));
+}
+/** 勾选后批量提交（入库/出库各自成单；出库按「日期+付款状态」分单） */
+async function evaSubmitChecked(type) {
+  const boxId = type === "inbound" ? "evaInList" : "evaOutList";
+  const ids = [...document.querySelectorAll(`#${boxId} .eva-ck:checked`)].map((x) => x.dataset.id);
+  if (!ids.length) { toast("请先勾选要提交的待办（也可以在每条上点「审核提交」逐个核对）"); return; }
+  const jobs = ids.map((id) => AI_QUEUE.find((j) => j.id === id)).filter((j) => j && j.result);
+  if (!jobs.length) return;
+  const bad = jobs.filter((j) => !evaRowsOf(j).length);
+  if (bad.length) { toast(`有 ${bad.length} 条没有可提交的明细行，请先逐条审核`); return; }
+  if (!confirm(`批量提交 ${jobs.length} 条${type === "inbound" ? "入库" : "出库"}待办？\n（按识别结果直接提交，日期用每行自己的单据日期；要改明细请点「审核提交」）`)) return;
+  const op = (CURRENT_USER && (CURRENT_USER.name || CURRENT_USER.username)) || "";
+  let okN = 0;
+  for (const j of jobs) {
+    const r = j.result || {};
+    try {
+      await submitDocRows({
+        type, party: type === "inbound" ? (r.supplier || "") : (r.customer || ""),
+        remark: r.remark || "", imageUrl: r.image_url || "", rows: evaRowsOf(j), op,
+      });
+      j.status = "submitted";
+      j.submitted_at = new Date().toISOString();
+      aiQueueSave();
+      okN++;
+    } catch (e) {
+      toast(`「${evaTitle(j)}」提交失败：${e.message}`);
+      break;
+    }
+  }
+  toast(`已提交 ${okN}/${jobs.length} 条`);
+  renderEva(); refreshEvaBadge(); loadDashboard(); loadStock();
+}
+
+/* ---------- 提交单据（确认框 & 待办批量提交共用） ----------
+   rows: [{ product_id, new_product, quantity, unit, unit_price, paid, date, auto_created }] */
+async function submitDocRows({ type, party, remark, imageUrl, rows, op }) {
+  const inv = imageUrl ? `[票据] ${imageUrl}` : "";
+  // 1) 先创建确认为新物品的商品档案（同名已存在则复用）
+  const pend = rows.filter((r) => !r.product_id && r.new_product);
+  if (pend.length) {
+    const d = await api("/api/ai/products", "POST", {
+      items: pend.map((r) => ({
+        name: (r.new_product.name || "").trim(),
+        category: r.new_product.category || "stock",
+        unit: r.unit || r.new_product.unit || "个",
+      })),
+    });
+    (d.items || []).forEach((it, k) => { if (pend[k]) pend[k].product_id = it.product_id; });
+    PRODUCTS = await api("/api/products");
+  }
+  const ok = rows.filter((r) => r.product_id);
+  if (!ok.length) throw new Error("商品创建失败，请稍后重试");
+  // 2) 写单据：入库逐行建单（各带自己的日期）；出库按「日期 + 付款状态」分单
+  if (type === "inbound") {
+    for (const r of ok) {
+      const rmk = [inv, r.auto_created ? "[AI自动新增]" : "", remark].filter(Boolean).join(" ");
+      await api("/api/inbounds", "POST", {
+        product_id: r.product_id, unit: r.unit, quantity: r.quantity, unit_price: r.unit_price,
+        supplier: party, operator: op, date: r.date, remark: rmk, pay_status: r.paid ? "paid" : "unpaid",
+      });
+    }
+  } else {
+    const groups = new Map();
+    ok.forEach((r) => {
+      const key = `${r.date}|${r.paid ? "paid" : "unpaid"}`;
+      if (!groups.has(key)) groups.set(key, { date: r.date, pay: r.paid ? "paid" : "unpaid", rows: [] });
+      groups.get(key).rows.push(r);
+    });
+    for (const g of groups.values()) {
+      const lines = g.rows.map((r) => ({ product_id: r.product_id, unit: r.unit, quantity: r.quantity, price: r.unit_price }));
+      await api("/api/outbounds", "POST", {
+        customer: party, operator: op, date: g.date,
+        remark: [inv, remark].filter(Boolean).join(" "), lines, pack_lines: [], pay_status: g.pay,
+      });
+    }
+  }
+  return ok.length;
 }
 
 /* =============== 备注附件 =============== */
@@ -7174,16 +7459,22 @@ let EVA_TASKS = [];
 let JST_PENDING_N = 0;          // 当前分仓待办数（设置页状态区据此提示）
 let JST_PENDING_POPPED = false; // 本次登录只弹一次
 
-/* 出库页那个「待办处理」按钮的状态：有待办时变红并显示条数 */
+/* 出库页那个「待办处理」按钮：待办数 = 聚水潭待办（新商品没规则匹配 / 要验证码）+ AI 识别待办 */
 function jstPendingBtnState() {
   const b = $("jstPendingBtn");
   if (!b) return;
-  const n = JST_PENDING_N;
+  const jst = JST_PENDING_N || 0;
+  const ai = aiQueuePendingCount();
+  const n = jst + ai;
   b.className = n ? "btn danger" : "btn secondary";
   b.textContent = n ? `⚠ 待办处理（${n}）` : "待办处理";
   b.title = n
-    ? `${n} 项待办要处理：新商品没规则匹配 / 聚水潭要验证码，点这里处理`
-    : "暂无待办；聚水潭遇到新商品没规则匹配、或需要验证码时会在这里处理";
+    ? [
+        jst ? `聚水潭待办 ${jst} 项（新商品没规则匹配 / 要验证码）` : "",
+        ai ? `AI 识别待办 ${ai} 项（识别完待审核提交）` : "",
+        "点这里处理",
+      ].filter(Boolean).join("；")
+    : "暂无待办；聚水潭遇到新商品没规则匹配、或需要验证码，以及 AI 识别完待审核时，都会在这里处理";
 }
 
 /* 打开待办弹层（出库页按钮、登录弹窗「去处理」、自动出库设置页的提示都走这里） */
@@ -7291,17 +7582,55 @@ function evaCaptchaCard(t) {
   </div>`;
 }
 
+/* 待办弹层：任务按钮左右排列，点哪个就在下面显示哪个的详情（不再把所有卡片纵向堆起来） */
+function evaTaskLabel(t) {
+  const kind = t.type === "unmapped" ? "新商品没规则" : "要验证码";
+  const name = (t.message || "").replace(/\s+/g, " ").slice(0, 16);
+  return `⚠ ${kind}${name ? "：" + name : ""}`;
+}
 function renderEvaTasks(tasks) {
   const box = $("jstPendingList");
   if (!box) return;
+  // ① AI 识别待办：一条一个按钮，左右排列；待审核的直接进审核框，其余进待办页
+  const aiItems = AI_QUEUE.filter((j) => ["waiting", "running", "done", "error"].includes(j.status));
+  const aiBlock = aiItems.length
+    ? `<div class="eva-sec-title">AI 识别待办（${aiItems.length}）</div>
+       <div class="eva-btn-row">` +
+      aiItems.slice(0, 30).map((j) => {
+        const st = j.status === "done" ? "待审核" : (j.status === "running" ? "识别中" : (j.status === "waiting" ? "排队中" : "失败"));
+        const click = j.status === "done" ? `evaReviewFromModal('${j.id}')` : "openEvaPage()";
+        return `<button class="btn sm ${j.status === "done" ? "" : "secondary"}" title="${esc(j.error || evaTitle(j))}" onclick="${click}">${esc(st)}·${esc(evaTitle(j).slice(0, 14))}</button>`;
+      }).join("") + `</div>`
+    : "";
+  const aiFoot = aiItems.length
+    ? `<div class="row" style="margin:-2px 0 10px;"><button class="btn sm secondary" onclick="openEvaPage()">打开 AI 待办页（批量审核 / 提交）→</button></div>`
+    : "";
   if (!tasks.length) {
-    box.innerHTML = `<div class="empty">当前没有待办 🎉　自动出库正常时这里是空的。</div>`;
+    box.innerHTML = aiBlock + aiFoot +
+      `<div class="empty">${aiItems.length ? "聚水潭待办已清空 🎉" : "当前没有待办 🎉　自动出库正常时这里是空的。"}</div>`;
     return;
   }
-  box.innerHTML = `<div class="alert warn">有 ${tasks.length} 项待处理，处理完点各项下面的按钮，系统会自动接着重跑。</div>` +
-    tasks.map((t) => (t.type === "unmapped" ? evaUnmappedCard(t) : evaCaptchaCard(t))).join("");
+  box.innerHTML = aiBlock + aiFoot +
+    `<div class="eva-sec-title">聚水潭待办（${tasks.length}）</div>` +
+    `<div class="alert warn">有 ${tasks.length} 项待处理，点按钮切换要处理的那条，处理完点下面的按钮，系统会自动接着重跑。</div>` +
+    `<div class="eva-btn-row" id="evaTaskBtns">` +
+    tasks.map((t, i) => `<button class="btn sm ${i === 0 ? "" : "secondary"}" data-i="${i}" onclick="evaShowTask(${i})">${esc(evaTaskLabel(t))}</button>`).join("") +
+    `</div><div id="evaTaskDetail"></div>`;
+  evaShowTask(0);
+}
+/** 切换待办弹层里当前显示的哪一条 */
+function evaShowTask(i) {
+  const box = $("evaTaskDetail");
+  const t = (EVA_TASKS || [])[i];
+  if (!box || !t) return;
+  box.innerHTML = t.type === "unmapped" ? evaUnmappedCard(t) : evaCaptchaCard(t);
+  document.querySelectorAll("#evaTaskBtns .btn").forEach((b) => {
+    b.className = "btn sm" + (+b.dataset.i === i ? "" : " secondary");
+  });
   try { bindSearchable(box); } catch (e) {}
 }
+function openEvaPage() { closeModal(); goPage("eva"); }
+function evaReviewFromModal(id) { closeModal(); goPage("eva"); evaReview(id); }
 
 /* 刷新待办：更新按钮上的条数；弹层开着就顺带刷新里面的内容 */
 async function renderJstPending() {
@@ -7856,6 +8185,8 @@ function startMaintenanceWatch() {
   applyNavVisibility();     // 侧边栏按本机偏好显隐（设置 → 模块显示）
   syncExcludeOtherHint();   // 报表页「排除其他开支」开关按本机偏好回显（默认开启）
   loadDashboard();
+  aiQueueLoad();    // AI 识别队列（待办处理）：恢复上次未处理完的识别结果，并继续跑排队中的任务
+  aiQueueTick();
   applyHashRoute(); // 支持深链：登录后跳转到指定二级页
   checkJstPending(); // 自动出库待办（商品资料待补全 / 需要验证码）：有就弹窗提醒
 })();
