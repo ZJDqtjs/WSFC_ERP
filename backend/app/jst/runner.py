@@ -548,6 +548,63 @@ def _save_mappings(key: str, mappings: list[dict[str, Any]]) -> int:
     return saved
 
 
+def _exact_norm(s: Any) -> str:
+    """100% 同名的比较口径：去掉所有空白 + 忽略大小写（不改字、不做相似度）。"""
+    return re.sub(r"\s+", "", str(s or "")).lower()
+
+
+def pick_exact_match(ext_name: str, products: list[Any], attr: str = "name") -> Any | None:
+    """在系统商品里找「名称/编码 100% 相同」的那一个；有歧义就不猜（返回 None）。
+
+    取商品的优先级与导入链路（routers/imports.py 的 _resolve_jst_product）保持一致：
+    同名的**订单小类**优先（小类才有规格、关联结算与「代发」语义），其次唯一同名商品；
+    多个同名订单小类（或既无小类又有多条同名）视为歧义，交人工选。
+    """
+    key = _exact_norm(ext_name)
+    if not key:
+        return None
+    hits = [p for p in products if _exact_norm(getattr(p, attr, "")) == key]
+    orders = [p for p in hits if getattr(p, "product_type", "") == "order"]
+    if len(orders) == 1:
+        return orders[0]
+    if len(hits) == 1:
+        return hits[0]
+    return None
+
+
+def exact_rematch(key: str, items: list[dict[str, Any]],
+                  only_codes: list[str] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """按「100% 同名」重新匹配待补全的聚水潭商品名（只读，不写库）。
+
+    只认完全一致的名称/编码（忽略空格与大小写），绝不做前缀/相似度匹配：
+    用户把商品资料维护好之后点一下，命中的自动关联并重新出库，其余仍留在待办里人工选。
+
+    返回 (匹配上的 [{external_code, product_id, product_name}], 仍未匹配的 items)。
+    """
+    from ..models import Product
+
+    db = get_sessionmaker(key)()
+    try:
+        prods = list(db.execute(select(Product)).scalars())
+        matched: list[dict[str, Any]] = []
+        left: list[dict[str, Any]] = []
+        for it in items or []:
+            code = str(it.get("external_code") or "").strip()
+            if not code:
+                continue
+            if only_codes and code not in only_codes:
+                left.append(it)
+                continue
+            hit = pick_exact_match(code, prods, "name") or pick_exact_match(code, prods, "code")
+            if hit is None:
+                left.append(it)
+                continue
+            matched.append({"external_code": code, "product_id": int(hit.id), "product_name": hit.name})
+        return matched, left
+    finally:
+        db.close()
+
+
 def reimport_files(key: str, paths: list[str], operator: str = "", skip_imported: bool = True) -> dict[str, Any]:
     """只重新导入已下载的文件（不再去聚水潭导一遍）。"""
     agg: dict[str, Any] = {"orders": 0, "created": 0, "duplicate_skipped": 0, "failed": [], "unmapped": set()}

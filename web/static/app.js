@@ -7740,6 +7740,8 @@ function evaUnmappedCard(t) {
     </div>
     <div class="toolbar" style="margin-top:10px;">
       <button class="btn green" onclick="evaResolve('${t.id}')">✔ 完成并重新导入</button>
+      <button class="btn" title="商品资料维护好之后点它：只自动关联名称/编码 100% 完全一致的商品，不做相似度猜测"
+        onclick="evaRematch('${t.id}')">⚡ 重新完全匹配（100% 同名，自动出库）</button>
       <button class="btn secondary" onclick="location.hash='#/settings?tab=jushuitan';">去「聚水潭关联」维护</button>
       <button class="btn sm ghost" onclick="evaDismiss('${t.id}')">忽略</button>
       <span class="muted">区间 ${esc(t.window || "")} · 文件 ${esc((t.files || []).join("、"))} · ${esc(t.created_at || "")}</span>
@@ -7851,6 +7853,33 @@ async function evaResolve(tid) {
     startJstPoll();
     setTimeout(() => { renderJstPending(); checkJstPending(false); }, 2500);
   } catch (e) { toast("提交失败：" + e.message); }
+}
+
+/* 重新完全匹配：商品资料维护好后一键按「100% 同名」自动关联并重新出库（不做相似度猜测）
+ * 后端只认名称/编码完全一致（忽略空格与大小写），命中的自动关联并立即重新导入，
+ * 其余仍留在待办里等人工选择；对已经在待办里的老任务同样有效（按名字匹配，不依赖任务创建时间）。 */
+async function evaRematch(tid) {
+  if (!confirm("按「名称 / 编码 100% 完全相同」重新匹配这条待办？\n\n"
+    + "· 只自动关联与系统商品完全同名的项（忽略空格/大小写）\n"
+    + "· 不做任何相似度猜测，避免像「新鲜百合 50%」那种误配\n"
+    + "· 命中的立即自动重新导入出库，其余仍留在待办里人工选择")) return;
+  try {
+    const r = await api(`/api/jst-auto/pending/${encodeURIComponent(tid)}/rematch`, "POST", { dry_run: false });
+    const ms = (r.matched || []).map((x) => `· ${x.external_code} → ${x.product_name}`).join("\n");
+    const ls = (r.left || []).map((x) => `· ${x.external_code}`).join("\n");
+    toast(r.message || "已提交");
+    if (ms) {
+      alert(`100% 同名自动关联 ${r.matched.length} 种：\n${ms}`
+        + (ls ? `\n\n仍未匹配（请手工选择）：\n${ls}` : "")
+        + (r.started ? "\n\n已开始重新导入出库，可点「刷新」看进度。" : ""));
+    }
+    if (r.started) {
+      startJstPoll();
+      setTimeout(() => { renderJstPending(); checkJstPending(false); }, 2500);
+    } else {
+      renderJstPending(); checkJstPending(false);
+    }
+  } catch (e) { toast("重新匹配失败：" + e.message); }
 }
 
 async function evaDismiss(tid) {
