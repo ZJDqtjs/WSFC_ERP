@@ -864,6 +864,12 @@ function showLoginErr(msg) {
 $("logoutBtn").addEventListener("click", async () => {
   try { await fetch(routePath("/api/auth/logout"), { method: "POST" }); } catch (e) {}
   CURRENT_USER = null;
+  // 待办按分仓隔离：退出后不留上一个分仓的待办与角标（数据仍在各自分仓的存储里，下次登录照旧）
+  AI_QUEUE = [];
+  AI_QUEUE_FILES.clear();
+  AI_QUEUE_CURRENT = null;
+  AI_CONFIRM = null;
+  try { refreshEvaBadge(); renderEva(); } catch (e) {}
   showLogin();
 });
 
@@ -1498,12 +1504,13 @@ async function aiFillMissingPrices() {
  * 后端只在识别时按「当时匹配到的商品」算过一遍；用户在确认框里手动换成别的商品后必须重算，
  * 否则会拿新商品的实盘数去减旧商品的库存（甚至是新建商品的 0），增减量就完全不对了
  * （例：识别成"小香菇"、实盘 135，当前库存算成 0 → +135；换回"香菇干货"应变成 135 − 420 = −285）。 */
-function aiStockRefresh(i) {
+function aiStockRefresh(i, opts) {
   const tr = document.querySelector(`#aiLines tr[data-idx="${i}"]`);
   const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[i] : null;
   const typeSel = $("aiType");
   if (!tr || !line || !typeSel || typeSel.value !== "stocktake") return;
-  const qtyEl = tr.querySelector(".ai-qty");
+  const countEl = tr.querySelector(".ai-count");   // 实盘数（界面上可改）
+  const hidEl = tr.querySelector(".ai-qty");       // 增减量（提交用，隐藏）
   const sel = tr.querySelector(".ai-pid");
   const cell = tr.querySelector(".ai-stock-cell");
   const pid = sel ? (+sel.value || 0) : 0;
@@ -1514,20 +1521,46 @@ function aiStockRefresh(i) {
   line.product_id = pid;
   line.stock_before = before;
   line.stock_unit = unit;
-  // 有「实盘数」→ 按 实盘 − 当前 重算；用户说的是增减（stock_rel）时数量本身就是增减量，保持不变
-  // （旧结果没有 stock_counted，用 quantity —— 盘点行它就是识别到的实盘数）
-  const oldResult = line.stock_counted == null && line.stock_rel == null;
-  const counted = line.stock_counted != null ? line.stock_counted : (oldResult ? +line.quantity : null);
-  let adj = +((qtyEl || {}).value) || 0;
-  if (!line.stock_rel && counted != null) adj = +(counted - before).toFixed(4);
+  // 实盘数：优先「识别/手填的实盘数」；用户说的是增减（stock_rel）时按当前库存折算成实盘数
+  // （更早的结果没有 stock_counted，就用 quantity —— 盘点行它就是识别到的实盘数）
+  let counted = line.stock_counted != null ? +line.stock_counted : null;
+  if (counted == null && !line.stock_count_cleared) {
+    if (line.stock_rel) counted = +(before + (+line.quantity || 0)).toFixed(4);
+    else if (line.quantity != null) counted = +line.quantity;
+  }
+  // 用户正在输入时不要覆盖他敲进去的内容
+  if (countEl && !(opts && opts.keepCount)) countEl.value = counted == null ? "" : fmtNum(counted);
+  // 实盘数被清空 → 该行不调整（避免拿上一次的增减量提交出去）
+  const adj = line.stock_count_cleared ? 0
+    : (counted == null ? (+((hidEl || {}).value) || 0) : +(counted - before).toFixed(4));
   line.stock_adjust = adj;
   line.stock_after = +(before + adj).toFixed(4);
-  line.hint = [`当前库存 ${fmtNum(before)}${unit}，调整 ${adj > 0 ? "+" : ""}${fmtNum(adj)}${unit} → 盘点后 ${fmtNum(line.stock_after)}${unit}`,
+  line.hint = [
+    line.stock_count_cleared
+      ? `未填实盘数：该行不调整（当前库存保持 ${fmtNum(before)}${unit}）`
+      : `当前库存 ${fmtNum(before)}${unit}，实盘 ${counted == null ? "—" : fmtNum(counted)}${unit}，调整 ${adj > 0 ? "+" : ""}${fmtNum(adj)}${unit} → 盘点后 ${fmtNum(line.stock_after)}${unit}`,
     line.unit_note || ""].filter(Boolean).join("；");
-  if (cell) cell.innerHTML = `当前 <b>${fmtNum(before)}</b> → ${fmtNum(line.stock_after)} ${esc(unit)}`;
+  if (cell) {
+    cell.innerHTML = `当前 <b>${fmtNum(before)}</b> → 调整 <b>${adj > 0 ? "+" : ""}${fmtNum(adj)}</b> → 盘点后 <b>${fmtNum(line.stock_after)}</b> ${esc(unit)}`;
+  }
   const hintEl = tr.querySelector(".ai-hint");
   if (hintEl) hintEl.textContent = line.hint;
-  if (qtyEl) qtyEl.value = fmtNum(adj);
+  if (hidEl) hidEl.value = fmtNum(adj);
+}
+/* 盘点行：手改「实盘数」→ 立刻重算增减量，并刷新「当前 → 调整 → 盘点后」与说明
+   （以前只有增减量输入框、且改了不刷新库存对比，看起来像被 AI 的结果定死了） */
+function aiCountChanged(i) {
+  const tr = document.querySelector(`#aiLines tr[data-idx="${i}"]`);
+  const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[i] : null;
+  const el = tr ? tr.querySelector(".ai-count") : null;
+  if (!line || !el) return;
+  const raw = (el.value || "").trim();
+  const v = parseFloat(raw);
+  line.stock_count_cleared = (raw === "" || isNaN(v));   // 清空 = 该行不调整
+  line.stock_counted = line.stock_count_cleared ? null : v;
+  line.stock_rel = false;   // 用户给了绝对实盘数，不再是「多了/少了」的相对量
+  line.unit_note = "";      // 已手改，去掉上一次的换算提示
+  aiStockRefresh(i, { keepCount: true });
 }
 /* 单位候选（datalist）：商品换算表里的单位 + 基础/默认单位 + 当前值（可下拉选，也可手填别的） */
 function aiUnitSuggest(pid, curUnit) {
@@ -1676,12 +1709,18 @@ function openAiConfirm(r) {
       ? '<span class="badge" style="background:#fff3cd;color:#8a6d00;margin-left:6px;">⚠ 相似商品待确认</span>' : "";
     const unitBadge = ln.unit_conflict
       ? '<span class="badge" style="background:#fde2e0;color:#b3261e;margin-left:6px;" title="' + esc(ln.unit_conflict_msg || "") + '">⚠ 单位不一致</span>' : "";
-    // 盘点：数量列改「增减量（±）」，单价列换成「当前库存 → 盘点后」，不显示付款状态
+    // 盘点：数量列 = 「实盘数」（直接改成你盘到的数，系统自动算增减量去调整），
+    // 单价列换成「当前 → 调整 → 盘点后」；提交时读隐藏的 .ai-qty（增减量，走既有 adjust 接口）
+    const counted = ln.stock_counted != null
+      ? ln.stock_counted
+      : (ln.stock_rel ? +(((ln.stock_before || 0) + (+ln.quantity || 0))).toFixed(4) : ln.quantity);
     const qtyCell = isStock
-      ? `<td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.stock_adjust || 0)}" style="width:104px;" title="增减量：正数增加、负数减少（默认已按 实盘数 − 当前库存 算好，可自行修改）" /></td>`
+      ? `<td><input type="number" step="any" class="ai-count" value="${fmtNum(counted)}" style="width:104px;" title="实盘数量（= 盘点后的库存数）：改成你实际盘到的数即可，提交时按「实盘数 − 当前库存」走增减调整" oninput="aiCountChanged(${i})" />
+           <input type="hidden" class="ai-qty" value="${fmtNum(ln.stock_adjust || 0)}" /></td>`
       : `<td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.quantity)}" style="width:90px;" /></td>`;
+    const stockCellHtml = `当前 <b>${fmtNum(ln.stock_before || 0)}</b> → 调整 <b>${(ln.stock_adjust || 0) > 0 ? "+" : ""}${fmtNum(ln.stock_adjust || 0)}</b> → 盘点后 <b>${fmtNum(ln.stock_after || 0)}</b> ${esc(ln.stock_unit || ln.unit || "")}`;
     const priceCell = isStock
-      ? `<td class="muted ai-stock-cell" style="white-space:nowrap;" title="当前库存 → 盘点后">当前 <b>${fmtNum(ln.stock_before || 0)}</b> → ${fmtNum(ln.stock_after || 0)} ${esc(ln.stock_unit || ln.unit || "")}</td>`
+      ? `<td class="muted ai-stock-cell" style="white-space:nowrap;" title="当前库存 → 调整 → 盘点后">${stockCellHtml}</td>`
       : `<td class="ai-price-cell"><input type="number" step="any" class="ai-price" value="${ln.unit_price ? ln.unit_price : ""}" placeholder="可留空" style="width:100px;" />${ln.price_defaulted ? '<span class="ai-price-badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按最近价</span>' : ""}</td>`;
     const payCell = isStock ? "" : `<td>${aiPayHtml(ln, i)}</td>`;
     return `<tr data-idx="${i}">
@@ -1723,7 +1762,7 @@ function openAiConfirm(r) {
       <div class="field"><label>备注</label><input id="aiRemark" value="${esc(r.remark)}" /></div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>分类</th><th>商品</th><th>日期</th><th>${isStock ? "调整(±)" : "数量"}</th><th>单位</th><th>${isStock ? "当前库存 → 盘点后" : (isIn ? "单价" : "售价")}</th>${isStock ? "" : "<th>付款</th>"}<th>说明</th><th>操作</th></tr></thead>
+      <thead><tr><th>分类</th><th>商品</th><th>日期</th><th>${isStock ? "实盘数" : "数量"}</th><th>单位</th><th>${isStock ? "当前 → 调整 → 盘点后" : (isIn ? "单价" : "售价")}</th>${isStock ? "" : "<th>付款</th>"}<th>说明</th><th>操作</th></tr></thead>
       <tbody id="aiLines">${linesHtml || `<tr><td colspan="${isStock ? 8 : 9}" class="empty">未识别到明细</td></tr>`}</tbody>
     </table></div>
     <div class="modal-foot">
@@ -1823,8 +1862,8 @@ async function aiSubmit() {
   if (!rows.length) { toast("请至少填写一条商品"); return; }
   if (rows.some((r) => !r.date)) { toast("每行都要有日期，请检查"); return; }
   if (type === "stocktake") {
-    // 盘点是「增减量」：允许负数，0 表示不动（提交时跳过）
-    if (rows.some((r) => !r.quantity || !r.unit)) { toast("请填写增减量与单位（正数=增加，负数=减少）"); return; }
+    // 盘点填的是「实盘数」，换算出的增减量允许为 0（= 实盘数与当前库存一致，该行不调整、提交时跳过）
+    if (rows.some((r) => isNaN(r.quantity) || !r.unit)) { toast("请填写实盘数与单位"); return; }
   } else if (rows.some((r) => !(r.quantity > 0) || !r.unit)) {
     toast("请填写数量与单位（单价可留空，提交后在单据里补）"); return;
   }
@@ -1853,7 +1892,13 @@ async function aiSubmit() {
    粘贴/输入不再直接弹确认框，而是入队（localStorage 持久化，刷新不丢已识别结果）；
    后台一次只跑一条，跑完自动取下一条；识别成功的按业务类型落到「入库待办 / 出库待办」，
    在 /eva 逐条审核或批量提交（提交逻辑与确认框共用 submitDocRows）。 */
-const AI_QUEUE_KEY = "ai_queue_v1";
+const AI_QUEUE_KEY = "ai_queue_v1";  // 旧版全局 key：只用于把老数据迁到分仓维度
+/** AI 识别待办按分仓隔离：key = ai_queue_v1:<分仓key>。
+ *  否则在 A 仓识别的盘点/入库待办会串到 B 仓（词条对不上，还容易被误删）。 */
+function aiQueueKey() {
+  const wh = (CURRENT_USER && CURRENT_USER.warehouse && CURRENT_USER.warehouse.key) || "";
+  return wh ? `${AI_QUEUE_KEY}:${wh}` : AI_QUEUE_KEY;
+}
 const AI_QUEUE_MAX = 60;            // 队列最多保留条数（超出丢最早的）
 const AI_QUEUE_THINK_KEEP = 4000;   // 每条任务最多保留的思考字数（持久化用）
 let AI_QUEUE = [];                  // [{id,kind,text,image_name,source,status,result,error,think,answer,...}]
@@ -1886,12 +1931,25 @@ function aiQueueSave() {
       created_at: j.created_at, finished_at: j.finished_at || "", submitted_at: j.submitted_at || "",
       elapsed: j.elapsed || 0,
     }));
-    localStorage.setItem(AI_QUEUE_KEY, JSON.stringify(items));
+    localStorage.setItem(aiQueueKey(), JSON.stringify(items));
   } catch (e) { /* 配额满等：不影响主流程 */ }
 }
 function aiQueueLoad() {
+  const key = aiQueueKey();
   try {
-    const arr = JSON.parse(localStorage.getItem(AI_QUEUE_KEY) || "[]");
+    let raw = localStorage.getItem(key);
+    // 旧版没分仓（key 无后缀）：只迁一次到当前分仓，避免继续串仓
+    if (raw == null && key !== AI_QUEUE_KEY) {
+      const legacy = localStorage.getItem(AI_QUEUE_KEY);
+      if (legacy) {
+        localStorage.setItem(key, legacy);
+        localStorage.removeItem(AI_QUEUE_KEY);
+        raw = legacy;
+        const whName = (CURRENT_USER && CURRENT_USER.warehouse && CURRENT_USER.warehouse.name) || "";
+        setTimeout(() => toast(`已把旧版未分仓的 AI 待办归到当前分仓${whName ? "（" + whName + "）" : ""}；之后各分仓的待办互不可见`), 900);
+      }
+    }
+    const arr = JSON.parse(raw || "[]");
     AI_QUEUE = Array.isArray(arr) ? arr.filter((j) => j && j.id) : [];
   } catch (e) { AI_QUEUE = []; }
   AI_QUEUE.forEach((j) => {
@@ -2581,7 +2639,13 @@ let FIN_PICK = new Set(); // 勾选的行（商品id）：勾了「全部入库�
 
 /* 今日已入库：点「入库」后把这个商品记在浏览器里（只记当天），这一行就先从表里隐藏——
    表里剩下的就都是「还没入库」的，一眼能看出还差哪些货；第二天 0 点自动恢复成默认列表。 */
-const FIN_DONE_KEY = "wsfc_fin_done";
+const FIN_DONE_KEY = "wsfc_fin_done";   // 旧版全局 key：只用于把老数据迁到分仓维度
+/** 「今日已入库」按分仓隔离：记的是商品 id，而商品 id 是分仓维度的，
+ *  串仓会把另一个分仓的同 id 商品也隐藏掉。 */
+function finDoneKey() {
+  const wh = (CURRENT_USER && CURRENT_USER.warehouse && CURRENT_USER.warehouse.key) || "";
+  return wh ? `${FIN_DONE_KEY}:${wh}` : FIN_DONE_KEY;
+}
 let FIN_DONE_SHOW = false;     // true = 连「今日已入库」的行也显示（灰显，可点行尾「恢复」放回）
 let FIN_DONE_SET = new Set();  // 今日已入库的商品 id（每次渲染从浏览器读一遍）
 let FIN_MIDNIGHT_TIMER = null; // 跨 0 点的定时器
@@ -2589,13 +2653,13 @@ let FIN_MIDNIGHT_TIMER = null; // 跨 0 点的定时器
 /** 读「今日已入库」：存的日期不是今天就当没有（天然实现「第二天 0 点恢复」） */
 function finDoneLoad() {
   try {
-    const raw = JSON.parse(localStorage.getItem(FIN_DONE_KEY) || "null");
+    const raw = JSON.parse(localStorage.getItem(finDoneKey()) || "null");
     if (raw && raw.date === today() && Array.isArray(raw.ids)) return new Set(raw.ids.map(Number).filter(Boolean));
   } catch (e) { /* 存坏了就当没有 */ }
   return new Set();
 }
 function finDoneSave(set) {
-  try { localStorage.setItem(FIN_DONE_KEY, JSON.stringify({ date: today(), ids: [...set] })); } catch (e) {}
+  try { localStorage.setItem(finDoneKey(), JSON.stringify({ date: today(), ids: [...set] })); } catch (e) {}
 }
 /** 入库成功后调用：把这些商品记成「今日已入库」（表里随后隐藏） */
 function finDoneAdd(ids) {
