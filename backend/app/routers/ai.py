@@ -1258,7 +1258,7 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
         # 该行的单据日期（没有就用顶层/表头日期），提交时按行落到各自单据上
         ln_out["date"] = (_safe_date(ln.get("date"), doc_date) or doc_date).isoformat()
         # 盘点：算好「当前库存 / 增减量 / 盘点后」，确认框里显示并可修改；
-        # 提交走既有 /api/inventory/adjust 的 +/- 增减模式（不做覆盖）
+        # 提交走既有 /api/adjust 的 +/- 增减模式（不做覆盖）
         if op_type == "stocktake":
             _conv = (p.conversions or {}) if p is not None else {}
             _du = (p.default_unit or p.base_unit) if p is not None else (ln_out.get("unit") or "")
@@ -1494,5 +1494,5 @@ def last_price(
     return {"product_id": p.id, "price": price, "unit": p.default_unit or p.base_unit, "op_type": op_type}
 
 
-# 注：AI 盘点没有单独的接口——前端直接调用既有的 POST /api/inventory/adjust
+# 注：AI 盘点没有单独的接口——前端直接调用既有的 POST /api/adjust
 # （+/- 增减模式），与手工盘点完全同一套库存流水、FIFO 批次与成本口径，可在盘点记录里回退。

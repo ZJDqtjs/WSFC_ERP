@@ -2396,7 +2396,8 @@ async function submitDocRows({ type, party, remark, imageUrl, rows, op }) {
     for (const r of ok) {
       const d = +r.quantity || 0;                       // 增减量（±，按展示单位）
       if (!d) continue;                                 // 增减为 0：等于没调整，跳过
-      await api("/api/inventory/adjust", "POST", {
+      // 既有接口是「库存 → 盘点调整」用的 POST /api/adjust（相对增减），别再写错路径（曾误写 /api/inventory/adjust → 404）
+      await api("/api/adjust", "POST", {
         product_id: r.product_id,
         date: r.date,
         quantity: `${d > 0 ? "+" : ""}${+d.toFixed(6)}`,  // 既有接口要求带符号的相对调整串
