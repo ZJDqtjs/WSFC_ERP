@@ -840,13 +840,17 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     return rec
 
 
-def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_express: bool = True) -> dict:
+def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_express: bool = True,
+                allow_self_stock: bool = False) -> dict:
     """构建出库单明细：销售行 + 关联结算行(包装材料) + 费用，并校验库存。不落库。
 
     成本结转按「先进先出(FIFO)」：从商品最早的入库批次依次扣减，成本 = Σ(批次单位成本 × 扣减数量)。
 
     auto_express=False 时不自动结算快递费（手动出库时用户在预览里删掉「快递费」行即为不结算），
     其余批量导入/聚水潭等流程不传该参数，保持「按整单毛重自动计快递费」的原行为。
+
+    allow_self_stock（手动出库）：销售行直接选的就是「库存商品（大类）」时，扣它自己的库存。
+    导入路径必须保持 False —— 平台商品名误指到大类时应当报错，而不是悄悄扣大类的库存改账。
     """
     pack_lines = pack_lines or []
     sale_rows, pack_rows, warnings = [], [], []
@@ -895,14 +899,17 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
         # 订单商品未关联库存大类 = 代发：不扣任何库存，只记代发数量与代发成本。
         deds = _deductions_with_override(db, p, qty_base, ov_sp, ov_mult)
         if not deds and (p.product_type or "stock") == "stock":
-            # 库存大类没有「关联结算清单」（大类在商品编辑页不能配关联，关联属于订单小类）：
-            # 旧逻辑会兜底扣大类自身库存 —— 属于默默改账，已去掉，改为直接报错，
-            # 让用户到「关联结算」新建订单商品（小类）并关联该大类，或在「关联明细」把平台商品名指到该小类。
-            raise ValueError(
-                f"商品「{p.name}」是库存大类、没有关联结算清单，未扣减库存："
-                f"请先在「关联结算」新增对应的订单商品（小类）并关联该库存大类"
-                f"（或在「关联明细」把平台商品名指到该小类）后重新导入"
-            )
+            if allow_self_stock:
+                # 手动出库直接选了库存商品（大类）：就扣它自己的库存（本来就是它的货）
+                deds = [(p, qty_base)]
+            else:
+                # 导入路径：库存大类没有「关联结算清单」（关联属于订单小类）时报错，
+                # 不做「兜底扣大类自身库存」—— 那属于默默改账，会让用户以为平台商品已正确关联。
+                raise ValueError(
+                    f"商品「{p.name}」是库存大类、没有关联结算清单，未扣减库存："
+                    f"请先在「关联结算」新增对应的订单商品（小类）并关联该库存大类"
+                    f"（或在「关联明细」把平台商品名指到该小类）后重新导入"
+                )
         is_dropship = not deds
         # 包邮：商品自身勾了「包邮」，或其扣减的任一库存大类勾了「包邮」→ 该行不计入计费毛重。
         # 整单全是包邮商品时 express_weight 为 0，不会生成「快递费(自动)」行；混合单只为不包邮的部分计运费。
@@ -1071,17 +1078,20 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
 
 
 def create_outbound(db: Session, payload: dict, operator: str = "", import_group: str = "",
-                    defer_recompute: bool = False, affected_out: list | None = None) -> tuple[Outbound, list]:
+                    defer_recompute: bool = False, affected_out: list | None = None,
+                    allow_self_stock: bool = False) -> tuple[Outbound, list]:
     """创建出库/销售单（含明细、库存流水、财务记录、成本重算）。返回 (单, 预警)。
 
     import_group：批量导入批次号，空表示手动单条。
     defer_recompute=True 时不在本单内重算商品成本，而是把受影响的商品 id 追加到 affected_out，
     由调用方（批量导入）在整批写完后统一重算一次 —— 避免每单都全量重放流水。
+    allow_self_stock：手动出库直接选了库存大类时扣它自己的库存（导入路径保持 False，见 build_order）。
     """
     lines = payload["lines"]
     order = build_order(
         db, lines, payload.get("pack_lines"), payload.get("pack_fee_total"),
         payload.get("auto_express", True),   # 手动出库可关掉自动快递费；批量导入等默认开
+        allow_self_stock,
     )
     op = (payload.get("operator") or "").strip() or operator
     date = payload["date"]

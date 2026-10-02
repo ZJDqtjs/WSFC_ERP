@@ -942,7 +942,7 @@ function renderStock(overview) {
   const kw = ($("stockSearch").value || "").trim().toLowerCase();
   const cat = catSel ? catSel.value : "";
   let rows = overview.filter((p) =>
-    (!kw || p.name.toLowerCase().includes(kw) || p.category.toLowerCase().includes(kw)) &&
+    (!kw || (p.name || "").toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw)) &&
     (!cat || p.category === cat)
   );
   const t = $("stockTable");

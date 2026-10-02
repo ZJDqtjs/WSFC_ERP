@@ -137,7 +137,8 @@ def _to_dict(o: Outbound) -> dict:
 @router.post("/preview")
 def preview(data: PreviewIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     try:
-        return build_order(db, data.lines, [], None, data.auto_express)
+        # 手动出库：销售行直接选「库存商品（大类）」时扣它自己的库存（导入路径才需要报错，见 build_order）
+        return build_order(db, data.lines, [], None, data.auto_express, allow_self_stock=True)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -159,7 +160,9 @@ def list_outbounds(date_from: str = "", date_to: str = "", g: str = "", db: Sess
 def create_outbound_api(data: OutboundIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     try:
         # 操作员固定为当前登录账号：忽略前端传入的 operator，避免被改成别人
-        rec, warnings = create_outbound(db, {**data.model_dump(), "operator": user.name}, operator=user.name)
+        # 手动出库允许直接选库存大类（扣它自己的库存）
+        rec, warnings = create_outbound(db, {**data.model_dump(), "operator": user.name},
+                                       operator=user.name, allow_self_stock=True)
     except ValueError as e:
         raise HTTPException(400, str(e))
     db.commit()
