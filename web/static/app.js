@@ -5473,8 +5473,8 @@ function renderPackPreview(r) {
     const isExpress = !!(m && m.category === "快递");
     return `<tr data-idx="${i}" data-pid="${pl.product_id}" data-unit="${esc(pl.unit)}" data-up="${pl.unit_price}"${isExpress ? ' data-express="1"' : ""}>
       <td><b>${esc(pl.product_name)}</b></td>
-      <td><select class="searchable" onchange="packLineUnitChanged(this)">${m ? unitOptions(m, pl.unit) : `<option>${pl.unit}</option>`}</select></td>
-      <td><input type="number" step="any" value="${pl.quantity}" oninput="packLineChanged(this)" style="width:90px;" /></td>
+      <td><select class="searchable pl-unit" onchange="packLineUnitChanged(this)">${m ? unitOptions(m, pl.unit) : `<option>${pl.unit}</option>`}</select></td>
+      <td><input class="pl-qty" type="number" step="any" value="${pl.quantity}" oninput="packLineChanged(this)" style="width:90px;" /></td>
       <td><span class="badge pack">${isExpress ? "快递费" : "包装消耗"}</span></td>
       <td class="num mono">${fmtMoney(pl.unit_price)}/${pl.unit}</td>
       <td class="num pl-amount">${fmtMoney(pl.amount)}</td>
@@ -5517,8 +5517,8 @@ function addPackRow(m, qty = 1) {
   tr.dataset.up = up;
   tr.innerHTML = `
     <td><b>${esc(m.name)}</b> <span class="badge" style="background:var(--primary-light);color:var(--primary);">手动</span></td>
-    <td><select class="searchable" onchange="packLineUnitChanged(this)">${unitOptions(m, unit)}</select></td>
-    <td><input type="number" step="any" min="0" value="${qty}" oninput="packLineChanged(this)" style="width:90px;" /></td>
+    <td><select class="searchable pl-unit" onchange="packLineUnitChanged(this)">${unitOptions(m, unit)}</select></td>
+    <td><input class="pl-qty" type="number" step="any" min="0" value="${qty}" oninput="packLineChanged(this)" style="width:90px;" /></td>
     <td><span class="badge pack">${m.category === "快递" ? "快递费" : (m.category === "人工" ? "人工" : "包装消耗")}</span></td>
     <td class="num mono">${fmtMoney(up)}/${esc(unit)}</td>
     <td class="num pl-amount">${fmtMoney(up * qty)}</td>
@@ -5586,8 +5586,10 @@ function packLineUnitChanged(sel) {
 }
 function packLineChanged(inp) {
   const tr = inp.closest("tr");
-  const unit = tr.querySelectorAll("select")[0].value;
-  const qty = parseFloat(tr.querySelectorAll("input")[0].value) || 0;
+  // ⚠ 必须按类名取：单位下拉被 bindSearchable 换成了「筛选输入框 + 列表」，原 select 隐藏，
+  //   按 querySelectorAll("input")[0] 会取到那个空的筛选框 → 数量恒为 0、小计算成 ¥0.00
+  const unit = tr.querySelector(".pl-unit")?.value || "";
+  const qty = parseFloat(tr.querySelector(".pl-qty")?.value) || 0;
   const m = packRowProduct(tr);
   if (m && unit) {
     // 优先按服务端预览给出的先进先出单位成本(每展示单位)重算；单位被改过则回退估计
@@ -5604,8 +5606,8 @@ function collectPackLines() {
   document.querySelectorAll("#outPackBody tr").forEach((tr) => {
     // 自动算出来的「快递费」行不提交：后端会按整单毛重自己结算（提交会被算两遍）
     if (tr.dataset.express === "1") return;
-    const unit = tr.querySelectorAll("select")[0]?.value;
-    const qty = parseFloat(tr.querySelectorAll("input")[0]?.value);
+    const unit = tr.querySelector(".pl-unit")?.value;
+    const qty = parseFloat(tr.querySelector(".pl-qty")?.value);
     const m = packRowProduct(tr);
     if (m && unit && qty > 0) lines.push({ product_id: m.id, unit, quantity: qty });
   });
