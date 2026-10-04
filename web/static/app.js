@@ -5465,11 +5465,13 @@ function renderPackPreview(r) {
   $("outPreview").style.display = "block";
   $("outFee").value = r.total_fee;
   $("outWarn").innerHTML = (r.warnings || []).map((w) => `<div class="alert warn">⚠ ${esc(w)}（仍可继续，可先补货）</div>`).join("");
+  // 手动挑选的关联物品不属于「自动带出」：先摘下来，重建表格后再挂回去
+  const manual = [...$("outPackBody").querySelectorAll('tr[data-manual="1"]')];
   $("outPackBody").innerHTML = r.pack_lines.map((pl, i) => {
     const m = PRODUCTS.find((x) => x.id === pl.product_id);
     // 快递费行标记出来：删掉它 = 这笔不结算快递费（否则重新预览又会被自动加回来）
     const isExpress = !!(m && m.category === "快递");
-    return `<tr data-idx="${i}" data-unit="${esc(pl.unit)}" data-up="${pl.unit_price}"${isExpress ? ' data-express="1"' : ""}>
+    return `<tr data-idx="${i}" data-pid="${pl.product_id}" data-unit="${esc(pl.unit)}" data-up="${pl.unit_price}"${isExpress ? ' data-express="1"' : ""}>
       <td><b>${esc(pl.product_name)}</b></td>
       <td><select class="searchable" onchange="packLineUnitChanged(this)">${m ? unitOptions(m, pl.unit) : `<option>${pl.unit}</option>`}</select></td>
       <td><input type="number" step="any" value="${pl.quantity}" oninput="packLineChanged(this)" style="width:90px;" /></td>
@@ -5479,8 +5481,94 @@ function renderPackPreview(r) {
       <td><button class="btn sm danger" title="删除该结算项" onclick="removePackRow(this)">✕</button></td></tr>`;
   }).join("");
   if (!r.pack_lines.length) $("outPackBody").innerHTML = `<tr><td colspan="7" class="empty">无关联结算项（该商品未配置包装清单）</td></tr>`;
+  // 挂回手动挑选的行（有它就不再显示「无关联结算项」的空提示）
+  if (manual.length) {
+    const empty = $("outPackBody").querySelector("tr .empty");
+    if (empty) empty.closest("tr").remove();
+    manual.forEach((tr) => $("outPackBody").appendChild(tr));
+  }
   bindSearchable($("outPackBody"));
   calcOutboundTotals();
+}
+/* ---------- 关联出库物品：手动挑选（包材 / 人工 / 快递费等，任意商品都可选） ---------- */
+function packRowProduct(tr) {
+  const pid = +(tr?.dataset?.pid || 0);
+  if (pid) {
+    const p = PRODUCTS.find((x) => x.id === pid);
+    if (p) return p;
+  }
+  const name = tr?.querySelector("b")?.textContent?.trim();
+  return PRODUCTS.find((x) => x.name === name) || null;
+}
+
+/** 往「关联结算」表里加一行（结构与被预览带出的行一致，提交时一起收集） */
+function addPackRow(m, qty = 1) {
+  const body = $("outPackBody");
+  if (!body || !m) return null;
+  const empty = body.querySelector("tr .empty");
+  if (empty) empty.closest("tr").remove();
+  const unit = m.default_unit || m.base_unit;
+  const factor = (m.conversions || {})[unit] || 1;
+  const up = +((m.avg_cost || 0) * factor).toFixed(6);   // 估算：库存均价；重新预览后由服务端 FIFO 实算
+  const tr = document.createElement("tr");
+  tr.dataset.pid = m.id;
+  tr.dataset.manual = "1";
+  tr.dataset.unit = unit;
+  tr.dataset.up = up;
+  tr.innerHTML = `
+    <td><b>${esc(m.name)}</b> <span class="badge" style="background:var(--primary-light);color:var(--primary);">手动</span></td>
+    <td><select class="searchable" onchange="packLineUnitChanged(this)">${unitOptions(m, unit)}</select></td>
+    <td><input type="number" step="any" min="0" value="${qty}" oninput="packLineChanged(this)" style="width:90px;" /></td>
+    <td><span class="badge pack">${m.category === "快递" ? "快递费" : (m.category === "人工" ? "人工" : "包装消耗")}</span></td>
+    <td class="num mono">${fmtMoney(up)}/${esc(unit)}</td>
+    <td class="num pl-amount">${fmtMoney(up * qty)}</td>
+    <td><button class="btn sm danger" title="删除该结算项" onclick="removePackRow(this)">✕</button></td>`;
+  body.appendChild(tr);
+  try { bindSearchable(tr) } catch (e) { /* 单位下拉搜索绑定失败不影响录入 */ }
+  calcOutboundTotals();
+  return tr;
+}
+
+function openPackItemPicker() {
+  if (!$("outPreview") || $("outPreview").style.display === "none") {
+    toast("先点「🔍 预览结算」，再挑关联出库物品"); return;
+  }
+  const cats = [...new Set(PRODUCTS.filter((p) => p.is_active).map((p) => p.category).filter(Boolean))].sort();
+  openModal(`
+    <h3>选择关联出库物品 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="toolbar" style="margin-bottom:10px;">
+      <input id="ppSearch" placeholder="🔍 搜索商品名称 / 分类..." oninput="renderPackItemPicker()" />
+      <select id="ppCat" class="searchable" onchange="renderPackItemPicker()"><option value="">全部分类</option>${cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
+    </div>
+    <div class="sp-list" id="ppList" style="max-height:52vh;overflow-y:auto;"></div>`);
+  renderPackItemPicker();
+}
+
+function renderPackItemPicker() {
+  const kw = ($("ppSearch")?.value || "").trim().toLowerCase();
+  const cat = $("ppCat")?.value || "";
+  const rows = PRODUCTS.filter((p) => p.is_active
+    && (!kw || (p.name || "").toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw))
+    && (!cat || p.category === cat));
+  const list = $("ppList");
+  if (!list) return;
+  if (!rows.length) { list.innerHTML = `<div class="empty" style="padding:30px;">无匹配商品</div>`; return; }
+  list.innerHTML = rows.map((p) => `
+    <div class="sp-item" onclick="pickPackItem(${p.id})">
+      <div class="grow">
+        <b>${esc(p.name)}</b>
+        <div class="muted" style="font-size:12px;">${esc(p.category || "—")} · 单位 ${esc(p.default_unit || p.base_unit)} · 库存 ${fmtStock(p)}</div>
+      </div>
+      <span class="badge" style="background:var(--primary-light);color:var(--primary);">选择 ›</span>
+    </div>`).join("");
+}
+
+function pickPackItem(id) {
+  const p = PRODUCTS.find((x) => x.id === id);
+  if (!p) return;
+  closeModal();
+  addPackRow(p);
+  toast(`已添加关联物品：${p.name}（数量按本单用量改）`);
 }
 /* 删掉「快递费」行 → 同步取消「自动计快递费」，避免再次预览/提交时又被算上 */
 function removePackRow(btn) {
@@ -5494,16 +5582,13 @@ function removePackRow(btn) {
   calcOutboundTotals();
 }
 function packLineUnitChanged(sel) {
-  const tr = sel.closest("tr");
-  const m = PRODUCTS.find((x) => x.name === tr.querySelector("b").textContent);
   packLineChanged(sel);
 }
 function packLineChanged(inp) {
   const tr = inp.closest("tr");
   const unit = tr.querySelectorAll("select")[0].value;
   const qty = parseFloat(tr.querySelectorAll("input")[0].value) || 0;
-  const name = tr.querySelector("b").textContent;
-  const m = PRODUCTS.find((x) => x.name === name);
+  const m = packRowProduct(tr);
   if (m && unit) {
     // 优先按服务端预览给出的先进先出单位成本(每展示单位)重算；单位被改过则回退估计
     const up = (tr.dataset.unit === unit) ? parseFloat(tr.dataset.up) : NaN;
@@ -5517,10 +5602,11 @@ function packLineChanged(inp) {
 function collectPackLines() {
   const lines = [];
   document.querySelectorAll("#outPackBody tr").forEach((tr) => {
-    const name = tr.querySelector("b")?.textContent;
+    // 自动算出来的「快递费」行不提交：后端会按整单毛重自己结算（提交会被算两遍）
+    if (tr.dataset.express === "1") return;
     const unit = tr.querySelectorAll("select")[0]?.value;
     const qty = parseFloat(tr.querySelectorAll("input")[0]?.value);
-    const m = PRODUCTS.find((x) => x.name === name);
+    const m = packRowProduct(tr);
     if (m && unit && qty > 0) lines.push({ product_id: m.id, unit, quantity: qty });
   });
   return lines;

@@ -395,6 +395,10 @@
                 <tbody id="outPackBody"></tbody>
               </table>
             </div>
+            <div class="toolbar" style="margin-top:10px;">
+              <button class="btn sm secondary" onclick="openPackItemPicker()">＋ 添加关联物品</button>
+              <span class="muted">手动挑选本单实际用到的包材 / 人工 / 快递费等（任意商品都可选）；数量按本单用量填，提交时与自动带出的结算项一起结转成本</span>
+            </div>
             <div class="form-grid" style="margin-top:12px;">
               <div class="field"><label>固定费用合计（人工打包费等）</label><input id="outFee" type="number" step="any" min="0" oninput="calcOutboundTotals()" /></div>
               <div class="field">
