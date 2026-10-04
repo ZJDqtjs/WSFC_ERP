@@ -2836,16 +2836,22 @@ function splitRemark(rmk) {
   return segs.filter((s) => s.url || s.text.trim());
 }
 
-/* 备注渲染：文本原样（换行转 <br>），图片附件显示缩略图，其他文件显示下载链接 */
-function renderRemarkHtml(rmk) {
+/* 备注渲染：文本原样（换行转 <br>），图片附件显示缩略图，其他文件显示下载链接。
+   opts.compact=true：附件只出标签、不加载缩略图（列表页一屏几十条备注全是票据图时，
+   浏览器会连发几十个图片请求、把接口请求都挤慢；点标签照样能预览）。 */
+function renderRemarkHtml(rmk, opts) {
   if (!rmk) return "—";
+  const compact = !!(opts && opts.compact);
   return splitRemark(rmk).map((s) => {
     if (s.text !== undefined) return esc(s.text).replace(/\n/g, "<br />");
     const u = routePath(s.url);
-    if (s.isImage) {
-      return `<span style="cursor:zoom-in;display:inline-block;vertical-align:middle;" onclick="openAttachmentPreview('${s.url}','${esc(s.name)}')" title="${esc(s.name)} — 点击预览"><img src="${u}" alt="${esc(s.name)}" style="height:34px;vertical-align:middle;border-radius:4px;margin-right:4px;border:1px solid var(--border-light);" /></span>`;
+    if (!s.isImage) {
+      return `<a class="attach-link" href="${u}" target="_blank" title="${esc(s.name)} — 点击预览" onclick="openAttachmentPreview('${s.url}','${esc(s.name)}');return false;">📎 ${esc(s.name)}</a>`;
     }
-    return `<a class="attach-link" href="${u}" target="_blank" title="${esc(s.name)} — 点击预览" onclick="openAttachmentPreview('${s.url}','${esc(s.name)}');return false;">📎 ${esc(s.name)}</a>`;
+    if (compact) {
+      return `<a class="attach-link" href="${u}" title="${esc(s.name)} — 点击预览" onclick="openAttachmentPreview('${s.url}','${esc(s.name)}');return false;">🖼 ${esc(s.name)}</a>`;
+    }
+    return `<span style="cursor:zoom-in;display:inline-block;vertical-align:middle;" onclick="openAttachmentPreview('${s.url}','${esc(s.name)}')" title="${esc(s.name)} — 点击预览"><img src="${u}" alt="${esc(s.name)}" loading="lazy" decoding="async" style="height:34px;vertical-align:middle;border-radius:4px;margin-right:4px;border:1px solid var(--border-light);" /></span>`;
   }).join("");
 }
 /* 附件点击预览：图片全屏浮层预览（点遮罩或按 Esc 关闭），非图片（PDF/Excel 等）新标签打开 */
@@ -7882,7 +7888,7 @@ function renderPayables() {
           <td class="mono">${esc(r.date)}</td>
           <td><span class="badge ${PAY_SRC_BADGE[r.source] || "adjust"}">${esc(r.source)}</span></td>
           <td><b>${esc(r.title)}</b>${r.code ? ` <span class="muted">${esc(r.code)}</span>` : ""}
-            <div class="muted" style="font-size:12px;">${esc(r.sub)}${r.remark ? " · " + renderRemarkHtml(r.remark) : ""}</div></td>
+            <div class="muted" style="font-size:12px;">${esc(r.sub)}${r.remark ? " · " + renderRemarkHtml(r.remark, { compact: true }) : ""}</div></td>
           <td class="num mono"><b style="color:${color};">${money}</b></td>
           <td>${esc(r.operator) || "—"}</td>
           <td class="num">${paid
@@ -7991,6 +7997,8 @@ let DS_GROUPS = [];      // 当前代发列表（按「商品 + 规格 + 单位�
 let DS_VIEW = "unpaid";  // unpaid 只看待结清 / all 含已结清
 let DS_LOADED = false;   // 是否已拉取过（切回来时无需重复拉取，除非有操作）
 let DS_TOTAL = {};
+let DS_TRUNCATED = false;   // 后端只回最近 N 行（避免上万行把页面拖垮）
+let DS_LIMIT = 0;
 
 function payTab(btn) {
   const panel = btn.dataset.panel;
@@ -8000,7 +8008,7 @@ function payTab(btn) {
   const hint = $("payTabHint");
   if (hint) hint.textContent = panel === "pay-panel-dropship"
     ? "代发：同一种商品和规格已合并，按「单价 × 单量 = 代发成本」核对付款"
-    : "";
+    : "账单：入库 / 出库 / 其他开支 / 手动记账的待结清项；代发应付在「代发」页签里单独看";
   if (panel === "pay-panel-dropship") loadDropshipBills();
 }
 
@@ -8009,8 +8017,13 @@ async function loadDropshipBills() {
     const d = await api(`/api/payables/dropship?include_paid=${DS_VIEW === "all" ? 1 : 0}`);
     DS_GROUPS = d.groups || [];
     DS_TOTAL = d.total || {};
+    DS_TRUNCATED = !!d.truncated;
+    DS_LIMIT = d.limit || 0;
     DS_LOADED = true;
-    dsAlert("");
+    // 列表被截断时给一句提示（合计仍按全部算），并说明缩小范围的办法
+    dsAlert(d.truncated
+      ? `共 ${DS_TOTAL.groups || 0} 行（按商品+规格合并），这里只列最近 ${DS_LIMIT} 行；待结清合计 ${fmtMoney(DS_TOTAL.pending_amount || 0)}。用上面的日期区间可以缩小范围。`
+      : "");
     renderDropshipBills();
   } catch (e) {
     dsAlert("加载代发应付失败：" + e.message);

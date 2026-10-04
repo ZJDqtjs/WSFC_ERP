@@ -385,11 +385,25 @@ def run_once(
             agg["status_skipped"] = status_skipped
             result["stats"] = agg
             result["ok"] = True
+            # 「提示」与「失败」分开：提示=单子照建（如没建「人工打包费」商品，人工按费用记入；
+            # 某行没配关联/换算），失败=这张单没建出来。另外把状态跳过里的「作废」明确写出来，
+            # 免得被当成失败（作废单本来就不该建单）。
+            soft = [f for f in agg["failed"] if str(f.get("level") or "") == "warn"]
+            hard = [f for f in agg["failed"] if str(f.get("level") or "") != "warn"]
+            void_n = int(status_skipped.get("作废") or 0)
+            soft_reasons: dict[str, int] = {}
+            for f in soft:
+                k = str(f.get("reason") or "").strip()
+                soft_reasons[k] = soft_reasons.get(k, 0) + 1
+            soft_top = max(soft_reasons.items(), key=lambda kv: kv[1])[0] if soft_reasons else ""
+            result["notices"] = soft
             result["message"] = (
                 f"导出 {len(files)} 个文件，新建出库单 {agg['created']} 张"
                 + (f"，跳过重复 {agg['duplicate_skipped']} 张" if agg["duplicate_skipped"] else "")
+                + (f"，跳过作废 {void_n} 张" if void_n else "")
                 + (f"，未关联商品 {len(agg['unmapped'])} 种（已生成待办，补完关联后可一键重跑）" if agg["unmapped"] else "")
-                + (f"，失败 {len(agg['failed'])} 条" if agg["failed"] else "")
+                + (f"，提示 {len(soft)} 条（{soft_top[:40]}）" if soft else "")
+                + (f"，失败 {len(hard)} 条" if hard else "")
             )
             if agg["unmapped"]:
                 result["pending_id"] = _open_unmapped_task(key, files, rng, targets, agg)

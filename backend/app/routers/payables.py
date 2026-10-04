@@ -87,6 +87,10 @@ def _unit_price_of(amount: float, quantity: float) -> float:
     return round(float(amount or 0) / float(quantity), 4) if quantity else 0.0
 
 
+# 「含最近已结清」时最多列多少张出库单（按日期倒序）：防止上万张单把接口与浏览器拖垮
+SETTLED_LIST_LIMIT = 1200
+
+
 def _dropship_formula(b: "DropshipBill") -> str:
     """代发一行的核对算式：规格 单价×单量=金额。"""
     label = (b.spec or "").strip() or (b.product_name or "代发")
@@ -193,9 +197,15 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
             sub, r.amount, "in", r.pay_status, r.paid_at, r.operator, r.remark, r.code,
         ))
 
-    ob_rows = list(db.execute(
+    # 「含最近已结清」时最近 30 天可能上万张单（wh01 实测 1.9 万）：按日期倒序只取最近一批，
+    # 免得接口要 1.5 秒、浏览器拉 2MB 备注渲染几千行（未结清的单不受影响，一笔都不会少）。
+    ob_q = (
         select(Outbound).where(_pay_filter(Outbound, include_paid, cutoff))
-    ).scalars())
+        .order_by(Outbound.date.desc(), Outbound.id.desc())
+    )
+    if include_paid:
+        ob_q = ob_q.limit(SETTLED_LIST_LIMIT)
+    ob_rows = list(db.execute(ob_q).scalars())
     titles = _outbound_titles(db, [r.id for r in ob_rows])
     for r in ob_rows:
         name, qty, unit, n = titles.get(r.id) or ("", 0.0, "", 0)
@@ -239,30 +249,9 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
             r.pay_status, r.paid_at, r.operator, r.remark,
         ))
 
-    # 代发应付：出库单命中代发商品（订单小类未关联库存大类）的行，按出库单聚合成一条；
-    # 逐规格的「单价 × 单量 = 金额」明细在「代发」页签里展开核对
-    ds_ids = list(db.execute(
-        select(DropshipBill.outbound_id)
-        .where(_pay_filter(DropshipBill, include_paid, cutoff))
-        .group_by(DropshipBill.outbound_id)
-    ).scalars())
-    ds_rows = _dropship_rows(db, ds_ids)
-    for oid, bs in ds_rows.items():
-        amount = round(sum(b.amount or 0.0 for b in bs), 2)
-        head = bs[0]
-        qty = sum(b.quantity or 0.0 for b in bs)
-        names = list(dict.fromkeys((b.product_name or "代发商品") for b in bs))
-        unit = head.unit or "" if len({(b.unit or "") for b in bs}) == 1 else ""   # 多规格单位不同就不硬凑
-        title = f"{names[0]} × {_qty(qty)}{unit}".strip()
-        if len(bs) > 1:
-            title += f" · {len(bs)} 款规格"
-        sub = "代发成本 " + " · ".join(_dropship_formula(b) for b in bs[:3])
-        if len(bs) > 3:
-            sub += f" 等 {len(bs)} 款"
-        rows.append(_row(
-            DROPSHIP_KIND, oid, head.date, title, sub, amount, "out",
-            head.pay_status, head.paid_at, head.operator, "", head.outbound_code,
-        ))
+    # 代发应付**不进这张通用账单列表**：wh01 实测有 7000+ 张单，塞进来会把列表灌满、接口要 1.5 秒，
+    # 浏览器还要拉几千行备注与图片。代发有专门的「代发」页签（/api/payables/dropship，
+    # 按出库单列出每款规格「单价 × 单量 = 金额」），这里不再重复列。
     return rows
 
 
@@ -356,6 +345,7 @@ def list_dropship_bills(
     date_from: str = "",
     date_to: str = "",
     include_paid: int = 0,
+    limit: int = 300,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -444,8 +434,13 @@ def list_dropship_bills(
         })
     out.sort(key=lambda x: (x["pay_status"] != "unpaid", -x["amount"]))
     pend = [x for x in out if x["pay_status"] == "unpaid"]
+    # 合计按全部算（不受下面截断影响），但列表只回最近 limit 行：
+    # wh01 实测 7790 行（每行还带规格明细），前端渲染上万行会很卡；截断后上面会提示「仅列最近 N 行」。
+    shown = out[: max(1, min(int(limit or 0) or 300, 2000))]
     return {
-        "groups": out,
+        "groups": shown,
+        "truncated": len(out) > len(shown),
+        "limit": len(shown),
         "total": {
             "groups": len(out),
             "orders": sum(x["order_count"] for x in out),
