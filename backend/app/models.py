@@ -127,6 +127,13 @@ class Outbound(Base):
     adjust_amount: Mapped[float] = mapped_column(Float, default=0.0)
     total_cogs: Mapped[float] = mapped_column(Float, default=0.0)  # 商品成本+包装材料成本
     total_fee: Mapped[float] = mapped_column(Float, default=0.0)  # 人工/打包等固定费用
+    # 客户随货款一起付给我们的关联结算（包材/人工/快递费）——「实收金额」口径：
+    #   实收金额 = total_amount + adjust_amount + settle_income
+    # 关联结算成本本来就在 total_cogs 里（毛利被它扣掉），这部分是客户代付回来的钱，
+    # 所以收入侧也要计一笔，包材/快递才不至于把毛利吃成负数。
+    # settle_cats 记录客户承担了哪几类：material / labor / express（逗号分隔；空 = 不计入，旧口径）。
+    settle_income: Mapped[float] = mapped_column(Float, default=0.0)
+    settle_cats: Mapped[str] = mapped_column(String(64), default="")
     # 芳谊放单仓「刷单结算」（口径见 app/brush.py）：
     #   brush_cost=我刷这单的成本（导入确认时手填）；brush_fee=本单结算用的「快递+包装固定费」
     #   （0=用系统自动值，用户可覆盖）；brush_auto_fee=出库时系统自动算出的快递+包装费快照（用于还原覆盖差额）。

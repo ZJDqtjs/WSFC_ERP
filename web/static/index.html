@@ -400,12 +400,32 @@
               <span class="muted">手动挑选本单实际用到的包材 / 人工 / 快递费等（任意商品都可选）；数量按本单用量填，提交时与自动带出的结算项一起结转成本</span>
             </div>
             <div class="form-grid" style="margin-top:12px;">
-              <div class="field"><label>固定费用合计（人工打包费等）</label><input id="outFee" type="number" step="any" min="0" oninput="calcOutboundTotals()" /></div>
+              <div class="field"><label>固定费用合计（人工打包费等）</label><input id="outFee" type="number" step="any" min="0" oninput="outFeeTouched()" />
+                <div class="field-hint" id="outFeeHint"></div>
+              </div>
               <div class="field">
                 <label>调整（给客户抹零 / 凑整）</label>
                 <input id="outAdjust" type="number" step="any" placeholder="0.00" oninput="calcOutboundTotals()" />
                 <div class="field-hint">正=加收，负=抹零；差额自动记「金额调整」其他开支，商品成本不变</div>
               </div>
+            </div>
+            <div class="field" style="grid-column:1/-1;margin-top:10px;">
+              <label>实收金额包含（客户随货款一起付的关联结算）</label>
+              <div class="toolbar" style="margin:0;flex-wrap:wrap;gap:14px;">
+                <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
+                  <input type="checkbox" id="settleMaterial" checked onchange="settleChanged()" /> 包材 / 耗材
+                </label>
+                <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
+                  <input type="checkbox" id="settleLabor" checked onchange="settleChanged()" /> 人工（打包费）
+                </label>
+                <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
+                  <input type="checkbox" id="settleExpress" checked onchange="settleChanged()" /> 快递费
+                </label>
+                <button type="button" class="btn sm secondary" onclick="setSettleAll(true)">全选</button>
+                <button type="button" class="btn sm secondary" onclick="setSettleAll(false)">全不选</button>
+                <span class="muted" id="settleHint"></span>
+              </div>
+              <div class="field-hint">勾选的类别会计入「实收金额」与报表收入（客户是付了这笔钱的）；成本照旧含包材/快递，所以毛利不会被包材吃掉。不勾 = 实收只算货款 + 调整（旧口径）。</div>
             </div>
             <div class="stat-grid" style="margin-top:14px;">
               <div class="stat"><div class="label">销售收入</div><div class="value" id="otAmount">¥0.00</div></div>

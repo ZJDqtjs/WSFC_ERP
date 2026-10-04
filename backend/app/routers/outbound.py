@@ -9,7 +9,17 @@ from ..auth import get_current_user
 from ..brush import brush_adjust, brush_fee_of
 from ..database import get_db
 from ..models import DropshipBill, FinanceRecord, OtherExpense, Outbound, OutboundLine, Product, StockMovement, User
-from ..services import build_order, create_outbound, pay_fields, purge_outbounds, recompute_product, sync_doc_edit
+from ..services import (
+    build_order,
+    create_outbound,
+    normalize_settle_cats,
+    pack_settle_cat,
+    pay_fields,
+    purge_outbounds,
+    recompute_product,
+    sync_doc_edit,
+    sync_settle_income_record,
+)
 
 router = APIRouter(prefix="/api/outbounds", tags=["outbound"])
 
@@ -33,6 +43,10 @@ class PackLine(BaseModel):
 class PreviewIn(BaseModel):
     lines: list[SaleLine]
     auto_express: bool = True   # False = 不自动结算快递费（手动出库时删掉「快递费」行）
+    # 手动挑选的关联出库物品（追加在自动带出的结算项后面）：让预览也按 FIFO 算它们的成本
+    extra_pack_lines: list[PackLine] = Field(default=[])
+    # 客户承担的关联结算类别（material 包材 / labor 人工 / express 快递费）：预览随之返回 settle_income
+    settle_cats: list[str] | None = None
 
 
 class OutboundIn(BaseModel):
@@ -49,14 +63,18 @@ class OutboundIn(BaseModel):
     pay_status: str = "paid"  # paid 已付款/已回款（默认）/ unpaid 待付款（先进「待付款账单」）
     # 金额调整（给客户抹零/凑整）：正=加收，负=抹零。商品成本不变，差额自动记「金额调整」其他开支
     adjust_amount: float = 0.0
+    # 客户承担的关联结算类别（包材/人工/快递费）→ 计入实收金额；不传 = 默认客户全额承担
+    settle_cats: list[str] | None = None
 
 
 class OutboundUpdate(BaseModel):
-    """手动修改出库单：只允许改 客户 / 日期 / 付款状态（其余字段须删除重建）。"""
+    """手动修改出库单：可改 客户 / 日期 / 付款状态 / 实收口径（其余字段须删除重建）。"""
 
     customer: str = ""
     date: str
     pay_status: str = "paid"
+    # 改「实收含哪些关联结算」（包材/人工/快递费）：只影响实收金额与报表收入，不动成本
+    settle_cats: list[str] | None = None
 
 
 class BatchIds(BaseModel):
@@ -66,8 +84,10 @@ class BatchIds(BaseModel):
 def _to_dict(o: Outbound) -> dict:
     remark = o.remark or ""
     is_multi = "一单多货" in remark
-    # 实收金额（收入 + 抹零/凑整）与工单刷单结算的额外扣减（非放单仓订单 adj=0）
-    brush_final = round((o.total_amount or 0.0) + (getattr(o, "adjust_amount", 0.0) or 0.0), 2)
+    # 实收金额 = 销售收入 + 抹零/凑整 + 客户代收的关联结算（包材/人工/快递费）
+    settle_income = round(float(getattr(o, "settle_income", 0.0) or 0.0), 2)
+    # 工单刷单结算的额外扣减（非放单仓订单 adj=0）
+    brush_final = round((o.total_amount or 0.0) + (getattr(o, "adjust_amount", 0.0) or 0.0) + settle_income, 2)
     adj = brush_adjust(o)
     multi_rule = o.pack_rule_name or ""
     if not multi_rule and "一单多货·规则：" in remark:
@@ -88,7 +108,10 @@ def _to_dict(o: Outbound) -> dict:
         "multi_rule": multi_rule,
         "total_amount": o.total_amount,
         "adjust_amount": round(getattr(o, "adjust_amount", 0.0) or 0.0, 2),
-        "final_amount": round((o.total_amount or 0.0) + (getattr(o, "adjust_amount", 0.0) or 0.0), 2),
+        # 客户代收的关联结算（包材/人工/快递费）与其类别：实收金额 = 销售收入 + 调整 + 这笔
+        "settle_income": settle_income,
+        "settle_cats": (getattr(o, "settle_cats", "") or ""),
+        "final_amount": brush_final,
         "total_cogs": o.total_cogs,
         "total_fee": o.total_fee,
         "pay_status": getattr(o, "pay_status", "paid") or "paid",
@@ -138,7 +161,11 @@ def _to_dict(o: Outbound) -> dict:
 def preview(data: PreviewIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     try:
         # 手动出库：销售行直接选「库存商品（大类）」时扣它自己的库存（导入路径才需要报错，见 build_order）
-        return build_order(db, data.lines, [], None, data.auto_express, allow_self_stock=True)
+        # extra_pack_lines = 手动挑选的关联出库物品（追加到自动带出的后面）
+        # settle_cats = 客户承担的关联结算类别 → 返回 settle_income，前端实收金额直接用服务端的数
+        return build_order(db, data.lines, [], None, data.auto_express,
+                           allow_self_stock=True, extra_pack_lines=data.extra_pack_lines,
+                           settle_cats=data.settle_cats)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -184,6 +211,17 @@ def update_outbound(oid: int, data: OutboundUpdate, db: Session = Depends(get_db
     rec.date = date
     rec.operator = user.name   # 记录为后来的修改人（忽略前端传值）
     rec.pay_status, rec.paid_at = pay["pay_status"], pay["paid_at"]
+    # 「实收含哪些关联结算」可改：只动实收/报表收入口径，成本与库存不变，按单据现有结算行重算
+    if data.settle_cats is not None:
+        cats = normalize_settle_cats(data.settle_cats)
+        rec.settle_cats = ",".join(cats)
+        rec.settle_income = round(sum(
+            float(l.cogs or 0.0) for l in rec.lines
+            if l.line_type == "pack" and pack_settle_cat(
+                l.product.category if l.product else "", l.product.name if l.product else ""
+            ) in cats
+        ), 2)
+        sync_settle_income_record(db, rec, date, user.name, pay)   # 代收流水跟着改（0 则删掉）
     sync_doc_edit(db, "outbound", oid, date, user.name, pay)
     db.commit()
     db.refresh(rec)

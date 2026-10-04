@@ -208,7 +208,9 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
         rows.append(_row(
             "outbound", r.id, r.date, title,
             ("客户 " + r.customer) if r.customer else "销售出库",
-            r.total_amount + (getattr(r, "adjust_amount", 0.0) or 0.0),  # 应收 = 实收（含抹零/凑整调整）
+            # 应收 = 实收（销售收入 + 抹零/凑整调整 + 客户代收的包材/人工/快递费）
+            r.total_amount + (getattr(r, "adjust_amount", 0.0) or 0.0)
+            + (getattr(r, "settle_income", 0.0) or 0.0),
             "in", r.pay_status, r.paid_at, r.operator, r.remark, r.code,
         ))
 

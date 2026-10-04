@@ -5353,11 +5353,72 @@ async function saveInboundEdit(id) {
 /* =============== 出库 =============== */
 let outSaleRowId = 0;
 let OUT_PREVIEW = null;  // 最近一次服务端出库预览（含先进先出结转成本），用于展示真实成本
+let OUT_FEE_MANUAL = false;  // 固定费用合计是否被手动改过（改过就别让「预览结算」覆盖掉）
+
+/* ---------- 实收金额口径：客户承担的关联结算（包材 / 人工 / 快递费） ----------
+   客户的付款里含包材/工时/运费 → 勾选后计入「实收金额」（后端同样记进 settle_income 与报表收入）；
+   成本侧的包材/快递照旧结转，所以毛利不会被包材吃掉。选择记在浏览器里，下一单沿用。 */
+const SETTLE_KEYS = { material: "settleMaterial", labor: "settleLabor", express: "settleExpress" };
+const SETTLE_LABEL = { material: "包材", labor: "人工", express: "快递费" };
+
+function settleCats() {
+  return Object.keys(SETTLE_KEYS).filter((k) => $(SETTLE_KEYS[k])?.checked);
+}
+function setSettleAll(on) {
+  Object.values(SETTLE_KEYS).forEach((id) => { if ($(id)) $(id).checked = !!on; });
+  settleChanged();
+}
+function settleChanged() {
+  try { localStorage.setItem("settleCats", JSON.stringify(settleCats())); } catch (e) { /* 隐私模式忽略 */ }
+  calcOutboundTotals();
+}
+function settleRestore() {
+  try {
+    const v = JSON.parse(localStorage.getItem("settleCats") || "null");
+    if (!Array.isArray(v) || !v.length) return;   // 没记录过就保持默认（全勾）
+    Object.entries(SETTLE_KEYS).forEach(([k, id]) => { if ($(id)) $(id).checked = v.includes(k); });
+  } catch (e) { /* 忽略 */ }
+}
+/** 关联结算行归到哪一类（与后端 services.pack_settle_cat 口径一致） */
+function packSettleCat(tr) {
+  const m = packRowProduct(tr);
+  const cat = (m?.category || "").trim();
+  const name = (m?.name || "").trim();
+  if (cat === "人工") return "labor";
+  if (cat === "快递") return "express";
+  if (name.endsWith("打包")) return "labor";
+  return "material";   // 包材 / 耗材 / 包装 / 其他关联结算
+}
+/** 勾选的关联结算合计（= 客户代收，计入实收金额） */
+function settleIncomeLocal() {
+  const cats = settleCats();
+  let sum = 0;
+  document.querySelectorAll("#outPackBody tr").forEach((tr) => {
+    if (!cats.includes(packSettleCat(tr))) return;
+    sum += parseFloat((tr.querySelector(".pl-amount")?.textContent || "0").replace(/[^\d.-]/g, "")) || 0;
+  });
+  return Math.round(sum * 100) / 100;
+}
+function settleCatsLabel(cats) {
+  const list = Array.isArray(cats) ? cats : String(cats || "").split(",").filter(Boolean);
+  return list.map((k) => SETTLE_LABEL[k] || k).join("、");
+}
 function initOutbound() {
   if (!$("outDate").value) $("outDate").value = today();
   if (!$("outSaleBody").children.length) addSaleRow();
+  settleRestore();
   loadOutbounds();
   renderJstPending();   // 顺手刷新「待办处理」卡片（没有待办会自动隐藏）
+}
+/** 固定费用被手动改过 → 记住，别被预览覆盖；没改过则跟随系统建议值 */
+function outFeeTouched() { OUT_FEE_MANUAL = true; calcOutboundTotals(); }
+/** 恢复系统建议的固定费用（按商品打包费自动算）；只填值不重绘表格，免得丢掉手动改过的结算行数量 */
+function outFeeReset() {
+  if (!OUT_PREVIEW) return;
+  OUT_FEE_MANUAL = false;
+  $("outFee").value = OUT_PREVIEW.total_fee;
+  if ($("outFeeHint")) $("outFeeHint").textContent = "按商品打包费自动算出的建议值，可手动覆盖";
+  calcOutboundTotals();
 }
 function addSaleRow() {
   const id = ++outSaleRowId;
@@ -5456,39 +5517,54 @@ async function previewOutbound() {
   const lines = collectSaleLines();
   if (!lines.length) { toast("请至少添加一行销售商品"); return; }
   try {
-    const r = await api("/api/outbounds/preview", "POST", { lines, auto_express: autoExpressOn() });
+    // 手动挑选的关联物品也带上：后端追加在自动带出的结算项后面，一起按 FIFO 算成本
+    const r = await api("/api/outbounds/preview", "POST", {
+      lines, auto_express: autoExpressOn(), extra_pack_lines: collectManualPackLines(),
+      settle_cats: settleCats(),   // 实收含哪些关联结算（后端据此回 settle_income）
+    });
     renderPackPreview(r);
   } catch (e) { toast("预览失败：" + e.message); }
 }
 function renderPackPreview(r) {
   OUT_PREVIEW = r;
   $("outPreview").style.display = "block";
-  $("outFee").value = r.total_fee;
+  // 固定费用：手动改过就保留用户的数（服务端建议值放提示里，可一键恢复）
+  if (!OUT_FEE_MANUAL) $("outFee").value = r.total_fee;
+  if ($("outFeeHint")) {
+    const cur = parseFloat($("outFee").value) || 0;
+    $("outFeeHint").innerHTML = OUT_FEE_MANUAL && Math.abs(cur - (r.total_fee || 0)) > 1e-9
+      ? `已按手填 ¥${(cur || 0).toFixed(2)} 计；系统建议 ¥${(r.total_fee || 0).toFixed(2)}（按商品打包费自动算）· <a href="javascript:outFeeReset()">恢复建议值</a>`
+      : "按商品打包费自动算出的建议值，可手动覆盖";
+  }
   $("outWarn").innerHTML = (r.warnings || []).map((w) => `<div class="alert warn">⚠ ${esc(w)}（仍可继续，可先补货）</div>`).join("");
-  // 手动挑选的关联物品不属于「自动带出」：先摘下来，重建表格后再挂回去
-  const manual = [...$("outPackBody").querySelectorAll('tr[data-manual="1"]')];
   $("outPackBody").innerHTML = r.pack_lines.map((pl, i) => {
     const m = PRODUCTS.find((x) => x.id === pl.product_id);
     // 快递费行标记出来：删掉它 = 这笔不结算快递费（否则重新预览又会被自动加回来）
     const isExpress = !!(m && m.category === "快递");
-    return `<tr data-idx="${i}" data-pid="${pl.product_id}" data-unit="${esc(pl.unit)}" data-up="${pl.unit_price}"${isExpress ? ' data-express="1"' : ""}>
-      <td><b>${esc(pl.product_name)}</b></td>
+    const isManual = !!pl.manual;   // 手动挑选的关联物品（后端已按 FIFO 算好成本一起返回）
+    return `<tr data-idx="${i}" data-pid="${pl.product_id}" data-unit="${esc(pl.unit)}" data-up="${pl.unit_price}"${isManual ? ' data-manual="1"' : ""}${isExpress ? ' data-express="1"' : ""}>
+      <td><b>${esc(pl.product_name)}</b>${isManual ? ' <span class="badge" style="background:var(--primary-light);color:var(--primary);">手动</span>' : ""}</td>
       <td><select class="searchable pl-unit" onchange="packLineUnitChanged(this)">${m ? unitOptions(m, pl.unit) : `<option>${pl.unit}</option>`}</select></td>
       <td><input class="pl-qty" type="number" step="any" value="${pl.quantity}" oninput="packLineChanged(this)" style="width:90px;" /></td>
-      <td><span class="badge pack">${isExpress ? "快递费" : "包装消耗"}</span></td>
-      <td class="num mono">${fmtMoney(pl.unit_price)}/${pl.unit}</td>
+      <td><span class="badge pack">${isExpress ? "快递费" : (isManual && m && m.category === "人工" ? "人工" : "包装消耗")}</span></td>
+      <td class="num mono">¥${fmtNum(pl.unit_price)}/${esc(pl.unit)}</td>
       <td class="num pl-amount">${fmtMoney(pl.amount)}</td>
       <td><button class="btn sm danger" title="删除该结算项" onclick="removePackRow(this)">✕</button></td></tr>`;
   }).join("");
   if (!r.pack_lines.length) $("outPackBody").innerHTML = `<tr><td colspan="7" class="empty">无关联结算项（该商品未配置包装清单）</td></tr>`;
-  // 挂回手动挑选的行（有它就不再显示「无关联结算项」的空提示）
-  if (manual.length) {
-    const empty = $("outPackBody").querySelector("tr .empty");
-    if (empty) empty.closest("tr").remove();
-    manual.forEach((tr) => $("outPackBody").appendChild(tr));
-  }
   bindSearchable($("outPackBody"));
   calcOutboundTotals();
+}
+/** 手动挑选的关联物品：从当前表格收集，重新预览时交回后端，一起按 FIFO 算成本 */
+function collectManualPackLines() {
+  const out = [];
+  document.querySelectorAll('#outPackBody tr[data-manual="1"]').forEach((tr) => {
+    const unit = tr.querySelector(".pl-unit")?.value;
+    const qty = parseFloat(tr.querySelector(".pl-qty")?.value);
+    const m = packRowProduct(tr);
+    if (m && unit && qty > 0) out.push({ product_id: m.id, unit, quantity: qty });
+  });
+  return out;
 }
 /* ---------- 关联出库物品：手动挑选（包材 / 人工 / 快递费等，任意商品都可选） ---------- */
 function packRowProduct(tr) {
@@ -5520,7 +5596,7 @@ function addPackRow(m, qty = 1) {
     <td><select class="searchable pl-unit" onchange="packLineUnitChanged(this)">${unitOptions(m, unit)}</select></td>
     <td><input class="pl-qty" type="number" step="any" min="0" value="${qty}" oninput="packLineChanged(this)" style="width:90px;" /></td>
     <td><span class="badge pack">${m.category === "快递" ? "快递费" : (m.category === "人工" ? "人工" : "包装消耗")}</span></td>
-    <td class="num mono">${fmtMoney(up)}/${esc(unit)}</td>
+    <td class="num mono" title="按库存均价估算；点「🔍 预览结算」后按 FIFO 实算">¥${fmtNum(up)}/${esc(unit)}</td>
     <td class="num pl-amount">${fmtMoney(up * qty)}</td>
     <td><button class="btn sm danger" title="删除该结算项" onclick="removePackRow(this)">✕</button></td>`;
   body.appendChild(tr);
@@ -5569,6 +5645,7 @@ function pickPackItem(id) {
   closeModal();
   addPackRow(p);
   toast(`已添加关联物品：${p.name}（数量按本单用量改）`);
+  previewOutbound();   // 立刻重算一次：让它按 FIFO 出准成本，而不是停留在均价估算
 }
 /* 删掉「快递费」行 → 同步取消「自动计快递费」，避免再次预览/提交时又被算上 */
 function removePackRow(btn) {
@@ -5640,15 +5717,32 @@ function calcOutboundTotals() {
   });
   const fee = parseFloat($("outFee").value) || 0;
   const adjust = parseFloat($("outAdjust")?.value) || 0;   // 抹零/凑整：正=加收，负=抹零
-  const finalAmount = amount + adjust;                     // 实收金额（差额记「金额调整」其他开支）
+  // 客户随货款一起付的关联结算（包材/人工/快递费，按上面的勾选）→ 计入实收金额与毛利
+  const settleIn = settleIncomeLocal();
+  const finalAmount = amount + settleIn + adjust;           // 实收金额（差额记「金额调整」其他开支）
   $("otAmount").textContent = fmtMoney(amount);
-  if ($("otFinal")) $("otFinal").textContent = fmtMoney(finalAmount);
+  if ($("otFinal")) {
+    $("otFinal").innerHTML = fmtMoney(finalAmount) + (settleIn
+      ? `<div class="muted" style="font-size:11px;">含${esc(settleCatsLabel(settleCats()))} ${fmtMoney(settleIn)}</div>` : "");
+  }
   $("otCogs").textContent = fmtMoney(cogs);
-  $("otGross").textContent = fmtMoney(amount - cogs);
+  $("otGross").textContent = fmtMoney(amount + settleIn - cogs);
   // 净利按实收口径：抹零/凑整的差额已计入其他开支，这里同步扣掉，与报表口径一致
   $("otNet").textContent = fmtMoney(finalAmount - cogs - fee);
+  const hint = $("settleHint");
+  if (hint) {
+    hint.innerHTML = settleIn
+      ? `客户代收：${esc(settleCatsLabel(settleCats()))} ${fmtMoney(settleIn)} → 实收 ${fmtMoney(finalAmount)}`
+      : "当前：实收 = 货款 + 调整（客户不承担关联结算）";
+  }
 }
-function clearPreview() { $("outPreview").style.display = "none"; OUT_PREVIEW = null; if ($("outAdjust")) $("outAdjust").value = ""; }
+function clearPreview() {
+  $("outPreview").style.display = "none";
+  OUT_PREVIEW = null;
+  OUT_FEE_MANUAL = false;
+  if ($("outAdjust")) $("outAdjust").value = "";
+  if ($("outFeeHint")) $("outFeeHint").textContent = "";
+}
 async function submitOutbound() {
   const lines = collectSaleLines();
   if (!lines.length) { toast("请至少添加一行销售商品"); return; }
@@ -5657,15 +5751,18 @@ async function submitOutbound() {
   try {
     const payStatus = payOf("outPay");
     const adjust = parseFloat($("outAdjust")?.value) || 0;
+    const settleIn = settleIncomeLocal();
     const r = await api("/api/outbounds", "POST", {
       customer: $("outCustomer").value, operator: $("outOperator").value,
       date: $("outDate").value, remark: remarkValue("outRemark"),
       lines, pack_lines: packLines, pack_fee_total: fee,
       auto_express: autoExpressOn(),   // 与预览一致：关掉就不再自动加快递费
       pay_status: payStatus, adjust_amount: adjust,
+      settle_cats: settleCats(),       // 实收含哪些关联结算（客户随货款付回来的包材/人工/运费）
     });
     const warns = (r.warnings || []).length ? "\n⚠ " + r.warnings.join("；") : "";
-    toast("出库成功" + (adjust ? `（调整 ${adjust > 0 ? "+" : "-"}${Math.abs(adjust).toFixed(2)}，已记其他开支）` : "") + (payStatus === "unpaid" ? "（待付款，已进待付款账单）" : "") + warns, 3800);
+    const settleTip = settleIn ? `（实收含${settleCatsLabel(settleCats())} ${fmtMoney(settleIn)}）` : "";
+    toast("出库成功" + (adjust ? `（调整 ${adjust > 0 ? "+" : "-"}${Math.abs(adjust).toFixed(2)}，已记其他开支）` : "") + settleTip + (payStatus === "unpaid" ? "（待付款，已进待付款账单）" : "") + warns, 3800);
     $("outSaleBody").innerHTML = ""; outSaleRowId = 0; addSaleRow();
     clearPreview();
     $("outCustomer").value = "";
@@ -5735,7 +5832,7 @@ function renderOutRow(o) {
       <td class="mono">${o.code}${payTag(o.pay_status)}${o.has_dropship ? ' <span class="badge income">含代发</span>' : ""}</td>
       <td>${esc(o.customer) || "—"}</td>
       <td><button class="detail-toggle" onclick="toggleOutDetail(${o.id})">▸ 查看明细</button></td>
-      <td class="num mono">${fmtMoney(o.final_amount != null ? o.final_amount : o.total_amount)}${o.adjust_amount ? `<div class="muted" style="font-size:11px;">调整 ${o.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(o.adjust_amount))}</div>` : ""}</td>
+      <td class="num mono">${fmtMoney(o.final_amount != null ? o.final_amount : o.total_amount)}${o.adjust_amount ? `<div class="muted" style="font-size:11px;">调整 ${o.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(o.adjust_amount))}</div>` : ""}${o.settle_income ? `<div class="muted" style="font-size:11px;" title="客户随货款一起付的关联结算（${esc(settleCatsLabel(o.settle_cats))}）：成本里已含包材/快递，这里是客户付回来的那部分">含代收 ${fmtMoney(o.settle_income)}</div>` : ""}</td>
       <td class="num mono">${fmtMoney(o.total_cogs)}${o.brush_adjust ? `<div class="muted" style="font-size:11px;">刷单 ${fmtMoney(o.brush_adjust)}</div>` : ""}</td>
       <td class="num mono">${fmtMoney(o.total_fee)}</td>
       <td class="num mono" style="color:${o.net_profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(o.net_profit)}</td>
@@ -5937,6 +6034,7 @@ function renderOutGroup() {
       a.other_cogs = a.other_cogs || 0;      // 其他关联结算
       a.express_cogs = a.express_cogs || 0;  // 快递费
       a.brush_cogs = a.brush_cogs || 0;      // 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差）
+      a.settle_income = a.settle_income || 0; // 客户代收的关联结算（包材/人工/快递费，按销售金额占比分摊）
 
       let arr = byPid.get(a.pid);
       if (!arr) { arr = []; byPid.set(a.pid, arr); }
@@ -5979,6 +6077,13 @@ function renderOutGroup() {
           spread(sl.product_id, (o.brush_adjust || 0) * share, "brush_cogs");
         }
       }
+      // 客户代收的关联结算（包材/人工/快递费）：同样按销售金额占比分摊，商品毛利算上它（与后端同口径）
+      if (o.settle_income && saleLines.length) {
+        for (const sl of saleLines) {
+          const share = totalAmt ? (sl.amount || 0) / totalAmt : 1 / saleLines.length;
+          spread(sl.product_id, (o.settle_income || 0) * share, "settle_income");
+        }
+      }
     }
     aggSale.forEach((a) => {
       a.pack_cogs = a.labor_cogs + a.material_cogs + a.other_cogs;
@@ -5987,7 +6092,8 @@ function renderOutGroup() {
     });
   }
   const total = {
-    amt: rows.reduce((s, o) => s + (o.total_amount || 0), 0),
+    // 收入含客户代收的关联结算（包材/人工/快递费），与出库单「实收金额」、报表收入同口径
+    amt: rows.reduce((s, o) => s + (o.total_amount || 0) + (o.settle_income || 0), 0),
     cogs: rows.reduce((s, o) => s + (o.total_cogs || 0), 0),
     fee: rows.reduce((s, o) => s + (o.total_fee || 0), 0),
     // 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差）：净利里已扣掉，单独列出便于核对
@@ -6014,10 +6120,12 @@ function renderOutGroup() {
   else if (seg === "og-laborpack") { isLaborPack = true; data = aggLaborPack; emptyText = "无打包人工/耗材记录"; }
   else { data = aggPack; emptyText = "无耗材/包装记录"; }
   data = data.map((a) => {
-    const gp = (a.amount - a.cogs) || 0;
-    const denom = a.gross_sales || a.amount || 0; // 扣点前销售金额
+    const settle = Number(a.settle_income) || 0;   // 客户代收的关联结算（成本里含它，收入也要含）
+    a.settle_income = settle;
+    const gp = (a.amount + settle - a.cogs) || 0;
+    const denom = (a.gross_sales || a.amount || 0) + settle; // 扣点前销售金额 + 代收
     a.splitText = isSale ? costSplitText(a) : "";  // 代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 快递费
-    const gp_rate = denom ? (gp / denom) * 100 : 0; // 毛利率 = 毛利 / 扣点前销售金额
+    const gp_rate = denom ? (gp / denom) * 100 : 0; // 毛利率 = 毛利 / （扣点前销售金额 + 代收）
     return { ...a, gp, gp_rate };
   });
   if (t._sort) data = data.slice().sort((a, b) => compareVal(a[t._sort.key], b[t._sort.key]) * t._sort.dir);
@@ -6037,9 +6145,9 @@ function renderOutGroup() {
       <td class="num">${a.order_count} 单</td>
       ${isLaborPack ? "" : `<td>${esc(a.unit)}</td>`}
       ${isLaborPack ? "" : `<td class="num mono">${fmtNum(a.qty)}</td>`}
-      ${isSale ? `<td class="num mono">${fmtMoney(a.amount)}</td>` : ""}
+      ${isSale ? `<td class="num mono">${fmtMoney(a.amount + (a.settle_income || 0))}${a.settle_income ? `<div class="muted" style="font-size:11px;">含代收 ${fmtMoney(a.settle_income)}</div>` : ""}</td>` : ""}
       <td class="num mono">${fmtMoney(a.cogs)}</td>
-      ${isSale ? `<td class="num mono" style="color:${(a.amount - a.cogs) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(a.amount - a.cogs)}</td>` : ""}
+      ${isSale ? `<td class="num mono" style="color:${a.gp >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(a.gp)}</td>` : ""}
       ${isSale ? `<td class="num mono">${(a.gp_rate || 0).toFixed(1)}%</td>` : ""}
     </tr>`).join("")
       : `<tr><td colspan="${colSpan}" class="muted">${emptyText}</td></tr>`) + `</tbody>`;
@@ -6122,10 +6230,15 @@ function editOutboundInGroup(groupKey) {
 function editOutbound(id) {
   const o = findOutbound(id);
   if (!o) { toast("未找到该出库单，请刷新列表"); return; }
+  const cats = String(o.settle_cats || "").split(",").filter(Boolean);
+  const box = (key) => `<label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
+      <input type="checkbox" class="ed-out-settle" value="${key}" ${cats.includes(key) ? "checked" : ""} /> ${SETTLE_LABEL[key]}
+    </label>`;
   openModal(`
     <h3>修改出库单 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="muted" style="margin-bottom:12px;">
-      ${esc(o.code)} · 销售收入 ${fmtMoney(o.total_amount)}${o.adjust_amount ? `（调整 ${o.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(o.adjust_amount))}，实收 ${fmtMoney(o.total_amount + o.adjust_amount)}）` : ""}
+      ${esc(o.code)} · 销售收入 ${fmtMoney(o.total_amount)}${o.adjust_amount ? `（调整 ${o.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(o.adjust_amount))}）` : ""}
+      ${o.settle_income ? ` · 客户代收 ${fmtMoney(o.settle_income)}` : ""} · 实收 ${fmtMoney(o.final_amount != null ? o.final_amount : o.total_amount)}
     </div>
     <div class="form-grid">
       <div class="field"><label>客户</label><input id="edOutCustomer" value="${esc(o.customer || "")}" placeholder="客户名称" /></div>
@@ -6134,8 +6247,15 @@ function editOutbound(id) {
         <label>付款状态</label>
         ${payRadios("edOutPay", o.pay_status, "待付款：先进「待付款账单」，点「已支付」后才计入财务报表")}
       </div>
+      <div class="field" style="grid-column:1/-1;">
+        <label>实收金额包含（客户随货款一起付的关联结算）</label>
+        <div class="toolbar" style="margin:0;flex-wrap:wrap;gap:14px;">
+          ${box("material")}${box("labor")}${box("express")}
+        </div>
+        <div class="field-hint">改这里只影响「实收金额」与报表收入（实收 = 货款 + 调整 + 勾选项金额），成本与库存不变。</div>
+      </div>
     </div>
-    <p class="hint">只能修改以上三项；保存后操作员记为当前登录账号（${esc(operatorName())}）。商品 / 数量 / 价格如需更正，请删除后重新出库。</p>
+    <p class="hint">以上四项可改；保存后操作员记为当前登录账号（${esc(operatorName())}）。商品 / 数量 / 价格如需更正，请删除后重新出库。</p>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
       <button class="btn green" onclick="saveOutboundEdit(${id})">✓ 保存</button>
@@ -6144,9 +6264,10 @@ function editOutbound(id) {
 async function saveOutboundEdit(id) {
   const date = $("edOutDate").value;
   if (!date) { toast("请选择出库日期"); return; }
+  const settle_cats = [...document.querySelectorAll(".ed-out-settle")].filter((x) => x.checked).map((x) => x.value);
   try {
     await api(`/api/outbounds/${id}`, "PUT", {
-      customer: $("edOutCustomer").value, date, pay_status: payOf("edOutPay"),
+      customer: $("edOutCustomer").value, date, pay_status: payOf("edOutPay"), settle_cats,
     });
     closeModal();
     toast(`已保存，操作员记为 ${operatorName()}`);
@@ -6547,12 +6668,16 @@ function renderReportGoods() {
   const hint = $("repGoodsHint");
   if (hint) hint.textContent = all.length ? (k ? `匹配 ${prodRows.length} / ${all.length} 个商品` : `共 ${all.length} 个商品`) : "";
   // 成本为「总成本」= 商品成本 + 打包人工/耗材 + 快递费（后端 by_product 已按销售商品归属；
-  // 无归属的快递费等按该单销售金额占比分摊）。毛利率分母用扣点前销售金额 gross_sales。
+  // 无归属的快递费等按该单销售金额占比分摊）。收入含客户代收的关联结算 settle_income，
+  // 毛利率分母用 扣点前销售金额 + 代收（与后端 gp_rate 同口径）。
+  const settleOf = (p) => Number(p.settle_income) || 0;
   const gpRateOf = (p) => {
-    const denom = Number(p.gross_sales) || Number(p.amount) || 0;
+    const settle = settleOf(p);
+    const denom = (Number(p.gross_sales) || Number(p.amount) || 0) + settle;
     if (!denom) return "—";
+    if (p.gp_rate != null) return Number(p.gp_rate).toFixed(1) + "%";
     const total = Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
-    const rate = p.gp_rate != null ? Number(p.gp_rate) : ((Number(p.amount) - total) / denom) * 100;
+    const rate = ((Number(p.amount) + settle - total) / denom) * 100;
     return rate.toFixed(1) + "%";
   };
   if (!prodRows.length) {
@@ -6564,10 +6689,11 @@ function renderReportGoods() {
   const sum = prodRows.reduce((a, p) => {
     a.qty += Number(p.qty) || 0;
     a.amount += Number(p.amount) || 0;
+    a.settle += settleOf(p);
     a.cogs += Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
     return a;
-  }, { qty: 0, amount: 0, cogs: 0 });
-  const sumGp = sum.amount - sum.cogs;
+  }, { qty: 0, amount: 0, settle: 0, cogs: 0 });
+  const sumGp = sum.amount + sum.settle - sum.cogs;
   const sumColor = sumGp >= 0 ? "var(--green)" : "var(--red)";
   pt.innerHTML = `<thead><tr>
     <th data-key="name">商品${sortArrow("repProductTable", "name")}</th>
@@ -6580,7 +6706,8 @@ function renderReportGoods() {
     <th class="num">毛利率</th></tr></thead><tbody>` +
     prodRows.map((p) => {
       const total = Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
-      const gp = (Number(p.amount) || 0) - total;
+      const settle = settleOf(p);   // 客户代收的关联结算（包材/人工/快递费）：成本里含它，收入也要含
+      const gp = (Number(p.amount) || 0) + settle - total;
       const color = gp >= 0 ? "var(--green)" : "var(--red)";
       // 成本构成：代发行也要列出来（代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 其他关联结算 ＋ 快递费）
       const splitText = costSplitText(p);
@@ -6594,7 +6721,8 @@ function renderReportGoods() {
       <td class="muted">${esc(p.spec) || "—"}</td>
       <td>${way}</td>
       <td class="num mono">${fmtNum(p.qty)}</td>
-      <td class="num mono">${fmtMoney(p.amount)}</td><td class="num mono">${fmtMoney(total)}</td>
+      <td class="num mono">${fmtMoney((Number(p.amount) || 0) + settle)}${settle ? `<div class="muted" style="font-size:11px;" title="客户随货款一起付的包材/人工/快递费（成本里已含，收入侧也计一笔）">含代收 ${fmtMoney(settle)}</div>` : ""}</td>
+      <td class="num mono">${fmtMoney(total)}</td>
       <td class="num mono" style="color:${color}">${fmtMoney(gp)}</td>
       <td class="num mono" style="color:${color}">${gpRateOf(p)}</td></tr>`;
     }).join("") + `</tbody>
@@ -6602,10 +6730,10 @@ function renderReportGoods() {
       <td><b>${k ? "筛选合计" : "本期合计"}</b> <span class="muted">${prodRows.length} 个商品</span></td>
       <td></td><td></td>
       <td class="num mono"><b>${fmtNum(sum.qty)}</b></td>
-      <td class="num mono"><b>${fmtMoney(sum.amount)}</b></td>
+      <td class="num mono"><b>${fmtMoney(sum.amount + sum.settle)}</b>${sum.settle ? `<div class="muted" style="font-size:11px;">含代收 ${fmtMoney(sum.settle)}</div>` : ""}</td>
       <td class="num mono"><b>${fmtMoney(sum.cogs)}</b></td>
       <td class="num mono" style="color:${sumColor}"><b>${fmtMoney(sumGp)}</b></td>
-      <td class="num mono" style="color:${sumColor}"><b>${sum.amount ? ((sumGp / sum.amount) * 100).toFixed(1) + "%" : "—"}</b></td>
+      <td class="num mono" style="color:${sumColor}"><b>${sum.amount + sum.settle ? ((sumGp / (sum.amount + sum.settle)) * 100).toFixed(1) + "%" : "—"}</b></td>
     </tr></tfoot>`;
   pt._rows = prodRows;
   pt._render = renderReportGoods;   // 点表头排序 / 再输入关键词都只重渲染这张表

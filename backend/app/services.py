@@ -840,8 +840,59 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     return rec
 
 
+# ---------------- 出库「实收金额」口径：关联结算里哪几类由客户承担 ----------------
+# 客户随货款一起付给我们的关联结算（包材 / 人工 / 快递费）：
+#   实收金额 = 销售收入 + 抹零凑整 + settle_income（勾选类别的关联结算金额）
+# 关联结算成本本来就已经在 total_cogs 里（毛利被它扣掉），这部分是客户代付回来的钱，
+# 所以收入侧也计一笔，包材/快递才不会把毛利吃成负数。勾选哪几类由单据上的 settle_cats 记录。
+SETTLE_CAT_LABEL = {"material": "包材", "labor": "人工", "express": "快递费"}
+SETTLE_CAT_ORDER = ("material", "labor", "express")
+# 默认「客户全额承担」：导入路径（聚水潭/批量/一键）不带 settle_cats 时按此口径记，
+# 手动出库由表单上的开关决定。
+DEFAULT_SETTLE_CATS = ("material", "labor", "express")
+
+
+def pack_settle_cat(category: str | None, name: str | None) -> str:
+    """关联结算行归到「实收」的哪一类（与报表 PACK_COST_CATS 的分类口径一致）。
+
+    人工 → labor；快递 → express；包材/耗材/包装/其他关联结算 → material。
+    """
+    c = (category or "").strip()
+    if c == "人工":
+        return "labor"
+    if c == "快递":
+        return "express"
+    if (name or "").strip().endswith("打包"):   # 兜底：名称以「打包」结尾算人工
+        return "labor"
+    return "material"
+
+
+def normalize_settle_cats(cats) -> list[str]:
+    """把前端 / 导入传来的类别归一：去重、丢掉未知项、按固定顺序排列。
+
+    None / 空 → 默认「客户全额承担」（DEFAULT_SETTLE_CATS）；
+    显式传空列表则视为「客户不承担」（旧口径，实收不含关联结算）。
+    """
+    if cats is None:
+        return list(DEFAULT_SETTLE_CATS)
+    if isinstance(cats, str):
+        cats = cats.replace("，", ",").split(",")
+    out: list[str] = []
+    for x in cats:
+        k = str(x or "").strip().lower()
+        if k in SETTLE_CAT_LABEL and k not in out:
+            out.append(k)
+    return [k for k in SETTLE_CAT_ORDER if k in out]
+
+
+def settle_cats_label(cats) -> str:
+    """类别 key → 中文（用于提示文案 / 图表注）。"""
+    return "、".join(SETTLE_CAT_LABEL[k] for k in normalize_settle_cats(cats))
+
+
 def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_express: bool = True,
-                allow_self_stock: bool = False) -> dict:
+                allow_self_stock: bool = False, extra_pack_lines=None,
+                settle_cats=None) -> dict:
     """构建出库单明细：销售行 + 关联结算行(包装材料) + 费用，并校验库存。不落库。
 
     成本结转按「先进先出(FIFO)」：从商品最早的入库批次依次扣减，成本 = Σ(批次单位成本 × 扣减数量)。
@@ -851,6 +902,13 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
 
     allow_self_stock（手动出库）：销售行直接选的就是「库存商品（大类）」时，扣它自己的库存。
     导入路径必须保持 False —— 平台商品名误指到大类时应当报错，而不是悄悄扣大类的库存改账。
+
+    extra_pack_lines：手动挑选的关联出库物品，**追加**在自动带出的结算项后面（不替换），
+    返回的 pack_lines 里带 manual=True 让前端标「手动」。预览与提交用同一套算法，
+    这样手动行的成本也能在预览时按 FIFO 算准，而不是前端按均价估。
+
+    settle_cats：客户承担的关联结算类别（material 包材 / labor 人工 / express 快递费）；
+    勾选类别的金额合计 = settle_income，计入「实收金额」与报表收入（成本不变）。
     """
     pack_lines = pack_lines or []
     sale_rows, pack_rows, warnings = [], [], []
@@ -997,6 +1055,12 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
             for (pid, mid), d in agg.items()
         ]
 
+    # 手动挑选的关联出库物品：追加在自动带出的后面（不替换），标 manual 供前端显示「手动」
+    for extra in (extra_pack_lines or []):
+        item = dict(extra) if isinstance(extra, dict) else extra.model_dump()
+        item["manual"] = True
+        pack_specs.append(item)
+
     for spec in pack_specs:
         m = db.get(Product, spec["product_id"])
         if not m:
@@ -1018,6 +1082,9 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
                 "unit_price": unit_price, "amount": cogs, "cogs": cogs, "pack_fee": 0,
                 "line_type": "pack",
                 "sale_product_id": spec.get("sale_product_id"),
+                "manual": bool(spec.get("manual")),   # 手动挑选的关联物品（前端标「手动」、重新预览时继续带上）
+                # 归属「实收」的类别（客户承担的那部分要计入实收金额）：包材 / 人工 / 快递费
+                "settle_cat": pack_settle_cat(m.category, m.name),
             }
         )
         total_cogs += cogs
@@ -1035,8 +1102,9 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
                     "unit": "单", "quantity": 1, "quantity_base": 1,
                     "unit_price": express_fee, "amount": express_fee, "cogs": express_fee,
                     "pack_fee": 0, "line_type": "pack", "sale_product_id": None,
-                    "express_weight": total_weight,
+                    "express_weight": total_weight, "manual": False,
                     "spec": f"{total_weight:.3f}kg",
+                    "settle_cat": pack_settle_cat(ep.category, ep.name),
                 }
             )
             total_cogs += express_fee
@@ -1063,6 +1131,10 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
                 label = r["product_name"] if not sp_name else f"{r['product_name']}（扣{fmt_qty(need)} {sp_name}）"
                 warnings.append(f"「{label}」库存不足：需 {fmt_qty(need)} {p.base_unit}，现有 {fmt_qty(p.stock)} {p.base_unit}")
 
+    # 客户承担的关联结算（包材/人工/快递费）：计入「实收金额」与报表收入，成本不受影响
+    settle_kinds = normalize_settle_cats(settle_cats)
+    settle_income = round(sum(r["cogs"] for r in pack_rows if r["settle_cat"] in settle_kinds), 2)
+
     return {
         "sale_lines": sale_rows,
         "pack_lines": pack_rows,
@@ -1071,10 +1143,49 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
         "total_fee": round(total_fee, 2),
         # 关联结算合计（包材 + 人工 + 自动快递费）：芳谊放单仓「快递+包装固定费」的自动值口径
         "pack_cogs": round(sum(r["cogs"] for r in pack_rows), 2),
-        "gross_profit": round(total_amount - total_cogs, 2),
-        "net_profit": round(total_amount - total_cogs - total_fee, 2),
+        # 客户代收的关联结算（实收 = 销售收入 + 这笔）：口径见文件上方 SETTLE_CAT_*
+        "settle_income": settle_income,
+        "settle_cats": ",".join(settle_kinds),
+        "gross_profit": round(total_amount + settle_income - total_cogs, 2),
+        "net_profit": round(total_amount + settle_income - total_cogs - total_fee, 2),
         "warnings": warnings,
     }
+
+
+SETTLE_INCOME_CAT = "关联结算代收"   # 客户随货款一起付的包材/人工/快递费（实收口径的流水类别）
+
+
+def sync_settle_income_record(db: Session, rec: Outbound, date: str, op: str, pay: dict) -> None:
+    """把「客户代收的关联结算」（rec.settle_income）登记/更新成一条收入流水。
+
+    金额 = 包材/人工/快递费里客户承担的那部分，收付款状态随出库单（待付款时也不进报表）；
+    客户不承担（金额 0）时把这条流水删掉。编辑出库单改了实收口径后调用它保持账实一致。
+    """
+    amount = round(float(getattr(rec, "settle_income", 0.0) or 0.0), 2)
+    rows = list(db.execute(
+        select(FinanceRecord).where(
+            FinanceRecord.ref_type == "outbound", FinanceRecord.ref_id == rec.id,
+            FinanceRecord.category == SETTLE_INCOME_CAT,
+        )
+    ).scalars())
+    if amount <= 0:
+        for f in rows:
+            db.delete(f)
+        return
+    if rows:
+        f = rows[0]
+        f.amount, f.date, f.operator = amount, date, op
+        f.pay_status, f.paid_at = pay["pay_status"], pay["paid_at"]
+        f.remark = f"关联结算代收 {rec.code}"
+        for extra in rows[1:]:
+            db.delete(extra)
+        return
+    db.add(FinanceRecord(
+        type="income", category=SETTLE_INCOME_CAT, product_id=None,
+        amount=amount, date=date, operator=op,
+        remark=f"关联结算代收 {rec.code}", ref_type="outbound", ref_id=rec.id,
+        **pay,   # 挂账状态随出库单
+    ))
 
 
 def create_outbound(db: Session, payload: dict, operator: str = "", import_group: str = "",
@@ -1092,6 +1203,9 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
         db, lines, payload.get("pack_lines"), payload.get("pack_fee_total"),
         payload.get("auto_express", True),   # 手动出库可关掉自动快递费；批量导入等默认开
         allow_self_stock,
+        # 客户承担的关联结算类别（包材/人工/快递费）：手动单由表单开关传，
+        # 导入路径不传 → 默认「客户全额承担」（见 normalize_settle_cats）
+        settle_cats=payload.get("settle_cats"),
     )
     op = (payload.get("operator") or "").strip() or operator
     date = payload["date"]
@@ -1114,6 +1228,9 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
         adjust_amount=adjust,
         total_cogs=order["total_cogs"],
         total_fee=order["total_fee"],
+        # 客户代收的关联结算（包材/人工/快递费）：实收 = 销售收入 + 调整 + 这笔
+        settle_income=order["settle_income"],
+        settle_cats=order["settle_cats"],
         brush_cost=round(float(payload.get("brush_cost") or 0), 2) if brush else 0.0,
         brush_fee=round(float(payload.get("brush_fee") or 0), 2) if brush else 0.0,
         brush_auto_fee=brush_auto_fee,
@@ -1209,6 +1326,8 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
             )
         )
     sync_adjust_expense(db, "outbound", rec.id, rec.code, date, op, adjust, pay)
+    # 客户代收的关联结算（包材/人工/快递费）也记一条收入流水，与「实收金额」口径一致
+    sync_settle_income_record(db, rec, date, op, pay)
     # 代发商品（未关联库存大类）：成本自动登记成「待付款 → 代发」的应付账单，按商品 × 规格列明细
     sync_dropship_bills(db, rec, order["sale_lines"])
     if defer_recompute:
