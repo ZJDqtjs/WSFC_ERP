@@ -421,11 +421,14 @@
                 <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
                   <input type="checkbox" id="settleExpress" checked onchange="settleChanged()" /> 快递费
                 </label>
+                <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;" title="工时 / 胶带这类按金额记的固定成本也由客户随货款付回时勾上（结算表里的「工时」行就是它）">
+                  <input type="checkbox" id="settleFee" onchange="settleChanged()" /> 固定成本
+                </label>
                 <button type="button" class="btn sm secondary" onclick="setSettleAll(true)">全选</button>
                 <button type="button" class="btn sm secondary" onclick="setSettleAll(false)">全不选</button>
                 <span class="muted" id="settleHint"></span>
               </div>
-              <div class="field-hint">勾选的类别会计入「实收金额」与报表收入（客户是付了这笔钱的）；成本照旧含包材/快递，所以毛利不会被包材吃掉。不勾 = 实收只算货款 + 调整（旧口径）。</div>
+              <div class="field-hint">勾选的类别会计入「实收金额」与报表收入（客户是付了这笔钱的）；成本照旧含包材/快递，所以毛利不会被包材吃掉。「固定成本」= 上面的固定费用合计（工时/胶带这类按金额记的），客户付回时才勾。不勾 = 实收只算货款 + 调整（旧口径）。</div>
             </div>
             <div class="stat-grid" style="margin-top:14px;">
               <div class="stat"><div class="label">销售收入</div><div class="value" id="otAmount">¥0.00</div></div>

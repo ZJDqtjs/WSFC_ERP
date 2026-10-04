@@ -845,8 +845,11 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
 #   实收金额 = 销售收入 + 抹零凑整 + settle_income（勾选类别的关联结算金额）
 # 关联结算成本本来就已经在 total_cogs 里（毛利被它扣掉），这部分是客户代付回来的钱，
 # 所以收入侧也计一笔，包材/快递才不会把毛利吃成负数。勾选哪几类由单据上的 settle_cats 记录。
-SETTLE_CAT_LABEL = {"material": "包材", "labor": "人工", "express": "快递费"}
-SETTLE_CAT_ORDER = ("material", "labor", "express")
+SETTLE_CAT_LABEL = {"material": "包材", "labor": "人工", "express": "快递费", "fee": "固定成本"}
+SETTLE_CAT_ORDER = ("material", "labor", "express", "fee")
+# 固定成本（人工打包费/工時/胶带这类不好量化的项目）也常由客户随货款付回（结算表里就是一行金额），
+# 勾了 "fee" 就把 pack_fee_total 一起计入实收；不勾则只算关联结算行。
+SETTLE_FEE_CAT = "fee"
 # 默认「客户全额承担」：导入路径（聚水潭/批量/一键）不带 settle_cats 时按此口径记，
 # 手动出库由表单上的开关决定。
 DEFAULT_SETTLE_CATS = ("material", "labor", "express")
@@ -1134,6 +1137,9 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
     # 客户承担的关联结算（包材/人工/快递费）：计入「实收金额」与报表收入，成本不受影响
     settle_kinds = normalize_settle_cats(settle_cats)
     settle_income = round(sum(r["cogs"] for r in pack_rows if r["settle_cat"] in settle_kinds), 2)
+    # 固定成本（工时/胶带这类按金额记的）也由客户承担时，一并计入实收（它本身是期间费用，两边相抵）
+    if SETTLE_FEE_CAT in settle_kinds:
+        settle_income = round(settle_income + round(total_fee, 2), 2)
 
     return {
         "sale_lines": sale_rows,

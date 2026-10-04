@@ -38,6 +38,9 @@ class PackLine(BaseModel):
     product_id: int
     unit: str
     quantity: float
+    # 显式指定这一项的成本（不填=按该商品先进先出成本算）。
+    # AI 识别出的「运费」与结算表里的金额可能不等于按重量自动算的值，这里按识别金额记账。
+    cogs: float | None = None
 
 
 class PreviewIn(BaseModel):
@@ -215,12 +218,15 @@ def update_outbound(oid: int, data: OutboundUpdate, db: Session = Depends(get_db
     if data.settle_cats is not None:
         cats = normalize_settle_cats(data.settle_cats)
         rec.settle_cats = ",".join(cats)
-        rec.settle_income = round(sum(
+        amount = sum(
             float(l.cogs or 0.0) for l in rec.lines
             if l.line_type == "pack" and pack_settle_cat(
                 l.product.category if l.product else "", l.product.name if l.product else ""
             ) in cats
-        ), 2)
+        )
+        if "fee" in cats:   # 固定成本（工时/胶带这类按金额记的）也由客户承担
+            amount += float(rec.total_fee or 0.0)
+        rec.settle_income = round(amount, 2)
         sync_settle_income_record(db, rec, date, user.name, pay)   # 代收流水跟着改（0 则删掉）
     sync_doc_edit(db, "outbound", oid, date, user.name, pay)
     db.commit()
