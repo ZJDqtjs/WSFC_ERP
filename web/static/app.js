@@ -1877,9 +1877,23 @@ function aiSettleCatsOf(r) {
   const cats = String((r || {}).settle_cats || "").split(",").filter(Boolean);
   return cats.length ? cats : ["material", "labor", "express"];
 }
-/** 识别到「按金额记」的固定成本项（工时/胶带…）：明细文本 + 合计 */
-function aiChargeFeeNote(r) {
-  const items = ((r || {}).charges || []).filter((c) => c.kind === "fee" && (+c.amount || 0) > 0);
+/** 当前「按金额记」的固定成本项：确认框开着时以表格里用户改过的为准，否则用识别结果 */
+function aiFeeItems() {
+  const rows = document.querySelectorAll("#aiChargeBody tr[data-ci]");
+  if (rows.length) {
+    const out = [];
+    rows.forEach((tr) => {
+      if (tr.querySelector(".ai-ch-kind").value !== "fee") return;
+      const amt = parseFloat(tr.querySelector(".ai-ch-amt").value) || 0;
+      if (amt > 0) out.push({ name: tr.querySelector(".ai-ch-name").value.trim() || "固定成本", amount: amt });
+    });
+    return out;
+  }
+  return ((AI_CONFIRM && AI_CONFIRM.charges) || []).filter((c) => c.kind === "fee" && (+c.amount || 0) > 0);
+}
+/** 固定成本明细（工时/胶带…）文本 + 合计 */
+function aiChargeFeeNote() {
+  const items = aiFeeItems();
   const sum = Math.round(items.reduce((a, c) => a + (+c.amount || 0), 0) * 100) / 100;
   return {
     text: items.map((c) => `${c.name} ${fmtMoney(+c.amount)}`).join("、"),
@@ -1887,14 +1901,18 @@ function aiChargeFeeNote(r) {
   };
 }
 /** 固定成本写进备注（用户要求「备注清楚金额」） */
-function aiChargeRemark(r) {
-  const items = ((r || {}).charges || []).filter((c) => c.kind === "fee" && (+c.amount || 0) > 0);
+function aiChargeRemark() {
+  const items = aiFeeItems();
   const sum = Math.round(items.reduce((a, c) => a + (+c.amount || 0), 0) * 100) / 100;
   if (sum <= 0) return "";
   return `【包材人工固定成本】${items.map((c) => `${c.name} ${fmtMoney(+c.amount)}`).join("、")}（合计 ${fmtMoney(sum)}）`;
 }
 function aiSettleChecked(box) {
   return [...(box || document).querySelectorAll(".ai-settle:checked")].map((x) => x.value);
+}
+/** 固定成本合计（确认框里以表格为准） */
+function aiFeeSum() {
+  return Math.round(aiFeeItems().reduce((a, c) => a + (+c.amount || 0), 0) * 100) / 100;
 }
 function aiSettleBoxes(cats) {
   return Object.keys(AI_SETTLE_LABELS).map((k) => `<label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
@@ -1906,42 +1924,153 @@ function aiChargeWrapHtml(r) {
   if (!r || r.type !== "outbound") return "";
   return `<div id="aiChargeWrap">${aiChargeHtml(r)}</div>`;
 }
+/** 费用项「记到哪」的可选项（用户可改，改完点重算/直接提交按新口径算） */
+const AI_CHARGE_KINDS = [
+  ["pack", "包材 / 耗材"], ["labor", "人工"], ["express", "快递费"], ["fee", "固定成本（按金额）"],
+];
+/** 某个商品能挂到「包材/人工」里的候选：先给识别候选，再给同类商品 */
+function aiChargeProdOptions(c, kind) {
+  const want = kind === "labor" ? "labor" : "pack";
+  const list = [];
+  const seen = new Set();
+  const push = (p) => { if (p && !seen.has(p.id)) { seen.add(p.id); list.push(p); } };
+  (c.candidates || []).forEach((x) => push(PRODUCTS.find((p) => p.id === x.product_id)));
+  PRODUCTS.filter((p) => p.is_active).forEach((p) => { if (aiProductsByCat(want).some((x) => x.id === p.id)) push(p); });
+  return list.map((p) => {
+    const du = p.default_unit || p.base_unit || "";
+    const cost = (p.avg_cost || p.unit_cost || 0) * ((p.conversions || {})[du] || 1);
+    return `<option value="${p.id}" ${p.id === (c.product_id || 0) ? "selected" : ""}>〔${({ stock: "库存", order: "订单", pack: "包材", labor: "人工" }[aiProductCat(p)] || "其他")}〕${esc(p.name)}${cost ? `（${fmtNum(cost)}/${esc(du)}）` : ""}</option>`;
+  }).join("");
+}
+function aiProductCat(p) {
+  const c = (p.category || "").trim();
+  if (c === "人工" || /打包$/.test(p.name || "")) return "labor";
+  if (["包材", "耗材", "包装"].includes(c)) return "pack";
+  if (c === "快递") return "express";
+  return p.product_type === "order" ? "order" : "stock";
+}
+/** 一行费用项：项目名 / 记到哪 / 商品（可改） / 单位 / 数量 / 金额 / 删除
+ *  工时不强制选商品 —— 记到哪选「固定成本」就按金额记，并写进备注。 */
+function aiChargeRowHtml(c, i) {
+  const kind = c.kind || "fee";
+  const needProd = kind === "pack" || kind === "labor";
+  const kindSel = `<select class="ai-ch-kind" onchange="aiChargeKind(${i}, this)">` +
+    AI_CHARGE_KINDS.map(([v, t]) => `<option value="${v}" ${v === kind ? "selected" : ""}>${t}</option>`).join("") + `</select>`;
+  const prodSel = needProd
+    ? `<select class="searchable ai-ch-pid" onchange="aiChargeProd(${i}, this)">
+         <option value="0" ${c.product_id ? "" : "selected"}>— 选商品 —</option>${aiChargeProdOptions(c, kind)}
+       </select>`
+    : `<span class="muted" style="font-size:12px;">${kind === "express" ? "按下面的金额记快递费" : "按金额记进固定成本"}</span>`;
+  const est = c.qty_est ? `<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;" title="结算表只给了金额，按 ${fmtNum(c.unit_cost)} / ${esc(c.unit)} 反推数量；金额仍按结算表记">按金额反推</span>` : "";
+  return `<tr data-ci="${i}">
+    <td><input class="ai-ch-name" value="${esc(c.name || "")}" style="width:110px;" oninput="aiChargeTouch()" /></td>
+    <td>${kindSel}</td>
+    <td style="min-width:190px;">${prodSel}</td>
+    <td><input class="ai-ch-unit" value="${esc(c.unit || "")}" style="width:64px;" ${needProd ? "" : "disabled"} /></td>
+    <td><input class="ai-ch-qty" type="number" step="any" value="${c.quantity ? fmtNum(c.quantity) : ""}" placeholder="—" style="width:80px;" ${needProd ? "" : "disabled"} oninput="aiChargeTouch()" />${est}</td>
+    <td><input class="ai-ch-amt" type="number" step="any" min="0" value="${c.amount ? fmtNum(c.amount) : ""}" style="width:88px;" oninput="aiChargeTouch()" /></td>
+    <td><button type="button" class="btn sm danger" title="删除这一项" onclick="aiChargeDel(${i})">✕</button></td>
+  </tr>`;
+}
 function aiChargeHtml(r) {
   const cats = aiSettleCatsOf(r);
-  const feeNote = aiChargeFeeNote(r);
-  const packs = r.pack_lines || [];
-  const rowsHtml = packs.map((p) => `<tr>
-      <td>${esc(p.product_name)}${p.source === "识别" ? ' <span class="badge" style="background:var(--primary-light);color:var(--primary);">识别</span>' : ' <span class="badge pack">自动</span>'}</td>
+  const charges = r.charges || [];
+  const feeSum = Math.round(charges.filter((c) => c.kind === "fee").reduce((a, c) => a + (+c.amount || 0), 0) * 100) / 100;
+  const feeNote = aiChargeFeeNote();
+  const auto = (r.pack_lines || []).filter((p) => p.source !== "识别");
+  const autoHtml = auto.map((p) => `<tr>
+      <td>${esc(p.product_name)} <span class="badge pack">自动</span></td>
       <td>${esc(p.unit)}</td><td class="num mono">${fmtNum(p.quantity)}</td>
       <td class="num mono">${fmtMoney(p.amount)}</td>
       <td class="muted" style="font-size:12px;">${esc(AI_SETTLE_LABELS[p.settle_cat] || "其他")}</td>
     </tr>`).join("");
-  return `<h4 class="block-title" style="margin-top:14px;">关联结算（包材 / 快递 / 固定成本）<span class="muted" style="font-weight:normal;font-size:12px;">· 与提交口径一致，用来核对结算表的「合计金额」</span></h4>
-    ${r.preview_hint ? `<div class="alert ${r.preview ? "ok" : "warn"}" style="margin:6px 0;">${esc(r.preview_hint)}</div>` : ""}
+  const rowsHtml = charges.map((c, i) => aiChargeRowHtml(c, i)).join("");
+  return `<h4 class="block-title" style="margin-top:14px;">包材 / 人工 / 快递（识别到的费用项，可改）<span class="muted" style="font-weight:normal;font-size:12px;">· 商品没挂对就在下拉里改，工时/胶带改成「固定成本」按金额记</span></h4>
+    <div id="aiPreviewHint" class="alert ${r.preview ? "ok" : "warn"}" style="margin:6px 0;${r.preview_hint ? "" : "display:none;"}">${esc(r.preview_hint || "")}</div>
     ${rowsHtml
-      ? `<div class="table-wrap"><table><thead><tr><th>项目</th><th>单位</th><th class="num">数量</th><th class="num">金额</th><th>归属</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>`
-      : `<div class="muted" style="margin:6px 0;">该商品没有包装清单，也没识别到包材 / 快递。</div>`}
+      ? `<div class="table-wrap"><table><thead><tr><th>项目</th><th>记到哪</th><th>商品（可改）</th><th>单位</th><th class="num">数量</th><th class="num">金额</th><th></th></tr></thead><tbody id="aiChargeBody">${rowsHtml}</tbody></table></div>`
+      : `<div class="muted" style="margin:6px 0;">没识别到费用项（气泡膜、泡沫箱这类可点下面「＋ 添加」手动加）。</div>`}
+    <div class="toolbar" style="margin:8px 0;">
+      <button type="button" class="btn sm secondary" onclick="aiChargeAdd()">＋ 添加包材 / 人工</button>
+      <button type="button" class="btn sm secondary" onclick="aiChargesRefresh()">🔄 重算（改完商品/数量点一下）</button>
+      <span class="muted">固定成本合计 <b id="aiFeeSum">${fmtMoney(feeSum)}</b>${feeNote.text ? `（${esc(feeNote.text)}）` : ""}</span>
+    </div>
+    <h4 class="block-title">商品包装清单自动带出 / 按重量算的快递费</h4>
+    <div class="table-wrap"><table><thead><tr><th>项目</th><th>单位</th><th class="num">数量</th><th class="num">金额</th><th>归属</th></tr></thead>
+      <tbody id="aiAutoPackBody">${autoHtml || `<tr><td colspan="5" class="muted">无（该商品没有包装清单，也没有自动快递费）</td></tr>`}</tbody></table></div>
     <div class="form-grid" style="margin-top:10px;">
-      <div class="field"><label>固定成本（工时 / 胶带等按金额记的）</label>
-        <input id="aiFee" type="number" step="any" min="0" value="${fmtNum(r.fee_total || 0)}" oninput="aiSettleRecalc()" />
-        <div class="field-hint">${feeNote.text ? `已识别：${esc(feeNote.text)}；提交时写进备注` : "识别到的工时 / 胶带这类不好量化的项目放这里，不必为它们建商品"}</div>
-      </div>
       <div class="field"><label>实收金额包含（客户随货款一起付的）</label>
         <div class="toolbar" style="margin:0;flex-wrap:wrap;gap:12px;">${aiSettleBoxes(cats)}</div>
         <div class="field-hint">勾了才计入「实收金额」与报表收入；包材/快递成本照旧结转，毛利不会被吃掉</div>
       </div>
-    </div>
-    <div class="toolbar" style="margin-top:6px;align-items:center;">
-      <button type="button" class="btn sm secondary" onclick="aiChargesRefresh()">🔄 商品/数量改过就点这里重算</button>
-      <span class="muted" id="aiChargeSum"></span>
+      <div class="field"><label>金额核对</label><span id="aiChargeSum"></span></div>
     </div>`;
+}
+/** 收集费用项表里（用户改过）的内容：重算与提交都按这个走 */
+function aiChargePick() {
+  const rows = [];
+  document.querySelectorAll("#aiChargeBody tr[data-ci]").forEach((tr) => {
+    const i = +tr.dataset.ci;
+    const base = ((AI_CONFIRM && AI_CONFIRM.charges) || [])[i] || {};
+    const kind = tr.querySelector(".ai-ch-kind").value;
+    const pid = +(tr.querySelector(".ai-ch-pid")?.value || 0);
+    rows.push({
+      name: tr.querySelector(".ai-ch-name").value.trim() || base.name || "",
+      kind,
+      product_id: pid,
+      unit: (tr.querySelector(".ai-ch-unit").value || "").trim(),
+      quantity: parseFloat(tr.querySelector(".ai-ch-qty").value) || 0,
+      amount: parseFloat(tr.querySelector(".ai-ch-amt").value) || 0,
+    });
+  });
+  return rows.filter((c) => c.name && (c.amount > 0 || c.quantity > 0));
+}
+/** 切换「记到哪」：换商品/单位/数量列显隐；改成固定成本就按金额记 */
+function aiChargeKind(i, sel) {
+  const c = ((AI_CONFIRM && AI_CONFIRM.charges) || [])[i];
+  if (!c) return;
+  c.kind = sel.value;
+  if (c.kind !== "pack" && c.kind !== "labor") { c.product_id = 0; }
+  aiChargeRender();
+}
+function aiChargeProd(i, sel) {
+  const c = ((AI_CONFIRM && AI_CONFIRM.charges) || [])[i];
+  if (!c) return;
+  c.product_id = +sel.value || 0;
+  const p = PRODUCTS.find((x) => x.id === c.product_id);
+  if (p) { c.unit = p.default_unit || p.base_unit || c.unit || ""; c.product_name = p.name; }
+  aiChargeRender();
+}
+function aiChargeDel(i) {
+  const r = AI_CONFIRM || {};
+  const list = (r.charges || []).slice();
+  list.splice(i, 1);
+  r.charges = list;
+  aiChargeRender();
+}
+function aiChargeAdd() {
+  const r = AI_CONFIRM || {};
+  const list = (r.charges || []).slice();
+  list.push({ name: "", kind: "pack", product_id: 0, unit: "", quantity: 0, amount: 0, candidates: [] });
+  r.charges = list;
+  aiChargeRender();
+}
+/** 重绘费用项表（保持已填内容），并刷新金额核对 */
+function aiChargeRender() {
+  const r = AI_CONFIRM || {};
+  if ($("aiChargeBody")) {
+    $("aiChargeBody").innerHTML = (r.charges || []).map((c, i) => aiChargeRowHtml(c, i)).join("");
+    bindSearchable($("aiChargeBody"));
+  }
+  if ($("aiFeeSum")) $("aiFeeSum").textContent = fmtMoney(aiFeeSum());
+  aiSettleRecalc();
 }
 /** 把当前勾选/固定成本代入，算「实收金额 / 毛利」给用户核对（口径与后端一致） */
 function aiSettleRecalc() {
   const r = AI_CONFIRM || {};
   const pv = r.preview || {};
   const cats = aiSettleChecked();
-  const fee = parseFloat($("aiFee")?.value) || 0;
+  const fee = aiFeeSum();
   let settle = 0;
   (r.pack_lines || []).forEach((p) => { if (cats.includes(p.settle_cat)) settle += (+p.amount || 0); });
   if (cats.includes("fee")) settle += fee;
@@ -1969,15 +2098,16 @@ function aiOutboundLines() {
     };
   }).filter((l) => l.product_id || l.product_name);
 }
-/** 商品/数量改过以后重算包材/快递/固定成本/实收金额（服务端口径） */
-async function aiChargesRefresh() {
+/** 商品/数量/费用项改过以后重算包材/快递/固定成本/实收金额（服务端口径）。
+ *  keepRows=true 时保留用户正在编辑的费用项行（只刷新自动带出的行与金额），避免打字时被重绘打断。 */
+async function aiChargesRefresh(keepRows) {
   const r = AI_CONFIRM || {};
   if (!r || r.type !== "outbound") return;
   try {
+    const rows = document.querySelectorAll("#aiChargeBody tr[data-ci]").length ? aiChargePick() : (r.charges || []);
     const d = await api("/api/ai/outbound-preview", "POST", {
       lines: aiOutboundLines(),
-      charges: r.charges || [],
-      fee_total: parseFloat($("aiFee")?.value) || 0,
+      charges: rows,
     });
     Object.assign(r, {
       pack_lines: d.pack_lines || [], preview: d.preview || null, preview_hint: d.preview_hint || "",
@@ -1985,10 +2115,36 @@ async function aiChargesRefresh() {
       auto_express: d.auto_express !== false,
       charges: (d.charges || []).length ? d.charges : (r.charges || []),
     });
-    if ($("aiChargeWrap")) $("aiChargeWrap").innerHTML = aiChargeHtml(r);
-    aiSettleRecalc();
+    if (keepRows) {
+      // 只刷新「自动带出」的表与金额，费用项行保持用户输入不动
+      const auto = (r.pack_lines || []).filter((p) => p.source !== "识别");
+      if ($("aiAutoPackBody")) {
+        $("aiAutoPackBody").innerHTML = auto.length ? auto.map((p) => `<tr>
+            <td>${esc(p.product_name)} <span class="badge pack">自动</span></td>
+            <td>${esc(p.unit)}</td><td class="num mono">${fmtNum(p.quantity)}</td>
+            <td class="num mono">${fmtMoney(p.amount)}</td>
+            <td class="muted" style="font-size:12px;">${esc(AI_SETTLE_LABELS[p.settle_cat] || "其他")}</td>
+          </tr>`).join("") : `<tr><td colspan="5" class="muted">无（该商品没有包装清单，也没有自动快递费）</td></tr>`;
+      }
+      if ($("aiFeeSum")) $("aiFeeSum").textContent = fmtMoney(aiFeeSum());
+      if ($("aiPreviewHint")) {
+        $("aiPreviewHint").innerHTML = esc(r.preview_hint || "");
+        $("aiPreviewHint").style.display = r.preview_hint ? "" : "none";
+      }
+      aiSettleRecalc();
+    } else if ($("aiChargeWrap")) {
+      $("aiChargeWrap").innerHTML = aiChargeHtml(r);
+      bindSearchable($("aiChargeWrap"));
+      aiSettleRecalc();
+    }
     if ((d.warnings || []).length) toast("⚠ " + d.warnings.join("；"), 3600);
   } catch (e) { toast("重算失败：" + e.message); }
+}
+/** 费用项输入变化：防抖重算（保留正在编辑的行） */
+let AI_CHARGE_TIMER = null;
+function aiChargeTouch() {
+  clearTimeout(AI_CHARGE_TIMER);
+  AI_CHARGE_TIMER = setTimeout(() => aiChargesRefresh(true), 600);
 }
 /** 从识别结果取提交用的附加项（待办页批量提交也用这套口径）。
  *  注意：提交要带上完整结算清单（商品包装清单自动带出的 + 识别到的），
@@ -1996,27 +2152,31 @@ async function aiChargesRefresh() {
  *  自动算出来的「快递费」行不传（后端按整单毛重自己结算），识别到的运费则按金额传。 */
 function aiChargesFromResult(r) {
   if (!r || r.type !== "outbound") return null;
-  const packs = (r.pack_lines || [])
-    .filter((p) => !(p.settle_cat === "express" && p.source !== "识别"))
-    .map((p) => ({
-      product_id: p.product_id, unit: p.unit, quantity: p.quantity,
-      cogs: p.settle_cat === "express" ? p.amount : null,   // 运费按识别金额记，其余按商品成本算
-    }));
+  // 商品包装清单自动带出的行（服务端会重新算，但要一起传，否则不再自动补）
+  const auto = (r.pack_lines || [])
+    .filter((p) => p.source !== "识别")
+    .map((p) => ({ product_id: p.product_id, unit: p.unit, quantity: p.quantity, cogs: null }));
+  // 识别/用户改过的项目（含按金额反推数量的：用服务端算好的显式成本，金额与结算表一致）
+  const extra = (r.extra_pack_lines || []).map((p) => ({
+    product_id: p.product_id, unit: p.unit, quantity: p.quantity,
+    cogs: p.cogs != null ? p.cogs : null,
+  }));
+  const packs = [...auto, ...extra];
   return {
     pack_lines: packs,
     fee_total: +r.fee_total || 0,
     settle_cats: aiSettleCatsOf(r).join(","),
     auto_express: r.auto_express !== false,
-    remark: aiChargeRemark(r),
+    remark: aiChargeRemark(),
   };
 }
-/** 确认框里收集提交用的附加项（用户可能改过勾选与固定成本） */
+/** 确认框里收集提交用的附加项（用户可能改过勾选） */
 function aiChargesFromModal() {
   const r = AI_CONFIRM || {};
   if (!r || r.type !== "outbound") return null;
   const base = aiChargesFromResult(r);
   if (!base) return null;
-  base.fee_total = parseFloat($("aiFee")?.value) || 0;
+  base.fee_total = aiFeeSum();   // 固定成本 = 费用项里「记到哪=固定成本」的那些之和（与备注一致）
   const cats = aiSettleChecked();
   base.settle_cats = Object.keys(AI_SETTLE_LABELS).filter((k) => cats.includes(k)).join(",");
   return base;

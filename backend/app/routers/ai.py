@@ -128,6 +128,8 @@ IMAGE_SYSTEM_PROMPT = """你是「企业台账系统」的采购票据识别助�
      amount 取该行该列的金额数字；「运费」列写 name="运费"。
    - **重要**：表格里没有单独的「数量」列时，quantity 一律填 0、unit 留空，绝对不要把列里的金额当成数量
      （「泡沫箱 4」= 金额 ¥4，不是 4 个）；只有表里确实写了「2 个 / 2 件」这类数量时才填 quantity 与 unit。
+   - **空格子不要编数**：某一行某个格子是空的（没写金额）就跳过这一项，不要拿表头写了单价、或别的行的数字补上
+     （例：第 1 行「吸水纸」格子是空的，就**不要**给第 1 行输出吸水纸）。
    - 「合计金额」「金额」「总价」列不要输出（系统自己算）；每行之间不要串列。
 10. charges 只对出库（outbound）输出；入库/盘点不要输出。
 
@@ -1152,13 +1154,38 @@ def _charge_amount(v) -> float:
         return 0.0
 
 
-def _normalize_charges(db: Session, parsed: dict, op_type: str) -> list[dict]:
-    """把模型抽到的出库附加项归一到三类（用户表格里商品行之外的那些费用项）。
+def _charge_candidates(db: Session, name: str, limit: int = 6) -> list[Product]:
+    """给费用项找候选商品（包材/人工/其他都算），供确认框里手动改。"""
+    cands: list[Product] = []
+    seen: set[int] = set()
+    for cat in ("pack", "labor", ""):
+        for p in _line_candidates(db, name, "outbound", cat):
+            if p.id not in seen:
+                seen.add(p.id)
+                cands.append(p)
+    return cands[:limit]
 
-    - pack：能对上商品档案、且给了数量（泡沫箱 2 个）→ 当「关联结算行」，成本按该商品 FIFO/参考成本算；
-    - express：运费/快递费 → 按识别金额记一条「快递费」关联结算行（表格里的运费与按重量自动算的未必一致）；
-    - fee：只给金额、或对不上商品（工时、胶带这类不好量化的）→ 汇总进「固定成本」，并在备注里写清金额，
-      这样用户不必为每个零碎项目建商品档案。
+
+def _charge_unit_cost(p: Product, unit: str) -> float:
+    """该商品在 unit 单位下的单位成本（先用库存均价，无则参考成本）——用于「按金额反推数量」。"""
+    conv = (p.conversions or {}).get(unit or "")
+    if not conv:
+        return 0.0
+    c = float(p.avg_cost or 0.0) or float(p.unit_cost or 0.0)
+    return round(c * float(conv), 6)
+
+
+def _normalize_charges(db: Session, parsed: dict, op_type: str) -> list[dict]:
+    """把出库附加项（商品行之外的费用项）归一到确认框里那一行行可改的结构。
+
+    kind 含义（用户在确认框里可以改）：
+    - pack：挂在商品上的关联结算（包材/耗材）——有数量就按数量，只给金额就按该商品单位成本反推数量，
+      金额仍按给你的那个数记（qty_est 标出来），这样结算表的金额不会因为成本口径不同而跑掉；
+    - labor：人工（工时/打包）——有商品也能挂上，但默认按「固定成本」金额记（见下）；
+    - express：运费/快递费 —— 按识别金额记一条快递费行（与按重量自动算的金额不同也照记）；
+    - fee：固定成本（工时、胶带这类不好量化的）—— 汇总进「固定成本」并写进备注。
+
+    前端把用户改过的 kind / 商品 / 数量 / 单位回传时，这里**以用户的选择为准**。
     """
     if op_type != "outbound":
         return []
@@ -1172,7 +1199,7 @@ def _normalize_charges(db: Session, parsed: dict, op_type: str) -> list[dict]:
             continue
         amount = _charge_amount(raw.get("amount"))
         try:
-            qty = round(float(raw.get("quantity") or 0), 4)
+            qty = round(float(raw.get("quantity") or 0), 6)
         except (TypeError, ValueError):
             qty = 0.0
         unit = _canonical_unit(str(raw.get("unit") or "").strip())
@@ -1183,28 +1210,60 @@ def _normalize_charges(db: Session, parsed: dict, op_type: str) -> list[dict]:
             continue
         seen.add(key)
         is_express = any(w in name for w in CHARGE_EXPRESS_WORDS)
-        is_labor = any(w in name for w in CHARGE_LABOR_WORDS)
+        is_fixed = any(w in name for w in CHARGE_LABOR_WORDS)   # 工时/人工/胶带：默认按金额记固定成本
+        cands = [] if is_express else _charge_candidates(db, name)
+        # 用户在确认框里选过商品（或服务端唯一命中）→ 用这个商品
+        picked = None
+        pid_in = int(raw.get("product_id") or 0)
+        if pid_in:
+            picked = db.get(Product, pid_in)
+        if picked is None and cands:
+            tight = _tight(name)
+            same = [c for c in cands if _tight(c.name) == tight or _pack_key(c.name) == _pack_key(name)]
+            if len(same) == 1:
+                picked = same[0]
+        kind_in = str(raw.get("kind") or "").strip().lower()
+        if kind_in in ("pack", "labor", "express", "fee"):
+            kind = kind_in
+        elif is_express:
+            kind = "express"
+        elif is_fixed:
+            kind = "fee"
+        else:
+            kind = "pack" if picked is not None else "fee"
         item = {
             "name": name, "amount": amount, "quantity": qty, "unit": unit,
-            "kind": "fee", "product_id": 0, "product_name": "", "category": "",
+            "kind": kind, "product_id": picked.id if picked else 0,
+            "product_name": picked.name if picked else "",
+            "category": _product_category(picked) if picked else "",
+            "qty_est": False, "unit_cost": 0.0,
+            "candidates": [
+                {
+                    "product_id": c.id, "name": c.name, "category": _product_category(c),
+                    "unit": c.default_unit or c.base_unit or "",
+                }
+                for c in cands
+            ],
         }
-        if is_express:
-            item["kind"] = "express"
-            out.append(item)
-            continue
-        # 人工/工时/胶带类一律进固定成本（用户明确要求「不好量化的放固定成本」，不必为它们建商品）
-        p = None if is_labor else (_match_by_category(db, name, "pack") or _match_by_category(db, name, "labor"))
-        # 只有「明确给了数量 + 该商品认识的单位」才当关联结算行：
-        # 结算表里只写金额的列（泡沫箱 4）不能猜成 4 个；单位对不上（瓶 vs 个）也按金额记，避免算错数量
-        if p is not None and qty > 0 and unit in (p.conversions or {}):
-            item.update({
-                "kind": "pack", "product_id": p.id, "product_name": p.name,
-                "category": _product_category(p),
-                "unit": item["unit"] or (p.default_unit or p.base_unit or "个"),
-            })
-        elif p is not None:
-            item["product_name"] = p.name   # 对上了商品但只有金额：备注里显示正式名，便于核对
-            item["category"] = _product_category(p)
+        if kind in ("pack", "labor"):
+            if picked is None:
+                item["kind"] = "fee"          # 没商品就只能按金额记（用户可在确认框里挑商品）
+            else:
+                du = picked.default_unit or picked.base_unit or "个"
+                if not item["unit"] or item["unit"] not in (picked.conversions or {}):
+                    item["unit"] = du if du in (picked.conversions or {}) else (
+                        next(iter(picked.conversions or {}), du)
+                    )
+                if item["quantity"] <= 0 and amount > 0:
+                    # 结算表只写金额的列（泡沫箱 2.2）→ 按该商品单位成本反推数量（2.2 ÷ 1.10 = 2 个），
+                    # 金额仍按结算表的数记账（提交时传显式成本），避免成本口径不同把金额改掉
+                    cost = _charge_unit_cost(picked, item["unit"])
+                    if cost > 0:
+                        item["quantity"] = round(amount / cost, 4)
+                        item["qty_est"] = True
+                        item["unit_cost"] = cost
+                if item["quantity"] <= 0:
+                    item["kind"] = "fee"      # 没有数量、也反推不出来 → 按金额进固定成本
         out.append(item)
     return out
 
@@ -1217,7 +1276,8 @@ def _attach_outbound_charges(db: Session, result: dict, parsed: dict,
     所以确认框里看到的金额 = 提交后的金额。fee_override：用户在确认框里直接改过的固定成本。
     """
     charges = _normalize_charges(db, parsed, "outbound")
-    pack_items = [c for c in charges if c["kind"] == "pack"]
+    # 能挂到商品上的（包材/人工）进关联结算；工时/胶带这类按金额的进固定成本；运费单独按金额记快递费
+    pack_items = [c for c in charges if c["kind"] in ("pack", "labor") and c["product_id"] and c["quantity"] > 0]
     fee_items = [c for c in charges if c["kind"] == "fee" and c["amount"] > 0]
     express_items = [c for c in charges if c["kind"] == "express" and c["amount"] > 0]
     fee_total = round(sum(c["amount"] for c in fee_items), 2)
@@ -1244,7 +1304,11 @@ def _attach_outbound_charges(db: Session, result: dict, parsed: dict,
     result["settle_cats"] = ",".join(cats)
     result["auto_express"] = not express_items     # 识别到运费就按识别金额记，不再按重量自动加一条
     extra_pack = [
-        {"product_id": c["product_id"], "unit": c["unit"], "quantity": c["quantity"]}
+        {
+            "product_id": c["product_id"], "unit": c["unit"], "quantity": c["quantity"],
+            # 数量是按金额反推出来的（结算表只给了金额）→ 用显式成本保证金额和结算表一致
+            "cogs": c["amount"] if c.get("qty_est") else None,
+        }
         for c in pack_items
     ]
     if express_items:
