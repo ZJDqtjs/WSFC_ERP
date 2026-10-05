@@ -56,7 +56,7 @@ SOURCE_PAGE = {
     "dropship": "outbound",
 }
 DROPSHIP_KIND = "dropship"                  # 按出库单整单结算（账单列表里的代发行）
-DROPSHIP_ITEM_KIND = "dropship_item"        # 按「商品+规格」的账单行结算（代发页签合并后的行）
+DROPSHIP_ITEM_KIND = "dropship_item"        # 按「商品+规格+日期」的账单行结算（代发页签按天分行后的行）
 
 
 class PayIn(BaseModel):
@@ -349,11 +349,15 @@ def list_dropship_bills(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """代发应付明细（「待付款账单 → 代发」页签）：按「商品 + 规格 + 单位」跨单合并。
+    """代发应付明细（「待付款账单 → 代发」页签）：按「商品 + 规格 + 单位 + 出库日期」分行。
 
     金额 = 代发成本（出库行 cogs = 成本单价 × 基础数量）。它本来就已计入该单结转成本，
     这里只做「付给代发方」的付款核对，所以不影响报表口径；付款状态独立于出库单
     （出库单的收付款状态是客户回款）。
+
+    说明：聚水潭出库单常一次导入多个日期，若只按「商品 + 规格」跨日期合并，日期列会显示成
+    「2026-09-22 ~ 2026-10-04」这样的区间，看不出每天应付多少。这里把出库日期也并进分组键，
+    同款规格按天分别成行，付款核对更清晰（每行仍可单独标记已付/撤销）。
     """
     q = select(DropshipBill)
     if date_from:
@@ -368,18 +372,19 @@ def list_dropship_bills(
     for b in bills:
         spec = (b.spec or "").strip()
         unit = (b.unit or "").strip()
-        g = groups.setdefault((b.product_id, spec, unit), {
+        day = (b.date or "").strip()   # 出库日期：并入分组键，按天分行（避免多日单据被合并成日期区间）
+        g = groups.setdefault((b.product_id, spec, unit, day), {
             "product_id": b.product_id,
             "product_name": b.product_name or "",
             "spec": spec,
             "unit": unit,
+            "date": day,
             "base_unit": b.base_unit or "",
             "quantity": 0.0,
             "quantity_base": 0.0,
             "amount": 0.0,
             "order_ids": set(),
             "bill_ids": [],
-            "dates": [],
             "sale_amount": 0.0,
             "sale_price": 0.0,
             "unit_cost": 0.0,
@@ -393,8 +398,6 @@ def list_dropship_bills(
         g["sale_amount"] = round(g["sale_amount"] + (b.sale_amount or 0.0), 2)
         g["order_ids"].add(b.outbound_id)
         g["bill_ids"].append(b.id)
-        if b.date:
-            g["dates"].append(b.date)
         if (b.pay_status or "unpaid") == "unpaid":
             g["unpaid"] += 1
         else:
@@ -407,13 +410,14 @@ def list_dropship_bills(
             g["sale_price"] = round(b.sale_price or 0.0, 4)
 
     out: list[dict] = []
-    for (pid, spec, unit), g in groups.items():
+    for (pid, spec, unit, day), g in groups.items():
         qty = round(g["quantity"], 4)
         out.append({
             "product_id": pid,
             "product_name": g["product_name"],
             "spec": spec,
             "unit": unit,
+            "date": day,
             "base_unit": g["base_unit"],
             "quantity": qty,
             "quantity_base": round(g["quantity_base"], 4),
@@ -425,17 +429,22 @@ def list_dropship_bills(
             "order_count": len(g["order_ids"]),
             "order_ids": sorted(g["order_ids"]),
             "bill_ids": g["bill_ids"],
-            "date_from": min(g["dates"]) if g["dates"] else "",
-            "date_to": max(g["dates"]) if g["dates"] else "",
+            # 每行只含同一天的单据：起止日期相同，前端直接显示单日，不再出现「09-22 ~ 10-04」区间
+            "date_from": day,
+            "date_to": day,
             "pay_status": "unpaid" if g["unpaid"] else "paid",
             "unpaid_count": g["unpaid"],
             "paid_at": g["paid_at"],
             "operator": g["operator"],
         })
+    # 先按「待结清优先 + 金额倒序」，再按出库日期倒序（稳定排序：同一天内保持上面的顺序），
+    # 这样列表从上到下就是「最近的日期 → 更早的日期」，一眼能看出每天应付多少
     out.sort(key=lambda x: (x["pay_status"] != "unpaid", -x["amount"]))
+    out.sort(key=lambda x: x["date"] or "", reverse=True)
     pend = [x for x in out if x["pay_status"] == "unpaid"]
     # 合计按全部算（不受下面截断影响），但列表只回最近 limit 行：
-    # wh01 实测 7790 行（每行还带规格明细），前端渲染上万行会很卡；截断后上面会提示「仅列最近 N 行」。
+    # 按「商品+规格+日期」分行后行数会比原来多，前端渲染上万行会很卡；截断后上面会提示
+    # 「仅列最近 N 行」，此时可用日期区间（服务端过滤）缩小范围。
     shown = out[: max(1, min(int(limit or 0) or 300, 2000))]
     return {
         "groups": shown,

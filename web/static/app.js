@@ -8007,14 +8007,20 @@ function payTab(btn) {
   if ($("pay-panel-dropship")) $("pay-panel-dropship").style.display = panel === "pay-panel-dropship" ? "" : "none";
   const hint = $("payTabHint");
   if (hint) hint.textContent = panel === "pay-panel-dropship"
-    ? "代发：同一种商品和规格已合并，按「单价 × 单量 = 代发成本」核对付款"
+    ? "代发：按「商品 + 规格 + 出库日期」分行，按天核对「单价 × 单量 = 代发成本」"
     : "账单：入库 / 出库 / 其他开支 / 手动记账的待结清项；代发应付在「代发」页签里单独看";
   if (panel === "pay-panel-dropship") loadDropshipBills();
 }
 
 async function loadDropshipBills() {
   try {
-    const d = await api(`/api/payables/dropship?include_paid=${DS_VIEW === "all" ? 1 : 0}`);
+    const from = $("dsFrom") ? $("dsFrom").value : "";
+    const to = $("dsTo") ? $("dsTo").value : "";
+    // 日期区间交给服务端过滤：这样被截断（只回最近 N 行）时也能查到更早的日期
+    const qs = new URLSearchParams({ include_paid: DS_VIEW === "all" ? "1" : "0" });
+    if (from) qs.set("date_from", from);
+    if (to) qs.set("date_to", to);
+    const d = await api(`/api/payables/dropship?${qs.toString()}`);
     DS_GROUPS = d.groups || [];
     DS_TOTAL = d.total || {};
     DS_TRUNCATED = !!d.truncated;
@@ -8022,7 +8028,7 @@ async function loadDropshipBills() {
     DS_LOADED = true;
     // 列表被截断时给一句提示（合计仍按全部算），并说明缩小范围的办法
     dsAlert(d.truncated
-      ? `共 ${DS_TOTAL.groups || 0} 行（按商品+规格合并），这里只列最近 ${DS_LIMIT} 行；待结清合计 ${fmtMoney(DS_TOTAL.pending_amount || 0)}。用上面的日期区间可以缩小范围。`
+      ? `共 ${DS_TOTAL.groups || 0} 行（按商品+规格+日期分行），这里只列最近 ${DS_LIMIT} 行；待结清合计 ${fmtMoney(DS_TOTAL.pending_amount || 0)}。用上面的日期区间可以缩小范围。`
       : "");
     renderDropshipBills();
   } catch (e) {
@@ -8042,7 +8048,7 @@ function dsClearFilter() {
   if ($("dsSearch")) $("dsSearch").value = "";
   if ($("dsFrom")) $("dsFrom").value = "";
   if ($("dsTo")) $("dsTo").value = "";
-  renderDropshipBills();
+  loadDropshipBills();   // 日期是服务端过滤，清空后要重新拉取
 }
 
 function dsAlert(msg) {
@@ -8052,7 +8058,7 @@ function dsAlert(msg) {
   el.textContent = msg || "";
 }
 
-/** 关键词 / 日期筛选（按合并后的行；日期与「该组跨的单据区间」有交集即保留） */
+/** 关键词 / 日期筛选（行 = 商品+规格+日期；日期已由服务端过滤，这里再兜一次防漏） */
 function dsFilterGroups() {
   const kw = ($("dsSearch") ? $("dsSearch").value : "").trim().toLowerCase();
   const from = $("dsFrom") ? $("dsFrom").value : "";
@@ -8086,11 +8092,12 @@ function renderDropshipBills() {
   const pend = groups.filter((g) => g.pay_status === "unpaid");
   const pendAmt = pend.reduce((a, g) => a + (g.amount || 0), 0);
   const orders = groups.reduce((a, g) => a + (g.order_count || 0), 0);
+  const days = new Set(groups.map((g) => g.date).filter(Boolean)).size;   // 涉及多少个出库日期
   const sumEl = $("dsSum");
   if (sumEl) {
     sumEl.innerHTML =
       `<span class="pay-sum-label">${active ? "筛选结果" : "当前列表"}</span>` +
-      `<span><b>${groups.length}</b> 款商品规格 <span class="muted">/ ${orders} 单</span></span>` +
+      `<span><b>${groups.length}</b> 行 <span class="muted">/ ${days} 天 / ${orders} 单</span></span>` +
       `<span class="pay-sum-total">合计 <b class="mono">${fmtMoney(sum)}</b></span>` +
       `<span class="muted">待结清 <b class="mono" style="color:var(--danger, #dc2626);">${fmtMoney(pendAmt)}</b></span>` +
       (DS_VIEW === "all" ? `<span class="muted">已结清 <b class="mono" style="color:var(--green, #16a34a);">${fmtMoney(sum - pendAmt)}</b></span>` : "") +
@@ -8104,9 +8111,7 @@ function renderDropshipBills() {
     const specTxt = g.spec && !(g.product_name || "").includes(g.spec) ? ` <span class="muted">· ${esc(g.spec)}</span>` : "";
     return `<tr${paid ? ' style="opacity:.55;"' : ""}>
       <td><input type="checkbox" class="ds-pick" value="${idx}" /></td>
-      <td class="num mono">${g.date_from === g.date_to || !g.date_to
-        ? esc(g.date_from || g.date_to || "")
-        : `${esc(g.date_from)}<div style="font-size:11px;">~ ${esc(g.date_to)}</div>`}</td>
+      <td class="num mono">${esc(g.date || g.date_from || g.date_to || "")}</td>
       <td><b>${esc(g.product_name || "代发商品")}</b>${specTxt}
         <div class="muted" style="font-size:11px;color:var(--danger);">代发成本 ${fmtMoney(g.amount)}</div></td>
       <td class="num mono">${DS_NUM4(g.quantity)}${esc(g.unit || "")}</td>
@@ -8138,7 +8143,7 @@ function renderDropshipBills() {
       ? `<tfoot><tr>
           <td></td>
           <td><b>${active ? "筛选合计" : "列出合计"}</b></td>
-          <td class="muted" colspan="3">${groups.length} 款商品规格 · 待结清 ${pend.length} 款 · ${orders} 单</td>
+          <td class="muted" colspan="3">${groups.length} 行 · ${days} 天 · 待结清 ${pend.length} 行 · ${orders} 单</td>
           <td class="num mono"><b>应付 ${fmtMoney(sum)}</b></td>
           <td colspan="2"></td>
         </tr></tfoot>`

@@ -869,7 +869,7 @@
             <div class="table-wrap"><table id="payTable"></table></div>
           </div>
 
-          <!-- 代发：出库单里命中代发商品（关联结算未挂库存大类）的成本，按出库单列出每款规格的「单价 × 单量 = 金额」 -->
+          <!-- 代发：出库单里命中代发商品（关联结算未挂库存大类）的成本，按「商品 + 规格 + 出库日期」列出「单价 × 单量 = 金额」 -->
           <div id="pay-panel-dropship" style="display:none;">
             <div class="toolbar">
               <div class="seg" id="dsSeg" style="margin-bottom:0;">
@@ -878,9 +878,9 @@
               </div>
               <input id="dsSearch" placeholder="🔍 筛选 商品 / 规格 / 出库单 / 操作员..." style="flex:1 1 220px;min-width:220px;" oninput="renderDropshipBills()" />
               <span class="date-range" title="按出库单日期筛选">
-                <span class="date-pick"><input id="dsFrom" type="date" onchange="renderDropshipBills()" /><span class="date-ph">开始</span></span>
+                <span class="date-pick"><input id="dsFrom" type="date" onchange="loadDropshipBills()" /><span class="date-ph">开始</span></span>
                 <span class="muted">至</span>
-                <span class="date-pick"><input id="dsTo" type="date" onchange="renderDropshipBills()" /><span class="date-ph">结束</span></span>
+                <span class="date-pick"><input id="dsTo" type="date" onchange="loadDropshipBills()" /><span class="date-ph">结束</span></span>
               </span>
               <button class="btn sm secondary" onclick="dsClearFilter()">清空筛选</button>
               <span class="grow"></span>
@@ -889,7 +889,7 @@
             </div>
             <div class="pay-sum" id="dsSum"></div>
             <div id="dsAlert" class="alert warn" style="display:none;"></div>
-            <p class="hint" style="margin-top:4px;">同一种商品和规格已合并成一行：应付 = 成本单价 × 单量 = 代发成本（出库单里代发商品的成本，已计入结转成本、毛利口径不变）；这里只做「付给代发方」的核对，付款状态不影响财务报表。</p>
+            <p class="hint" style="margin-top:4px;">同一种商品和规格按「出库日期」分别成行，方便按天核对：应付 = 成本单价 × 单量 = 代发成本（出库单里代发商品的成本，已计入结转成本、毛利口径不变）；一次导入多个日期时就按各天分别统计，不会再合并成一个日期区间。这里只做「付给代发方」的核对，付款状态不影响财务报表。</p>
             <div class="table-wrap"><table id="dsTable"></table></div>
           </div>
         </div>
