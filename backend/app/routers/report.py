@@ -54,12 +54,26 @@ def _split_paid(rows: list) -> tuple[list, list]:
     return paid, unpaid
 
 
+# ---------------- 出库「收入」口径 ----------------
+# 收入 = 销售收入（商品） + 客户代收的关联结算（settle_income：包材/人工/快递费）。
+# 成本侧 total_cogs 本来就含关联结算（出库就结转掉了），收入侧一起计，毛利才不会被包材/快递吃成负数。
+# 老单据没有 settle_income 列值时按 0 处理，口径与改造前完全一致。
+def _income_expr():
+    """SQL 侧收入表达式：total_amount + settle_income（用于 func.sum 聚合）。"""
+    return Outbound.total_amount + func.coalesce(Outbound.settle_income, 0)
+
+
+def _income_of(o) -> float:
+    """单据对象侧收入：销售收入 + 客户代收的关联结算。"""
+    return (o.total_amount or 0.0) + (getattr(o, "settle_income", 0.0) or 0.0)
+
+
 def _pending_stats(inbounds: list, outbounds: list, others: list, finances: list) -> dict:
     """未计入本报表的待付款/待收款汇总（按来源单据算，避免自动流水重复计数）。"""
     payables = [i.total_amount or 0.0 for i in inbounds]                    # 入库（采购）
     payables += [e.amount or 0.0 for e in others]                           # 其他开支
     payables += [f.amount or 0.0 for f in finances if f.type == "expense" and f.ref_type == "manual"]
-    receivables = [o.total_amount or 0.0 for o in outbounds]                 # 出库（销售）
+    receivables = [_income_of(o) for o in outbounds]                         # 出库（销售，含客户代收的包材等）
     receivables += [f.amount or 0.0 for f in finances if f.type == "income" and f.ref_type == "manual"]
     return {
         "payables_count": len(payables),
@@ -149,7 +163,8 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
         paid_o = func.coalesce(Outbound.pay_status, PAID) != "unpaid"
         orders, revenue, cogs, brush = db.execute(
             select(func.count(),
-                   func.coalesce(func.sum(Outbound.total_amount), 0),
+                   # 收入口径 = 销售收入 + 客户代收的关联结算（包材/人工/快递费），见 _income_expr
+                   func.coalesce(func.sum(_income_expr()), 0),
                    func.coalesce(func.sum(Outbound.total_cogs), 0),
                    # 芳谊放单仓刷单结算：刷单成本 + 固定费覆盖差（非放单仓订单为 0）
                    func.coalesce(func.sum(brush_adjust_sql(Outbound)), 0))
@@ -242,10 +257,10 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
                 select(
                     Outbound.import_group,
                     func.count(),
-                    func.coalesce(func.sum(Outbound.total_amount), 0),
+                    func.coalesce(func.sum(_income_expr()), 0),
                     # 净利同样扣掉刷单结算（芳谊放单仓的刷单成本 + 固定费覆盖差）
                     func.coalesce(func.sum(
-                        Outbound.total_amount - Outbound.total_cogs - Outbound.total_fee
+                        _income_expr() - Outbound.total_cogs - Outbound.total_fee
                         - brush_adjust_sql(Outbound)
                     ), 0),
                 ).where(Outbound.import_group.in_(keys)).group_by(Outbound.import_group)
@@ -266,8 +281,8 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
         for s in singles:
             entries.append({
                 "code": s.code, "customer": s.customer, "date": s.date, "operator": s.operator,
-                "amount": s.total_amount,
-                "net": round(s.total_amount - s.total_cogs - s.total_fee - brush_adjust(s), 2),
+                "amount": _income_of(s),
+                "net": round(_income_of(s) - s.total_cogs - s.total_fee - brush_adjust(s), 2),
                 "_sort": s.id,
             })
         entries.sort(key=lambda e: -e["_sort"])
@@ -336,7 +351,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     # 与「待付款账单」页的应付金额（货款 + 调整 + 运费/装卸）保持一致。
     others = [e for e in others if e.ref_type != INBOUND_FEE_REF]
 
-    revenue = sum(o.total_amount for o in outbounds)
+    # 收入 = 销售收入 + 客户代收的关联结算（包材/人工/快递费）：与出库单「实收金额」同口径
+    revenue = sum(_income_of(o) for o in outbounds)
     cogs = sum(o.total_cogs for o in outbounds)
     # 芳谊放单仓刷单结算：刷单成本（我填的）+ 固定费覆盖差；非放单仓订单都是 0。
     # 注意 cogs 里**不**含这笔钱（cogs 仍是商品/包材/快递的结转成本），毛利单独扣它，
@@ -387,6 +403,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "other_cogs": 0.0,  # 其他关联结算
                 "express_cogs": 0.0,  # 快递运费
                 "brush_cogs": 0.0,  # 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差，按销售金额占比分摊到单内商品）
+                "settle_income": 0.0,  # 客户代收的关联结算（包材/人工/快递费，按销售金额占比分摊到单内商品）
             },
         )
 
@@ -519,6 +536,10 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     # 芳谊放单仓的刷单结算也按同一套算法归到该单的商品上，商品毛利才能扣掉它
     for o in outbounds:
         _spread(o.id, "brush_cogs", brush_adjust(o))
+    # 客户代收的关联结算（包材/人工/快递费）同样归到该单的商品上：
+    # 成本侧的包材/快递本来就算在这行成本里，收入侧要把它计回来，商品毛利才不被吃成负数
+    for o in outbounds:
+        _spread(o.id, "settle_income", float(getattr(o, "settle_income", 0.0) or 0.0))
 
     product_rows = []
     for _key, d in sorted(by_product.items(), key=lambda kv: -kv[1]["amount"]):
@@ -532,9 +553,11 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         total_cogs = round(goods + pack + express + brush, 2)
         amount = round(d["amount"], 2)
         gross_sales = round(d["gross_sales"], 2)
-        gp = round(amount - total_cogs, 2)
-        # 毛利率分母用扣点前销售金额（与出库批次页 gp_rate 口径一致）
-        denom = gross_sales or amount
+        settle = round(d.get("settle_income", 0.0), 2)  # 客户代收的关联结算（包材/人工/快递费）
+        # 商品毛利 = 销售收入 + 客户代收的关联结算 − 总成本（包材/快递本来就在成本里）
+        gp = round(amount + settle - total_cogs, 2)
+        # 毛利率分母用扣点前销售金额 + 代收的关联结算（与毛利同口径）
+        denom = round((gross_sales or amount) + settle, 2)
         product_rows.append(
             {
                 "product_id": d["product_id"],
@@ -554,6 +577,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "other_cogs": other,        # 其他关联结算
                 "express_cogs": express,
                 "brush_cogs": brush,        # 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差）
+                "settle_income": settle,    # 客户代收的关联结算（包材/人工/快递费）
                 "total_cogs": total_cogs,
                 "gross_profit": gp,
                 "gp_rate": round(gp / denom * 100, 2) if denom else 0.0,
@@ -689,6 +713,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         # 以下金额一律只含「已付款」单据（待付款的在 pending 里，点「已支付」后自动转入）
         "pending": _pending_stats(unpaid_inbounds, unpaid_outbounds, unpaid_others, unpaid_finances),
         "revenue": round(revenue, 2),
+        # 其中：客户随货款一起付的关联结算（包材/人工/快递费）——只在勾了「实收含关联结算」的单据上
+        "settle_income": round(sum(float(getattr(o, "settle_income", 0.0) or 0.0) for o in outbounds), 2),
         "cogs": round(cogs, 2),
         "goods_cogs": goods_cogs,
         # 刷单结算（芳谊放单仓）：刷单成本 + 固定费覆盖差，已从下面的毛利/净利里扣掉
@@ -787,7 +813,8 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
 
     # ---- 商品：按「商品 + 规格 + 是否代发」归并，再用合并后的成本重算毛利/毛利率 ----
     num_fields = ("qty", "amount", "gross_sales", "goods_cogs", "pack_cogs",
-                  "labor_cogs", "material_cogs", "other_cogs", "express_cogs", "brush_cogs")
+                  "labor_cogs", "material_cogs", "other_cogs", "express_cogs", "brush_cogs",
+                  "settle_income")
     buckets: dict[tuple, dict] = {}
     for p in parts:
         for r in p.get("by_product") or []:
@@ -809,13 +836,15 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
         total_cogs = round(goods + pack + express + brush, 2)
         amount = round(d["amount"], 2)
         gross_sales = round(d["gross_sales"], 2)
-        gp = round(amount - total_cogs, 2)
-        denom = gross_sales or amount
+        settle = round(d.get("settle_income", 0.0), 2)   # 客户代收的关联结算（与单仓口径一致）
+        gp = round(amount + settle - total_cogs, 2)
+        denom = round((gross_sales or amount) + settle, 2)
         product_rows.append({
             **d,
             "qty": round(d["qty"], 4),
             "amount": amount,
             "gross_sales": gross_sales,
+            "settle_income": settle,
             # cogs 语义与单仓一致：总成本 = 商品成本 + 打包人工/耗材 + 快递费
             "cogs": total_cogs,
             "total_cogs": total_cogs,
@@ -1154,14 +1183,17 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
         ).one()
         return int(cnt), float(amt or 0)
 
-    orders, revenue, cogs, brush = db.execute(
-        select(func.count(), func.coalesce(func.sum(Outbound.total_amount), 0),
+    orders, revenue, cogs, brush, settle_total = db.execute(
+        select(func.count(), func.coalesce(func.sum(_income_expr()), 0),
                func.coalesce(func.sum(Outbound.total_cogs), 0),
                # 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差），与 /report/summary 同口径
-               func.coalesce(func.sum(brush_adjust_sql(Outbound)), 0))
+               func.coalesce(func.sum(brush_adjust_sql(Outbound)), 0),
+               # 其中客户代收的关联结算（包材/人工/快递费）
+               func.coalesce(func.sum(func.coalesce(Outbound.settle_income, 0)), 0))
         .where(*_date_conds(Outbound), paid(Outbound))
     ).one()
     revenue, cogs, brush = float(revenue), float(cogs), round(float(brush), 2)
+    settle_total = round(float(settle_total or 0), 2)
 
     manual_expense = float(db.execute(
         select(func.coalesce(func.sum(FinanceRecord.amount), 0))
@@ -1199,7 +1231,8 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
     oe_c, oe_a = unpaid_count_sum(OtherExpense, OtherExpense.amount)
     fi_out_c, fi_out_a = unpaid_count_sum(FinanceRecord, FinanceRecord.amount,
                                           (FinanceRecord.type == "expense", FinanceRecord.ref_type == "manual"))
-    ob_c, ob_a = unpaid_count_sum(Outbound, Outbound.total_amount)
+    # 待收（未回款）：应收口径与出库单「实收金额」一致（含客户代收的包材/人工/快递费）
+    ob_c, ob_a = unpaid_count_sum(Outbound, _income_expr())
     fi_in_c, fi_in_a = unpaid_count_sum(FinanceRecord, FinanceRecord.amount,
                                         (FinanceRecord.type == "income", FinanceRecord.ref_type == "manual"))
 
@@ -1207,6 +1240,8 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
         "key": key,
         "name": name,
         "revenue": round(revenue, 2),
+        # 其中：客户随货款一起付的关联结算（包材/人工/快递费）
+        "settle_income": settle_total,
         "cogs": round(cogs, 2),
         "brush_cost": brush,
         "gross": round(revenue - cogs - brush, 2),

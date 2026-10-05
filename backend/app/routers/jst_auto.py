@@ -88,6 +88,11 @@ class RunIn(BaseModel):
     do_import: bool | None = None      # False = 只下载不建单（试跑）
 
 
+class RematchIn(BaseModel):
+    dry_run: bool = False        # True = 只看会命中哪些，不保存关联也不重跑
+    only_codes: list[str] = []   # 只对这几条重新匹配（默认全部）
+
+
 def _validate_wh(data: WhSettingsIn) -> None:
     """保存前校验：定时时间与区间规则写错要立刻报错，而不是等定时到点才失败。"""
     if data.schedule:
@@ -315,6 +320,41 @@ def pending_resolve(task_id: str, data: ResolvePendingIn, user: User = Depends(g
     ).start()
     return {"ok": True, "started": True,
             "message": "已提交，正在自动重跑（可点「刷新状态」看进度）"}
+
+
+@router.post("/pending/{task_id}/rematch")
+def pending_rematch(task_id: str, data: RematchIn, user: User = Depends(get_current_user)):
+    """重新完全匹配：把与系统商品**名称/编码 100% 完全相同**的待补全商品自动关联，并自动重新出库。
+
+    只认 100% 同名（忽略空格与大小写），不做任何前缀/相似度猜测 ——
+    商品资料维护好后点一下即可，不用再一条条手工选；没命中的仍留在待办里人工处理。
+    """
+    key = get_current_key()
+    task = next((t for t in st.pending_open(key) if t.get("id") == task_id), None)
+    if not task:
+        raise HTTPException(404, "待办不存在或已被处理")
+    if task.get("type") != "unmapped":
+        raise HTTPException(400, "只有「商品资料待补全」的待办能重新匹配")
+
+    matched, left = runner.exact_rematch(key, task.get("items") or [], data.only_codes or None)
+    msg = (f"按 100% 同名匹配到 {len(matched)} 种，还有 {len(left)} 种没匹配到（需人工选择）"
+           if matched else f"没有名称/编码完全一致的商品（{len(left)} 种待人工选择）")
+    if not matched or data.dry_run:
+        return {"ok": True, "started": False, "dry_run": bool(data.dry_run),
+                "matched": matched, "left": left, "message": msg}
+
+    state = runner.status()
+    if state.get("running"):
+        raise HTTPException(409, f"已有一轮在执行中（{state.get('warehouse')} · {state.get('step')}），等它结束后再试")
+    threading.Thread(
+        target=_run_resolve,
+        args=(key, task_id),
+        kwargs={"mappings": matched, "user_name": user.name},
+        name=f"jst-rematch-{task_id}",
+        daemon=True,
+    ).start()
+    return {"ok": True, "started": True, "dry_run": False, "matched": matched, "left": left,
+            "message": f"{msg}；已开始重新导入出库"}
 
 
 @router.post("/pending/{task_id}/dismiss")

@@ -9,6 +9,13 @@
           <van-field v-model="dt" type="date" placeholder="止" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
           <van-button size="small" type="primary" @click="load">查询</van-button>
         </div>
+        <!-- 商品名称筛选：与时间区间叠加使用（留空＝全部商品） -->
+        <van-field
+          v-model="gkw"
+          clearable
+          placeholder="筛选商品名称（如 土豆、上海青；留空＝全部商品）"
+          style="margin-top:6px;background:#f7f8fa;border-radius:6px;"
+        />
         <div class="seg" style="margin:8px 0 0;">
           <div class="seg-item" :class="{ active: quickKey === 'today' }" @click="quick('today')">今天</div>
           <div class="seg-item" :class="{ active: quickKey === 'month' }" @click="quick('month')">本月</div>
@@ -37,6 +44,27 @@
           <van-icon name="arrow" color="#969799" />
         </div>
         <div class="muted" style="font-size:12px;margin-top:2px;">换一个只是换看谁的数据，不会改变你的工作分仓</div>
+      </div>
+
+      <!-- 商品筛选生效时的提示条：给出该商品的销量 / 销售额 / 成本 / 毛利（两种视角通用） -->
+      <div v-if="gkwQ" class="gfilter">
+        <div class="row">
+          <van-icon name="filter-o" />
+          <span class="grow">已筛选商品「<b>{{ gkwTrim }}</b>」· 匹配 <b>{{ gTotal.n }}</b> 个</span>
+          <van-button size="mini" plain @click="clearGkw">清除</van-button>
+        </div>
+        <div class="muted" style="margin-top:4px;">
+          <template v-if="gTotal.n">
+            销量 {{ fmtNum(gTotal.qty) }} · 销售额 {{ fmtMoney(gTotal.amount) }} · 总成本 {{ fmtMoney(gTotal.cogs) }} ·
+            毛利 <b :class="gTotal.gross >= 0 ? 'up' : 'down'">{{ fmtMoney(gTotal.gross) }}</b>
+            <template v-if="gTotal.rate != null"> · 毛利率 {{ gTotal.rate.toFixed(1) }}%</template>
+          </template>
+          <template v-else>本期没有匹配「{{ gkwTrim }}」的商品销售记录</template>
+        </div>
+        <div class="muted" style="margin-top:2px;">
+          上面的汇总卡仍是整期全部商品的口径；只看这个商品请切到「商品」分区。
+          <a style="color:#1989fa;" @click="tab = 'goods'">看商品明细 ›</a>
+        </div>
       </div>
 
       <!-- 分区 tab：全仓总览 / 单仓总览 两种视角都用（数据源由请求的 wh 决定） -->
@@ -260,8 +288,16 @@
           <span class="grow">商品销售明细</span>
           <span class="muted">成本为总成本</span>
         </div>
-        <div v-if="!(rep.by_product || []).length" class="empty">本期无销售</div>
-        <div v-for="(p, i) in rep.by_product || []" :key="i" class="list-item">
+        <div v-if="gkwQ" class="row" style="margin-bottom:6px;">
+          <span class="grow muted" style="font-size:12px;">
+            匹配「{{ gkwTrim }}」<b>{{ byProduct.length }}</b> / {{ byProductAll.length }} 个商品
+          </span>
+          <van-button size="mini" plain @click="clearGkw">清除筛选</van-button>
+        </div>
+        <div v-if="!byProduct.length" class="empty">
+          {{ gkwQ && byProductAll.length ? '没有匹配「' + gkwTrim + '」的商品，换个关键词试试' : '本期无销售' }}
+        </div>
+        <div v-for="(p, i) in byProduct" :key="i" class="list-item">
           <div class="row">
             <span class="grow item-title">{{ p.name }}</span>
             <van-tag v-if="p.is_dropship" type="warning" plain>代发</van-tag>
@@ -279,6 +315,19 @@
           </div>
           <div v-if="costSplitText(p)" class="item-meta cost-split">{{ costSplitText(p) }}</div>
         </div>
+        <template v-if="byProduct.length">
+          <div class="divider"></div>
+          <div class="row">
+            <span class="grow bold">{{ gkwQ ? '筛选合计' : '本期合计' }}（{{ gTotal.n }} 个商品）</span>
+            <span class="bold">{{ fmtMoney(gTotal.amount) }}</span>
+          </div>
+          <div class="row" style="margin-top:2px;">
+            <span class="grow muted">销量 {{ fmtNum(gTotal.qty) }} · 总成本 {{ fmtMoney(gTotal.cogs) }}</span>
+            <span class="bold" :class="gTotal.gross >= 0 ? 'up' : 'down'">
+              毛利 {{ fmtMoney(gTotal.gross) }}<template v-if="gTotal.rate != null">（{{ gTotal.rate.toFixed(1) }}%）</template>
+            </span>
+          </div>
+        </template>
       </div>
       </template>
 
@@ -406,6 +455,29 @@ const rep = ref({})
 const finance = ref([])
 const fkw = ref('')
 let inited = false
+
+/* ---------- 商品名称筛选（与时间区间叠加；输入即生效，不必点「查询」） ---------- */
+const gkw = ref('')
+const gkwTrim = computed(() => gkw.value.trim())
+const gkwQ = computed(() => gkwTrim.value.toLowerCase())
+function clearGkw() { gkw.value = '' }
+
+const byProductAll = computed(() => rep.value.by_product || [])
+/** 商品名称 / 规格任一包含关键词即命中 */
+const byProduct = computed(() => {
+  const s = gkwQ.value
+  if (!s) return byProductAll.value
+  return byProductAll.value.filter((p) => `${p.name || ''} ${p.spec || ''}`.toLowerCase().includes(s))
+})
+/** 筛选结果的合计：销量 / 销售额 / 总成本 / 毛利 / 毛利率 */
+const gTotal = computed(() => {
+  const rows = byProduct.value
+  const amount = rows.reduce((a, p) => a + num(p.amount), 0)
+  const qty = rows.reduce((a, p) => a + num(p.qty), 0)
+  const cogs = rows.reduce((a, p) => a + totalCogsOf(p), 0)
+  const gross = amount - cogs
+  return { n: rows.length, qty, amount, cogs, gross, rate: amount ? (gross / amount) * 100 : null }
+})
 
 const COST_COLORS = { 包材耗材: '#ff976a', 人工打包费: '#7232dd', 快递运费: '#07c160', 其他关联结算: '#969799' }
 const pctOf = (v) => (rep.value.cogs ? (v / rep.value.cogs) * 100 : 0)
@@ -563,10 +635,13 @@ function expMomText(i) {
 
 const financeFiltered = computed(() => {
   const s = (fkw.value || '').trim().toLowerCase()
-  if (!s) return finance.value
-  return finance.value.filter((f) =>
-    [f.category, f.product_name, f.remark, f.operator, f.type].join(' ').toLowerCase().includes(s)
-  )
+  const g = gkwQ.value
+  return finance.value.filter((f) => {
+    // 顶部「商品名称」筛选：只看该商品的流水（流水行有 product_name 才参与匹配）
+    if (g && !String(f.product_name || '').toLowerCase().includes(g)) return false
+    if (!s) return true
+    return [f.category, f.product_name, f.remark, f.operator, f.type].join(' ').toLowerCase().includes(s)
+  })
 })
 
 async function load() {
@@ -677,6 +752,19 @@ onMounted(() => { applyQuery(); if (!inited) load() })
   font-size: 12px; line-height: 1.5;
 }
 .caliber.off { background: #f2f3f5; color: #646566; }
+/* 商品名称筛选提示条 */
+.gfilter {
+  background: #eef6ff;
+  border: 1px solid #cfe4ff;
+  color: #1a6fd4;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.gfilter .muted { color: #5a7ea6; }
+.gfilter a { cursor: pointer; }
 .cost-stack { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: #f2f3f5; margin-bottom: 10px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; flex-shrink: 0; }
 .cost-split { color: #969799; font-size: 11px; }

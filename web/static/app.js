@@ -323,8 +323,8 @@ function daysAgo(n) {
 
 /* ---------- 导航 ---------- */
 const PAGE_TITLES = {
-  home: "工作台", stock: "库存管理", inbound: "入库", outbound: "出库 / 销售",
-  "warehouse-in": "入仓", "wingroup": "入仓批次明细",
+  home: "工作台", stock: "库存管理",   inbound: "入库", outbound: "出库 / 销售",
+  "warehouse-in": "入仓", "wingroup": "入仓批次明细", eva: "待办处理",
   products: "商品", report: "财务报表", otherexp: "其他开支", payables: "待付款账单",
   import: "批量导入", jushuitan: "聚水潭关联",
   backup: "备份与恢复",
@@ -353,6 +353,7 @@ function goPage(name) {
     "fresh-in": loadFreshInbound,   // 鲜货入库（二级页，从出库/销售页进入，也可用 #/fresh-in 深链）
     deduction: loadDeductionPage, express: loadExpressPage, settings: loadSettingsPage,
     otherexp: loadOtherExpensePage, payables: loadPayablesPage,
+    eva: loadEva,   // 待办处理（AI 识别队列 / 入库待办 / 出库待办），也可用 #/eva 深链
   };
   (loaders[name] || (() => {}))();
 }
@@ -863,6 +864,12 @@ function showLoginErr(msg) {
 $("logoutBtn").addEventListener("click", async () => {
   try { await fetch(routePath("/api/auth/logout"), { method: "POST" }); } catch (e) {}
   CURRENT_USER = null;
+  // 待办按分仓隔离：退出后不留上一个分仓的待办与角标（数据仍在各自分仓的存储里，下次登录照旧）
+  AI_QUEUE = [];
+  AI_QUEUE_FILES.clear();
+  AI_QUEUE_CURRENT = null;
+  AI_CONFIRM = null;
+  try { refreshEvaBadge(); renderEva(); } catch (e) {}
   showLogin();
 });
 
@@ -872,7 +879,16 @@ function openModal(html) {
   $("modalMask").classList.add("show");
   bindSearchable($("modalBox"));
 }
-function closeModal() { $("modalMask").classList.remove("show"); $("modalBox").classList.remove("wide"); const r = _aiDoneResolve; _aiDoneResolve = null; if (r) r(); }
+function closeModal() {
+  // 关掉 AI 确认框前先把改过的明细自动暂存回待办（localStorage 持久化），
+  // 避免误点 ✕ / 点遮罩 / 中途离开就把辛苦改的行全丢了（已提交的任务不动）
+  try {
+    if (AI_CONFIRM && $("aiLines")) { aiSaveDraft(true); AI_CONFIRM = null; }
+  } catch (e) { /* 暂存失败不影响关闭 */ }
+  $("modalMask").classList.remove("show");
+  $("modalBox").classList.remove("wide");
+  AI_QUEUE_CURRENT = null;   // 关掉确认框就不再认为"正在提交某条待办"
+}
 $("modalMask").addEventListener("click", (e) => { if (e.target.id === "modalMask") closeModal(); });
 
 /* ---------- 付款状态（已付款 / 待付款，默认已付款）---------- */
@@ -926,7 +942,7 @@ function renderStock(overview) {
   const kw = ($("stockSearch").value || "").trim().toLowerCase();
   const cat = catSel ? catSel.value : "";
   let rows = overview.filter((p) =>
-    (!kw || p.name.toLowerCase().includes(kw) || p.category.toLowerCase().includes(kw)) &&
+    (!kw || (p.name || "").toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw)) &&
     (!cat || p.category === cat)
   );
   const t = $("stockTable");
@@ -982,11 +998,20 @@ function openAdjust(pid = 0) {
     </div>
     <div class="field" style="grid-column:1/-1;"><span class="muted">当前均价：<b id="adjNowAvg" style="color:var(--danger)">—</b></span>　→　<span class="muted">均价调整后：<b id="adjAfterAvg" style="color:var(--primary)">—</b></span></div>
     <div class="field" style="grid-column:1/-1;"><span class="muted">当前成本单价：<b id="adjNowUc" style="color:var(--danger)">—</b></span>　→　<span class="muted">成本单价调整后：<b id="adjAfterUc" style="color:var(--primary)">—</b></span></div>
-    <div class="field" style="margin-top:10px;"><label>原因</label><input id="adjRemark" placeholder="如：盘点差异/损耗" /></div>
+    <div class="field" style="margin-top:10px;"><label>原因 / 备注（可贴盘点照片）</label>
+      <textarea id="adjRemark" rows="1" placeholder="如：盘点差异/损耗；可直接 Ctrl+V 粘贴图片" onpaste="pasteRemarkFiles('adjRemark', event)"></textarea>
+      <div class="attach-bar">
+        <button type="button" class="btn sm secondary" onclick="$('adjRemarkFile').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 图片 / 附件</button>
+        <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），可直接 Ctrl+V 粘贴</span>
+        <input type="file" id="adjRemarkFile" multiple style="display:none;" onchange="uploadRemarkFiles('adjRemark', this)" />
+      </div>
+      <div class="attach-list" id="adjRemarkFiles"></div>
+    </div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
       <button class="btn" onclick="submitAdjust()">确认调整</button>
     </div>`);
+  clearRemarkField("adjRemark");   // 每次打开都清空上一次的附件
   adjPreview();
 }
 function adjPreview() {
@@ -1036,7 +1061,7 @@ async function submitAdjust() {
       unit_cost_adj: uraw,
       date: $("adjDate").value,
       operator: $("adjOperator").value,
-      remark: $("adjRemark").value,
+      remark: remarkValue("adjRemark"),   // 纯文本 + 附件路径（图片/PDF），与其它单据备注同一格式
     });
     closeModal();
     toast(r && r.message ? r.message : (raw || araw || uraw ? "盘点调整成功" : "无调整"));
@@ -1091,7 +1116,7 @@ async function loadAdjustments() {
         <td class="num mono" style="color:${r.avg_cost_delta ? (r.avg_cost_delta > 0 ? "var(--green)" : "var(--red)") : ""}">${deltaHtml(r.avg_cost_delta, r.unit)}</td>
         <td class="num mono" style="color:${r.unit_cost_delta ? (r.unit_cost_delta > 0 ? "var(--green)" : "var(--red)") : ""}">${deltaHtml(r.unit_cost_delta, r.unit)}</td>
         <td>${esc(r.operator) || "—"}</td>
-        <td class="muted">${esc(r.remark)}</td>
+        <td class="muted">${renderRemarkHtml(r.remark)}</td>
         <td class="line-actions"><button class="btn sm danger" onclick="deleteAdjustment(${r.id})">删除回退</button></td>
       </tr>`;
     }).join("") + `</tbody>`;
@@ -1183,9 +1208,6 @@ let AI_THINK_TEXT = "";    // 累计的「思考过程」原文（确认框里�
 let AI_ANSWER_TEXT = "";   // 累计的模型正式输出（中文「思路」+ JSON）
 const AI_THINK_MAX = 20000; // 面板最多保留的字符数（票据识别的思考常有 1.5 万字），超出只留尾部
 let AI_THINK_OPEN = false;  // 原始思考（该模型只能用英文）默认收起，点「展开英文思考」才看
-let _batchAbort = false;    // 多图批量识别是否已被取消
-let _aiDoneResolve = null;  // 批量识别时，等待当前确认框关闭后再识别下一张
-
 function aiShowThinking() {
   AI_THINK_TEXT = "";
   AI_ANSWER_TEXT = "";
@@ -1254,29 +1276,28 @@ function aiAppendAnswer(s) {          // 模型正式输出：中文「思路」
   _aiFill($("aiAnswerBody"), AI_ANSWER_TEXT);
 }
 function aiCancel() {
+  if (AI_QUEUE_CTRL) AI_QUEUE_CTRL.abort();   // 队列里正在跑的那条（识别中的取消按钮）
   if (AI_CTRL) AI_CTRL.abort();
-  // 批量识别的「等确认框关闭」阶段没有在途请求，abort 拦不住，必须自己打断并放行等待
-  _batchAbort = true;
-  const done = _aiDoneResolve;
-  _aiDoneResolve = null;
-  if (done) done();
   aiHideThinking();
-  aiResetBtn();          // 关键：取消后按钮恢复可用（原来漏了，会一直停在"识别中…"且点不动）
+  aiResetBtn();          // 取消后按钮恢复可用
   toast("已取消识别");
-}
-function aiStartTask(btnHtml = '<svg class="ic"><use href="#i-ai"/></svg> 识别中…') {
-  if (AI_CTRL) AI_CTRL.abort();           // 取消上一次任务
-  AI_CTRL = new AbortController();
-  $("aiBtn").disabled = true;
-  $("aiBtn").innerHTML = btnHtml;
-  aiShowThinking();
 }
 function aiResetBtn() {
   AI_CTRL = null;
   $("aiBtn").disabled = false;
   $("aiBtn").innerHTML = '<svg class="ic"><use href="#i-ai"/></svg> 识别并录入';
 }
-async function aiCollectStream(res) {
+/**
+ * 读取识别接口的 SSE 流。
+ * sink 可注入：默认把思考/结果写进工作台的「AI 思考」面板；队列识别时会传入自己的 sink，
+ * 把内容同时写到任务对象（待办页展示）而不打开确认框。
+ */
+async function aiCollectStream(res, sink) {
+  const out = sink || {
+    think: (s) => aiAppendThink(s),
+    answer: (s) => aiAppendAnswer(s),
+    stage: (s) => aiSetStage(s),
+  };
   if (res.status === 401) { showLogin(); throw new Error("请先登录"); }
   if (!res.ok) {
     let msg = "识别失败";
@@ -1300,11 +1321,11 @@ async function aiCollectStream(res) {
       let obj;
       try { obj = JSON.parse(data); } catch (e) { continue; }
       if (obj.think) {
-        aiAppendThink(obj.think);          // 模型的思考过程，实时逐字展示
+        out.think(obj.think);              // 模型的思考过程，实时逐字展示
       } else if (obj.stage) {
-        aiSetStage(obj.stage);             // 当前阶段提示
+        out.stage(obj.stage);              // 当前阶段提示
       } else if (obj.delta) {
-        aiAppendAnswer(obj.delta);         // 模型正式输出（JSON）
+        out.answer(obj.delta);             // 模型正式输出（中文思路 + JSON）
       } else if (obj.result) {
         if (!result || obj.source === "quick") result = obj.result;
       } else if (obj.error) {
@@ -1315,36 +1336,8 @@ async function aiCollectStream(res) {
   if (!result) throw new Error("识别未返回结果");
   return result;
 }
-async function aiFinishOk(result) {
-  // 不隐藏思考过程面板：识别完成后仍可回看（标题转完成态）
-  aiFinishThinking("识别完成（可「展开英文思考」看模型原始推理）");
-  // 刷新商品列表，保证确认框里的候选/分类下拉是最新的
-  PRODUCTS = await api("/api/products");
-  openAiConfirm(result);
-  aiResetBtn();
-}
-function aiFinishErr(e) {
-  if (e.name === "AbortError") return;     // 用户手动取消
-  aiSetStage("识别失败：" + e.message);
-  aiAppendThink("\n⚠ 识别失败：" + e.message);
-  aiFinishThinking("识别失败");
-  toast("识别失败：" + e.message);
-  aiResetBtn();
-}
-async function aiParse() {
-  const text = $("aiText").value.trim();
-  if (!text) { toast("请输入入库/出库描述"); return; }
-  aiStartTask();
-  try {
-    const res = await fetch(routePath("/api/ai/parse/stream"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-      signal: AI_CTRL.signal,
-    });
-    await aiFinishOk(await aiCollectStream(res));
-  } catch (e) { aiFinishErr(e); }
-}
+/* 注：原来「识别完立刻弹确认框」的 aiParse / aiRecognizeOne 已由队列识别取代
+   （见下方「AI 识别队列 · 待办处理」：入队 → 后台识别 → /eva 审核提交）。 */
 function aiPickImage() { $("aiImgFile").click(); }
 function aiCaptureImage() { $("aiCamFile").click(); }
 
@@ -1392,53 +1385,24 @@ function aiParseImage(src) {
   if (!files.length) return;
   aiAddPending(files, src === "cam" ? "拍照" : "相册");
 }
-// 回车 /「识别并录入」的统一入口：有待识别图片就先识别图片，否则解析文字
+// 回车 /「识别并录入」：把当前输入加入队列，AI 后台识别；识别完到「待办处理」批量审核提交
 function aiRun() {
-  if (AI_CTRL) { toast("正在识别中，可先点「取消」"); return; }
+  const text = $("aiText").value.trim();
   if (AI_PENDING.length) {
-    aiParseImageFiles(AI_PENDING.map((it) => it.file), AI_PENDING_LABEL || "已选");
+    const files = AI_PENDING.map((it) => it.file);
+    const label = AI_PENDING_LABEL || "已选";
+    files.forEach((f) => aiQueueAdd({ kind: "image", text, image_name: f.name, source: label, file: f }));
+    aiClearPending();
+    $("aiText").value = "";     // 补充说明已随任务带走，清空方便继续录入
+    toast(`已加入队列 ${files.length} 张图片，AI 后台识别中（可继续录入）`);
     return;
   }
-  aiParse();
+  if (!text) { toast("请输入入库/出库描述，或先粘贴/选择票据图片"); return; }
+  aiQueueAdd({ kind: "text", text, source: "文字" });
+  $("aiText").value = "";
+  toast("已加入队列，AI 后台识别中（可继续录入）");
 }
-async function aiParseImageFiles(files, label) {
-  _batchAbort = false;   // 每批开始前复位，避免上次取消留下的标记把新一批直接掐掉
-  const total = files.length;
-  // 输入框里的文字会作为「补充说明」一起发给 AI（如「京东8号->8号纸箱」）
-  const extra = $("aiText").value.trim();
-  if (total > 1) toast(`已选择 ${total} 张图片，逐张识别中…`);
-  for (let i = 0; i < total; i++) {
-    if (_batchAbort) { _batchAbort = false; break; }
-    if (i > 0) await new Promise((r) => setTimeout(r, 400));
-    const ok = await aiRecognizeOne(files[i], i, total, label, extra);
-    // 识别失败或用户取消：保留预览图，方便改完补充说明后按回车重试
-    if (!ok) return;
-  }
-  aiClearPending();   // 整批识别完成，清掉待识别预览
-}
-async function aiRecognizeOne(f, idx, total, label, extra) {
-  const progress = total > 1 ? `（第 ${idx + 1}/${total} 张）` : "";
-  aiStartTask(`<svg class="ic"><use href="#i-camera"/></svg> ${label}识别中 ${progress}`);
-  try {
-    const fd = new FormData();
-    fd.append("file", f);
-    if (extra) fd.append("text", extra);
-    const res = await fetch(routePath("/api/ai/parse-image/stream"), {
-      method: "POST",
-      body: fd,
-      signal: AI_CTRL.signal,
-    });
-    const result = await aiCollectStream(res);
-    await aiFinishOk(result);
-    if (total > 1) await new Promise((resolve) => { _aiDoneResolve = resolve; }); // 等用户确认/取消后再识别下一张
-    return true;
-  } catch (e) {
-    if (e.name === "AbortError") { _batchAbort = true; aiFinishErr(e); }  // 用户取消：终止整批
-    else aiFinishErr(e);
-    return false;
-  }
-}
-// Ctrl+V 粘贴图片：只加入「待识别」预览，按回车或点「识别并录入」才开始识别（不再粘贴即识别）
+// Ctrl+V 粘贴图片：只加入「待识别」预览，按回车或点「识别并录入」加入队列（不再粘贴即识别）
 document.addEventListener("paste", (e) => {
   // 粘贴目标若是「备注/附件」输入框：交给其自身 onpaste 走附件上传，不加入 AI 待识别
   const _pt = e.target;
@@ -1475,6 +1439,15 @@ function aiProductOptions(selectedId, cat, prependHtml = "") {
   const list = aiProductsByCat(cat || "stock").slice().sort((a, b) => a.name.localeCompare(b.name, "zh"));
   return prependHtml + list.map((p) =>
     `<option value="${p.id}" ${p.id === selectedId ? "selected" : ""}>〔${catLabel}〕${esc(p.name)}</option>`
+  ).join("");
+}
+/** 出库行「没识别到商品」时的下拉：订单商品 + 库存大类一起列。
+ *  用户常直接卖库存大类（如「天麻大果」按公斤），不必先切分类才能选到。 */
+function aiProductOptionsWide(selectedId, prependHtml = "") {
+  const list = [...aiProductsByCat("order"), ...aiProductsByCat("stock")]
+    .sort((a, b) => a.name.localeCompare(b.name, "zh"));
+  return prependHtml + list.map((p) =>
+    `<option value="${p.id}" ${p.id === selectedId ? "selected" : ""}>〔${p.product_type === "order" ? "订单" : "库存"}〕${esc(p.name)}</option>`
   ).join("");
 }
 function aiCatChanged(i) {
@@ -1516,6 +1489,140 @@ function aiPriceBadge(tr, line) {
     badge.remove();
   }
 }
+/**
+ * 兜底补价：把「已命中已有商品、但单价为空」的行按该商品最近一次录入价填上。
+ * 正常后端在识别时就会填（_normalize_line），这里覆盖漏填的情形：
+ * 从待办页打开的历史结果、单位没能换算的行、以前存下的旧结果等。
+ * 只填空行，票据/用户已填的价一律不动；待新增商品（pid=0）没有历史价，跳过。
+ */
+async function aiFillMissingPrices() {
+  const rows = [...document.querySelectorAll("#aiLines tr[data-idx]")];
+  for (const tr of rows) {
+    const sel = tr.querySelector(".ai-pid");
+    const priceEl = tr.querySelector(".ai-price");
+    if (!sel || !priceEl) continue;
+    const pid = +sel.value || 0;
+    if (!pid) continue;
+    const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[+tr.dataset.idx] : null;
+    // 手动填的、票据带来的价不动；之前是「自动按最近价」填的，换入库/出库口径后允许刷新
+    if (!(line && line.price_defaulted) && priceEl.value !== "" && +priceEl.value !== 0) continue;
+    let price = 0;
+    const opt = sel.options[sel.selectedIndex];
+    if (opt && opt.dataset && opt.dataset.price) price = +opt.dataset.price || 0;
+    if (!price) {
+      try {
+        const d = await api(`/api/ai/last-price?product_id=${pid}&op_type=${$("aiType").value}`);
+        price = (d && d.price) || 0;
+      } catch (e) { price = 0; }
+    }
+    if (price > 0) {
+      priceEl.value = price;
+      const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[+tr.dataset.idx] : null;
+      if (line) line.price_defaulted = true;
+      aiPriceBadge(tr, line);
+    }
+  }
+}
+/* ---------- 盘点行：换商品后重算「当前库存 → 盘点后」与增减量 ----------
+ * 后端只在识别时按「当时匹配到的商品」算过一遍；用户在确认框里手动换成别的商品后必须重算，
+ * 否则会拿新商品的实盘数去减旧商品的库存（甚至是新建商品的 0），增减量就完全不对了
+ * （例：识别成"小香菇"、实盘 135，当前库存算成 0 → +135；换回"香菇干货"应变成 135 − 420 = −285）。 */
+function aiStockRefresh(i, opts) {
+  const tr = document.querySelector(`#aiLines tr[data-idx="${i}"]`);
+  const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[i] : null;
+  const typeSel = $("aiType");
+  if (!tr || !line || !typeSel || typeSel.value !== "stocktake") return;
+  const countEl = tr.querySelector(".ai-count");   // 实盘数（界面上可改）
+  const hidEl = tr.querySelector(".ai-qty");       // 增减量（提交用，隐藏）
+  const sel = tr.querySelector(".ai-pid");
+  const cell = tr.querySelector(".ai-stock-cell");
+  const pid = sel ? (+sel.value || 0) : 0;
+  const p = PRODUCTS.find((x) => x.id === pid) || null;
+  const unit = (tr.querySelector(".ai-unit") || {}).value || line.stock_unit || "";
+  // 商品库存以基础单位存，按当前行单位换算（如商品按公斤记录、行单位是斤 → 1公斤=2斤）
+  const before = p ? +((Number(p.stock) || 0) / (unitFactor(p, unit) || 1)).toFixed(4) : 0;
+  line.product_id = pid;
+  line.stock_before = before;
+  line.stock_unit = unit;
+  // 实盘数：优先「识别/手填的实盘数」；用户说的是增减（stock_rel）时按当前库存折算成实盘数
+  // （更早的结果没有 stock_counted，就用 quantity —— 盘点行它就是识别到的实盘数）
+  let counted = line.stock_counted != null ? +line.stock_counted : null;
+  if (counted == null && !line.stock_count_cleared) {
+    if (line.stock_rel) counted = +(before + (+line.quantity || 0)).toFixed(4);
+    else if (line.quantity != null) counted = +line.quantity;
+  }
+  // 用户正在输入时不要覆盖他敲进去的内容
+  if (countEl && !(opts && opts.keepCount)) countEl.value = counted == null ? "" : fmtNum(counted);
+  // 实盘数被清空 → 该行不调整（避免拿上一次的增减量提交出去）
+  const adj = line.stock_count_cleared ? 0
+    : (counted == null ? (+((hidEl || {}).value) || 0) : +(counted - before).toFixed(4));
+  line.stock_adjust = adj;
+  line.stock_after = +(before + adj).toFixed(4);
+  line.hint = [
+    line.stock_count_cleared
+      ? `未填实盘数：该行不调整（当前库存保持 ${fmtNum(before)}${unit}）`
+      : `当前库存 ${fmtNum(before)}${unit}，实盘 ${counted == null ? "—" : fmtNum(counted)}${unit}，调整 ${adj > 0 ? "+" : ""}${fmtNum(adj)}${unit} → 盘点后 ${fmtNum(line.stock_after)}${unit}`,
+    line.unit_note || ""].filter(Boolean).join("；");
+  if (cell) {
+    cell.innerHTML = `当前 <b>${fmtNum(before)}</b> → 调整 <b>${adj > 0 ? "+" : ""}${fmtNum(adj)}</b> → 盘点后 <b>${fmtNum(line.stock_after)}</b> ${esc(unit)}`;
+  }
+  const hintEl = tr.querySelector(".ai-hint");
+  if (hintEl) hintEl.textContent = line.hint;
+  if (hidEl) hidEl.value = fmtNum(adj);
+}
+/* 盘点行：手改「实盘数」→ 立刻重算增减量，并刷新「当前 → 调整 → 盘点后」与说明
+   （以前只有增减量输入框、且改了不刷新库存对比，看起来像被 AI 的结果定死了） */
+function aiCountChanged(i) {
+  const tr = document.querySelector(`#aiLines tr[data-idx="${i}"]`);
+  const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[i] : null;
+  const el = tr ? tr.querySelector(".ai-count") : null;
+  if (!line || !el) return;
+  const raw = (el.value || "").trim();
+  const v = parseFloat(raw);
+  line.stock_count_cleared = (raw === "" || isNaN(v));   // 清空 = 该行不调整
+  line.stock_counted = line.stock_count_cleared ? null : v;
+  line.stock_rel = false;   // 用户给了绝对实盘数，不再是「多了/少了」的相对量
+  line.unit_note = "";      // 已手改，去掉上一次的换算提示
+  aiStockRefresh(i, { keepCount: true });
+}
+/* 单位候选（datalist）：商品换算表里的单位 + 基础/默认单位 + 当前值（可下拉选，也可手填别的） */
+function aiUnitSuggest(pid, curUnit) {
+  const p = PRODUCTS.find((x) => x.id === (+pid || 0)) || null;
+  const set = [];
+  const push = (u) => { u = String(u || "").trim(); if (u && !set.includes(u)) set.push(u); };
+  if (p) {
+    Object.keys(p.conversions || {}).forEach(push);
+    push(p.base_unit);
+    push(p.default_unit);
+  }
+  push(curUnit);
+  return set.map((u) => `<option value="${esc(u)}"></option>`).join("");
+}
+/* 手动改单位：能换算就按换算表把「实盘数」一起换（92袋 × 25公斤/袋 → 2300公斤），并重算库存基线 */
+function aiUnitChanged(i) {
+  const tr = document.querySelector(`#aiLines tr[data-idx="${i}"]`);
+  const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[i] : null;
+  if (!tr || !line) return;
+  const inp = tr.querySelector(".ai-unit");
+  const unit = (inp ? inp.value : "").trim();
+  const oldUnit = (line.stock_unit || line.unit || "").trim();
+  if (unit && unit !== oldUnit) {
+    const p = PRODUCTS.find((x) => x.id === (+tr.querySelector(".ai-pid").value || 0)) || null;
+    const conv = (p && p.conversions) || {};
+    const fOld = +conv[oldUnit] || 0, fNew = +conv[unit] || 0;
+    if (fOld && fNew && line.stock_counted != null) {
+      line.stock_counted = +((line.stock_counted * fOld) / fNew).toFixed(4);
+      line.unit_note = `单位「${oldUnit}」→「${unit}」，数量已按换算表同步换算`;
+    } else {
+      line.unit_note = `单位「${oldUnit || "空"}」→「${unit}」，数量请核对（该商品换算表里没有这两个单位，无法自动换算）`;
+    }
+    line.unit = unit;
+    line.stock_unit = unit;
+    aiStockRefresh(i);
+  } else if (line) {
+    line.unit = unit;
+  }
+}
 // 切换商品（分类下拉/相似候选/新商品占位）后：若单价为空，回填该商品最近一次录入价
 async function aiProdChanged(i) {
   const tr = document.querySelector(`#aiLines tr[data-idx="${i}"]`);
@@ -1533,6 +1640,37 @@ async function aiProdChanged(i) {
   if (!pid && line && line.recognized_unit) {
     tr.querySelector(".ai-unit").value = line.recognized_unit;
   }
+  // 换成真实商品：识别到的单位若不在该商品的可选单位里（如占位的「袋」 vs 商品的「公斤」），
+  // 自动改成商品的默认单位 —— 否则商品的「公斤」会被「袋」盖住，库存与增减量全按错单位算
+  if (pid) {
+    const p = PRODUCTS.find((x) => x.id === pid) || null;
+    const unitInp = tr.querySelector(".ai-unit");
+    const cur = (unitInp && unitInp.value || "").trim();
+    const conv = (p && p.conversions) || {};
+    const valid = !!cur && (cur in conv || cur === defaultUnit(p) || cur === (p && p.base_unit));
+    if (p && unitInp && !valid) {
+      const du = defaultUnit(p);
+      const fOld = +conv[cur] || 0, fNew = +conv[du] || 0;
+      if (du && du !== cur) {
+        if (fOld && fNew && line && line.stock_counted != null) {
+          line.stock_counted = +((line.stock_counted * fOld) / fNew).toFixed(4);
+          line.unit_note = `单位已按商品「${p.name}」改为「${du}」（识别单位「${cur || "空"}」不适用），数量已按换算表同步换算`;
+        } else if (line) {
+          line.unit_note = `单位已按商品「${p.name}」改为「${du}」（识别单位「${cur || "空"}」不适用），数量请核对`;
+        }
+        unitInp.value = du;
+        if (line) line.unit = du;
+      }
+    }
+    // 单位候选（datalist）跟着商品更新：换商品后可选单位不同
+    const dl = tr.querySelector("datalist");
+    if (dl) dl.innerHTML = aiUnitSuggest(pid, (unitInp && unitInp.value) || "");
+  }
+  // 盘点行：换了商品/分类就必须重算「当前库存 → 盘点后」与增减量
+  aiStockRefresh(i);
+  // 已选中真实商品：去掉「🆕 提交后新增」徽标（它是按识别时的"待新增"渲染的，换商品后就不对了）
+  const newBadge = tr.querySelector(".ai-newbadge");
+  if (newBadge) newBadge.style.display = pid ? "none" : "";
   const priceEl = tr.querySelector(".ai-price");
   if (!pid || !priceEl) { aiPriceBadge(tr, line); return; }   // 待新增商品：暂无历史价
   // 用户手填的价格不动；自动填入的价格在换商品后要跟着换成新商品的价格
@@ -1557,9 +1695,58 @@ async function aiProdChanged(i) {
   aiPriceBadge(tr, line);
 }
 let AI_CONFIRM = null;   // 当前确认框对应的识别结果（供提交时标注）
+/* 同种商品的多行合并成一行（数量累加）——与后端 _merge_duplicate_lines 同一口径。
+   盘点是「一个商品一个实盘数」：分开提交会在同一个商品上反复调整（+3500 再 −16000），净额就错了。
+   后端识别时已经合并；这里再兜一次，是为了队列里已经存下的老结果也能正确合并与提交。 */
+function aiMergeDupLines(r) {
+  if (!r || !Array.isArray(r.lines) || r.lines.length < 2) return r;
+  const isStock = r.type === "stocktake";
+  const seen = new Map();
+  // 合并 = 把被并掉的行标记 _deleted，数组本身不缩短：
+  // 行上的 data-idx 就是数组下标，数组一变短，下面各行改商品时就会取到「下一行」的商品与库存
+  r.lines.forEach((ln) => {
+    if (ln._deleted) return;
+    const pid = +ln.product_id || 0;
+    if (!pid) return;                          // 待新增/未匹配：可能对应不同档案，不合并
+    const key = isStock
+      ? `s|${pid}|${ln.stock_unit || ln.unit || ""}`
+      : `d|${pid}|${ln.unit || ""}|${+(ln.unit_price || 0)}|${ln.date || ""}|${ln.paid !== false}`;
+    const first = seen.get(key);
+    if (!first) { seen.set(key, ln); return; }
+    first.quantity = +(((+first.quantity || 0) + (+ln.quantity || 0)).toFixed(4));
+    if (first.stock_counted != null && ln.stock_counted != null) {
+      first.stock_counted = +((+first.stock_counted + +ln.stock_counted).toFixed(4));
+    }
+    first.merged_count = (+first.merged_count || 1) + 1;
+    ln._deleted = true;                        // 被合并掉的行不再显示，但下标原位保留
+  });
+  // 合并过的行：按累加后的数量重算（提交读的是 stock_adjust / quantity）
+  r.lines.forEach((ln) => {
+    if (ln._deleted) return;
+    const n = +ln.merged_count || 1;
+    if (n <= 1) return;
+    if (isStock) {
+      const before = +ln.stock_before || 0;
+      const du = ln.stock_unit || ln.unit || "";
+      if (ln.stock_counted != null) {
+        ln.stock_adjust = +((ln.stock_counted - before).toFixed(4));
+        ln.stock_after = +(before + ln.stock_adjust).toFixed(4);
+        ln.hint = `已把 ${n} 行合并为一行（实盘数累加）：当前库存 ${fmtNum(before)}${du}，实盘 ${fmtNum(ln.stock_counted)}${du}，调整 ${ln.stock_adjust > 0 ? "+" : ""}${fmtNum(ln.stock_adjust)}${du} → 盘点后 ${fmtNum(ln.stock_after)}${du}`;
+      } else {
+        ln.stock_adjust = +(+(ln.quantity || 0)).toFixed(4);
+        ln.stock_after = +(before + ln.stock_adjust).toFixed(4);
+        ln.hint = `已把 ${n} 行合并为一行（增减量累加）：调整 ${ln.stock_adjust > 0 ? "+" : ""}${fmtNum(ln.stock_adjust)}${du} → 盘点后 ${fmtNum(ln.stock_after)}${du}`;
+      }
+    } else {
+      ln.hint = (ln.hint || "") + `；已把 ${n} 行合并为一行（数量累加）`;
+    }
+  });
+  return r;
+}
 function openAiConfirm(r) {
-  AI_CONFIRM = r;
+  AI_CONFIRM = aiMergeDupLines(r);
   const isIn = r.type === "inbound";
+  const isStock = r.type === "stocktake";   // 盘点：用识别到的数量覆盖当前库存（不是入/出库）
   const docDate = r.date || today();
   // 逐行日期：票据每行各有单据日期时，这里按行显示、可单独修改
   (r.lines || []).forEach((ln) => { ln.date = ln.date || docDate; });
@@ -1568,6 +1755,9 @@ function openAiConfirm(r) {
     ? `<span class="badge" style="background:var(--primary-light);color:var(--primary);margin-left:6px;">已按票据逐行取日期：${esc(dateSet[0])} ~ ${esc(dateSet[dateSet.length - 1])}（共 ${dateSet.length} 天）</span>`
     : "";
   const linesHtml = (r.lines || []).map((ln, i) => {
+    // 删除的行只标记不摘除：行上的 data-idx 必须与数组下标一一对应，
+    // 否则删过行之后，下面各行再改商品/单位就会取到「下一行」的商品与库存
+    if (ln._deleted) return "";
     const cat = (["stock", "order", "pack", "labor"].includes(ln.category) ? ln.category : (isIn ? "stock" : "order"));
     const np = ln.new_product || null;
     let prodSel;
@@ -1576,14 +1766,18 @@ function openAiConfirm(r) {
       if (!ln.candidates.some((c) => c.product_id === ln.product_id)) ln.product_id = ln.candidates[0].product_id;
       const cur = ln.candidates.find((c) => c.product_id === ln.product_id) || ln.candidates[0];
       if (!(+ln.unit_price) && cur.last_price) { ln.unit_price = cur.last_price; ln.price_defaulted = true; }
-      prodSel = `<select class="ai-pid" style="border-color:var(--amber);" onchange="aiProdChanged(${i})">
+      // searchable：和普通下拉一样支持「点击选择 / 输入筛选」（漏了它就只能滚原生下拉，无法输入搜索）
+      prodSel = `<select class="searchable ai-pid" style="border-color:var(--amber);" onchange="aiProdChanged(${i})">
           <option value="0">🆕 新建：${esc(ln.recognized_name || ln.product_name || "")}</option>
           ${ln.candidates.map((c) => `<option value="${c.product_id}" ${c.product_id === ln.product_id ? "selected" : ""} data-price="${c.last_price || 0}">〔${({ stock: "库存", order: "订单", pack: "包材", labor: "人工" }[c.category] || "库存")}〕${esc(c.name)}${c.last_price ? `（最近 ${c.last_price}）` : ""}</option>`).join("")}
         </select>`;
     } else if (np) {
       // 待新增商品：仅在「确认提交」后才建档，取消不会污染商品资料
       ln.product_id = 0;
-      prodSel = `<select class="ai-pid" onchange="aiProdChanged(${i})">${aiProductOptions(0, cat, `<option value="0" selected>🆕 新建：${esc(np.name)}</option>`)}</select>`;
+      prodSel = `<select class="searchable ai-pid" onchange="aiProdChanged(${i})">${aiProductOptions(0, cat, `<option value="0" selected>🆕 新建：${esc(np.name)}</option>`)}</select>`;
+    } else if (!isIn && !isStock && !ln.product_id && !ln.category) {
+      // AI 没说是什么商品（也没能判断分类）：订单商品与库存大类一起列，选完下面的包材/快递会自动算
+      prodSel = `<select class="searchable ai-pid" onchange="aiProdChanged(${i})">${aiProductOptionsWide(ln.product_id, '<option value="0" selected>— 请选择商品（订单 / 库存都在这里）—</option>')}</select>`;
     } else {
       const head = ln.product_id ? "" : `<option value="0" selected>— 请选择商品 —</option>`;
       prodSel = `<select class="searchable ai-pid" onchange="aiProdChanged(${i})">${aiProductOptions(ln.product_id, cat, head)}</select>`;
@@ -1592,15 +1786,29 @@ function openAiConfirm(r) {
       ? '<span class="badge" style="background:#fff3cd;color:#8a6d00;margin-left:6px;">⚠ 相似商品待确认</span>' : "";
     const unitBadge = ln.unit_conflict
       ? '<span class="badge" style="background:#fde2e0;color:#b3261e;margin-left:6px;" title="' + esc(ln.unit_conflict_msg || "") + '">⚠ 单位不一致</span>' : "";
+    // 盘点：数量列 = 「实盘数」（直接改成你盘到的数，系统自动算增减量去调整），
+    // 单价列换成「当前 → 调整 → 盘点后」；提交时读隐藏的 .ai-qty（增减量，走既有 adjust 接口）
+    const counted = ln.stock_counted != null
+      ? ln.stock_counted
+      : (ln.stock_rel ? +(((ln.stock_before || 0) + (+ln.quantity || 0))).toFixed(4) : ln.quantity);
+    const qtyCell = isStock
+      ? `<td><input type="number" step="any" class="ai-count" value="${fmtNum(counted)}" style="width:104px;" title="实盘数量（= 盘点后的库存数）：改成你实际盘到的数即可，提交时按「实盘数 − 当前库存」走增减调整" oninput="aiCountChanged(${i})" />
+           <input type="hidden" class="ai-qty" value="${fmtNum(ln.stock_adjust || 0)}" /></td>`
+      : `<td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.quantity)}" style="width:90px;" /></td>`;
+    const stockCellHtml = `当前 <b>${fmtNum(ln.stock_before || 0)}</b> → 调整 <b>${(ln.stock_adjust || 0) > 0 ? "+" : ""}${fmtNum(ln.stock_adjust || 0)}</b> → 盘点后 <b>${fmtNum(ln.stock_after || 0)}</b> ${esc(ln.stock_unit || ln.unit || "")}`;
+    const priceCell = isStock
+      ? `<td class="muted ai-stock-cell" style="white-space:nowrap;" title="当前库存 → 调整 → 盘点后">${stockCellHtml}</td>`
+      : `<td class="ai-price-cell"><input type="number" step="any" class="ai-price" value="${ln.unit_price ? ln.unit_price : ""}" placeholder="可留空" style="width:100px;" />${ln.price_defaulted ? '<span class="ai-price-badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按最近价</span>' : ""}</td>`;
+    const payCell = isStock ? "" : `<td>${aiPayHtml(ln, i)}</td>`;
     return `<tr data-idx="${i}">
       <td><select class="ai-cat" onchange="aiCatChanged(${i})" style="width:92px;">${aiCatOptions(cat)}</select></td>
-      <td style="min-width:250px;">${prodSel}${aiNewNameHtml(ln)}<div style="margin-top:4px;">${ambiBadge}${np ? '<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 提交后新增</span>' : ""}</div></td>
+      <td style="min-width:250px;">${prodSel}${aiNewNameHtml(ln)}<div style="margin-top:4px;">${ambiBadge}${np ? '<span class="badge ai-newbadge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 提交后新增</span>' : ""}</div></td>
       <td><input type="date" class="ai-date" value="${esc(ln.date || docDate)}" style="width:138px;" title="这一行的单据日期（对账单/送货单逐行日期）" /></td>
-      <td><input type="number" step="any" class="ai-qty" value="${fmtNum(ln.quantity)}" style="width:90px;" /></td>
-      <td><input class="ai-unit" value="${esc(ln.unit || "")}" style="width:70px;" />${unitBadge}</td>
-      <td class="ai-price-cell"><input type="number" step="any" class="ai-price" value="${ln.unit_price ? ln.unit_price : ""}" placeholder="可留空" style="width:100px;" />${ln.price_defaulted ? '<span class="ai-price-badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;">已按最近价</span>' : ""}</td>
-      <td>${aiPayHtml(ln, i)}</td>
-      <td class="muted" style="font-size:12px;min-width:200px;">${esc(ln.hint || "")}</td>
+      ${qtyCell}
+      <td><input class="ai-unit" list="aiUnitList-${i}" value="${esc(ln.unit || "")}" style="width:84px;" title="单位：可下拉选该商品已有单位，也可手填；改动会立即重算库存" onchange="aiUnitChanged(${i})" /><datalist id="aiUnitList-${i}">${aiUnitSuggest(ln.product_id, ln.unit)}</datalist>${unitBadge}</td>
+      ${priceCell}
+      ${payCell}
+      <td class="muted ai-hint" style="font-size:12px;min-width:200px;">${esc(ln.hint || "")}</td>
       <td style="white-space:nowrap;"><button class="btn secondary" style="padding:4px 8px;" title="删除这一行" onclick="aiDelLine(${i})">🗑 删除</button></td>
     </tr>`;
   }).join("");
@@ -1613,31 +1821,434 @@ function openAiConfirm(r) {
          <pre>${esc(AI_THINK_TEXT.length > 12000 ? "…（前面内容略）\n" + AI_THINK_TEXT.slice(-12000) : AI_THINK_TEXT)}</pre></details>`
     : "";
   openModal(`
-    <h3>确认录入（${isIn ? "入库" : "出库"}） <button class="close" onclick="closeModal()">✕</button></h3>
+    <h3>确认${isStock ? "盘点（调整库存）" : (isIn ? "入库" : "出库")} <button class="close" onclick="closeModal()">✕</button></h3>
     ${invImg}
     <p class="hint" style="margin-bottom:12px;">已自动识别以下内容，请核对（可修改/可删除行）后提交；🆕 标记的商品为新物品，点「确认提交」后才会新增商品档案（取消不会创建）。单价可留空，提交后在单据里补也行。<b>每行日期取自票据该行的「单据日期」</b>，可逐行改；对账单等多日期票据会按各自日期生成单据。每行默认<b>已付款</b>，可点成「待付款」把该笔列入「待付款账单」。</p>
     ${thinkHtml}
     <div class="form-grid">
       <div class="field"><label>业务类型</label><select id="aiType" onchange="aiTypeChanged()">
-        <option value="inbound" ${isIn ? "selected" : ""}>入库（进货）</option>
-        <option value="outbound" ${isIn ? "" : "selected"}>出库（销售）</option>
+        <option value="inbound" ${r.type === "inbound" ? "selected" : ""}>入库（进货）</option>
+        <option value="outbound" ${r.type === "outbound" ? "selected" : ""}>出库（销售）</option>
+        <option value="stocktake" ${isStock ? "selected" : ""}>盘点（增减调整库存）</option>
       </select></div>
       <div class="field"><label>整单日期</label>
         <input type="date" id="aiDate" value="${esc(docDate)}" />${dateHint}
         <button class="btn-link" style="font-size:12px;margin-left:6px;" onclick="aiApplyDateAll()">应用到所有行</button>
       </div>
-      <div class="field"><label>${isIn ? "供应商" : "客户"}</label><input id="aiParty" value="${esc(isIn ? r.supplier : r.customer)}" /></div>
-      <div class="field"><label>备注</label><input id="aiRemark" value="${esc(r.remark)}" /></div>
+      ${isStock ? "" : `<div class="field"><label>${isIn ? "供应商" : "客户"}</label><input id="aiParty" value="${esc(isIn ? r.supplier : r.customer)}" /></div>`}
+      <div class="field"><label>备注（可贴盘点照片）</label>
+        <textarea id="aiRemark" rows="1" placeholder="可选；可直接 Ctrl+V 粘贴图片" onpaste="pasteRemarkFiles('aiRemark', event)"></textarea>
+        <div class="attach-bar">
+          <button type="button" class="btn sm secondary" onclick="$('aiRemarkFile').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 图片 / 附件</button>
+          <span class="attach-tip">识别到的票据也会显示在这里，可再加图</span>
+          <input type="file" id="aiRemarkFile" multiple style="display:none;" onchange="uploadRemarkFiles('aiRemark', this)" />
+        </div>
+        <div class="attach-list" id="aiRemarkFiles"></div>
+      </div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>分类</th><th>商品</th><th>日期</th><th>数量</th><th>单位</th><th>${isIn ? "单价" : "售价"}</th><th>付款</th><th>说明</th><th>操作</th></tr></thead>
-      <tbody id="aiLines">${linesHtml || '<tr><td colspan="9" class="empty">未识别到明细</td></tr>'}</tbody>
+      <thead><tr><th>分类</th><th>商品</th><th>日期</th><th>${isStock ? "实盘数" : "数量"}</th><th>单位</th><th>${isStock ? "当前 → 调整 → 盘点后" : (isIn ? "单价" : "售价")}</th>${isStock ? "" : "<th>付款</th>"}<th>说明</th><th>操作</th></tr></thead>
+      <tbody id="aiLines">${linesHtml || `<tr><td colspan="${isStock ? 8 : 9}" class="empty">未识别到明细</td></tr>`}</tbody>
     </table></div>
+    ${aiChargeWrapHtml(r)}
     <div class="modal-foot">
+      <span class="muted" style="margin-right:auto;">改完可先点「暂存修改」；直接关掉也会自动暂存，中途离开 / 刷新都不会丢</span>
       <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="aiSaveDraft(false)">💾 暂存修改</button>
       <button class="btn green" onclick="aiSubmit()">✓ 确认提交</button>
     </div>`);
   $("modalBox").classList.add("wide");   // 明细列多，弹窗放宽，避免信息被挤没
+  setRemarkValue("aiRemark", r.remark);  // 备注里的 /uploads/xxx（如识别票据）拆成可点开的附件标签
+  if (r.type === "outbound") aiSettleRecalc();   // 出库：算好「实收金额」给用户核对（含包材/快递/固定成本）
+  // 盘点行按「当前库存」重新刷一遍（暂存/重新打开时库存可能已变，避免显示过期对比）
+  if (isStock) setTimeout(() => {
+    document.querySelectorAll("#aiLines tr[data-idx]").forEach((tr) => aiStockRefresh(+tr.dataset.idx));
+  }, 40);
+  // 打开后兜底补价：已命中商品但单价为空的行，自动带出最近录入价（票据自带的价不动）
+  setTimeout(() => aiFillMissingPrices(), 60);
+}
+/* ---------- AI 出库：关联结算（包材/快递）+ 固定成本 + 实收金额 ----------
+   只说了商品名（甚至没说商品）也能出库：包材/快递按服务端口径自动算出来核对；
+   「工时、胶带」这类不好量化的项目不要求建商品，直接汇总进「固定成本」，金额写进备注，
+   这样对着结算表（货价 + 各项 = 合计金额）一眼就能核完再提交。 */
+const AI_SETTLE_LABELS = { material: "包材", labor: "人工", express: "快递费", fee: "固定成本" };
+
+function aiSettleCatsOf(r) {
+  const cats = String((r || {}).settle_cats || "").split(",").filter(Boolean);
+  return cats.length ? cats : ["material", "labor", "express"];
+}
+/** 当前「按金额记」的固定成本项：确认框开着时以表格里用户改过的为准，否则用识别结果 */
+function aiFeeItems() {
+  const rows = document.querySelectorAll("#aiChargeBody tr[data-ci]");
+  if (rows.length) {
+    const out = [];
+    rows.forEach((tr) => {
+      if (tr.querySelector(".ai-ch-kind").value !== "fee") return;
+      const amt = parseFloat(tr.querySelector(".ai-ch-amt").value) || 0;
+      if (amt > 0) out.push({ name: tr.querySelector(".ai-ch-name").value.trim() || "固定成本", amount: amt });
+    });
+    return out;
+  }
+  return ((AI_CONFIRM && AI_CONFIRM.charges) || []).filter((c) => c.kind === "fee" && (+c.amount || 0) > 0);
+}
+/** 固定成本明细（工时/胶带…）文本 + 合计 */
+function aiChargeFeeNote() {
+  const items = aiFeeItems();
+  const sum = Math.round(items.reduce((a, c) => a + (+c.amount || 0), 0) * 100) / 100;
+  return {
+    text: items.map((c) => `${c.name} ${fmtMoney(+c.amount)}`).join("、"),
+    sum,
+  };
+}
+/** 固定成本写进备注（用户要求「备注清楚金额」） */
+function aiChargeRemark() {
+  const items = aiFeeItems();
+  const sum = Math.round(items.reduce((a, c) => a + (+c.amount || 0), 0) * 100) / 100;
+  if (sum <= 0) return "";
+  return `【包材人工固定成本】${items.map((c) => `${c.name} ${fmtMoney(+c.amount)}`).join("、")}（合计 ${fmtMoney(sum)}）`;
+}
+function aiSettleChecked(box) {
+  return [...(box || document).querySelectorAll(".ai-settle:checked")].map((x) => x.value);
+}
+/** 固定成本合计（确认框里以表格为准） */
+function aiFeeSum() {
+  return Math.round(aiFeeItems().reduce((a, c) => a + (+c.amount || 0), 0) * 100) / 100;
+}
+function aiSettleBoxes(cats) {
+  return Object.keys(AI_SETTLE_LABELS).map((k) => `<label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
+      <input type="checkbox" class="ai-settle" value="${k}" ${cats.includes(k) ? "checked" : ""} onchange="aiSettleRecalc()" /> ${AI_SETTLE_LABELS[k]}
+    </label>`).join("");
+}
+/** 关联结算区块（出库才有）；preview 由服务端算好，改了商品/数量点「重算」即可 */
+function aiChargeWrapHtml(r) {
+  if (!r || r.type !== "outbound") return "";
+  return `<div id="aiChargeWrap">${aiChargeHtml(r)}</div>`;
+}
+/** 费用项「记到哪」的可选项（用户可改，改完点重算/直接提交按新口径算） */
+const AI_CHARGE_KINDS = [
+  ["pack", "包材 / 耗材"], ["labor", "人工"], ["express", "快递费"], ["fee", "固定成本（按金额）"],
+];
+/** 某个商品能挂到「包材/人工」里的候选：先给识别候选，再给同类商品 */
+function aiChargeProdOptions(c, kind) {
+  const want = kind === "labor" ? "labor" : "pack";
+  const list = [];
+  const seen = new Set();
+  const push = (p) => { if (p && !seen.has(p.id)) { seen.add(p.id); list.push(p); } };
+  (c.candidates || []).forEach((x) => push(PRODUCTS.find((p) => p.id === x.product_id)));
+  PRODUCTS.filter((p) => p.is_active).forEach((p) => { if (aiProductsByCat(want).some((x) => x.id === p.id)) push(p); });
+  return list.map((p) => {
+    const du = p.default_unit || p.base_unit || "";
+    const cost = (p.avg_cost || p.unit_cost || 0) * ((p.conversions || {})[du] || 1);
+    return `<option value="${p.id}" ${p.id === (c.product_id || 0) ? "selected" : ""}>〔${({ stock: "库存", order: "订单", pack: "包材", labor: "人工" }[aiProductCat(p)] || "其他")}〕${esc(p.name)}${cost ? `（${fmtNum(cost)}/${esc(du)}）` : ""}</option>`;
+  }).join("");
+}
+function aiProductCat(p) {
+  const c = (p.category || "").trim();
+  if (c === "人工" || /打包$/.test(p.name || "")) return "labor";
+  if (["包材", "耗材", "包装"].includes(c)) return "pack";
+  if (c === "快递") return "express";
+  return p.product_type === "order" ? "order" : "stock";
+}
+/** 一行费用项：项目名 / 记到哪 / 商品（可改） / 单位 / 数量 / 金额 / 删除
+ *  工时不强制选商品 —— 记到哪选「固定成本」就按金额记，并写进备注。 */
+function aiChargeRowHtml(c, i) {
+  const kind = c.kind || "fee";
+  const needProd = kind === "pack" || kind === "labor";
+  const kindSel = `<select class="ai-ch-kind" onchange="aiChargeKind(${i}, this)">` +
+    AI_CHARGE_KINDS.map(([v, t]) => `<option value="${v}" ${v === kind ? "selected" : ""}>${t}</option>`).join("") + `</select>`;
+  const prodSel = needProd
+    ? `<select class="searchable ai-ch-pid" onchange="aiChargeProd(${i}, this)">
+         <option value="0" ${c.product_id ? "" : "selected"}>— 选商品 —</option>${aiChargeProdOptions(c, kind)}
+       </select>`
+    : `<span class="muted" style="font-size:12px;">${kind === "express" ? "按下面的金额记快递费" : "按金额记进固定成本"}</span>`;
+  const est = c.qty_est ? `<span class="badge" style="background:var(--amber-light);color:#8a6d00;margin-left:4px;" title="结算表只给了金额，按 ${fmtNum(c.unit_cost)} / ${esc(c.unit)} 反推数量；金额仍按结算表记">按金额反推</span>` : "";
+  return `<tr data-ci="${i}">
+    <td><input class="ai-ch-name" value="${esc(c.name || "")}" style="width:110px;" oninput="aiChargeTouch()" /></td>
+    <td>${kindSel}</td>
+    <td style="min-width:190px;">${prodSel}</td>
+    <td><input class="ai-ch-unit" value="${esc(c.unit || "")}" style="width:64px;" ${needProd ? "" : "disabled"} /></td>
+    <td><input class="ai-ch-qty" type="number" step="any" value="${c.quantity ? fmtNum(c.quantity) : ""}" placeholder="—" style="width:80px;" ${needProd ? "" : "disabled"} oninput="aiChargeTouch()" />${est}</td>
+    <td><input class="ai-ch-amt" type="number" step="any" min="0" value="${c.amount ? fmtNum(c.amount) : ""}" style="width:88px;" oninput="aiChargeTouch()" /></td>
+    <td><button type="button" class="btn sm danger" title="删除这一项" onclick="aiChargeDel(${i})">✕</button></td>
+  </tr>`;
+}
+function aiChargeHtml(r) {
+  const cats = aiSettleCatsOf(r);
+  const charges = r.charges || [];
+  const feeSum = Math.round(charges.filter((c) => c.kind === "fee").reduce((a, c) => a + (+c.amount || 0), 0) * 100) / 100;
+  const feeNote = aiChargeFeeNote();
+  const auto = (r.pack_lines || []).filter((p) => p.source !== "识别");
+  const autoHtml = auto.map((p) => `<tr>
+      <td>${esc(p.product_name)} <span class="badge pack">自动</span></td>
+      <td>${esc(p.unit)}</td><td class="num mono">${fmtNum(p.quantity)}</td>
+      <td class="num mono">${fmtMoney(p.amount)}</td>
+      <td class="muted" style="font-size:12px;">${esc(AI_SETTLE_LABELS[p.settle_cat] || "其他")}</td>
+    </tr>`).join("");
+  const rowsHtml = charges.map((c, i) => aiChargeRowHtml(c, i)).join("");
+  return `<h4 class="block-title" style="margin-top:14px;">包材 / 人工 / 快递（识别到的费用项，可改）<span class="muted" style="font-weight:normal;font-size:12px;">· 商品没挂对就在下拉里改，工时/胶带改成「固定成本」按金额记</span></h4>
+    <div id="aiPreviewHint" class="alert ${r.preview ? "ok" : "warn"}" style="margin:6px 0;${r.preview_hint ? "" : "display:none;"}">${esc(r.preview_hint || "")}</div>
+    ${rowsHtml
+      ? `<div class="table-wrap"><table><thead><tr><th>项目</th><th>记到哪</th><th>商品（可改）</th><th>单位</th><th class="num">数量</th><th class="num">金额</th><th></th></tr></thead><tbody id="aiChargeBody">${rowsHtml}</tbody></table></div>`
+      : `<div class="muted" style="margin:6px 0;">没识别到费用项（气泡膜、泡沫箱这类可点下面「＋ 添加」手动加）。</div>`}
+    <div class="toolbar" style="margin:8px 0;">
+      <button type="button" class="btn sm secondary" onclick="aiChargeAdd()">＋ 添加包材 / 人工</button>
+      <button type="button" class="btn sm secondary" onclick="aiChargesRefresh()">🔄 重算（改完商品/数量点一下）</button>
+      <span class="muted">固定成本合计 <b id="aiFeeSum">${fmtMoney(feeSum)}</b>${feeNote.text ? `（${esc(feeNote.text)}）` : ""}</span>
+    </div>
+    <h4 class="block-title">商品包装清单自动带出 / 按重量算的快递费</h4>
+    <div class="table-wrap"><table><thead><tr><th>项目</th><th>单位</th><th class="num">数量</th><th class="num">金额</th><th>归属</th></tr></thead>
+      <tbody id="aiAutoPackBody">${autoHtml || `<tr><td colspan="5" class="muted">无（该商品没有包装清单，也没有自动快递费）</td></tr>`}</tbody></table></div>
+    <div class="form-grid" style="margin-top:10px;">
+      <div class="field"><label>实收金额包含（客户随货款一起付的）</label>
+        <div class="toolbar" style="margin:0;flex-wrap:wrap;gap:12px;">${aiSettleBoxes(cats)}</div>
+        <div class="field-hint">勾了才计入「实收金额」与报表收入；包材/快递成本照旧结转，毛利不会被吃掉</div>
+      </div>
+      <div class="field"><label>金额核对</label><span id="aiChargeSum"></span></div>
+    </div>`;
+}
+/** 收集费用项表里（用户改过）的内容：重算与提交都按这个走 */
+function aiChargePick() {
+  const rows = [];
+  document.querySelectorAll("#aiChargeBody tr[data-ci]").forEach((tr) => {
+    const i = +tr.dataset.ci;
+    const base = ((AI_CONFIRM && AI_CONFIRM.charges) || [])[i] || {};
+    const kind = tr.querySelector(".ai-ch-kind").value;
+    const pid = +(tr.querySelector(".ai-ch-pid")?.value || 0);
+    rows.push({
+      name: tr.querySelector(".ai-ch-name").value.trim() || base.name || "",
+      kind,
+      product_id: pid,
+      unit: (tr.querySelector(".ai-ch-unit").value || "").trim(),
+      quantity: parseFloat(tr.querySelector(".ai-ch-qty").value) || 0,
+      amount: parseFloat(tr.querySelector(".ai-ch-amt").value) || 0,
+    });
+  });
+  return rows.filter((c) => c.name && (c.amount > 0 || c.quantity > 0));
+}
+/** 切换「记到哪」：换商品/单位/数量列显隐；改成固定成本就按金额记 */
+function aiChargeKind(i, sel) {
+  const c = ((AI_CONFIRM && AI_CONFIRM.charges) || [])[i];
+  if (!c) return;
+  c.kind = sel.value;
+  if (c.kind !== "pack" && c.kind !== "labor") { c.product_id = 0; }
+  aiChargeRender();
+}
+function aiChargeProd(i, sel) {
+  const c = ((AI_CONFIRM && AI_CONFIRM.charges) || [])[i];
+  if (!c) return;
+  c.product_id = +sel.value || 0;
+  const p = PRODUCTS.find((x) => x.id === c.product_id);
+  if (p) { c.unit = p.default_unit || p.base_unit || c.unit || ""; c.product_name = p.name; }
+  aiChargeRender();
+}
+function aiChargeDel(i) {
+  const r = AI_CONFIRM || {};
+  const list = (r.charges || []).slice();
+  list.splice(i, 1);
+  r.charges = list;
+  aiChargeRender();
+}
+function aiChargeAdd() {
+  const r = AI_CONFIRM || {};
+  const list = (r.charges || []).slice();
+  list.push({ name: "", kind: "pack", product_id: 0, unit: "", quantity: 0, amount: 0, candidates: [] });
+  r.charges = list;
+  aiChargeRender();
+}
+/** 重绘费用项表（保持已填内容），并刷新金额核对 */
+function aiChargeRender() {
+  const r = AI_CONFIRM || {};
+  if ($("aiChargeBody")) {
+    $("aiChargeBody").innerHTML = (r.charges || []).map((c, i) => aiChargeRowHtml(c, i)).join("");
+    bindSearchable($("aiChargeBody"));
+  }
+  if ($("aiFeeSum")) $("aiFeeSum").textContent = fmtMoney(aiFeeSum());
+  aiSettleRecalc();
+}
+/** 把当前勾选/固定成本代入，算「实收金额 / 毛利」给用户核对（口径与后端一致） */
+function aiSettleRecalc() {
+  const r = AI_CONFIRM || {};
+  const pv = r.preview || {};
+  const cats = aiSettleChecked();
+  const fee = aiFeeSum();
+  let settle = 0;
+  (r.pack_lines || []).forEach((p) => { if (cats.includes(p.settle_cat)) settle += (+p.amount || 0); });
+  if (cats.includes("fee")) settle += fee;
+  settle = Math.round(settle * 100) / 100;
+  const amount = +pv.amount || 0, cogs = +pv.cogs || 0;
+  const el = $("aiChargeSum");
+  if (!el) return;
+  if (!r.preview) { el.textContent = ""; return; }
+  el.innerHTML = `货价 ${fmtMoney(amount)} ＋ 代收 ${fmtMoney(settle)} = <b>实收 ${fmtMoney(amount + settle)}</b>`
+    + ` · 结转成本 ${fmtMoney(cogs)} · <b style="color:${amount + settle - cogs >= 0 ? "var(--green)" : "var(--red)"}">毛利 ${fmtMoney(amount + settle - cogs)}</b>`;
+}
+/** 收集确认框里的出库行（供重算 / 提交） */
+function aiOutboundLines() {
+  return [...document.querySelectorAll("#aiLines tr[data-idx]")].map((tr) => {
+    const idx = +tr.dataset.idx;
+    const line = ((AI_CONFIRM && AI_CONFIRM.lines) || [])[idx] || {};
+    const priceEl = tr.querySelector(".ai-price");
+    return {
+      product_id: +tr.querySelector(".ai-pid").value || 0,
+      product_name: line.product_name || line.recognized_name || "",
+      unit: tr.querySelector(".ai-unit").value.trim(),
+      quantity: parseFloat(tr.querySelector(".ai-qty").value) || 0,
+      unit_price: priceEl ? (parseFloat(priceEl.value) || 0) : (+line.unit_price || 0),
+      _deleted: false,
+    };
+  }).filter((l) => l.product_id || l.product_name);
+}
+/** 商品/数量/费用项改过以后重算包材/快递/固定成本/实收金额（服务端口径）。
+ *  keepRows=true 时保留用户正在编辑的费用项行（只刷新自动带出的行与金额），避免打字时被重绘打断。 */
+async function aiChargesRefresh(keepRows) {
+  const r = AI_CONFIRM || {};
+  if (!r || r.type !== "outbound") return;
+  try {
+    const rows = document.querySelectorAll("#aiChargeBody tr[data-ci]").length ? aiChargePick() : (r.charges || []);
+    const d = await api("/api/ai/outbound-preview", "POST", {
+      lines: aiOutboundLines(),
+      charges: rows,
+    });
+    Object.assign(r, {
+      pack_lines: d.pack_lines || [], preview: d.preview || null, preview_hint: d.preview_hint || "",
+      fee_total: d.fee_total || 0, settle_cats: d.settle_cats || "", extra_pack_lines: d.extra_pack_lines || [],
+      auto_express: d.auto_express !== false,
+      charges: (d.charges || []).length ? d.charges : (r.charges || []),
+    });
+    if (keepRows) {
+      // 只刷新「自动带出」的表与金额，费用项行保持用户输入不动
+      const auto = (r.pack_lines || []).filter((p) => p.source !== "识别");
+      if ($("aiAutoPackBody")) {
+        $("aiAutoPackBody").innerHTML = auto.length ? auto.map((p) => `<tr>
+            <td>${esc(p.product_name)} <span class="badge pack">自动</span></td>
+            <td>${esc(p.unit)}</td><td class="num mono">${fmtNum(p.quantity)}</td>
+            <td class="num mono">${fmtMoney(p.amount)}</td>
+            <td class="muted" style="font-size:12px;">${esc(AI_SETTLE_LABELS[p.settle_cat] || "其他")}</td>
+          </tr>`).join("") : `<tr><td colspan="5" class="muted">无（该商品没有包装清单，也没有自动快递费）</td></tr>`;
+      }
+      if ($("aiFeeSum")) $("aiFeeSum").textContent = fmtMoney(aiFeeSum());
+      if ($("aiPreviewHint")) {
+        $("aiPreviewHint").innerHTML = esc(r.preview_hint || "");
+        $("aiPreviewHint").style.display = r.preview_hint ? "" : "none";
+      }
+      aiSettleRecalc();
+    } else if ($("aiChargeWrap")) {
+      $("aiChargeWrap").innerHTML = aiChargeHtml(r);
+      bindSearchable($("aiChargeWrap"));
+      aiSettleRecalc();
+    }
+    if ((d.warnings || []).length) toast("⚠ " + d.warnings.join("；"), 3600);
+  } catch (e) { toast("重算失败：" + e.message); }
+}
+/** 费用项输入变化：防抖重算（保留正在编辑的行） */
+let AI_CHARGE_TIMER = null;
+function aiChargeTouch() {
+  clearTimeout(AI_CHARGE_TIMER);
+  AI_CHARGE_TIMER = setTimeout(() => aiChargesRefresh(true), 600);
+}
+/** 从识别结果取提交用的附加项（待办页批量提交也用这套口径）。
+ *  注意：提交要带上完整结算清单（商品包装清单自动带出的 + 识别到的），
+ *  因为一旦传了 pack_lines，后端就不再自动补商品包装清单了；
+ *  自动算出来的「快递费」行不传（后端按整单毛重自己结算），识别到的运费则按金额传。 */
+function aiChargesFromResult(r) {
+  if (!r || r.type !== "outbound") return null;
+  // 商品包装清单自动带出的行（服务端会重新算，但要一起传，否则不再自动补）
+  const auto = (r.pack_lines || [])
+    .filter((p) => p.source !== "识别")
+    .map((p) => ({ product_id: p.product_id, unit: p.unit, quantity: p.quantity, cogs: null }));
+  // 识别/用户改过的项目（含按金额反推数量的：用服务端算好的显式成本，金额与结算表一致）
+  const extra = (r.extra_pack_lines || []).map((p) => ({
+    product_id: p.product_id, unit: p.unit, quantity: p.quantity,
+    cogs: p.cogs != null ? p.cogs : null,
+  }));
+  const packs = [...auto, ...extra];
+  return {
+    pack_lines: packs,
+    fee_total: +r.fee_total || 0,
+    settle_cats: aiSettleCatsOf(r).join(","),
+    auto_express: r.auto_express !== false,
+    remark: aiChargeRemark(),
+  };
+}
+/** 确认框里收集提交用的附加项（用户可能改过勾选） */
+function aiChargesFromModal() {
+  const r = AI_CONFIRM || {};
+  if (!r || r.type !== "outbound") return null;
+  const base = aiChargesFromResult(r);
+  if (!base) return null;
+  base.fee_total = aiFeeSum();   // 固定成本 = 费用项里「记到哪=固定成本」的那些之和（与备注一致）
+  const cats = aiSettleChecked();
+  base.settle_cats = Object.keys(AI_SETTLE_LABELS).filter((k) => cats.includes(k)).join(",");
+  return base;
+}
+
+/** 当前确认框对应的那条队列待办（暂存 / 提交标记用） */
+function aiCurrentJob() {
+  if (AI_QUEUE_CURRENT) {
+    const j = AI_QUEUE.find((x) => x.id === AI_QUEUE_CURRENT);
+    if (j) return j;
+  }
+  return AI_QUEUE.find((x) => x.result && x.result === AI_CONFIRM) || null;
+}
+/** 暂存：把确认框里的当前修改写回待办队列（localStorage 持久化），中途离开 / 刷新都不丢 */
+function aiSaveDraft(silent) {
+  const body = $("aiLines");
+  const typeSel = $("aiType");
+  const job = aiCurrentJob();
+  if (!AI_CONFIRM || !body || !typeSel || !job || job.status === "submitted") {
+    if (!silent) toast("这条识别结果不在待办队列里，改完直接点「确认提交」即可");
+    return false;
+  }
+  // 逐行把界面上的值写回「同一个行对象」（按 data-idx 取，下标与数组一一对应）
+  [...body.querySelectorAll("tr[data-idx]")].forEach((tr) => {
+    const ln = (AI_CONFIRM.lines || [])[+tr.dataset.idx];
+    if (!ln) return;
+    ln.product_id = +tr.querySelector(".ai-pid").value || 0;
+    const catEl = tr.querySelector(".ai-cat");
+    if (catEl) ln.category = catEl.value;
+    const dateEl = tr.querySelector(".ai-date");
+    if (dateEl && dateEl.value) ln.date = dateEl.value;
+    const unitEl = tr.querySelector(".ai-unit");
+    if (unitEl && unitEl.value.trim()) ln.unit = unitEl.value.trim();
+    const countEl = tr.querySelector(".ai-count");      // 盘点：实盘数（可改）
+    if (countEl) {
+      const v = parseFloat(countEl.value);
+      ln.stock_count_cleared = (countEl.value.trim() === "" || isNaN(v));
+      ln.stock_counted = ln.stock_count_cleared ? null : v;
+      if (!ln.stock_count_cleared) ln.stock_rel = false;
+      const hid = tr.querySelector(".ai-qty");
+      const d = hid ? parseFloat(hid.value) : NaN;
+      ln.stock_adjust = isNaN(d) ? 0 : d;
+    } else {
+      const q = tr.querySelector(".ai-qty");
+      if (q) ln.quantity = parseFloat(q.value) || 0;
+    }
+    const priceEl = tr.querySelector(".ai-price");
+    if (priceEl) ln.unit_price = priceEl.value.trim() === "" ? 0 : (parseFloat(priceEl.value) || 0);
+    const payEl = tr.querySelector(".ai-sw-in");
+    if (payEl) ln.paid = !!payEl.checked;
+    const nameEl = tr.querySelector(".ai-newname");
+    if (nameEl && !ln.product_id) ln.recognized_name = nameEl.value.trim() || ln.recognized_name;
+    const hintEl = tr.querySelector(".ai-hint");
+    if (hintEl) ln.hint = hintEl.textContent;
+  });
+  job.result = job.result || {};
+  job.result.type = typeSel.value;      // 类型可能被改过（入库/出库/盘点）
+  const topDate = $("aiDate");
+  if (topDate && topDate.value) job.result.date = topDate.value;
+  const partyEl = $("aiParty");
+  if (partyEl) {
+    if (typeSel.value === "outbound") job.result.customer = partyEl.value.trim();
+    else job.result.supplier = partyEl.value.trim();
+  }
+  const rmEl = $("aiRemark");
+  if (rmEl) job.result.remark = remarkValue("aiRemark");   // 含附件（票据 / 新加的图），重开后按同一套拆成标签
+  // 注意：这里不替换 lines 数组（上面已按 data-idx 原地写回），
+  // 数组一换长度，行上的 data-idx 与数组下标就会错位，改商品时会取到下一行的商品/库存
+  job.draft_at = new Date().toISOString();
+  aiQueueSave();
+  if (!silent) toast("✅ 已暂存：中途离开或刷新后，打开这条待办还能接着改");
+  return true;
 }
 // 每行「是否已付款」开关：默认已付款；点成「待付款」后该笔提交时计入「待付款账单」
 function aiPayHtml(ln, i) {
@@ -1678,6 +2289,9 @@ function aiNewNameHtml(ln) {
 function aiDelLine(i) {
   const tr = document.querySelector(`#aiLines tr[data-idx="${i}"]`);
   if (tr) tr.remove();
+  // 只标记删除、不从数组里摘掉：数组下标要始终与行的 data-idx 对齐
+  const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[i] : null;
+  if (line) line._deleted = true;
 }
 function aiTypeChanged() {
   // 切换类型时，未显式归类的行按业务类型重设默认分类（入库库存优先，出库订单优先）
@@ -1688,13 +2302,15 @@ function aiTypeChanged() {
     if (!["stock", "order", "pack", "labor"].includes(cat)) catSel.value = isIn ? "stock" : "order";
     aiCatChanged(+tr.dataset.idx);
   });
+  // 入库/出库切换后价格口径不同：重新给空单价的已命中行补价
+  setTimeout(() => aiFillMissingPrices(), 60);
 }
 async function aiSubmit() {
   const type = $("aiType").value;
   const date = $("aiDate").value;
-  const party = $("aiParty").value.trim();
-  const remark = $("aiRemark").value.trim();
-  const inv = (AI_CONFIRM && AI_CONFIRM.image_url) ? `[票据] ${AI_CONFIRM.image_url}` : "";
+  const partyEl = $("aiParty");                       // 盘点模式没有供应商/客户输入框
+  const party = partyEl ? partyEl.value.trim() : "";
+  const remark = remarkValue("aiRemark");   // 纯文本 + 附件（含识别票据），与其它单据备注同一格式
   const autoFlags = (AI_CONFIRM && AI_CONFIRM.lines) || [];
   let rows = [...document.querySelectorAll("#aiLines tr[data-idx]")].map((tr) => {
     const idx = +tr.dataset.idx;                      // 按行号取回识别结果，删行后也不会串位
@@ -1709,7 +2325,8 @@ async function aiSubmit() {
       category: line.category || "stock",
       unit: tr.querySelector(".ai-unit").value.trim() || line.recognized_unit || "个",
     } : null;
-    const priceRaw = tr.querySelector(".ai-price").value.trim();
+    const priceEl2 = tr.querySelector(".ai-price");           // 盘点模式没有单价输入框
+    const priceRaw = priceEl2 ? priceEl2.value.trim() : "";
     return {
       product_id: pid,
       // 待新增商品：提交时才建档，避免用户取消也污染商品资料（含商品类型/包材）
@@ -1724,51 +2341,468 @@ async function aiSubmit() {
   }).filter((r) => r.product_id || r.new_product);
   if (!rows.length) { toast("请至少填写一条商品"); return; }
   if (rows.some((r) => !r.date)) { toast("每行都要有日期，请检查"); return; }
-  if (rows.some((r) => !(r.quantity > 0) || !r.unit)) { toast("请填写数量与单位（单价可留空，提交后在单据里补）"); return; }
-  if (rows.some((r) => isNaN(r.unit_price))) { toast("单价填的不是数字，请检查"); return; }
+  if (type === "stocktake") {
+    // 盘点填的是「实盘数」，换算出的增减量允许为 0（= 实盘数与当前库存一致，该行不调整、提交时跳过）
+    if (rows.some((r) => isNaN(r.quantity) || !r.unit)) { toast("请填写实盘数与单位"); return; }
+  } else if (rows.some((r) => !(r.quantity > 0) || !r.unit)) {
+    toast("请填写数量与单位（单价可留空，提交后在单据里补）"); return;
+  }
+  if (type !== "stocktake" && rows.some((r) => isNaN(r.unit_price))) { toast("单价填的不是数字，请检查"); return; }
   const op = (CURRENT_USER && (CURRENT_USER.name || CURRENT_USER.username)) || "";
   try {
-    // 1) 先创建确认为新物品的商品档案（同名已存在则复用）
-    const pend = rows.filter((r) => !r.product_id && r.new_product);
-    if (pend.length) {
-      const d = await api("/api/ai/products", "POST", {
-        items: pend.map((r) => ({
-          name: r.new_product.name,
-          category: r.new_product.category || "stock",
-          unit: r.unit || r.new_product.unit || "个",
-        })),
-      });
-      (d.items || []).forEach((it, k) => { if (pend[k]) pend[k].product_id = it.product_id; });
-      PRODUCTS = await api("/api/products");
-    }
-    rows = rows.filter((r) => r.product_id);
-    if (!rows.length) { toast("商品创建失败，请稍后重试"); return; }
-    // 2) 再写入单据
-    if (type === "inbound") {
-      for (const r of rows) {
-        const rmk = [inv, r.auto_created ? "[AI自动新增]" : "", remark].filter(Boolean).join(" ");
-        // 逐行用各自的单据日期（对账单每行日期不同）
-        await api("/api/inbounds", "POST", { product_id: r.product_id, unit: r.unit, quantity: r.quantity, unit_price: r.unit_price, supplier: party, operator: op, date: r.date, remark: rmk, pay_status: r.paid ? "paid" : "unpaid" });
-      }
-    } else {
-      // 按「日期 + 已付款/待付款」分单：日期不同的各成一单，待付款的独立进「待付款账单」
-      const groups = new Map();
-      rows.forEach((r) => {
-        const key = `${r.date}|${r.paid ? "paid" : "unpaid"}`;
-        if (!groups.has(key)) groups.set(key, { date: r.date, pay: r.paid ? "paid" : "unpaid", rows: [] });
-        groups.get(key).rows.push(r);
-      });
-      for (const g of groups.values()) {
-        const lines = g.rows.map((r) => ({ product_id: r.product_id, unit: r.unit, quantity: r.quantity, price: r.unit_price }));
-        await api("/api/outbounds", "POST", { customer: party, operator: op, date: g.date, remark: [inv, remark].filter(Boolean).join(" "), lines, pack_lines: [], pay_status: g.pay });
-      }
+    // 出库：提交前按「当前行」重算一次包材/快递/固定成本（换过商品、改过数量也不会拿旧清单）
+    if (type === "outbound") await aiChargesRefresh();
+    const n = await submitDocRows({
+      type, party, remark, imageUrl: (AI_CONFIRM && AI_CONFIRM.image_url) || "", rows, op,
+      charges: type === "outbound" ? aiChargesFromModal() : null,   // 包材/快递/固定成本（服务端口径）
+    });
+    // 这次是从「待办处理」打开的：提交成功就把该待办标记为已完成，从待办列表消失
+    if (AI_QUEUE_CURRENT) {
+      const job = AI_QUEUE.find((x) => x.id === AI_QUEUE_CURRENT);
+      if (job) { job.status = "submitted"; job.submitted_at = new Date().toISOString(); aiQueueSave(); }
+      AI_QUEUE_CURRENT = null;
     }
     closeModal();
     AI_CONFIRM = null;
-    toast(type === "inbound" ? "入库成功" : "出库成功");
-    loadDashboard(); loadStock();
+    toast(type === "stocktake" ? `盘点完成（调整 ${n} 行）`
+      : (type === "inbound" ? `入库成功（${n} 行）` : `出库成功（${n} 行）`));
+    loadDashboard(); loadStock(); refreshEvaBadge();
     $("aiText").value = "";
   } catch (e) { toast("提交失败：" + e.message); }
+}
+
+/* =============== AI 识别队列 · 待办处理（#/eva） ===============
+   粘贴/输入不再直接弹确认框，而是入队（localStorage 持久化，刷新不丢已识别结果）；
+   后台一次只跑一条，跑完自动取下一条；识别成功的按业务类型落到「入库待办 / 出库待办」，
+   在 /eva 逐条审核或批量提交（提交逻辑与确认框共用 submitDocRows）。 */
+const AI_QUEUE_KEY = "ai_queue_v1";  // 旧版全局 key：只用于把老数据迁到分仓维度
+/** AI 识别待办按分仓隔离：key = ai_queue_v1:<分仓key>。
+ *  否则在 A 仓识别的盘点/入库待办会串到 B 仓（词条对不上，还容易被误删）。 */
+function aiQueueKey() {
+  const wh = (CURRENT_USER && CURRENT_USER.warehouse && CURRENT_USER.warehouse.key) || "";
+  return wh ? `${AI_QUEUE_KEY}:${wh}` : AI_QUEUE_KEY;
+}
+const AI_QUEUE_MAX = 60;            // 队列最多保留条数（超出丢最早的）
+const AI_QUEUE_THINK_KEEP = 4000;   // 每条任务最多保留的思考字数（持久化用）
+let AI_QUEUE = [];                  // [{id,kind,text,image_name,source,status,result,error,think,answer,...}]
+const AI_QUEUE_FILES = new Map();   // id -> File（图片任务原图，只在内存；刷新后需重选）
+let AI_QUEUE_CTRL = null;           // 正在识别那条的 AbortController
+let AI_QUEUE_TICKING = false;
+let AI_QUEUE_CURRENT = null;        // 从待办页打开确认框时记录任务 id，提交成功后标记该待办已完成
+let AI_QUEUE_LIVE_T = null;
+
+function aiQueueUid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function evaTitle(j) {
+  if (j.kind === "image") return (j.image_name || "票据图片") + (j.text ? ` · ${j.text.slice(0, 16)}` : "");
+  return (j.text || "").slice(0, 30) || "（空描述）";
+}
+function evaMoney(j) {
+  return ((j.result && j.result.lines) || []).reduce((a, ln) => a + (+ln.quantity || 0) * (+ln.unit_price || 0), 0);
+}
+function evaDateSpan(j) {
+  const r = j.result || {};
+  const ds = [...new Set((r.lines || []).map((ln) => ln.date || r.date || ""))].filter(Boolean).sort();
+  if (!ds.length) return "—";
+  return ds.length > 1 ? `${ds[0]} ~ ${ds[ds.length - 1]}（${ds.length} 天）` : ds[0];
+}
+function aiQueueSave() {
+  try {
+    const items = AI_QUEUE.slice(-AI_QUEUE_MAX).map((j) => ({
+      id: j.id, kind: j.kind, text: j.text || "", image_name: j.image_name || "", source: j.source || "",
+      status: j.status, result: j.result || null, error: j.error || "",
+      think: (j.think || "").slice(-AI_QUEUE_THINK_KEEP), answer: (j.answer || "").slice(-4000),
+      created_at: j.created_at, finished_at: j.finished_at || "", submitted_at: j.submitted_at || "",
+      elapsed: j.elapsed || 0, draft_at: j.draft_at || "",
+    }));
+    localStorage.setItem(aiQueueKey(), JSON.stringify(items));
+  } catch (e) { /* 配额满等：不影响主流程 */ }
+}
+function aiQueueLoad() {
+  const key = aiQueueKey();
+  try {
+    let raw = localStorage.getItem(key);
+    // 旧版没分仓（key 无后缀）：只迁一次到当前分仓，避免继续串仓
+    if (raw == null && key !== AI_QUEUE_KEY) {
+      const legacy = localStorage.getItem(AI_QUEUE_KEY);
+      if (legacy) {
+        localStorage.setItem(key, legacy);
+        localStorage.removeItem(AI_QUEUE_KEY);
+        raw = legacy;
+        const whName = (CURRENT_USER && CURRENT_USER.warehouse && CURRENT_USER.warehouse.name) || "";
+        setTimeout(() => toast(`已把旧版未分仓的 AI 待办归到当前分仓${whName ? "（" + whName + "）" : ""}；之后各分仓的待办互不可见`), 900);
+      }
+    }
+    const arr = JSON.parse(raw || "[]");
+    AI_QUEUE = Array.isArray(arr) ? arr.filter((j) => j && j.id) : [];
+  } catch (e) { AI_QUEUE = []; }
+  AI_QUEUE.forEach((j) => {
+    if (j.status === "running") j.status = "waiting";            // 上次没跑完 → 重新排队
+    if (j.kind === "image" && ["waiting", "running"].includes(j.status)) {
+      j.status = "error";                                        // 原图只在内存里，刷新后无法续跑
+      j.error = "页面刷新后原图已丢失，请回到工作台重新粘贴这张图片";
+    }
+  });
+  refreshEvaBadge();
+}
+/** 入队：文字或图片（图片需把 File 传进来，内部登记到 AI_QUEUE_FILES） */
+function aiQueueAdd(job) {
+  const j = {
+    id: aiQueueUid(), kind: job.kind, text: job.text || "", image_name: job.image_name || "",
+    source: job.source || "", status: "waiting", result: null, error: "", think: "", answer: "",
+    created_at: new Date().toISOString(), finished_at: "", submitted_at: "", elapsed: 0,
+  };
+  AI_QUEUE.push(j);
+  if (job.file) AI_QUEUE_FILES.set(j.id, job.file);
+  aiQueueSave();
+  refreshEvaBadge();
+  aiQueueTick();
+  return j.id;
+}
+/** 后台逐条识别：一次一条，跑完自动取下一条（不占用工作台的「识别中」按钮，可继续录入） */
+async function aiQueueTick() {
+  if (AI_QUEUE_TICKING) return;
+  const job = AI_QUEUE.find((j) => j.status === "waiting");
+  if (!job) { renderAiQueueBar(); refreshEvaBadge(); return; }
+  AI_QUEUE_TICKING = true;
+  job.status = "running";
+  job.think = "";
+  job.answer = "";
+  job.error = "";
+  aiQueueSave();
+  refreshEvaBadge();
+  if ($("page-eva").classList.contains("active")) renderEva();
+
+  AI_QUEUE_CTRL = new AbortController();
+  const started = Date.now();
+  aiShowThinking();                       // 工作台的面板同步显示当前这条
+  aiSetStage(`队列识别中：${evaTitle(job)}`);
+  const sink = {
+    think: (s) => {
+      job.think = (job.think + s).slice(-AI_QUEUE_THINK_KEEP);
+      aiAppendThink(s);
+      evaRenderLive();
+    },
+    stage: (s) => { job.stage = s; aiSetStage(s); evaRenderLive(); },
+    answer: (s) => {
+      job.answer = (job.answer + s).slice(-4000);
+      aiAppendAnswer(s);
+      evaRenderLive();
+    },
+  };
+  try {
+    let result;
+    if (job.kind === "image") {
+      const f = AI_QUEUE_FILES.get(job.id);
+      if (!f) throw new Error("页面刷新后原图已丢失，请重新粘贴/选择这张图片");
+      const fd = new FormData();
+      fd.append("file", f);
+      if (job.text) fd.append("text", job.text);
+      const res = await fetch(routePath("/api/ai/parse-image/stream"), { method: "POST", body: fd, signal: AI_QUEUE_CTRL.signal });
+      result = await aiCollectStream(res, sink);
+    } else {
+      const res = await fetch(routePath("/api/ai/parse/stream"), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: job.text }), signal: AI_QUEUE_CTRL.signal,
+      });
+      result = await aiCollectStream(res, sink);
+    }
+    job.status = "done";
+    job.result = result;
+    job.finished_at = new Date().toISOString();
+    job.elapsed = Math.round((Date.now() - started) / 1000);
+    aiFinishThinking("队列识别完成");
+    AI_QUEUE_FILES.delete(job.id);        // 原图用完即弃，避免内存堆积
+  } catch (e) {
+    job.status = "error";
+    if (e && e.name === "AbortError") { job.error = "已取消"; aiHideThinking(); }
+    else { job.error = (e && e.message) || String(e); aiFinishThinking("队列识别失败"); }
+  } finally {
+    AI_QUEUE_CTRL = null;
+    AI_QUEUE_TICKING = false;
+    aiQueueSave();
+    refreshEvaBadge();
+    if ($("page-eva").classList.contains("active")) renderEva();
+    setTimeout(aiQueueTick, 300);         // 接着跑下一条
+  }
+}
+/** 待办页「正在识别」卡片（节流 400ms，只更新这一块，避免整页重绘） */
+function evaRenderLive() {
+  if (AI_QUEUE_LIVE_T) return;
+  AI_QUEUE_LIVE_T = setTimeout(() => {
+    AI_QUEUE_LIVE_T = null;
+    const card = $("evaLiveCard");
+    if (!card) return;
+    const job = AI_QUEUE.find((j) => j.status === "running");
+    if (!job) { card.style.display = "none"; return; }
+    card.style.display = "";
+    $("evaLiveHead").textContent = `${evaTitle(job)}${job.source ? "（" + job.source + "）" : ""}`;
+    $("evaLiveStage").textContent = job.stage || "识别中…";
+    const t = $("evaLiveThink");
+    if (t) { t.textContent = (job.think || "").slice(-600) || "（等待模型输出…）"; t.scrollTop = t.scrollHeight; }
+  }, 400);
+}
+function renderAiQueueBar() {
+  const el = $("aiQueueBar");
+  if (!el) return;
+  const waiting = AI_QUEUE.filter((j) => j.status === "waiting").length;
+  const running = AI_QUEUE.filter((j) => j.status === "running").length;
+  const done = AI_QUEUE.filter((j) => j.status === "done").length;
+  const errs = AI_QUEUE.filter((j) => j.status === "error").length;
+  if (!(waiting + running + done + errs)) { el.style.display = "none"; el.innerHTML = ""; return; }
+  el.style.display = "";
+  el.innerHTML =
+    `<span class="grow">${running ? "⏳ 正在识别… · " : ""}排队 ${waiting} 项 · <b>待处理 ${done} 项</b>${errs ? ` · 失败 ${errs} 项` : ""}</span>` +
+    `<button class="btn sm" onclick="goPage('eva')">去待办处理 →</button>`;
+}
+/** AI 识别待办条数：排队 / 识别中 / 待审核（不含已提交与失败） */
+function aiQueuePendingCount() {
+  return AI_QUEUE.filter((j) => ["waiting", "running", "done"].includes(j.status)).length;
+}
+/** 待办总数（既有「待办处理」按钮上显示）：聚水潭待办 + AI 识别待办 */
+function evaPendingTotal() { return (JST_PENDING_N || 0) + aiQueuePendingCount(); }
+function refreshEvaBadge() {
+  jstPendingBtnState();   // 出库页那个「待办处理（N）」按钮：N = 聚水潭 + AI
+  renderAiQueueBar();
+}
+
+/* ---------- 待办页渲染 ---------- */
+let EVA_TAB = "ai";   // 顶部三个横向按钮：ai 识别队列 / in 入库待办 / out 出库待办
+function evaTab(tab) {
+  EVA_TAB = ["ai", "in", "out", "st"].includes(tab) ? tab : "ai";
+  document.querySelectorAll("#evaSeg .seg-item").forEach((b) => b.classList.toggle("active", b.dataset.tab === EVA_TAB));
+  [["ai", "evaPanelAi"], ["in", "evaPanelIn"], ["out", "evaPanelOut"], ["st", "evaPanelSt"]].forEach(([k, id]) => {
+    const el = $(id);
+    if (el) el.style.display = k === EVA_TAB ? "" : "none";
+  });
+  if (EVA_TAB !== "ai") { const c = $("evaLiveCard"); if (c) c.style.display = "none"; }
+  else evaRenderLive();
+}
+function loadEva() { renderEva(); evaTab(EVA_TAB); }
+function evaRefresh() { renderEva(); refreshEvaBadge(); aiQueueTick(); }
+function evaRunQueue() {
+  const waiting = AI_QUEUE.filter((j) => j.status === "waiting").length;
+  toast(waiting ? `队列里还有 ${waiting} 项，继续识别…` : "队列已全部识别完");
+  aiQueueTick();
+}
+function evaCancelCurrent() { if (AI_QUEUE_CTRL) { AI_QUEUE_CTRL.abort(); toast("已取消当前识别"); } }
+function renderEva() {
+  const running = AI_QUEUE.filter((j) => j.status === "running");
+  const waiting = AI_QUEUE.filter((j) => j.status === "waiting");
+  const errors = AI_QUEUE.filter((j) => j.status === "error");
+  const done = AI_QUEUE.filter((j) => j.status === "done");
+  const ins = done.filter((j) => !["outbound", "stocktake"].includes((j.result || {}).type));
+  const outs = done.filter((j) => (j.result || {}).type === "outbound");
+  const stocks = done.filter((j) => (j.result || {}).type === "stocktake");
+  const submitted = AI_QUEUE.filter((j) => j.status === "submitted").length;
+  $("evaStats").innerHTML = `
+    <div class="stat"><div class="label">识别中 / 排队</div><div class="value">${running.length} / ${waiting.length}</div></div>
+    <div class="stat accent"><div class="label">入库待办</div><div class="value">${ins.length}</div></div>
+    <div class="stat warn"><div class="label">出库待办</div><div class="value">${outs.length}</div></div>
+    <div class="stat"><div class="label">盘点待办</div><div class="value">${stocks.length}</div></div>
+    <div class="stat ${errors.length ? "danger" : "success"}"><div class="label">识别失败</div><div class="value">${errors.length}</div><div class="sub">已提交 ${submitted} 条</div></div>`;
+  // 顶部三个横向按钮上的角标（没活就不显示，一眼看出哪一类有待办）
+  const setBadge = (id, n) => { const el = $(id); if (!el) return; el.textContent = String(n); el.style.display = n ? "" : "none"; };
+  setBadge("evaTabAi", running.length + waiting.length + errors.length);
+  setBadge("evaTabIn", ins.length);
+  setBadge("evaTabOut", outs.length);
+  setBadge("evaTabSt", stocks.length);
+  const aiItems = [...running, ...waiting, ...errors];
+  // 任务一律「按钮左右排列」，点按钮才展开处理，避免纵向堆一大片
+  const row = (items, zone, empty) => items.length
+    ? `<div class="eva-btn-row">${items.map((j) => evaItemHtml(j, zone)).join("")}</div>`
+    : `<div class="empty">${empty}</div>`;
+  $("evaAiList").innerHTML = row(aiItems, "ai", "队列为空。回到「工作台 → AI 智能录入」粘贴票据或输入描述，会自动加入这里。");
+  $("evaInList").innerHTML = row(ins, "inbound", "暂无待审核的入库识别结果");
+  $("evaOutList").innerHTML = row(outs, "outbound", "暂无待审核的出库识别结果");
+  $("evaStList").innerHTML = row(stocks, "stocktake", "暂无待审核的盘点结果（说「盘点…」或传盘点表就会出现在这里）");
+  // 聚水潭待办（新商品没规则 / 要验证码）：在既有待办弹层里处理，这里只做入口与计数
+  const jb = $("evaJstBtn");
+  if (jb) {
+    jb.textContent = JST_PENDING_N ? `聚水潭待办（${JST_PENDING_N}）` : "聚水潭待办";
+    jb.className = JST_PENDING_N ? "btn danger" : "btn secondary";
+  }
+  evaRenderLive();
+}
+/** 一条待办 = 一个按钮（左右排列）；点主按钮打开审核/详情，旁边的 ↻ 重试、✕ 删除 */
+function evaItemHtml(j, zone) {
+  const r0 = j.result || {};
+  const isStockJob = r0.type === "stocktake";
+  const stockSum = (r0.lines || []).reduce((a, ln) => a + (+ln.stock_adjust || 0), 0);
+  const meta = j.status === "done"
+    ? (isStockJob
+        ? `${(r0.lines || []).length} 行 · 净调整 ${stockSum >= 0 ? "+" : ""}${fmtNum(stockSum)} · ${evaDateSpan(j)}`
+        : `${(r0.lines || []).length} 行 · ${fmtMoney(evaMoney(j))} · ${evaDateSpan(j)}`)
+    : (j.status === "running" ? "识别中…" : (j.status === "waiting" ? "等待识别…" : ""));
+  const draftTag = (j.status === "done" && j.draft_at) ? " · ✎已暂存" : "";   // 你改过并暂存过（打开会带着修改）
+  const ck = zone === "ai" ? "" : `<input type="checkbox" class="eva-ck" data-id="${j.id}" title="勾选后可批量提交" />`;
+  const side = zone === "ai"
+    ? `<button class="btn sm secondary eva-chip-mini" title="重新识别" onclick="evaRetry('${j.id}')">↻</button>
+       <button class="btn sm secondary eva-chip-mini" title="删除这条待办" onclick="evaDelete('${j.id}')">✕</button>`
+    : `<button class="btn sm secondary eva-chip-mini" title="删除这条待办" onclick="evaDelete('${j.id}')">✕</button>`;
+  const label = `${esc(j.source || (j.kind === "image" ? "票据" : "文字"))} · ${esc(evaTitle(j).slice(0, 16))}`;
+  return `<span class="eva-chip s-${j.status}">
+      ${ck}
+      <button class="eva-chip-main" title="${esc(j.error || "点开核对 / 提交：" + evaTitle(j))}" onclick="evaOpen('${j.id}')">${label}<span class="muted">${esc(meta + draftTag)}</span></button>
+      ${side}
+    </span>`;
+}
+/** 点待办按钮：已识别好的直接打开审核框；失败的重试；其余只是提示 */
+function evaOpen(id) {
+  const j = AI_QUEUE.find((x) => x.id === id);
+  if (!j) return;
+  if (j.status === "done") evaReview(id);
+  else if (j.status === "error") evaRetry(id);
+  else toast(j.status === "running" ? "这条正在识别中…" : "这条还在排队，识别完会自动出现在待办里");
+}
+function evaReview(id) {
+  const j = AI_QUEUE.find((x) => x.id === id);
+  if (!j || !j.result) return;
+  AI_QUEUE_CURRENT = id;
+  AI_THINK_TEXT = j.think || "";        // 让确认框里的「思考过程」显示这条任务的
+  openAiConfirm(j.result);
+}
+function evaDelete(id) {
+  const j = AI_QUEUE.find((x) => x.id === id);
+  if (!j) return;
+  if (!confirm(`删除这条待办？\n${evaTitle(j)}`)) return;
+  AI_QUEUE = AI_QUEUE.filter((x) => x.id !== id);
+  AI_QUEUE_FILES.delete(id);
+  aiQueueSave(); renderEva(); refreshEvaBadge();
+}
+function evaRetry(id) {
+  const j = AI_QUEUE.find((x) => x.id === id);
+  if (!j) return;
+  if (j.kind === "image" && !AI_QUEUE_FILES.has(j.id)) { toast("原图已丢失，请回到工作台重新粘贴这张图片"); return; }
+  j.status = "waiting"; j.error = ""; j.think = ""; j.answer = "";
+  aiQueueSave(); renderEva(); refreshEvaBadge(); aiQueueTick();
+}
+/** 待办结果 → 提交用的明细行（与确认框里的行结构一致） */
+function evaRowsOf(job) {
+  const r = job.result || {};
+  aiMergeDupLines(r);   // 老结果兜底：同种商品合并成一行（数量累加），批量提交才不会在同一商品上反复调整
+  return (r.lines || []).filter((ln) => !ln._deleted && (ln.product_id || ln.new_product)).map((ln) => ({
+    product_id: ln.product_id || 0,
+    new_product: ln.product_id ? null : (ln.new_product || { name: ln.recognized_name || ln.product_name || "", category: ln.category || "stock", unit: ln.unit || "个" }),
+    // 盘点：数量用「增减量」（后端已按 实盘数 − 当前库存 算好）
+    quantity: r.type === "stocktake" ? (+ln.stock_adjust || 0) : (+ln.quantity || 0),
+    unit: (r.type === "stocktake" ? (ln.stock_unit || ln.unit) : ln.unit) || "个",
+    unit_price: +ln.unit_price || 0,
+    paid: ln.paid !== false,
+    date: ln.date || r.date || today(),
+    auto_created: !!ln.auto_created,
+  }));
+}
+/** 勾选后批量提交（入库/出库各自成单；出库按「日期+付款状态」分单） */
+async function evaSubmitChecked(type) {
+  const boxId = { inbound: "evaInList", outbound: "evaOutList", stocktake: "evaStList" }[type] || "evaInList";
+  const label = { inbound: "入库", outbound: "出库", stocktake: "盘点" }[type] || "入库";
+  const ids = [...document.querySelectorAll(`#${boxId} .eva-ck:checked`)].map((x) => x.dataset.id);
+  if (!ids.length) { toast("请先勾选要提交的待办（也可以在每条上点「审核提交」逐个核对）"); return; }
+  const jobs = ids.map((id) => AI_QUEUE.find((j) => j.id === id)).filter((j) => j && j.result);
+  if (!jobs.length) return;
+  const bad = jobs.filter((j) => !evaRowsOf(j).length);
+  if (bad.length) { toast(`有 ${bad.length} 条没有可提交的明细行，请先逐条审核`); return; }
+  const tip = type === "stocktake"
+    ? "：按增减量调整库存（可在「库存 → 盘点记录」回退）"
+    : "，日期用每行自己的单据日期";
+  if (!confirm(`批量提交 ${jobs.length} 条${label}待办？\n（按识别结果直接提交${tip}；要改明细请点「审核提交」）`)) return;
+  const op = (CURRENT_USER && (CURRENT_USER.name || CURRENT_USER.username)) || "";
+  let okN = 0;
+  for (const j of jobs) {
+    const r = j.result || {};
+    try {
+      await submitDocRows({
+        type,
+        party: type === "outbound" ? (r.customer || "") : (type === "inbound" ? (r.supplier || "") : ""),   // 盘点不需要客户/供应商
+        remark: r.remark || "", imageUrl: r.image_url || "", rows: evaRowsOf(j), op,
+        // 出库：带上识别阶段算好的包材/快递/固定成本（口径与确认框一致）
+        charges: type === "outbound" ? aiChargesFromResult(r) : null,
+      });
+      j.status = "submitted";
+      j.submitted_at = new Date().toISOString();
+      aiQueueSave();
+      okN++;
+    } catch (e) {
+      toast(`「${evaTitle(j)}」提交失败：${e.message}`);
+      break;
+    }
+  }
+  toast(`已提交 ${okN}/${jobs.length} 条`);
+  renderEva(); refreshEvaBadge(); loadDashboard(); loadStock();
+}
+
+/* ---------- 提交单据（确认框 & 待办批量提交共用） ----------
+   rows: [{ product_id, new_product, quantity, unit, unit_price, paid, date, auto_created }] */
+async function submitDocRows({ type, party, remark, imageUrl, rows, op, charges }) {
+  const inv = imageUrl ? `[票据] ${imageUrl}` : "";
+  // 1) 先创建确认为新物品的商品档案（同名已存在则复用）
+  const pend = rows.filter((r) => !r.product_id && r.new_product);
+  if (pend.length) {
+    const d = await api("/api/ai/products", "POST", {
+      items: pend.map((r) => ({
+        name: (r.new_product.name || "").trim(),
+        category: r.new_product.category || "stock",
+        unit: r.unit || r.new_product.unit || "个",
+      })),
+    });
+    (d.items || []).forEach((it, k) => { if (pend[k]) pend[k].product_id = it.product_id; });
+    PRODUCTS = await api("/api/products");
+  }
+  const ok = rows.filter((r) => r.product_id);
+  if (!ok.length) throw new Error("商品创建失败，请稍后重试");
+  // 2) 写单据：盘点走既有「盘点调整」的 +/- 增减模式；入库逐行建单；出库按「日期 + 付款状态」分单
+  if (type === "stocktake") {
+    let n = 0;
+    for (const r of ok) {
+      const d = +r.quantity || 0;                       // 增减量（±，按展示单位）
+      if (!d) continue;                                 // 增减为 0：等于没调整，跳过
+      // 既有接口是「库存 → 盘点调整」用的 POST /api/adjust（相对增减），别再写错路径（曾误写 /api/inventory/adjust → 404）
+      await api("/api/adjust", "POST", {
+        product_id: r.product_id,
+        date: r.date,
+        quantity: `${d > 0 ? "+" : ""}${+d.toFixed(6)}`,  // 既有接口要求带符号的相对调整串
+        unit: r.unit,
+        remark: [remark, inv].filter(Boolean).join(" ") || "AI盘点",
+      });
+      n++;
+    }
+    return n;
+  }
+  if (type === "inbound") {
+    for (const r of ok) {
+      const rmk = [inv, r.auto_created ? "[AI自动新增]" : "", remark].filter(Boolean).join(" ");
+      await api("/api/inbounds", "POST", {
+        product_id: r.product_id, unit: r.unit, quantity: r.quantity, unit_price: r.unit_price,
+        supplier: party, operator: op, date: r.date, remark: rmk, pay_status: r.paid ? "paid" : "unpaid",
+      });
+    }
+  } else {
+    const groups = new Map();
+    ok.forEach((r) => {
+      const key = `${r.date}|${r.paid ? "paid" : "unpaid"}`;
+      if (!groups.has(key)) groups.set(key, { date: r.date, pay: r.paid ? "paid" : "unpaid", rows: [] });
+      groups.get(key).rows.push(r);
+    });
+    // 附加项（包材/快递/固定成本）只挂在「只有一张单」的情况下；多张单（不同日期/付款状态）
+    // 时按整单算的金额没法分摊，就不自动挂，避免把一笔包材记到每张单上重复计。
+    const useCharges = charges && groups.size === 1 ? charges : null;
+    for (const g of groups.values()) {
+      const lines = g.rows.map((r) => ({ product_id: r.product_id, unit: r.unit, quantity: r.quantity, price: r.unit_price }));
+      const payload = {
+        customer: party, operator: op, date: g.date,
+        remark: [inv, remark, useCharges && useCharges.remark].filter(Boolean).join(" "),
+        lines, pack_lines: useCharges ? useCharges.pack_lines : [], pay_status: g.pay,
+      };
+      if (useCharges) {
+        // 固定成本（工时/胶带等按金额记的）与实收口径一起提交，口径与确认框显示的一致
+        payload.pack_fee_total = useCharges.fee_total || 0;
+        payload.settle_cats = String(useCharges.settle_cats || "").split(",").filter(Boolean);
+        payload.auto_express = useCharges.auto_express !== false;
+      }
+      await api("/api/outbounds", "POST", payload);
+    }
+  }
+  return ok.length;
 }
 
 /* =============== 备注附件 =============== */
@@ -1802,16 +2836,22 @@ function splitRemark(rmk) {
   return segs.filter((s) => s.url || s.text.trim());
 }
 
-/* 备注渲染：文本原样（换行转 <br>），图片附件显示缩略图，其他文件显示下载链接 */
-function renderRemarkHtml(rmk) {
+/* 备注渲染：文本原样（换行转 <br>），图片附件显示缩略图，其他文件显示下载链接。
+   opts.compact=true：附件只出标签、不加载缩略图（列表页一屏几十条备注全是票据图时，
+   浏览器会连发几十个图片请求、把接口请求都挤慢；点标签照样能预览）。 */
+function renderRemarkHtml(rmk, opts) {
   if (!rmk) return "—";
+  const compact = !!(opts && opts.compact);
   return splitRemark(rmk).map((s) => {
     if (s.text !== undefined) return esc(s.text).replace(/\n/g, "<br />");
     const u = routePath(s.url);
-    if (s.isImage) {
-      return `<span style="cursor:zoom-in;display:inline-block;vertical-align:middle;" onclick="openAttachmentPreview('${s.url}','${esc(s.name)}')" title="${esc(s.name)} — 点击预览"><img src="${u}" alt="${esc(s.name)}" style="height:34px;vertical-align:middle;border-radius:4px;margin-right:4px;border:1px solid var(--border-light);" /></span>`;
+    if (!s.isImage) {
+      return `<a class="attach-link" href="${u}" target="_blank" title="${esc(s.name)} — 点击预览" onclick="openAttachmentPreview('${s.url}','${esc(s.name)}');return false;">📎 ${esc(s.name)}</a>`;
     }
-    return `<a class="attach-link" href="${u}" target="_blank" title="${esc(s.name)} — 点击预览" onclick="openAttachmentPreview('${s.url}','${esc(s.name)}');return false;">📎 ${esc(s.name)}</a>`;
+    if (compact) {
+      return `<a class="attach-link" href="${u}" title="${esc(s.name)} — 点击预览" onclick="openAttachmentPreview('${s.url}','${esc(s.name)}');return false;">🖼 ${esc(s.name)}</a>`;
+    }
+    return `<span style="cursor:zoom-in;display:inline-block;vertical-align:middle;" onclick="openAttachmentPreview('${s.url}','${esc(s.name)}')" title="${esc(s.name)} — 点击预览"><img src="${u}" alt="${esc(s.name)}" loading="lazy" decoding="async" style="height:34px;vertical-align:middle;border-radius:4px;margin-right:4px;border:1px solid var(--border-light);" /></span>`;
   }).join("");
 }
 /* 附件点击预览：图片全屏浮层预览（点遮罩或按 Esc 关闭），非图片（PDF/Excel 等）新标签打开 */
@@ -2008,21 +3048,27 @@ function renderFreshTable(items) {
   if (!items.length) t.innerHTML = `<tr><td colspan="7" class="empty">暂无鲜货商品，可点「管理展示商品」添加</td></tr>`;
 }
 
-/* ---------- 鲜货展示清单管理（可自主增删/排序） ---------- */
+/* ---------- 展示清单管理（可自主增删/排序） ---------- */
 let FC_SEL = [];   // 当前展示清单（有序商品 id）
-let FC_ALL = [];   // 全部可选鲜货商品
+let FC_ALL = [];   // 全部可选商品（所有在用库存商品，不限分类）
+let FC_CATS = [];  // 鲜货分类（蔬菜/干货），供「只看鲜货分类」筛选
 async function openFreshConfig() {
   try {
-    const [opts, cur] = await Promise.all([api("/api/fresh/options"), api("/api/fresh")]);
+    // scope=all：候选商品列出全部在用商品（不再只限蔬菜/干货），任意商品都能加进清单
+    const [opts, cur] = await Promise.all([api("/api/fresh/options?scope=all"), api("/api/fresh")]);
     FC_ALL = opts.items || [];
+    FC_CATS = opts.fresh_cats || [];
     FC_SEL = (cur.ids || []).slice();
     openModal(`
       <h3>管理展示商品 <button class="close" onclick="closeModal()">✕</button></h3>
-      <p class="hint" style="margin-bottom:10px;">左侧勾选要展示的鲜货商品（点击顺序即展示顺序），右侧可调整顺序或移除；参考订货单品类清单。</p>
+      <p class="hint" style="margin-bottom:10px;">左侧列出的是<b>全部在用商品</b>（与「商品」页口径一致，不含 包材/人工/快递，可搜索）；勾选即加入展示清单，点击顺序即展示顺序，右侧可调整顺序或移除。清单里的商品会出现在「鲜货入库」表格里，可随时调整。</p>
       <div class="fc-wrap">
         <div class="fc-pane">
-          <div class="fc-label">候选商品</div>
-          <input id="fcSearch" placeholder="🔍 搜索…" oninput="renderFreshConfig()" style="margin-bottom:8px;" />
+          <div class="fc-label">
+            候选商品（<b id="fcCount">0</b> 个）
+            <label style="float:right;font-weight:400;cursor:pointer;"><input type="checkbox" id="fcFreshOnly" onchange="renderFreshConfig()" /> 只看鲜货分类</label>
+          </div>
+          <input id="fcSearch" placeholder="🔍 搜索名称 / 分类…" oninput="renderFreshConfig()" style="margin-bottom:8px;" />
           <div id="fcOptions" class="fc-list"></div>
         </div>
         <div class="fc-pane">
@@ -2039,17 +3085,23 @@ async function openFreshConfig() {
 }
 function renderFreshConfig() {
   const kw = ($("fcSearch")?.value || "").trim().toLowerCase();
+  const freshOnly = !!($("fcFreshOnly") || {}).checked;
   const selSet = new Set(FC_SEL);
-  const optHtml = FC_ALL
-    .filter((p) => !kw || p.name.toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw))
+  const rows = FC_ALL
+    .filter((p) => !freshOnly || FC_CATS.includes(p.category))   // 「只看鲜货分类」按蔬菜/干货筛
+    .filter((p) => !kw || p.name.toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw));
+  const optHtml = rows
     .map((p) => `<div class="fc-opt ${selSet.has(p.id) ? "on" : ""}" onclick="fcToggle(${p.id})">${esc(p.name)} <span class="muted">${esc(p.category)}</span></div>`)
     .join("");
+  const cnt = $("fcCount");
+  if (cnt) cnt.textContent = rows.length;
   $("fcOptions").innerHTML = optHtml || '<div class="empty" style="padding:14px;">无匹配商品</div>';
   const selHtml = FC_SEL.map((id, i) => {
     const p = FC_ALL.find((x) => x.id === id);
-    if (!p) return "";
+    // 已停用 / 不在候选里的（历史清单遗留）也给出来，方便直接移除
+    const label = p ? esc(p.name) : `<span class="muted">（包材/人工/快递 或已停用 #${id}）</span>`;
     return `<div class="fc-sel-item">
-      <span class="grow">${i + 1}. ${esc(p.name)}</span>
+      <span class="grow">${i + 1}. ${label}</span>
       <button class="btn sm" onclick="fcMove(${i},-1)" title="上移">↑</button>
       <button class="btn sm" onclick="fcMove(${i},1)" title="下移">↓</button>
       <button class="btn sm danger" onclick="fcDel(${i})" title="移除">✕</button>
@@ -2092,7 +3144,13 @@ let FIN_PICK = new Set(); // 勾选的行（商品id）：勾了「全部入库�
 
 /* 今日已入库：点「入库」后把这个商品记在浏览器里（只记当天），这一行就先从表里隐藏——
    表里剩下的就都是「还没入库」的，一眼能看出还差哪些货；第二天 0 点自动恢复成默认列表。 */
-const FIN_DONE_KEY = "wsfc_fin_done";
+const FIN_DONE_KEY = "wsfc_fin_done";   // 旧版全局 key：只用于把老数据迁到分仓维度
+/** 「今日已入库」按分仓隔离：记的是商品 id，而商品 id 是分仓维度的，
+ *  串仓会把另一个分仓的同 id 商品也隐藏掉。 */
+function finDoneKey() {
+  const wh = (CURRENT_USER && CURRENT_USER.warehouse && CURRENT_USER.warehouse.key) || "";
+  return wh ? `${FIN_DONE_KEY}:${wh}` : FIN_DONE_KEY;
+}
 let FIN_DONE_SHOW = false;     // true = 连「今日已入库」的行也显示（灰显，可点行尾「恢复」放回）
 let FIN_DONE_SET = new Set();  // 今日已入库的商品 id（每次渲染从浏览器读一遍）
 let FIN_MIDNIGHT_TIMER = null; // 跨 0 点的定时器
@@ -2100,13 +3158,13 @@ let FIN_MIDNIGHT_TIMER = null; // 跨 0 点的定时器
 /** 读「今日已入库」：存的日期不是今天就当没有（天然实现「第二天 0 点恢复」） */
 function finDoneLoad() {
   try {
-    const raw = JSON.parse(localStorage.getItem(FIN_DONE_KEY) || "null");
+    const raw = JSON.parse(localStorage.getItem(finDoneKey()) || "null");
     if (raw && raw.date === today() && Array.isArray(raw.ids)) return new Set(raw.ids.map(Number).filter(Boolean));
   } catch (e) { /* 存坏了就当没有 */ }
   return new Set();
 }
 function finDoneSave(set) {
-  try { localStorage.setItem(FIN_DONE_KEY, JSON.stringify({ date: today(), ids: [...set] })); } catch (e) {}
+  try { localStorage.setItem(finDoneKey(), JSON.stringify({ date: today(), ids: [...set] })); } catch (e) {}
 }
 /** 入库成功后调用：把这些商品记成「今日已入库」（表里随后隐藏） */
 function finDoneAdd(ids) {
@@ -2184,7 +3242,7 @@ function renderFreshInbound() {
     + (ids.length ? ids.map(finRowHtml).join("")
       : `<tr><td colspan="10" class="empty">${hidden.length
         ? `今天的鲜货都入完啦 ✅（${hidden.length} 个商品已入库、先从列表隐藏，明天 0 点自动回来；也可以点上面「显示今日已入库」核对）`
-        : "还没挑商品：点右上「管理展示商品」把要入库的鲜货挑进来，这里就会出现"}</td></tr>`)
+        : "还没挑商品：点右上「管理展示商品」把要入库的商品挑进来（候选含全部在用商品，不限分类），这里就会出现"}</td></tr>`)
     + `</tbody>`;
   // 单价没填过的行先自动带出（最近入库价 → 参考成本），再算一遍金额
   ids.forEach((id) => {
@@ -4646,11 +5704,73 @@ async function saveInboundEdit(id) {
 /* =============== 出库 =============== */
 let outSaleRowId = 0;
 let OUT_PREVIEW = null;  // 最近一次服务端出库预览（含先进先出结转成本），用于展示真实成本
+let OUT_FEE_MANUAL = false;  // 固定费用合计是否被手动改过（改过就别让「预览结算」覆盖掉）
+
+/* ---------- 实收金额口径：客户承担的关联结算（包材 / 人工 / 快递费） ----------
+   客户的付款里含包材/工时/运费 → 勾选后计入「实收金额」（后端同样记进 settle_income 与报表收入）；
+   成本侧的包材/快递照旧结转，所以毛利不会被包材吃掉。选择记在浏览器里，下一单沿用。 */
+const SETTLE_KEYS = { material: "settleMaterial", labor: "settleLabor", express: "settleExpress", fee: "settleFee" };
+const SETTLE_LABEL = { material: "包材", labor: "人工", express: "快递费", fee: "固定成本" };
+
+function settleCats() {
+  return Object.keys(SETTLE_KEYS).filter((k) => $(SETTLE_KEYS[k])?.checked);
+}
+function setSettleAll(on) {
+  Object.values(SETTLE_KEYS).forEach((id) => { if ($(id)) $(id).checked = !!on; });
+  settleChanged();
+}
+function settleChanged() {
+  try { localStorage.setItem("settleCats", JSON.stringify(settleCats())); } catch (e) { /* 隐私模式忽略 */ }
+  calcOutboundTotals();
+}
+function settleRestore() {
+  try {
+    const v = JSON.parse(localStorage.getItem("settleCats") || "null");
+    if (!Array.isArray(v) || !v.length) return;   // 没记录过就保持默认（全勾）
+    Object.entries(SETTLE_KEYS).forEach(([k, id]) => { if ($(id)) $(id).checked = v.includes(k); });
+  } catch (e) { /* 忽略 */ }
+}
+/** 关联结算行归到哪一类（与后端 services.pack_settle_cat 口径一致） */
+function packSettleCat(tr) {
+  const m = packRowProduct(tr);
+  const cat = (m?.category || "").trim();
+  const name = (m?.name || "").trim();
+  if (cat === "人工") return "labor";
+  if (cat === "快递") return "express";
+  if (name.endsWith("打包")) return "labor";
+  return "material";   // 包材 / 耗材 / 包装 / 其他关联结算
+}
+/** 勾选的关联结算合计（= 客户代收，计入实收金额）；「固定成本」勾上时把固定费用合计也算进来 */
+function settleIncomeLocal() {
+  const cats = settleCats();
+  let sum = 0;
+  document.querySelectorAll("#outPackBody tr").forEach((tr) => {
+    if (!cats.includes(packSettleCat(tr))) return;
+    sum += parseFloat((tr.querySelector(".pl-amount")?.textContent || "0").replace(/[^\d.-]/g, "")) || 0;
+  });
+  if (cats.includes("fee")) sum += parseFloat($("outFee")?.value) || 0;
+  return Math.round(sum * 100) / 100;
+}
+function settleCatsLabel(cats) {
+  const list = Array.isArray(cats) ? cats : String(cats || "").split(",").filter(Boolean);
+  return list.map((k) => SETTLE_LABEL[k] || k).join("、");
+}
 function initOutbound() {
   if (!$("outDate").value) $("outDate").value = today();
   if (!$("outSaleBody").children.length) addSaleRow();
+  settleRestore();
   loadOutbounds();
   renderJstPending();   // 顺手刷新「待办处理」卡片（没有待办会自动隐藏）
+}
+/** 固定费用被手动改过 → 记住，别被预览覆盖；没改过则跟随系统建议值 */
+function outFeeTouched() { OUT_FEE_MANUAL = true; calcOutboundTotals(); }
+/** 恢复系统建议的固定费用（按商品打包费自动算）；只填值不重绘表格，免得丢掉手动改过的结算行数量 */
+function outFeeReset() {
+  if (!OUT_PREVIEW) return;
+  OUT_FEE_MANUAL = false;
+  $("outFee").value = OUT_PREVIEW.total_fee;
+  if ($("outFeeHint")) $("outFeeHint").textContent = "按商品打包费自动算出的建议值，可手动覆盖";
+  calcOutboundTotals();
 }
 function addSaleRow() {
   const id = ++outSaleRowId;
@@ -4749,31 +5869,135 @@ async function previewOutbound() {
   const lines = collectSaleLines();
   if (!lines.length) { toast("请至少添加一行销售商品"); return; }
   try {
-    const r = await api("/api/outbounds/preview", "POST", { lines, auto_express: autoExpressOn() });
+    // 手动挑选的关联物品也带上：后端追加在自动带出的结算项后面，一起按 FIFO 算成本
+    const r = await api("/api/outbounds/preview", "POST", {
+      lines, auto_express: autoExpressOn(), extra_pack_lines: collectManualPackLines(),
+      settle_cats: settleCats(),   // 实收含哪些关联结算（后端据此回 settle_income）
+    });
     renderPackPreview(r);
   } catch (e) { toast("预览失败：" + e.message); }
 }
 function renderPackPreview(r) {
   OUT_PREVIEW = r;
   $("outPreview").style.display = "block";
-  $("outFee").value = r.total_fee;
+  // 固定费用：手动改过就保留用户的数（服务端建议值放提示里，可一键恢复）
+  if (!OUT_FEE_MANUAL) $("outFee").value = r.total_fee;
+  if ($("outFeeHint")) {
+    const cur = parseFloat($("outFee").value) || 0;
+    $("outFeeHint").innerHTML = OUT_FEE_MANUAL && Math.abs(cur - (r.total_fee || 0)) > 1e-9
+      ? `已按手填 ¥${(cur || 0).toFixed(2)} 计；系统建议 ¥${(r.total_fee || 0).toFixed(2)}（按商品打包费自动算）· <a href="javascript:outFeeReset()">恢复建议值</a>`
+      : "按商品打包费自动算出的建议值，可手动覆盖";
+  }
   $("outWarn").innerHTML = (r.warnings || []).map((w) => `<div class="alert warn">⚠ ${esc(w)}（仍可继续，可先补货）</div>`).join("");
   $("outPackBody").innerHTML = r.pack_lines.map((pl, i) => {
     const m = PRODUCTS.find((x) => x.id === pl.product_id);
     // 快递费行标记出来：删掉它 = 这笔不结算快递费（否则重新预览又会被自动加回来）
     const isExpress = !!(m && m.category === "快递");
-    return `<tr data-idx="${i}" data-unit="${esc(pl.unit)}" data-up="${pl.unit_price}"${isExpress ? ' data-express="1"' : ""}>
-      <td><b>${esc(pl.product_name)}</b></td>
-      <td><select class="searchable" onchange="packLineUnitChanged(this)">${m ? unitOptions(m, pl.unit) : `<option>${pl.unit}</option>`}</select></td>
-      <td><input type="number" step="any" value="${pl.quantity}" oninput="packLineChanged(this)" style="width:90px;" /></td>
-      <td><span class="badge pack">${isExpress ? "快递费" : "包装消耗"}</span></td>
-      <td class="num mono">${fmtMoney(pl.unit_price)}/${pl.unit}</td>
+    const isManual = !!pl.manual;   // 手动挑选的关联物品（后端已按 FIFO 算好成本一起返回）
+    return `<tr data-idx="${i}" data-pid="${pl.product_id}" data-unit="${esc(pl.unit)}" data-up="${pl.unit_price}"${isManual ? ' data-manual="1"' : ""}${isExpress ? ' data-express="1"' : ""}>
+      <td><b>${esc(pl.product_name)}</b>${isManual ? ' <span class="badge" style="background:var(--primary-light);color:var(--primary);">手动</span>' : ""}</td>
+      <td><select class="searchable pl-unit" onchange="packLineUnitChanged(this)">${m ? unitOptions(m, pl.unit) : `<option>${pl.unit}</option>`}</select></td>
+      <td><input class="pl-qty" type="number" step="any" value="${pl.quantity}" oninput="packLineChanged(this)" style="width:90px;" /></td>
+      <td><span class="badge pack">${isExpress ? "快递费" : (isManual && m && m.category === "人工" ? "人工" : "包装消耗")}</span></td>
+      <td class="num mono">¥${fmtNum(pl.unit_price)}/${esc(pl.unit)}</td>
       <td class="num pl-amount">${fmtMoney(pl.amount)}</td>
       <td><button class="btn sm danger" title="删除该结算项" onclick="removePackRow(this)">✕</button></td></tr>`;
   }).join("");
   if (!r.pack_lines.length) $("outPackBody").innerHTML = `<tr><td colspan="7" class="empty">无关联结算项（该商品未配置包装清单）</td></tr>`;
   bindSearchable($("outPackBody"));
   calcOutboundTotals();
+}
+/** 手动挑选的关联物品：从当前表格收集，重新预览时交回后端，一起按 FIFO 算成本 */
+function collectManualPackLines() {
+  const out = [];
+  document.querySelectorAll('#outPackBody tr[data-manual="1"]').forEach((tr) => {
+    const unit = tr.querySelector(".pl-unit")?.value;
+    const qty = parseFloat(tr.querySelector(".pl-qty")?.value);
+    const m = packRowProduct(tr);
+    if (m && unit && qty > 0) out.push({ product_id: m.id, unit, quantity: qty });
+  });
+  return out;
+}
+/* ---------- 关联出库物品：手动挑选（包材 / 人工 / 快递费等，任意商品都可选） ---------- */
+function packRowProduct(tr) {
+  const pid = +(tr?.dataset?.pid || 0);
+  if (pid) {
+    const p = PRODUCTS.find((x) => x.id === pid);
+    if (p) return p;
+  }
+  const name = tr?.querySelector("b")?.textContent?.trim();
+  return PRODUCTS.find((x) => x.name === name) || null;
+}
+
+/** 往「关联结算」表里加一行（结构与被预览带出的行一致，提交时一起收集） */
+function addPackRow(m, qty = 1) {
+  const body = $("outPackBody");
+  if (!body || !m) return null;
+  const empty = body.querySelector("tr .empty");
+  if (empty) empty.closest("tr").remove();
+  const unit = m.default_unit || m.base_unit;
+  const factor = (m.conversions || {})[unit] || 1;
+  const up = +((m.avg_cost || 0) * factor).toFixed(6);   // 估算：库存均价；重新预览后由服务端 FIFO 实算
+  const tr = document.createElement("tr");
+  tr.dataset.pid = m.id;
+  tr.dataset.manual = "1";
+  tr.dataset.unit = unit;
+  tr.dataset.up = up;
+  tr.innerHTML = `
+    <td><b>${esc(m.name)}</b> <span class="badge" style="background:var(--primary-light);color:var(--primary);">手动</span></td>
+    <td><select class="searchable pl-unit" onchange="packLineUnitChanged(this)">${unitOptions(m, unit)}</select></td>
+    <td><input class="pl-qty" type="number" step="any" min="0" value="${qty}" oninput="packLineChanged(this)" style="width:90px;" /></td>
+    <td><span class="badge pack">${m.category === "快递" ? "快递费" : (m.category === "人工" ? "人工" : "包装消耗")}</span></td>
+    <td class="num mono" title="按库存均价估算；点「🔍 预览结算」后按 FIFO 实算">¥${fmtNum(up)}/${esc(unit)}</td>
+    <td class="num pl-amount">${fmtMoney(up * qty)}</td>
+    <td><button class="btn sm danger" title="删除该结算项" onclick="removePackRow(this)">✕</button></td>`;
+  body.appendChild(tr);
+  try { bindSearchable(tr) } catch (e) { /* 单位下拉搜索绑定失败不影响录入 */ }
+  calcOutboundTotals();
+  return tr;
+}
+
+function openPackItemPicker() {
+  if (!$("outPreview") || $("outPreview").style.display === "none") {
+    toast("先点「🔍 预览结算」，再挑关联出库物品"); return;
+  }
+  const cats = [...new Set(PRODUCTS.filter((p) => p.is_active).map((p) => p.category).filter(Boolean))].sort();
+  openModal(`
+    <h3>选择关联出库物品 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="toolbar" style="margin-bottom:10px;">
+      <input id="ppSearch" placeholder="🔍 搜索商品名称 / 分类..." oninput="renderPackItemPicker()" />
+      <select id="ppCat" class="searchable" onchange="renderPackItemPicker()"><option value="">全部分类</option>${cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
+    </div>
+    <div class="sp-list" id="ppList" style="max-height:52vh;overflow-y:auto;"></div>`);
+  renderPackItemPicker();
+}
+
+function renderPackItemPicker() {
+  const kw = ($("ppSearch")?.value || "").trim().toLowerCase();
+  const cat = $("ppCat")?.value || "";
+  const rows = PRODUCTS.filter((p) => p.is_active
+    && (!kw || (p.name || "").toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw))
+    && (!cat || p.category === cat));
+  const list = $("ppList");
+  if (!list) return;
+  if (!rows.length) { list.innerHTML = `<div class="empty" style="padding:30px;">无匹配商品</div>`; return; }
+  list.innerHTML = rows.map((p) => `
+    <div class="sp-item" onclick="pickPackItem(${p.id})">
+      <div class="grow">
+        <b>${esc(p.name)}</b>
+        <div class="muted" style="font-size:12px;">${esc(p.category || "—")} · 单位 ${esc(p.default_unit || p.base_unit)} · 库存 ${fmtStock(p)}</div>
+      </div>
+      <span class="badge" style="background:var(--primary-light);color:var(--primary);">选择 ›</span>
+    </div>`).join("");
+}
+
+function pickPackItem(id) {
+  const p = PRODUCTS.find((x) => x.id === id);
+  if (!p) return;
+  closeModal();
+  addPackRow(p);
+  toast(`已添加关联物品：${p.name}（数量按本单用量改）`);
+  previewOutbound();   // 立刻重算一次：让它按 FIFO 出准成本，而不是停留在均价估算
 }
 /* 删掉「快递费」行 → 同步取消「自动计快递费」，避免再次预览/提交时又被算上 */
 function removePackRow(btn) {
@@ -4787,16 +6011,15 @@ function removePackRow(btn) {
   calcOutboundTotals();
 }
 function packLineUnitChanged(sel) {
-  const tr = sel.closest("tr");
-  const m = PRODUCTS.find((x) => x.name === tr.querySelector("b").textContent);
   packLineChanged(sel);
 }
 function packLineChanged(inp) {
   const tr = inp.closest("tr");
-  const unit = tr.querySelectorAll("select")[0].value;
-  const qty = parseFloat(tr.querySelectorAll("input")[0].value) || 0;
-  const name = tr.querySelector("b").textContent;
-  const m = PRODUCTS.find((x) => x.name === name);
+  // ⚠ 必须按类名取：单位下拉被 bindSearchable 换成了「筛选输入框 + 列表」，原 select 隐藏，
+  //   按 querySelectorAll("input")[0] 会取到那个空的筛选框 → 数量恒为 0、小计算成 ¥0.00
+  const unit = tr.querySelector(".pl-unit")?.value || "";
+  const qty = parseFloat(tr.querySelector(".pl-qty")?.value) || 0;
+  const m = packRowProduct(tr);
   if (m && unit) {
     // 优先按服务端预览给出的先进先出单位成本(每展示单位)重算；单位被改过则回退估计
     const up = (tr.dataset.unit === unit) ? parseFloat(tr.dataset.up) : NaN;
@@ -4810,10 +6033,11 @@ function packLineChanged(inp) {
 function collectPackLines() {
   const lines = [];
   document.querySelectorAll("#outPackBody tr").forEach((tr) => {
-    const name = tr.querySelector("b")?.textContent;
-    const unit = tr.querySelectorAll("select")[0]?.value;
-    const qty = parseFloat(tr.querySelectorAll("input")[0]?.value);
-    const m = PRODUCTS.find((x) => x.name === name);
+    // 自动算出来的「快递费」行不提交：后端会按整单毛重自己结算（提交会被算两遍）
+    if (tr.dataset.express === "1") return;
+    const unit = tr.querySelector(".pl-unit")?.value;
+    const qty = parseFloat(tr.querySelector(".pl-qty")?.value);
+    const m = packRowProduct(tr);
     if (m && unit && qty > 0) lines.push({ product_id: m.id, unit, quantity: qty });
   });
   return lines;
@@ -4845,15 +6069,32 @@ function calcOutboundTotals() {
   });
   const fee = parseFloat($("outFee").value) || 0;
   const adjust = parseFloat($("outAdjust")?.value) || 0;   // 抹零/凑整：正=加收，负=抹零
-  const finalAmount = amount + adjust;                     // 实收金额（差额记「金额调整」其他开支）
+  // 客户随货款一起付的关联结算（包材/人工/快递费，按上面的勾选）→ 计入实收金额与毛利
+  const settleIn = settleIncomeLocal();
+  const finalAmount = amount + settleIn + adjust;           // 实收金额（差额记「金额调整」其他开支）
   $("otAmount").textContent = fmtMoney(amount);
-  if ($("otFinal")) $("otFinal").textContent = fmtMoney(finalAmount);
+  if ($("otFinal")) {
+    $("otFinal").innerHTML = fmtMoney(finalAmount) + (settleIn
+      ? `<div class="muted" style="font-size:11px;">含${esc(settleCatsLabel(settleCats()))} ${fmtMoney(settleIn)}</div>` : "");
+  }
   $("otCogs").textContent = fmtMoney(cogs);
-  $("otGross").textContent = fmtMoney(amount - cogs);
+  $("otGross").textContent = fmtMoney(amount + settleIn - cogs);
   // 净利按实收口径：抹零/凑整的差额已计入其他开支，这里同步扣掉，与报表口径一致
   $("otNet").textContent = fmtMoney(finalAmount - cogs - fee);
+  const hint = $("settleHint");
+  if (hint) {
+    hint.innerHTML = settleIn
+      ? `客户代收：${esc(settleCatsLabel(settleCats()))} ${fmtMoney(settleIn)} → 实收 ${fmtMoney(finalAmount)}`
+      : "当前：实收 = 货款 + 调整（客户不承担关联结算）";
+  }
 }
-function clearPreview() { $("outPreview").style.display = "none"; OUT_PREVIEW = null; if ($("outAdjust")) $("outAdjust").value = ""; }
+function clearPreview() {
+  $("outPreview").style.display = "none";
+  OUT_PREVIEW = null;
+  OUT_FEE_MANUAL = false;
+  if ($("outAdjust")) $("outAdjust").value = "";
+  if ($("outFeeHint")) $("outFeeHint").textContent = "";
+}
 async function submitOutbound() {
   const lines = collectSaleLines();
   if (!lines.length) { toast("请至少添加一行销售商品"); return; }
@@ -4862,15 +6103,18 @@ async function submitOutbound() {
   try {
     const payStatus = payOf("outPay");
     const adjust = parseFloat($("outAdjust")?.value) || 0;
+    const settleIn = settleIncomeLocal();
     const r = await api("/api/outbounds", "POST", {
       customer: $("outCustomer").value, operator: $("outOperator").value,
       date: $("outDate").value, remark: remarkValue("outRemark"),
       lines, pack_lines: packLines, pack_fee_total: fee,
       auto_express: autoExpressOn(),   // 与预览一致：关掉就不再自动加快递费
       pay_status: payStatus, adjust_amount: adjust,
+      settle_cats: settleCats(),       // 实收含哪些关联结算（客户随货款付回来的包材/人工/运费）
     });
     const warns = (r.warnings || []).length ? "\n⚠ " + r.warnings.join("；") : "";
-    toast("出库成功" + (adjust ? `（调整 ${adjust > 0 ? "+" : "-"}${Math.abs(adjust).toFixed(2)}，已记其他开支）` : "") + (payStatus === "unpaid" ? "（待付款，已进待付款账单）" : "") + warns, 3800);
+    const settleTip = settleIn ? `（实收含${settleCatsLabel(settleCats())} ${fmtMoney(settleIn)}）` : "";
+    toast("出库成功" + (adjust ? `（调整 ${adjust > 0 ? "+" : "-"}${Math.abs(adjust).toFixed(2)}，已记其他开支）` : "") + settleTip + (payStatus === "unpaid" ? "（待付款，已进待付款账单）" : "") + warns, 3800);
     $("outSaleBody").innerHTML = ""; outSaleRowId = 0; addSaleRow();
     clearPreview();
     $("outCustomer").value = "";
@@ -4940,7 +6184,7 @@ function renderOutRow(o) {
       <td class="mono">${o.code}${payTag(o.pay_status)}${o.has_dropship ? ' <span class="badge income">含代发</span>' : ""}</td>
       <td>${esc(o.customer) || "—"}</td>
       <td><button class="detail-toggle" onclick="toggleOutDetail(${o.id})">▸ 查看明细</button></td>
-      <td class="num mono">${fmtMoney(o.final_amount != null ? o.final_amount : o.total_amount)}${o.adjust_amount ? `<div class="muted" style="font-size:11px;">调整 ${o.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(o.adjust_amount))}</div>` : ""}</td>
+      <td class="num mono">${fmtMoney(o.final_amount != null ? o.final_amount : o.total_amount)}${o.adjust_amount ? `<div class="muted" style="font-size:11px;">调整 ${o.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(o.adjust_amount))}</div>` : ""}${o.settle_income ? `<div class="muted" style="font-size:11px;" title="客户随货款一起付的关联结算（${esc(settleCatsLabel(o.settle_cats))}）：成本里已含包材/快递，这里是客户付回来的那部分">含代收 ${fmtMoney(o.settle_income)}</div>` : ""}</td>
       <td class="num mono">${fmtMoney(o.total_cogs)}${o.brush_adjust ? `<div class="muted" style="font-size:11px;">刷单 ${fmtMoney(o.brush_adjust)}</div>` : ""}</td>
       <td class="num mono">${fmtMoney(o.total_fee)}</td>
       <td class="num mono" style="color:${o.net_profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(o.net_profit)}</td>
@@ -5142,6 +6386,7 @@ function renderOutGroup() {
       a.other_cogs = a.other_cogs || 0;      // 其他关联结算
       a.express_cogs = a.express_cogs || 0;  // 快递费
       a.brush_cogs = a.brush_cogs || 0;      // 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差）
+      a.settle_income = a.settle_income || 0; // 客户代收的关联结算（包材/人工/快递费，按销售金额占比分摊）
 
       let arr = byPid.get(a.pid);
       if (!arr) { arr = []; byPid.set(a.pid, arr); }
@@ -5184,6 +6429,13 @@ function renderOutGroup() {
           spread(sl.product_id, (o.brush_adjust || 0) * share, "brush_cogs");
         }
       }
+      // 客户代收的关联结算（包材/人工/快递费）：同样按销售金额占比分摊，商品毛利算上它（与后端同口径）
+      if (o.settle_income && saleLines.length) {
+        for (const sl of saleLines) {
+          const share = totalAmt ? (sl.amount || 0) / totalAmt : 1 / saleLines.length;
+          spread(sl.product_id, (o.settle_income || 0) * share, "settle_income");
+        }
+      }
     }
     aggSale.forEach((a) => {
       a.pack_cogs = a.labor_cogs + a.material_cogs + a.other_cogs;
@@ -5192,7 +6444,8 @@ function renderOutGroup() {
     });
   }
   const total = {
-    amt: rows.reduce((s, o) => s + (o.total_amount || 0), 0),
+    // 收入含客户代收的关联结算（包材/人工/快递费），与出库单「实收金额」、报表收入同口径
+    amt: rows.reduce((s, o) => s + (o.total_amount || 0) + (o.settle_income || 0), 0),
     cogs: rows.reduce((s, o) => s + (o.total_cogs || 0), 0),
     fee: rows.reduce((s, o) => s + (o.total_fee || 0), 0),
     // 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差）：净利里已扣掉，单独列出便于核对
@@ -5219,10 +6472,12 @@ function renderOutGroup() {
   else if (seg === "og-laborpack") { isLaborPack = true; data = aggLaborPack; emptyText = "无打包人工/耗材记录"; }
   else { data = aggPack; emptyText = "无耗材/包装记录"; }
   data = data.map((a) => {
-    const gp = (a.amount - a.cogs) || 0;
-    const denom = a.gross_sales || a.amount || 0; // 扣点前销售金额
+    const settle = Number(a.settle_income) || 0;   // 客户代收的关联结算（成本里含它，收入也要含）
+    a.settle_income = settle;
+    const gp = (a.amount + settle - a.cogs) || 0;
+    const denom = (a.gross_sales || a.amount || 0) + settle; // 扣点前销售金额 + 代收
     a.splitText = isSale ? costSplitText(a) : "";  // 代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 快递费
-    const gp_rate = denom ? (gp / denom) * 100 : 0; // 毛利率 = 毛利 / 扣点前销售金额
+    const gp_rate = denom ? (gp / denom) * 100 : 0; // 毛利率 = 毛利 / （扣点前销售金额 + 代收）
     return { ...a, gp, gp_rate };
   });
   if (t._sort) data = data.slice().sort((a, b) => compareVal(a[t._sort.key], b[t._sort.key]) * t._sort.dir);
@@ -5242,9 +6497,9 @@ function renderOutGroup() {
       <td class="num">${a.order_count} 单</td>
       ${isLaborPack ? "" : `<td>${esc(a.unit)}</td>`}
       ${isLaborPack ? "" : `<td class="num mono">${fmtNum(a.qty)}</td>`}
-      ${isSale ? `<td class="num mono">${fmtMoney(a.amount)}</td>` : ""}
+      ${isSale ? `<td class="num mono">${fmtMoney(a.amount + (a.settle_income || 0))}${a.settle_income ? `<div class="muted" style="font-size:11px;">含代收 ${fmtMoney(a.settle_income)}</div>` : ""}</td>` : ""}
       <td class="num mono">${fmtMoney(a.cogs)}</td>
-      ${isSale ? `<td class="num mono" style="color:${(a.amount - a.cogs) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(a.amount - a.cogs)}</td>` : ""}
+      ${isSale ? `<td class="num mono" style="color:${a.gp >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(a.gp)}</td>` : ""}
       ${isSale ? `<td class="num mono">${(a.gp_rate || 0).toFixed(1)}%</td>` : ""}
     </tr>`).join("")
       : `<tr><td colspan="${colSpan}" class="muted">${emptyText}</td></tr>`) + `</tbody>`;
@@ -5327,10 +6582,15 @@ function editOutboundInGroup(groupKey) {
 function editOutbound(id) {
   const o = findOutbound(id);
   if (!o) { toast("未找到该出库单，请刷新列表"); return; }
+  const cats = String(o.settle_cats || "").split(",").filter(Boolean);
+  const box = (key) => `<label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
+      <input type="checkbox" class="ed-out-settle" value="${key}" ${cats.includes(key) ? "checked" : ""} /> ${SETTLE_LABEL[key]}
+    </label>`;
   openModal(`
     <h3>修改出库单 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="muted" style="margin-bottom:12px;">
-      ${esc(o.code)} · 销售收入 ${fmtMoney(o.total_amount)}${o.adjust_amount ? `（调整 ${o.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(o.adjust_amount))}，实收 ${fmtMoney(o.total_amount + o.adjust_amount)}）` : ""}
+      ${esc(o.code)} · 销售收入 ${fmtMoney(o.total_amount)}${o.adjust_amount ? `（调整 ${o.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(o.adjust_amount))}）` : ""}
+      ${o.settle_income ? ` · 客户代收 ${fmtMoney(o.settle_income)}` : ""} · 实收 ${fmtMoney(o.final_amount != null ? o.final_amount : o.total_amount)}
     </div>
     <div class="form-grid">
       <div class="field"><label>客户</label><input id="edOutCustomer" value="${esc(o.customer || "")}" placeholder="客户名称" /></div>
@@ -5339,8 +6599,15 @@ function editOutbound(id) {
         <label>付款状态</label>
         ${payRadios("edOutPay", o.pay_status, "待付款：先进「待付款账单」，点「已支付」后才计入财务报表")}
       </div>
+      <div class="field" style="grid-column:1/-1;">
+        <label>实收金额包含（客户随货款一起付的关联结算）</label>
+        <div class="toolbar" style="margin:0;flex-wrap:wrap;gap:14px;">
+          ${box("material")}${box("labor")}${box("express")}
+        </div>
+        <div class="field-hint">改这里只影响「实收金额」与报表收入（实收 = 货款 + 调整 + 勾选项金额），成本与库存不变。</div>
+      </div>
     </div>
-    <p class="hint">只能修改以上三项；保存后操作员记为当前登录账号（${esc(operatorName())}）。商品 / 数量 / 价格如需更正，请删除后重新出库。</p>
+    <p class="hint">以上四项可改；保存后操作员记为当前登录账号（${esc(operatorName())}）。商品 / 数量 / 价格如需更正，请删除后重新出库。</p>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
       <button class="btn green" onclick="saveOutboundEdit(${id})">✓ 保存</button>
@@ -5349,9 +6616,10 @@ function editOutbound(id) {
 async function saveOutboundEdit(id) {
   const date = $("edOutDate").value;
   if (!date) { toast("请选择出库日期"); return; }
+  const settle_cats = [...document.querySelectorAll(".ed-out-settle")].filter((x) => x.checked).map((x) => x.value);
   try {
     await api(`/api/outbounds/${id}`, "PUT", {
-      customer: $("edOutCustomer").value, date, pay_status: payOf("edOutPay"),
+      customer: $("edOutCustomer").value, date, pay_status: payOf("edOutPay"), settle_cats,
     });
     closeModal();
     toast(`已保存，操作员记为 ${operatorName()}`);
@@ -5648,49 +6916,9 @@ async function loadReport() {
   renderExpenseTables(rep);
   renderExpenseItems(rep);
 
-  const pt = $("repProductTable");
-  let prodRows = applyTableSort(pt, rep.by_product || []);
-  // 成本为「总成本」= 商品成本 + 打包人工/耗材 + 快递费（后端 by_product 已按销售商品归属；
-  // 无归属的快递费等按该单销售金额占比分摊）。毛利率分母用扣点前销售金额 gross_sales。
-  const gpRateOf = (p) => {
-    const denom = Number(p.gross_sales) || Number(p.amount) || 0;
-    if (!denom) return "—";
-    const total = Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
-    const rate = p.gp_rate != null ? Number(p.gp_rate) : ((Number(p.amount) - total) / denom) * 100;
-    return rate.toFixed(1) + "%";
-  };
-  if (!prodRows.length) pt.innerHTML = `<tr><td class="empty" colspan="8">本期无销售</td></tr>`;
-  else pt.innerHTML = `<thead><tr>
-    <th data-key="name">商品${sortArrow("repProductTable", "name")}</th>
-    <th data-key="spec">规格${sortArrow("repProductTable", "spec")}</th>
-    <th data-key="is_dropship">出库方式${sortArrow("repProductTable", "is_dropship")}</th>
-    <th data-key="qty" class="num">销量${sortArrow("repProductTable", "qty")}</th>
-    <th data-key="amount" class="num">收入${sortArrow("repProductTable", "amount")}</th>
-    <th data-key="cogs" class="num">总成本${sortArrow("repProductTable", "cogs")}</th>
-    <th data-key="gross" class="num">毛利${sortArrow("repProductTable", "gross")}</th>
-    <th class="num">毛利率</th></tr></thead><tbody>` +
-    prodRows.map((p) => {
-      const total = Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
-      const gp = (Number(p.amount) || 0) - total;
-      const color = gp >= 0 ? "var(--green)" : "var(--red)";
-      // 成本构成：代发行也要列出来（代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 其他关联结算 ＋ 快递费）
-      const splitText = costSplitText(p);
-      const split = splitText ? `<div class="muted" style="font-size:11px;">${splitText}</div>` : "";
-      // 出库方式：代发（别人发货，不扣本仓库存）单独标出，不和库存商品混在一起
-      const way = p.is_dropship
-        ? '<span class="badge income">代发</span>'
-        : '<span class="badge adjust">库存出库</span>';
-      return `<tr>
-      <td>${esc(p.name)}${split}</td>
-      <td class="muted">${esc(p.spec) || "—"}</td>
-      <td>${way}</td>
-      <td class="num mono">${fmtNum(p.qty)}</td>
-      <td class="num mono">${fmtMoney(p.amount)}</td><td class="num mono">${fmtMoney(total)}</td>
-      <td class="num mono" style="color:${color}">${fmtMoney(gp)}</td>
-      <td class="num mono" style="color:${color}">${gpRateOf(p)}</td></tr>`;
-    }).join("") + `</tbody>`;
-  pt._rows = prodRows;
-  pt._render = loadReport;
+  // 商品销售明细：先缓存原始行，再由 renderReportGoods() 按「商品名称筛选」渲染（输入即过滤）
+  REP_PROD_ROWS = rep.by_product || [];
+  renderReportGoods();
   renderSalesBySpec(from, to, whQs);   // 出库明细：每天 × 每种规格卖了多少单（含代发数量/代发成本）
 
   const ft = $("financeTable");
@@ -5777,6 +7005,98 @@ function renderCostBreakdown(rep) {
     </table></div>
     ${packTotal ? "" : `<div class="alert warn" style="margin-top:10px;">本期没有包材 / 人工 / 快递等关联结算成本。若商品已配置包装清单，请确认出库时是否生成了关联结算行。</div>`}`;
 }
+/* 商品销售明细表：带「商品名称筛选」（与移动端财务报表同一套口径——名称 / 规格任一包含关键词即命中）。
+   输入即过滤、点表头排序都只重渲染这张表，不再请求后端；筛选词在重新查询后保留。 */
+let REP_PROD_ROWS = null;   // 最近一次报表的商品明细原始行（未筛选、未排序）
+function renderReportGoods() {
+  const pt = $("repProductTable");
+  if (!pt) return;
+  const all = REP_PROD_ROWS || [];
+  const kwEl = $("repGoodsKw");
+  const kw = ((kwEl && kwEl.value) || "").trim();
+  const k = kw.toLowerCase();
+  const hit = k ? all.filter((p) => `${p.name || ""} ${p.spec || ""}`.toLowerCase().includes(k)) : all;
+  const prodRows = applyTableSort(pt, hit);
+  const hint = $("repGoodsHint");
+  if (hint) hint.textContent = all.length ? (k ? `匹配 ${prodRows.length} / ${all.length} 个商品` : `共 ${all.length} 个商品`) : "";
+  // 成本为「总成本」= 商品成本 + 打包人工/耗材 + 快递费（后端 by_product 已按销售商品归属；
+  // 无归属的快递费等按该单销售金额占比分摊）。收入含客户代收的关联结算 settle_income，
+  // 毛利率分母用 扣点前销售金额 + 代收（与后端 gp_rate 同口径）。
+  const settleOf = (p) => Number(p.settle_income) || 0;
+  const gpRateOf = (p) => {
+    const settle = settleOf(p);
+    const denom = (Number(p.gross_sales) || Number(p.amount) || 0) + settle;
+    if (!denom) return "—";
+    if (p.gp_rate != null) return Number(p.gp_rate).toFixed(1) + "%";
+    const total = Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
+    const rate = ((Number(p.amount) + settle - total) / denom) * 100;
+    return rate.toFixed(1) + "%";
+  };
+  if (!prodRows.length) {
+    pt.innerHTML = `<tr><td class="empty" colspan="8">${all.length ? `没有匹配「${esc(kw)}」的商品，换个关键词试试` : "本期无销售"}</td></tr>`;
+    pt._rows = [];
+    pt._render = renderReportGoods;
+    return;
+  }
+  const sum = prodRows.reduce((a, p) => {
+    a.qty += Number(p.qty) || 0;
+    a.amount += Number(p.amount) || 0;
+    a.settle += settleOf(p);
+    a.cogs += Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
+    return a;
+  }, { qty: 0, amount: 0, settle: 0, cogs: 0 });
+  const sumGp = sum.amount + sum.settle - sum.cogs;
+  const sumColor = sumGp >= 0 ? "var(--green)" : "var(--red)";
+  pt.innerHTML = `<thead><tr>
+    <th data-key="name">商品${sortArrow("repProductTable", "name")}</th>
+    <th data-key="spec">规格${sortArrow("repProductTable", "spec")}</th>
+    <th data-key="is_dropship">出库方式${sortArrow("repProductTable", "is_dropship")}</th>
+    <th data-key="qty" class="num">销量${sortArrow("repProductTable", "qty")}</th>
+    <th data-key="amount" class="num">收入${sortArrow("repProductTable", "amount")}</th>
+    <th data-key="cogs" class="num">总成本${sortArrow("repProductTable", "cogs")}</th>
+    <th data-key="gross" class="num">毛利${sortArrow("repProductTable", "gross")}</th>
+    <th class="num">毛利率</th></tr></thead><tbody>` +
+    prodRows.map((p) => {
+      const total = Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
+      const settle = settleOf(p);   // 客户代收的关联结算（包材/人工/快递费）：成本里含它，收入也要含
+      const gp = (Number(p.amount) || 0) + settle - total;
+      const color = gp >= 0 ? "var(--green)" : "var(--red)";
+      // 成本构成：代发行也要列出来（代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 其他关联结算 ＋ 快递费）
+      const splitText = costSplitText(p);
+      const split = splitText ? `<div class="muted" style="font-size:11px;">${splitText}</div>` : "";
+      // 出库方式：代发（别人发货，不扣本仓库存）单独标出，不和库存商品混在一起
+      const way = p.is_dropship
+        ? '<span class="badge income">代发</span>'
+        : '<span class="badge adjust">库存出库</span>';
+      return `<tr>
+      <td>${esc(p.name)}${split}</td>
+      <td class="muted">${esc(p.spec) || "—"}</td>
+      <td>${way}</td>
+      <td class="num mono">${fmtNum(p.qty)}</td>
+      <td class="num mono">${fmtMoney((Number(p.amount) || 0) + settle)}${settle ? `<div class="muted" style="font-size:11px;" title="客户随货款一起付的包材/人工/快递费（成本里已含，收入侧也计一笔）">含代收 ${fmtMoney(settle)}</div>` : ""}</td>
+      <td class="num mono">${fmtMoney(total)}</td>
+      <td class="num mono" style="color:${color}">${fmtMoney(gp)}</td>
+      <td class="num mono" style="color:${color}">${gpRateOf(p)}</td></tr>`;
+    }).join("") + `</tbody>
+    <tfoot><tr>
+      <td><b>${k ? "筛选合计" : "本期合计"}</b> <span class="muted">${prodRows.length} 个商品</span></td>
+      <td></td><td></td>
+      <td class="num mono"><b>${fmtNum(sum.qty)}</b></td>
+      <td class="num mono"><b>${fmtMoney(sum.amount + sum.settle)}</b>${sum.settle ? `<div class="muted" style="font-size:11px;">含代收 ${fmtMoney(sum.settle)}</div>` : ""}</td>
+      <td class="num mono"><b>${fmtMoney(sum.cogs)}</b></td>
+      <td class="num mono" style="color:${sumColor}"><b>${fmtMoney(sumGp)}</b></td>
+      <td class="num mono" style="color:${sumColor}"><b>${sum.amount + sum.settle ? ((sumGp / (sum.amount + sum.settle)) * 100).toFixed(1) + "%" : "—"}</b></td>
+    </tr></tfoot>`;
+  pt._rows = prodRows;
+  pt._render = renderReportGoods;   // 点表头排序 / 再输入关键词都只重渲染这张表
+}
+/** 清空商品名称筛选 */
+function clearRepGoodsKw() {
+  const el = $("repGoodsKw");
+  if (el) el.value = "";
+  renderReportGoods();
+}
+
 /** 出库明细：每天 × 每种规格卖了多少单（含代发行的代发数量/代发成本） */
 async function renderSalesBySpec(from, to, whQs) {
   const t = $("repSpecTable");
@@ -6568,7 +7888,7 @@ function renderPayables() {
           <td class="mono">${esc(r.date)}</td>
           <td><span class="badge ${PAY_SRC_BADGE[r.source] || "adjust"}">${esc(r.source)}</span></td>
           <td><b>${esc(r.title)}</b>${r.code ? ` <span class="muted">${esc(r.code)}</span>` : ""}
-            <div class="muted" style="font-size:12px;">${esc(r.sub)}${r.remark ? " · " + renderRemarkHtml(r.remark) : ""}</div></td>
+            <div class="muted" style="font-size:12px;">${esc(r.sub)}${r.remark ? " · " + renderRemarkHtml(r.remark, { compact: true }) : ""}</div></td>
           <td class="num mono"><b style="color:${color};">${money}</b></td>
           <td>${esc(r.operator) || "—"}</td>
           <td class="num">${paid
@@ -6677,6 +7997,8 @@ let DS_GROUPS = [];      // 当前代发列表（按「商品 + 规格 + 单位�
 let DS_VIEW = "unpaid";  // unpaid 只看待结清 / all 含已结清
 let DS_LOADED = false;   // 是否已拉取过（切回来时无需重复拉取，除非有操作）
 let DS_TOTAL = {};
+let DS_TRUNCATED = false;   // 后端只回最近 N 行（避免上万行把页面拖垮）
+let DS_LIMIT = 0;
 
 function payTab(btn) {
   const panel = btn.dataset.panel;
@@ -6685,18 +8007,29 @@ function payTab(btn) {
   if ($("pay-panel-dropship")) $("pay-panel-dropship").style.display = panel === "pay-panel-dropship" ? "" : "none";
   const hint = $("payTabHint");
   if (hint) hint.textContent = panel === "pay-panel-dropship"
-    ? "代发：同一种商品和规格已合并，按「单价 × 单量 = 代发成本」核对付款"
-    : "";
+    ? "代发：按「商品 + 规格 + 出库日期」分行，按天核对「单价 × 单量 = 代发成本」"
+    : "账单：入库 / 出库 / 其他开支 / 手动记账的待结清项；代发应付在「代发」页签里单独看";
   if (panel === "pay-panel-dropship") loadDropshipBills();
 }
 
 async function loadDropshipBills() {
   try {
-    const d = await api(`/api/payables/dropship?include_paid=${DS_VIEW === "all" ? 1 : 0}`);
+    const from = $("dsFrom") ? $("dsFrom").value : "";
+    const to = $("dsTo") ? $("dsTo").value : "";
+    // 日期区间交给服务端过滤：这样被截断（只回最近 N 行）时也能查到更早的日期
+    const qs = new URLSearchParams({ include_paid: DS_VIEW === "all" ? "1" : "0" });
+    if (from) qs.set("date_from", from);
+    if (to) qs.set("date_to", to);
+    const d = await api(`/api/payables/dropship?${qs.toString()}`);
     DS_GROUPS = d.groups || [];
     DS_TOTAL = d.total || {};
+    DS_TRUNCATED = !!d.truncated;
+    DS_LIMIT = d.limit || 0;
     DS_LOADED = true;
-    dsAlert("");
+    // 列表被截断时给一句提示（合计仍按全部算），并说明缩小范围的办法
+    dsAlert(d.truncated
+      ? `共 ${DS_TOTAL.groups || 0} 行（按商品+规格+日期分行），这里只列最近 ${DS_LIMIT} 行；待结清合计 ${fmtMoney(DS_TOTAL.pending_amount || 0)}。用上面的日期区间可以缩小范围。`
+      : "");
     renderDropshipBills();
   } catch (e) {
     dsAlert("加载代发应付失败：" + e.message);
@@ -6715,7 +8048,7 @@ function dsClearFilter() {
   if ($("dsSearch")) $("dsSearch").value = "";
   if ($("dsFrom")) $("dsFrom").value = "";
   if ($("dsTo")) $("dsTo").value = "";
-  renderDropshipBills();
+  loadDropshipBills();   // 日期是服务端过滤，清空后要重新拉取
 }
 
 function dsAlert(msg) {
@@ -6725,7 +8058,7 @@ function dsAlert(msg) {
   el.textContent = msg || "";
 }
 
-/** 关键词 / 日期筛选（按合并后的行；日期与「该组跨的单据区间」有交集即保留） */
+/** 关键词 / 日期筛选（行 = 商品+规格+日期；日期已由服务端过滤，这里再兜一次防漏） */
 function dsFilterGroups() {
   const kw = ($("dsSearch") ? $("dsSearch").value : "").trim().toLowerCase();
   const from = $("dsFrom") ? $("dsFrom").value : "";
@@ -6759,11 +8092,12 @@ function renderDropshipBills() {
   const pend = groups.filter((g) => g.pay_status === "unpaid");
   const pendAmt = pend.reduce((a, g) => a + (g.amount || 0), 0);
   const orders = groups.reduce((a, g) => a + (g.order_count || 0), 0);
+  const days = new Set(groups.map((g) => g.date).filter(Boolean)).size;   // 涉及多少个出库日期
   const sumEl = $("dsSum");
   if (sumEl) {
     sumEl.innerHTML =
       `<span class="pay-sum-label">${active ? "筛选结果" : "当前列表"}</span>` +
-      `<span><b>${groups.length}</b> 款商品规格 <span class="muted">/ ${orders} 单</span></span>` +
+      `<span><b>${groups.length}</b> 行 <span class="muted">/ ${days} 天 / ${orders} 单</span></span>` +
       `<span class="pay-sum-total">合计 <b class="mono">${fmtMoney(sum)}</b></span>` +
       `<span class="muted">待结清 <b class="mono" style="color:var(--danger, #dc2626);">${fmtMoney(pendAmt)}</b></span>` +
       (DS_VIEW === "all" ? `<span class="muted">已结清 <b class="mono" style="color:var(--green, #16a34a);">${fmtMoney(sum - pendAmt)}</b></span>` : "") +
@@ -6777,9 +8111,7 @@ function renderDropshipBills() {
     const specTxt = g.spec && !(g.product_name || "").includes(g.spec) ? ` <span class="muted">· ${esc(g.spec)}</span>` : "";
     return `<tr${paid ? ' style="opacity:.55;"' : ""}>
       <td><input type="checkbox" class="ds-pick" value="${idx}" /></td>
-      <td class="num mono">${g.date_from === g.date_to || !g.date_to
-        ? esc(g.date_from || g.date_to || "")
-        : `${esc(g.date_from)}<div style="font-size:11px;">~ ${esc(g.date_to)}</div>`}</td>
+      <td class="num mono">${esc(g.date || g.date_from || g.date_to || "")}</td>
       <td><b>${esc(g.product_name || "代发商品")}</b>${specTxt}
         <div class="muted" style="font-size:11px;color:var(--danger);">代发成本 ${fmtMoney(g.amount)}</div></td>
       <td class="num mono">${DS_NUM4(g.quantity)}${esc(g.unit || "")}</td>
@@ -6811,7 +8143,7 @@ function renderDropshipBills() {
       ? `<tfoot><tr>
           <td></td>
           <td><b>${active ? "筛选合计" : "列出合计"}</b></td>
-          <td class="muted" colspan="3">${groups.length} 款商品规格 · 待结清 ${pend.length} 款 · ${orders} 单</td>
+          <td class="muted" colspan="3">${groups.length} 行 · ${days} 天 · 待结清 ${pend.length} 行 · ${orders} 单</td>
           <td class="num mono"><b>应付 ${fmtMoney(sum)}</b></td>
           <td colspan="2"></td>
         </tr></tfoot>`
@@ -7117,16 +8449,22 @@ let EVA_TASKS = [];
 let JST_PENDING_N = 0;          // 当前分仓待办数（设置页状态区据此提示）
 let JST_PENDING_POPPED = false; // 本次登录只弹一次
 
-/* 出库页那个「待办处理」按钮的状态：有待办时变红并显示条数 */
+/* 出库页那个「待办处理」按钮：待办数 = 聚水潭待办（新商品没规则匹配 / 要验证码）+ AI 识别待办 */
 function jstPendingBtnState() {
   const b = $("jstPendingBtn");
   if (!b) return;
-  const n = JST_PENDING_N;
+  const jst = JST_PENDING_N || 0;
+  const ai = aiQueuePendingCount();
+  const n = jst + ai;
   b.className = n ? "btn danger" : "btn secondary";
   b.textContent = n ? `⚠ 待办处理（${n}）` : "待办处理";
   b.title = n
-    ? `${n} 项待办要处理：新商品没规则匹配 / 聚水潭要验证码，点这里处理`
-    : "暂无待办；聚水潭遇到新商品没规则匹配、或需要验证码时会在这里处理";
+    ? [
+        jst ? `聚水潭待办 ${jst} 项（新商品没规则匹配 / 要验证码）` : "",
+        ai ? `AI 识别待办 ${ai} 项（识别完待审核提交）` : "",
+        "点这里处理",
+      ].filter(Boolean).join("；")
+    : "暂无待办；聚水潭遇到新商品没规则匹配、或需要验证码，以及 AI 识别完待审核时，都会在这里处理";
 }
 
 /* 打开待办弹层（出库页按钮、登录弹窗「去处理」、自动出库设置页的提示都走这里） */
@@ -7200,6 +8538,8 @@ function evaUnmappedCard(t) {
     </div>
     <div class="toolbar" style="margin-top:10px;">
       <button class="btn green" onclick="evaResolve('${t.id}')">✔ 完成并重新导入</button>
+      <button class="btn" title="商品资料维护好之后点它：只自动关联名称/编码 100% 完全一致的商品，不做相似度猜测"
+        onclick="evaRematch('${t.id}')">⚡ 重新完全匹配（100% 同名，自动出库）</button>
       <button class="btn secondary" onclick="location.hash='#/settings?tab=jushuitan';">去「聚水潭关联」维护</button>
       <button class="btn sm ghost" onclick="evaDismiss('${t.id}')">忽略</button>
       <span class="muted">区间 ${esc(t.window || "")} · 文件 ${esc((t.files || []).join("、"))} · ${esc(t.created_at || "")}</span>
@@ -7234,17 +8574,55 @@ function evaCaptchaCard(t) {
   </div>`;
 }
 
+/* 待办弹层：任务按钮左右排列，点哪个就在下面显示哪个的详情（不再把所有卡片纵向堆起来） */
+function evaTaskLabel(t) {
+  const kind = t.type === "unmapped" ? "新商品没规则" : "要验证码";
+  const name = (t.message || "").replace(/\s+/g, " ").slice(0, 16);
+  return `⚠ ${kind}${name ? "：" + name : ""}`;
+}
 function renderEvaTasks(tasks) {
   const box = $("jstPendingList");
   if (!box) return;
+  // ① AI 识别待办：一条一个按钮，左右排列；待审核的直接进审核框，其余进待办页
+  const aiItems = AI_QUEUE.filter((j) => ["waiting", "running", "done", "error"].includes(j.status));
+  const aiBlock = aiItems.length
+    ? `<div class="eva-sec-title">AI 识别待办（${aiItems.length}）</div>
+       <div class="eva-btn-row">` +
+      aiItems.slice(0, 30).map((j) => {
+        const st = j.status === "done" ? "待审核" : (j.status === "running" ? "识别中" : (j.status === "waiting" ? "排队中" : "失败"));
+        const click = j.status === "done" ? `evaReviewFromModal('${j.id}')` : "openEvaPage()";
+        return `<button class="btn sm ${j.status === "done" ? "" : "secondary"}" title="${esc(j.error || evaTitle(j))}" onclick="${click}">${esc(st)}·${esc(evaTitle(j).slice(0, 14))}</button>`;
+      }).join("") + `</div>`
+    : "";
+  const aiFoot = aiItems.length
+    ? `<div class="row" style="margin:-2px 0 10px;"><button class="btn sm secondary" onclick="openEvaPage()">打开 AI 待办页（批量审核 / 提交）→</button></div>`
+    : "";
   if (!tasks.length) {
-    box.innerHTML = `<div class="empty">当前没有待办 🎉　自动出库正常时这里是空的。</div>`;
+    box.innerHTML = aiBlock + aiFoot +
+      `<div class="empty">${aiItems.length ? "聚水潭待办已清空 🎉" : "当前没有待办 🎉　自动出库正常时这里是空的。"}</div>`;
     return;
   }
-  box.innerHTML = `<div class="alert warn">有 ${tasks.length} 项待处理，处理完点各项下面的按钮，系统会自动接着重跑。</div>` +
-    tasks.map((t) => (t.type === "unmapped" ? evaUnmappedCard(t) : evaCaptchaCard(t))).join("");
+  box.innerHTML = aiBlock + aiFoot +
+    `<div class="eva-sec-title">聚水潭待办（${tasks.length}）</div>` +
+    `<div class="alert warn">有 ${tasks.length} 项待处理，点按钮切换要处理的那条，处理完点下面的按钮，系统会自动接着重跑。</div>` +
+    `<div class="eva-btn-row" id="evaTaskBtns">` +
+    tasks.map((t, i) => `<button class="btn sm ${i === 0 ? "" : "secondary"}" data-i="${i}" onclick="evaShowTask(${i})">${esc(evaTaskLabel(t))}</button>`).join("") +
+    `</div><div id="evaTaskDetail"></div>`;
+  evaShowTask(0);
+}
+/** 切换待办弹层里当前显示的哪一条 */
+function evaShowTask(i) {
+  const box = $("evaTaskDetail");
+  const t = (EVA_TASKS || [])[i];
+  if (!box || !t) return;
+  box.innerHTML = t.type === "unmapped" ? evaUnmappedCard(t) : evaCaptchaCard(t);
+  document.querySelectorAll("#evaTaskBtns .btn").forEach((b) => {
+    b.className = "btn sm" + (+b.dataset.i === i ? "" : " secondary");
+  });
   try { bindSearchable(box); } catch (e) {}
 }
+function openEvaPage() { closeModal(); goPage("eva"); }
+function evaReviewFromModal(id) { closeModal(); goPage("eva"); evaReview(id); }
 
 /* 刷新待办：更新按钮上的条数；弹层开着就顺带刷新里面的内容 */
 async function renderJstPending() {
@@ -7273,6 +8651,33 @@ async function evaResolve(tid) {
     startJstPoll();
     setTimeout(() => { renderJstPending(); checkJstPending(false); }, 2500);
   } catch (e) { toast("提交失败：" + e.message); }
+}
+
+/* 重新完全匹配：商品资料维护好后一键按「100% 同名」自动关联并重新出库（不做相似度猜测）
+ * 后端只认名称/编码完全一致（忽略空格与大小写），命中的自动关联并立即重新导入，
+ * 其余仍留在待办里等人工选择；对已经在待办里的老任务同样有效（按名字匹配，不依赖任务创建时间）。 */
+async function evaRematch(tid) {
+  if (!confirm("按「名称 / 编码 100% 完全相同」重新匹配这条待办？\n\n"
+    + "· 只自动关联与系统商品完全同名的项（忽略空格/大小写）\n"
+    + "· 不做任何相似度猜测，避免像「新鲜百合 50%」那种误配\n"
+    + "· 命中的立即自动重新导入出库，其余仍留在待办里人工选择")) return;
+  try {
+    const r = await api(`/api/jst-auto/pending/${encodeURIComponent(tid)}/rematch`, "POST", { dry_run: false });
+    const ms = (r.matched || []).map((x) => `· ${x.external_code} → ${x.product_name}`).join("\n");
+    const ls = (r.left || []).map((x) => `· ${x.external_code}`).join("\n");
+    toast(r.message || "已提交");
+    if (ms) {
+      alert(`100% 同名自动关联 ${r.matched.length} 种：\n${ms}`
+        + (ls ? `\n\n仍未匹配（请手工选择）：\n${ls}` : "")
+        + (r.started ? "\n\n已开始重新导入出库，可点「刷新」看进度。" : ""));
+    }
+    if (r.started) {
+      startJstPoll();
+      setTimeout(() => { renderJstPending(); checkJstPending(false); }, 2500);
+    } else {
+      renderJstPending(); checkJstPending(false);
+    }
+  } catch (e) { toast("重新匹配失败：" + e.message); }
 }
 
 async function evaDismiss(tid) {
@@ -7799,6 +9204,8 @@ function startMaintenanceWatch() {
   applyNavVisibility();     // 侧边栏按本机偏好显隐（设置 → 模块显示）
   syncExcludeOtherHint();   // 报表页「排除其他开支」开关按本机偏好回显（默认开启）
   loadDashboard();
+  aiQueueLoad();    // AI 识别队列（待办处理）：恢复上次未处理完的识别结果，并继续跑排队中的任务
+  aiQueueTick();
   applyHashRoute(); // 支持深链：登录后跳转到指定二级页
   checkJstPending(); // 自动出库待办（商品资料待补全 / 需要验证码）：有就弹窗提醒
 })();

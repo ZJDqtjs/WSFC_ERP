@@ -20,6 +20,7 @@ from ..auth import get_current_user
 from ..config import llm_config
 from ..database import get_db
 from ..models import Inbound, OutboundLine, Product, Unit, User
+from ..services import build_order, get_or_create_express_product
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -47,7 +48,10 @@ SYSTEM_PROMPT = """你是「企业台账系统」的自然语言录入解析器�
 - 出库：出库2单七彩土豆3斤，每单15元，客户叫张三
 
 处理要求：
-1. 判断业务类型 type：入库 -> "inbound"；出库 -> "outbound"。按用户第一个明确的动作词判断。
+1. 判断业务类型 type：入库 -> "inbound"；出库 -> "outbound"；盘点（盘库/盘点库存/清点/实盘/校对库存）-> "stocktake"。按用户第一个明确的动作词判断。
+   - stocktake（盘点）时：quantity 默认是「实盘数量」（盘点后的库存数），系统会按「实盘数 − 当前库存」换算成增减量去调整库存；unit 照写；unit_price 一律填 0；不需要供应商/客户。
+   - 若用户说的是增减（「多了 100 个 / 少了 3 斤 / 盘盈 / 盘亏」），quantity 就填那个增减量，并在该行加 "rel": true。
+   - 用户没提「盘点 / 盘库 / 实盘 / 结存」等词时，一律不要输出 stocktake（否则会凭空调整库存）。
 2. 商品名称 product：输出用户提到的商品名称（原词即可，简洁，不要加多余说明）。
 3. 数量、单位、单价：直接保留用户表述的数字与单位（如 quantity=100, unit="斤", unit_price=25），禁止自行换算单位、禁止改数字。
 4. category 商品分类：逐条判断该商品属于哪一类，按以下四选一输出原词：
@@ -62,6 +66,16 @@ SYSTEM_PROMPT = """你是「企业台账系统」的自然语言录入解析器�
    - 只有一个日期时只写顶层 date，行里不用重复写 date。
 6. supplier（入库时的供应商）/ customer（出库时的客户）/ remark（备注）：有则提取，没有给空字符串。
 7. 一句话可能包含多行/多个商品，lines 里逐行列出；单价统一理解为"每 unit 单位的金额"。
+8. charges 出库附加项（只对 type="outbound" 输出；入库不要输出）：用户描述里除商品以外的费用项，
+   如 包材（泡沫箱/保温袋/自封袋/冰袋/吸水纸/纸箱）、人工工时（工时/人工打包费）、运费（运费/快递费/邮费）、其他杂费。
+   每项输出 { "name": "原词", "amount": 金额, "quantity": 数量, "unit": "单位", "for": "属于哪个商品（可省略）" }：
+   - 只给了金额、说不好量化（工时、胶带这类）→ amount 填金额，quantity 填 0，unit 留空；
+   - 同时给了数量与单价（如「泡沫箱 2 个 2 元」）→ quantity 填 2、unit 填「个」，amount 填该项总金额 4；
+   - 「运费」按金额写进 charges（name 用「运费」）；
+   - 商品货价（货价/货款/售价×数量）**不要**放进 charges；quantity 与 unit 只在确实提到数量时才填。
+   - 用户用重量描述商品（「规格/g」「7000g」「3000克」这类）：quantity = 克数 ÷ 1000、unit 填「公斤」
+     —— 例如「天麻大果 7000g」= quantity 7、unit 公斤（这是唯一允许的换算：系统里重量按公斤存）。
+     商品名照用户说的写（如「天麻大果」），不要因为只有规格就编造商品名，也不要自己编 charges。
 
 输出格式：先用简体中文写 3~6 行「思路」，每行一句话，说明：判断的业务类型、每条商品的数量与单位是怎么来的、准备匹配还是新建商品；
 然后再另起一行输出一个 JSON 对象。除「思路」文字和这个 JSON 之外，不要输出任何其他内容（不要解释、不要前后缀、不要 markdown 代码块标记）。
@@ -75,13 +89,21 @@ JSON 结构：
   "remark": "",
   "lines": [
     { "category": "库存商品", "product": "商品名称", "quantity": 100, "unit": "斤", "unit_price": 25, "date": "YYYY-MM-DD" }
+  ],
+  "charges": [
+    { "name": "运费", "amount": 10.6 },
+    { "name": "泡沫箱", "amount": 4, "quantity": 2, "unit": "个" },
+    { "name": "工时", "amount": 2 }
   ]
 }""" + ZH_LANG_RULE
 
-IMAGE_SYSTEM_PROMPT = """你是「企业台账系统」的采购票据识别助手。用户会提供一张采购发票 / 送货单 / 销货单的图片（如公司进货凭证），请从中提取采购信息。
+IMAGE_SYSTEM_PROMPT = """你是「企业台账系统」的采购票据识别助手。用户会提供一张采购发票 / 送货单 / 销货单 / 出货结算表的图片，请从中提取信息。
 
 处理要求：
-1. 业务类型一律为入库（inbound）：这些票据代表公司采购了货物进入仓库。
+1. 业务类型判断：
+   - 采购发票 / 送货单 / 进货单 → type = "inbound"（公司采购入库）；
+   - **出货 / 销售 / 结算 / 代发 结算表**（列名如 时间、SKU规格/g、泡沫箱、保温袋、胶带、工时、运费、货价、合计金额，或标题写了 出货/销售/结算/发货/代发）→ type = "outbound"；
+   - 「库存盘点表 / 实盘单 / 结存表」（只有品名 + 实盘数量，没有单价/金额，或标题写着 盘点/实盘/结存/盘库）→ type = "stocktake"：quantity 取该行的实盘数量（系统会据此换算成增减量调整库存），unit 照写，unit_price 一律 0，不需要供应商。
 2. 逐条提取每条采购商品的：商品名称（product）、数量（quantity）、单位（unit，如 张/个/斤/公斤/袋/箱）、单价（unit_price，每单位的金额，保留小数）。
    - product 必须逐字照抄票据上的名称（保留括号、规格、编号等），不要改写、缩写、纠错，也不要自行补「干货」等字样；名称中不要插入空格。
    - quantity 取票据上直接列出的数量（如「数额」列）为准；若数量写成算式（如「2960-1500-1308=152」「2214-1587=627个」），取等号后面的结果作为 quantity。不要用「计算明细」里的算式重算；票据上没有单价的，unit_price 一律填 0，禁止拿明细里的数字当单价。
@@ -97,19 +119,37 @@ IMAGE_SYSTEM_PROMPT = """你是「企业台账系统」的采购票据识别助�
    - 行里的 date 仅在需要区分（与顶层不同）时输出即可。
 7. remark：可留空。
 8. 票据可能有多张/多条，lines 逐条列出；金额合计不用输出。
+9. **出库结算表（type="outbound"）的列解读**（逐行提取）：
+   - 「SKU规格/g」「规格/g」「重量/g」= 该行重量（克）：quantity = 克数 ÷ 1000，unit 填「公斤」（表格本身写成 7公斤/7kg 就照写）；
+   - 「货价」「货款」「销售额」= 商品金额：unit_price = 货价 ÷ quantity（拿不到数量就填 0）；
+   - 表里没有商品名（只有 SKU 规格）时 product 留空字符串 ""（由用户在确认框补全），**不要**编造商品名；
+   - 其余数字列（泡沫箱/保温袋/吸水纸/胶带/工时/自封袋/冰袋/运费/人工 等）逐列写进 charges：
+     name 取列名去掉价格部分（「胶带4/30」→「胶带」、「自封袋0.17」→「自封袋」、「冰袋/瓶」→「冰袋」、「吸水纸0.23」→「吸水纸」），
+     amount 取该行该列的金额数字；「运费」列写 name="运费"。
+   - **重要**：表格里没有单独的「数量」列时，quantity 一律填 0、unit 留空，绝对不要把列里的金额当成数量
+     （「泡沫箱 4」= 金额 ¥4，不是 4 个）；只有表里确实写了「2 个 / 2 件」这类数量时才填 quantity 与 unit。
+   - **空格子不要编数**：某一行某个格子是空的（没写金额）就跳过这一项，不要拿表头写了单价、或别的行的数字补上
+     （例：第 1 行「吸水纸」格子是空的，就**不要**给第 1 行输出吸水纸）。
+   - 「合计金额」「金额」「总价」列不要输出（系统自己算）；每行之间不要串列。
+10. charges 只对出库（outbound）输出；入库/盘点不要输出。
 
 输出格式：先用简体中文写 3~6 行「思路」，每行一句话，说明：识别到的票据类型与条数、数量/单价是怎么从票据上取的、准备匹配还是新建商品；
 然后再另起一行输出一个 JSON 对象。除「思路」文字和这个 JSON 之外，不要输出任何其他内容（不要解释、不要前后缀、不要 markdown 代码块标记）。
 JSON 要紧凑输出：单行、无缩进无换行、字段间不留多余空格；supplier/customer/remark 为空时省略该字段。
 JSON 结构：
 {
-  "type": "inbound",
+  "type": "inbound" | "outbound",
   "date": "YYYY-MM-DD",
   "supplier": "",
   "customer": "",
   "remark": "",
   "lines": [
     { "category": "库存商品", "product": "商品名称", "quantity": 100, "unit": "个", "unit_price": 0.5, "date": "YYYY-MM-DD" }
+  ],
+  "charges": [
+    { "name": "运费", "amount": 10.6 },
+    { "name": "泡沫箱", "amount": 4, "quantity": 2, "unit": "个" },
+    { "name": "工时", "amount": 2 }
   ]
 }""" + ZH_LANG_RULE
 
@@ -976,7 +1016,8 @@ def _normalize_line(db: Session, p: Product | None, line: dict, op_type: str, au
         out["hint"] += f"；⚠ {out['unit_conflict_msg']}"
 
     # 用户未录入单价（仍为 0）：按该商品上次录入的价格默认填入（已是默认单位，不再换算）
-    if not out["unit_price"]:
+    # 盘点（stocktake）只关心数量，不填价
+    if not out["unit_price"] and op_type != "stocktake":
         last = _last_price_default(db, p, op_type)
         if last:
             out["unit_price"] = round(last, 4)
@@ -1031,6 +1072,294 @@ def _safe_date(v, fallback):
     return d
 
 
+def _merge_duplicate_lines(lines: list[dict], op_type: str) -> list[dict]:
+    """同种商品的多行合并成一行（数量累加），不再分开。
+
+    盘点是「一个商品一个实盘数」：同一个商品出多行、各自按「实盘 − 当前库存」提交，
+    会在同一个商品上反复调整（如 +3500 再 −16000，净额就错了），所以必须累加；
+    入库/出库只合并完全同口径（同商品/单位/单价/日期/付款）的重复行，不动分批单据。
+    待新增/未匹配（product_id=0）的行不合并 —— 它们可能对应不同的商品档案。
+    """
+    if not lines:
+        return lines
+    kept: dict[tuple, dict] = {}
+    out: list[dict] = []
+    for ln in lines:
+        pid = int(ln.get("product_id") or 0)
+        if not pid:
+            out.append(ln)
+            continue
+        if op_type == "stocktake":
+            key = ("stocktake", pid, ln.get("stock_unit") or ln.get("unit") or "")
+        else:
+            key = (op_type, pid, ln.get("unit") or "",
+                   round(float(ln.get("unit_price") or 0), 6), ln.get("date") or "", bool(ln.get("paid", True)))
+        first = kept.get(key)
+        if first is None:
+            kept[key] = ln
+            out.append(ln)
+            continue
+        first["quantity"] = round(float(first.get("quantity") or 0) + float(ln.get("quantity") or 0), 4)
+        if first.get("stock_counted") is not None and ln.get("stock_counted") is not None:
+            first["stock_counted"] = round(float(first["stock_counted"]) + float(ln["stock_counted"]), 4)
+        first["merged_count"] = int(first.get("merged_count") or 1) + 1
+
+    # 合并过的行：按累加后的数量重算（批量提交读的就是这里的 stock_adjust / quantity）
+    for ln in out:
+        n = int(ln.get("merged_count") or 1)
+        if n <= 1:
+            continue
+        if op_type == "stocktake":
+            before = float(ln.get("stock_before") or 0)
+            du = ln.get("stock_unit") or ln.get("unit") or ""
+            counted = ln.get("stock_counted")
+            if counted is not None:
+                adj = round(float(counted) - before, 4)
+                ln["stock_adjust"] = adj
+                ln["stock_after"] = round(before + adj, 4)
+                ln["hint"] = (f"已把 {n} 行合并为一行（实盘数累加）：当前库存 {before:g}{du}，"
+                              f"实盘 {float(counted):g}{du}，调整 {adj:+g}{du} → 盘点后 {before + adj:g}{du}")
+            else:
+                adj = round(float(ln.get("quantity") or 0), 4)
+                ln["stock_adjust"] = adj
+                ln["stock_after"] = round(before + adj, 4)
+                ln["hint"] = f"已把 {n} 行合并为一行（增减量累加）：调整 {adj:+g}{du} → 盘点后 {before + adj:g}{du}"
+        else:
+            ln["hint"] = (ln.get("hint") or "") + f"；已把 {n} 行合并为一行（数量累加）"
+    return out
+
+
+# ---------------- 出库附加项（包材 / 人工 / 运费 / 固定成本） ----------------
+# 出库时除了商品，用户还会报一堆费用项（泡沫箱/保温袋/自封袋/冰袋/吸水纸/胶带/工时/运费…），
+# 按「能不能对上商品、有没有数量」分三类处理，见 _normalize_charges 的说明。
+CHARGE_EXPRESS_WORDS = ("运费", "快递", "邮费", "物流", "配送费")
+# 按金额直记「固定成本」的项目：人工/工时，以及胶带这类零碎、不好按数量量化的小耗材
+# （用户明确要求：这些东西不要求建商品，直接汇总进固定成本并写清金额）
+CHARGE_LABOR_WORDS = ("工时", "人工", "手工", "劳务", "打包费", "胶带", "胶布")
+
+
+def _charge_name(raw: str) -> str:
+    """费用项名称归一：去掉列名里夹带的单价与括号说明（「胶带4/30」→「胶带」、「吸水纸0.23」→「吸水纸」）。"""
+    s = str(raw or "").strip()
+    s = re.sub(r"[（(][^)）]*[)）]", "", s)                      # 括号里的补充说明
+    s = re.sub(r"[\d.]+\s*(?:[/／]\s*[\d.]+)?\s*(?:元|块|¥|￥)?", "", s)   # 「4/30」「0.23」这类单价
+    s = s.strip(" /／-—,，、:：.·")
+    return s or str(raw or "").strip()
+
+
+def _charge_amount(v) -> float:
+    try:
+        return round(float(v), 2)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _charge_candidates(db: Session, name: str, limit: int = 6) -> list[Product]:
+    """给费用项找候选商品（包材/人工/其他都算），供确认框里手动改。"""
+    cands: list[Product] = []
+    seen: set[int] = set()
+    for cat in ("pack", "labor", ""):
+        for p in _line_candidates(db, name, "outbound", cat):
+            if p.id not in seen:
+                seen.add(p.id)
+                cands.append(p)
+    return cands[:limit]
+
+
+def _charge_unit_cost(p: Product, unit: str) -> float:
+    """该商品在 unit 单位下的单位成本（先用库存均价，无则参考成本）——用于「按金额反推数量」。"""
+    conv = (p.conversions or {}).get(unit or "")
+    if not conv:
+        return 0.0
+    c = float(p.avg_cost or 0.0) or float(p.unit_cost or 0.0)
+    return round(c * float(conv), 6)
+
+
+def _normalize_charges(db: Session, parsed: dict, op_type: str) -> list[dict]:
+    """把出库附加项（商品行之外的费用项）归一到确认框里那一行行可改的结构。
+
+    kind 含义（用户在确认框里可以改）：
+    - pack：挂在商品上的关联结算（包材/耗材）——有数量就按数量，只给金额就按该商品单位成本反推数量，
+      金额仍按给你的那个数记（qty_est 标出来），这样结算表的金额不会因为成本口径不同而跑掉；
+    - labor：人工（工时/打包）——有商品也能挂上，但默认按「固定成本」金额记（见下）；
+    - express：运费/快递费 —— 按识别金额记一条快递费行（与按重量自动算的金额不同也照记）；
+    - fee：固定成本（工时、胶带这类不好量化的）—— 汇总进「固定成本」并写进备注。
+
+    前端把用户改过的 kind / 商品 / 数量 / 单位回传时，这里**以用户的选择为准**。
+    """
+    if op_type != "outbound":
+        return []
+    out: list[dict] = []
+    seen: set[tuple[str, float]] = set()
+    for raw in (parsed.get("charges") or []):
+        if not isinstance(raw, dict):
+            continue
+        name = _charge_name(raw.get("name") or raw.get("product") or "")
+        if not name:
+            continue
+        amount = _charge_amount(raw.get("amount"))
+        try:
+            qty = round(float(raw.get("quantity") or 0), 6)
+        except (TypeError, ValueError):
+            qty = 0.0
+        unit = _canonical_unit(str(raw.get("unit") or "").strip())
+        if amount <= 0 and qty <= 0:
+            continue
+        key = (name, amount)
+        if key in seen:      # 同一行里重复的列
+            continue
+        seen.add(key)
+        is_express = any(w in name for w in CHARGE_EXPRESS_WORDS)
+        is_fixed = any(w in name for w in CHARGE_LABOR_WORDS)   # 工时/人工/胶带：默认按金额记固定成本
+        cands = [] if is_express else _charge_candidates(db, name)
+        # 用户在确认框里选过商品（或服务端唯一命中）→ 用这个商品
+        picked = None
+        pid_in = int(raw.get("product_id") or 0)
+        if pid_in:
+            picked = db.get(Product, pid_in)
+        if picked is None and cands:
+            tight = _tight(name)
+            same = [c for c in cands if _tight(c.name) == tight or _pack_key(c.name) == _pack_key(name)]
+            if len(same) == 1:
+                picked = same[0]
+        kind_in = str(raw.get("kind") or "").strip().lower()
+        if kind_in in ("pack", "labor", "express", "fee"):
+            kind = kind_in
+        elif is_express:
+            kind = "express"
+        elif is_fixed:
+            kind = "fee"
+        else:
+            kind = "pack" if picked is not None else "fee"
+        item = {
+            "name": name, "amount": amount, "quantity": qty, "unit": unit,
+            "kind": kind, "product_id": picked.id if picked else 0,
+            "product_name": picked.name if picked else "",
+            "category": _product_category(picked) if picked else "",
+            "qty_est": False, "unit_cost": 0.0,
+            "candidates": [
+                {
+                    "product_id": c.id, "name": c.name, "category": _product_category(c),
+                    "unit": c.default_unit or c.base_unit or "",
+                }
+                for c in cands
+            ],
+        }
+        if kind in ("pack", "labor"):
+            if picked is None:
+                item["kind"] = "fee"          # 没商品就只能按金额记（用户可在确认框里挑商品）
+            else:
+                du = picked.default_unit or picked.base_unit or "个"
+                if not item["unit"] or item["unit"] not in (picked.conversions or {}):
+                    item["unit"] = du if du in (picked.conversions or {}) else (
+                        next(iter(picked.conversions or {}), du)
+                    )
+                if item["quantity"] <= 0 and amount > 0:
+                    # 结算表只写金额的列（泡沫箱 2.2）→ 按该商品单位成本反推数量（2.2 ÷ 1.10 = 2 个），
+                    # 金额仍按结算表的数记账（提交时传显式成本），避免成本口径不同把金额改掉
+                    cost = _charge_unit_cost(picked, item["unit"])
+                    if cost > 0:
+                        item["quantity"] = round(amount / cost, 4)
+                        item["qty_est"] = True
+                        item["unit_cost"] = cost
+                if item["quantity"] <= 0:
+                    item["kind"] = "fee"      # 没有数量、也反推不出来 → 按金额进固定成本
+        out.append(item)
+    return out
+
+
+def _attach_outbound_charges(db: Session, result: dict, parsed: dict,
+                             fee_override: float | None = None) -> None:
+    """给出库结果补上「关联结算预览 + 固定成本 + 实收金额」，确认框里直接核对（含金额与备注）。
+
+    预览用的就是服务端口径（build_order）：商品自带包装清单自动带出包材/快递，识别到的附加项追加进去，
+    所以确认框里看到的金额 = 提交后的金额。fee_override：用户在确认框里直接改过的固定成本。
+    """
+    charges = _normalize_charges(db, parsed, "outbound")
+    # 能挂到商品上的（包材/人工）进关联结算；工时/胶带这类按金额的进固定成本；运费单独按金额记快递费
+    pack_items = [c for c in charges if c["kind"] in ("pack", "labor") and c["product_id"] and c["quantity"] > 0]
+    fee_items = [c for c in charges if c["kind"] == "fee" and c["amount"] > 0]
+    express_items = [c for c in charges if c["kind"] == "express" and c["amount"] > 0]
+    fee_total = round(sum(c["amount"] for c in fee_items), 2)
+    if fee_override is not None:
+        fee_total = round(float(fee_override), 2)
+    result["charges"] = charges
+    result["fee_total"] = fee_total
+    note_items = [*pack_items, *fee_items, *express_items]
+    result["fee_note"] = "、".join(f"{c['name']} ¥{c['amount']:.2f}" for c in note_items if c["amount"] > 0)
+
+    sale_lines = [
+        {
+            "product_id": int(l["product_id"]),
+            "unit": (l.get("unit") or "").strip(),
+            "quantity": float(l.get("quantity") or 0),
+            "price": float(l.get("unit_price") or 0),
+        }
+        for l in (result.get("lines") or [])
+        if l.get("product_id") and not l.get("_deleted")
+    ]
+    missing = [l for l in (result.get("lines") or []) if not l.get("product_id")]
+    # 客户承担的类别：包材/人工/快递费默认全含（与结算表一致），识别到按金额记的固定成本时再加上「固定成本」
+    cats = ["material", "labor", "express"] + (["fee"] if fee_total > 0 else [])
+    result["settle_cats"] = ",".join(cats)
+    result["auto_express"] = not express_items     # 识别到运费就按识别金额记，不再按重量自动加一条
+    extra_pack = [
+        {
+            "product_id": c["product_id"], "unit": c["unit"], "quantity": c["quantity"],
+            # 数量是按金额反推出来的（结算表只给了金额）→ 用显式成本保证金额和结算表一致
+            "cogs": c["amount"] if c.get("qty_est") else None,
+        }
+        for c in pack_items
+    ]
+    if express_items:
+        had_express = db.query(Product).filter(Product.category == "快递").first() is not None
+        ep = get_or_create_express_product(db)
+        if not had_express:
+            # 新建的「快递费(自动)」商品必须落库：确认框按 id 引用它提交，随请求回滚就会「关联商品ID不存在」
+            db.commit()
+        amount = round(sum(c["amount"] for c in express_items), 2)
+        extra_pack.append({"product_id": ep.id, "unit": "单", "quantity": 1, "cogs": amount})
+    result["extra_pack_lines"] = extra_pack
+    if not sale_lines or missing:
+        # 商品还没补齐（用户没说是哪个商品 / 有歧义待确认）时先不预览，等确认框里补全后由服务端重算
+        result["preview"] = None
+        if missing:
+            result["preview_hint"] = "有商品还没确认，选好商品后包材/快递/实收金额会自动算出来"
+        return
+    try:
+        order = build_order(
+            db, sale_lines, [], fee_total or None,
+            bool(result["auto_express"]), allow_self_stock=True,
+            extra_pack_lines=extra_pack, settle_cats=cats,
+        )
+    except Exception as e:  # noqa: BLE001 - 预览失败不该让识别整体失败
+        result["preview"] = None
+        result["preview_hint"] = f"关联结算预览失败：{e}"
+        return
+    result["pack_lines"] = [
+        {
+            "product_id": r["product_id"], "product_name": r["product_name"],
+            "unit": r["unit"], "quantity": r["quantity"], "quantity_base": r["quantity_base"],
+            "unit_price": r["unit_price"], "amount": r["amount"],
+            "category": r.get("category") or "", "settle_cat": r.get("settle_cat") or "",
+            "source": "识别" if r.get("manual") else "自动",
+        }
+        for r in order["pack_lines"]
+    ]
+    result["preview"] = {
+        "amount": order["total_amount"],
+        "cogs": order["total_cogs"],
+        "pack_cogs": order["pack_cogs"],
+        "fee": order["total_fee"],
+        "settle_income": order["settle_income"],
+        "final_amount": round(order["total_amount"] + order["settle_income"], 2),
+        "gross_profit": order["gross_profit"],
+    }
+    if order.get("warnings"):
+        result["warnings"] = list(order["warnings"])
+    result["preview_hint"] = "包材/快递/固定成本都按服务端口径算好了：上面金额与提交后一致，可改商品/数量后再提交"
+
+
 def _build_result(db: Session, parsed: dict, text: str) -> dict:
     """把模型抽取结果规范化：校验类型/日期，匹配商品，换算单位。
 
@@ -1038,8 +1367,8 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
     这样用户粘贴票据后可以补一句「京东8号->8号纸箱」来纠正识别结果。
     """
     op_type = str(parsed.get("type", "")).strip().lower()
-    if op_type not in ("inbound", "outbound"):
-        raise HTTPException(400, "无法识别业务类型（入库/出库），请换个说法")
+    if op_type not in ("inbound", "outbound", "stocktake"):
+        raise HTTPException(400, "无法识别业务类型（入库 / 出库 / 盘点），请换个说法")
     lines_in = parsed.get("lines") or []
     if not lines_in:
         raise HTTPException(400, "未能从描述中提取商品明细，请补充商品名称、数量与价格")
@@ -1144,8 +1473,8 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
         # 非完全命中（含仅「包含」命中）或存在其他候选 => 歧义：不自动新增，交由用户确认
         ambiguous = (not exact_hit) and (p is not None or bool(similar))
         pending_new = None
-        if p is None and not ambiguous and op_type == "inbound":
-            # 入库的新物品（无任何相似商品）：识别阶段只生成「待新增档案」预览，绝不写库。
+        if p is None and not ambiguous and op_type in ("inbound", "stocktake"):
+            # 入库 / 盘点遇到的新物品（无任何相似商品）：识别阶段只生成「待新增档案」预览，绝不写库。
             # 用户点「确认提交」时才真正建档（见 materialize_products），取消则不产生任何商品/包材数据。
             pending_new = _new_product_meta(_tight(name), cat or "stock")
             auto = True
@@ -1194,9 +1523,32 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
                 ln_out["hint"] += f"；已按默认候选「{first['name']}」最近价 {first['last_price']} 填入，请核对"
         # 该行的单据日期（没有就用顶层/表头日期），提交时按行落到各自单据上
         ln_out["date"] = (_safe_date(ln.get("date"), doc_date) or doc_date).isoformat()
+        # 盘点：算好「当前库存 / 增减量 / 盘点后」，确认框里显示并可修改；
+        # 提交走既有 /api/adjust 的 +/- 增减模式（不做覆盖）
+        if op_type == "stocktake":
+            _conv = (p.conversions or {}) if p is not None else {}
+            _du = (p.default_unit or p.base_unit) if p is not None else (ln_out.get("unit") or "")
+            _f = _conv.get(_du, 1) or 1
+            _before = round(((p.stock or 0) / _f) if p is not None else 0.0, 4)
+            _qty = round(float(ln_out.get("quantity") or 0), 4)
+            # 默认按「实盘数 − 当前库存」算增减；用户明确说了增减（rel=true）时，数量本身就是增减量
+            _adjust = _qty if ln.get("rel") else round(_qty - _before, 4)
+            ln_out["stock_before"] = _before
+            ln_out["stock_unit"] = _du
+            ln_out["stock_adjust"] = _adjust
+            ln_out["stock_after"] = round(_before + _adjust, 4)
+            # 实盘数（原始识别值）：用户在确认框里换成别的商品后，前端据此重新算增减量
+            # （否则会拿新商品的实盘数去减旧商品的库存，增减量就错了）
+            ln_out["stock_counted"] = None if ln.get("rel") else _qty
+            ln_out["stock_rel"] = bool(ln.get("rel"))
+            ln_out["unit_price"] = 0.0
+            ln_out["hint"] = f"当前库存 {_before:g}{_du}，调整 {_adjust:+g}{_du} → 盘点后 {_before + _adjust:g}{_du}"
         lines.append(ln_out)
 
-    return {
+    # 同种商品合并成一行（数量累加）：避免同一个商品上反复调整（盘点尤其必须）
+    lines = _merge_duplicate_lines(lines, op_type)
+
+    result = {
         "type": op_type,
         "date": doc_date.isoformat(),
         "supplier": str(parsed.get("supplier") or ""),
@@ -1205,6 +1557,10 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
         "lines": lines,
         "raw": text,
     }
+    # 出库：顺手把「包材/快递/固定成本」按服务端口径算出来（确认框直接核对金额，见 _attach_outbound_charges）
+    if op_type == "outbound":
+        _attach_outbound_charges(db, result, parsed)
+    return result
 
 
 @router.post("/parse")
@@ -1346,6 +1702,41 @@ async def parse_image_stream(
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
+class OutboundPreviewIn(BaseModel):
+    """AI 确认框里改了商品 / 数量后重算：关联结算（包材/快递）+ 固定成本 + 实收金额。"""
+
+    lines: list[dict] = []
+    charges: list[dict] = []          # 识别到的附加项（原样回传，口径见 _normalize_charges）
+    fee_total: float | None = None    # 用户在确认框里直接改过的固定成本（优先）
+
+
+@router.post("/outbound-preview")
+def outbound_preview(
+    data: OutboundPreviewIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """按服务端口径重算一张出库单的关联结算与实收金额（确认框里商品/数量改动后点一下即可）。
+
+    口径与提交完全一致（都走 services.build_order）：商品自带包装清单自动带出包材/快递，
+    识别到的附加项追加进去；工时/胶带这类按金额记的进「固定成本」，金额写进备注。
+    """
+    result: dict = {"type": "outbound", "lines": data.lines}
+    _attach_outbound_charges(db, result, {"charges": data.charges}, fee_override=data.fee_total)
+    return {
+        "pack_lines": result.get("pack_lines") or [],
+        "preview": result.get("preview"),
+        "preview_hint": result.get("preview_hint") or "",
+        "fee_total": result.get("fee_total"),
+        "fee_note": result.get("fee_note") or "",
+        "charges": result.get("charges") or [],
+        "settle_cats": result.get("settle_cats") or "",
+        "auto_express": bool(result.get("auto_express", True)),
+        "extra_pack_lines": result.get("extra_pack_lines") or [],
+        "warnings": result.get("warnings") or [],
+    }
+
+
 class NewProductIn(BaseModel):
     name: str
     category: str = "stock"
@@ -1406,3 +1797,7 @@ def last_price(
         raise HTTPException(404, "商品不存在")
     price = _last_price_default(db, p, "outbound" if op_type == "outbound" else "inbound")
     return {"product_id": p.id, "price": price, "unit": p.default_unit or p.base_unit, "op_type": op_type}
+
+
+# 注：AI 盘点没有单独的接口——前端直接调用既有的 POST /api/adjust
+# （+/- 增减模式），与手工盘点完全同一套库存流水、FIFO 批次与成本口径，可在盘点记录里回退。

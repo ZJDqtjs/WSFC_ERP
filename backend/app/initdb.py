@@ -65,6 +65,11 @@ def migrate(engine: Engine, maker: sessionmaker) -> None:
             conn.execute(text("ALTER TABLE outbounds ADD COLUMN pack_rule_id INTEGER"))
         if "pack_rule_name" not in ocols:
             conn.execute(text("ALTER TABLE outbounds ADD COLUMN pack_rule_name VARCHAR(255) DEFAULT ''"))
+        # 客户代收的关联结算（包材/人工/快递费）→ 计入「实收金额」与报表收入（成本不变）
+        if "settle_income" not in ocols:
+            conn.execute(text("ALTER TABLE outbounds ADD COLUMN settle_income FLOAT DEFAULT 0"))
+        if "settle_cats" not in ocols:
+            conn.execute(text("ALTER TABLE outbounds ADD COLUMN settle_cats VARCHAR(64) DEFAULT ''"))
         conn.commit()
 
     # 出库单行：pack 行所属销售商品（打包人工+耗材组合统计用）

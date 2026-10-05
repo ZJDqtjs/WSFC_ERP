@@ -970,6 +970,10 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
         for code in sorted(unmapped_codes)
     ]
     unmapped_list.sort(key=lambda x: -x["count"])
+    # 把「提示」和「失败」分开：关联/换算没配好只是少建了明细行（单子照建），
+    # 真正建不出单的才算失败。以前混在一起报「失败 N 条」，用户会误以为单子没建出来（也可能是作废单）。
+    for f in failed:
+        f["level"] = _issue_level(str(f.get("reason") or ""))
     return drafts, failed, skip, unmapped_codes, unmapped_list, list(unmatched_multi.values())
 
 
@@ -985,6 +989,8 @@ def preview_import_jushuitan(file: UploadFile, db: Session = Depends(get_db), us
     return {
         "orders": [o.model_dump() for o in drafts],
         "skip": skip, "failed": failed, "failed_count": len(failed),
+        # 提示（单子照建，只是某行没建出来）与失败分开报，见 _issue_level
+        "notices": [f for f in failed if f.get("level") == "warn"],
         "unmapped_codes": sorted(unmapped),
         "unmapped": unmapped_list,
         "unmatched_multi": unmatched_multi,
@@ -1239,6 +1245,21 @@ def _load_pack_rule_map(db: Session) -> dict:
 def _resolve_labor_product(db: Session) -> Product | None:
     """查找人工打包费商品（人工明细行用于溯源）。"""
     return db.scalar(select(Product).where(Product.name == "人工打包费", Product.category == "人工"))
+
+
+# 「提示」类问题：单子照建，只是某个明细行没建出来 / 人工改成按费用记。
+# 报成「失败」会让人以为单子没建（也会和作废单混淆），所以在提示里说清楚。
+_SOFT_ISSUE_KEYS = (
+    "人工将按费用记入",
+    "未关联订单商品",
+    "未配置每件重量换算",
+    "换算单位",
+)
+
+
+def _issue_level(reason: str) -> str:
+    """问题分级：warn=提示（单子照建）/ fail=失败（这张单没建出来）。"""
+    return "warn" if any(k in (reason or "") for k in _SOFT_ISSUE_KEYS) else "fail"
 
 
 def _pack_rule_settle(db: Session, rule: PackRule, order_items: list[tuple[str, float]]):
