@@ -728,6 +728,65 @@ data: {"done": true}
 
 ***
 
+## 12.5 对外成本表（京东投放工具）
+
+`GET /api/open/sku-costs?date_from=&date_to=`
+
+供京东投放工具（JD_AdOperation）拉取「每个京东 SKU 的单件成本」，用来算保本 ROI。
+
+* **鉴权与登录会话无关**：请求头带 `X-Api-Token: <token>`（也兼容 `Authorization: Bearer <token>`）。
+  令牌配在仓库根 `config.local.json`：
+
+```json
+{ "open_api": { "token": "换成一串随机字符" } }
+```
+
+  未配置时该接口返回 503（不会无鉴权开放）。
+
+* **不分仓**：接口内部跨全部分仓合并后按 SKU 汇总，对方不需要感知分仓。
+
+* **SKU 对应关系**：
+
+  * 订单商品：`products.code` = 京东 skuId（聚水潭导入时按商品名称匹配到系统商品，编码取自京东）；
+  * 入仓品：`warehouse_products.sku` = 京东 skuId。
+
+* **字段口径**（全部按「每 1 件售卖单位」）：
+
+| 字段 | 含义与来源 |
+| --- | --- |
+| `supply` | **京东结算给我们的单件金额**（出库明细 `amount` ÷ 件数；入仓品为入仓收入 ÷ 袋数）。注意不是我方买货成本 |
+| `supplyGross` | 扣点前的单件金额（`gross_sales` ÷ 件数 / 入仓采购价） |
+| `price` | 固定 `null`，请继续用报表里的真实客单价 |
+| `shipping` | 单件快递运费（出库关联结算的快递费 ÷ 件数；入仓品为入仓运费 ÷ 袋数） |
+| `package` | 单件包材耗材 |
+| `labor` | 单件打包人工（入仓品恒为 0） |
+| `platformRate` | 扣点比例。导入时已按店铺扣点从销售额里扣掉，这里按 `1 − amount ÷ gross_sales` 反推 |
+| `returnRate` | 固定 `null`，ERP 不记退货率，回落到 `default` |
+
+* `null` 字段由对方回落到 `default`（可在 `backend/json/sku_cost_defaults.json` 维护）。
+* `_` 前缀的是附带信息（名称、销量、我方买货成本、毛利率），对方可忽略。
+* 结果按参数缓存 10 分钟，避免对方高频拉取反复扫全量出库单。
+
+响应：
+
+```json
+{
+  "updatedAt": "2026-10-07",
+  "default": { "shipping": 5.0, "platformRate": 0.0, "package": 0.0, "labor": 0.0, "returnRate": 0.05 },
+  "skus": {
+    "100284897924": { "supply": 18.47, "supplyGross": 19.0, "price": null, "shipping": 0.0,
+                      "package": 0.6, "labor": 0.4, "platformRate": 0.0278, "returnRate": null,
+                      "_name": "牛奶芋头4.5斤50g＋", "_source": "sale", "_qty": 1405.0 },
+    "100024877397": { "supply": 23.5, "supplyGross": 25.0, "price": null, "shipping": 1.5,
+                      "package": 0.0, "labor": 0.0, "platformRate": 0.06, "returnRate": null,
+                      "_name": "白拇指玉米", "_source": "warehouse", "_marginRate": 36.16 }
+  },
+  "meta": { "sku_count": 15, "sale_sku_count": 7, "warehouse_sku_count": 8, "failed": [] }
+}
+```
+
+***
+
 ## 13. Flutter 对接速查
 
 1. **基础 URL**：`http://<服务器地址>`（nginx 80）。本地联调可用 `http://127.0.0.1:8000`（注意 127.0.0.1 只在本机；真机调试用局域网 IP + 8000 或部署后域名/公网 IP）。

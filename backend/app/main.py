@@ -18,7 +18,7 @@ from .database import (
 )
 from .initdb import ensure_schema, init_warehouse
 from .maintenance import on_service_start, record_request, should_record, start_activity_store
-from .routers import ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, jst_auto, maintenance, others, outbound, pack_rules, payables, product_data, products, report, uploads, warehouse_in, warehouses
+from .routers import ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, jst_auto, maintenance, open_api, others, outbound, pack_rules, payables, product_data, products, report, uploads, warehouse_in, warehouses
 from .routers.backup import create_backup_file, create_json_backup_file, load_config
 
 # 桌面 Web 前端目录（WSFC_ERP/web/static，前后端分离；SERVE_STATIC=1 时后端顺带托管）
@@ -216,6 +216,7 @@ app.include_router(fresh.router)
 app.include_router(warehouse_in.router)
 app.include_router(warehouses.router)
 app.include_router(maintenance.router)   # 维护状态（免登录）：前端滚动公告 / 整屏维护页
+app.include_router(open_api.router)      # 对外只读成本表（Header Token 鉴权，非登录会话）：京东投放工具按 SKU 取单件成本
 
 # AI 票据图片上传目录：记录备注可引用 /uploads/xxx.jpg 预览
 UPLOAD_DIR = Path(__file__).resolve().parent.parent / "data" / "uploads"

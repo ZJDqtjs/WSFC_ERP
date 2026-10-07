@@ -193,8 +193,17 @@ def _product_dict(db: Session, p: WarehouseProduct) -> dict:
     }
 
 
+def _profit_rate(profit: float | None, amount: float | None) -> float:
+    """毛利率（%）= 毛利 ÷ 收入。收入为 0 时返回 0，避免除零。"""
+    amt = float(amount or 0)
+    if not amt:
+        return 0.0
+    return round(float(profit or 0) / amt * 100, 2)
+
+
 def _in_dict(db: Session, r: WarehouseIn) -> dict:
     sp = db.get(Product, r.stock_product_id) if r.stock_product_id else None
+    qty = float(r.quantity or 0)
     return {
         "id": r.id, "code": r.code, "product_id": r.product_id,
         "product_name": r.product_name, "category": r.category, "unit": r.unit,
@@ -206,6 +215,13 @@ def _in_dict(db: Session, r: WarehouseIn) -> dict:
         "stock_default_unit": _stock_default_unit(sp),
         "bag_weight": r.bag_weight, "unit_cost": r.unit_cost,
         "cogs": r.cogs, "amount": r.amount, "freight_total": r.freight_total, "profit": r.profit,
+        # 毛利率与每袋口径：成本类字段都是整单金额，除以袋数才是「每袋赚多少」
+        "profit_rate": _profit_rate(r.profit, r.amount),
+        "unit_revenue": round(float(r.amount or 0) / qty, 4) if qty else 0.0,   # 每袋结算收入（已扣点）
+        "unit_goods_cost": round(float(r.cogs or 0) / qty, 4) if qty else 0.0,    # 每袋商品成本
+        "unit_freight": round(float(r.freight_total or 0) / qty, 4) if qty else 0.0,  # 每袋运费
+        "unit_pack_cost": round(float(r.pack_cost or 0) / qty, 4) if qty else 0.0,  # 每袋随货包材
+        "unit_profit": round(float(r.profit or 0) / qty, 4) if qty else 0.0,      # 每袋毛利
         "pack_items": r.pack_items or [],  # 随货包材结算快照
         "pack_cost": r.pack_cost or 0.0,
         "date": r.date, "operator": r.operator, "remark": r.remark,
@@ -213,6 +229,51 @@ def _in_dict(db: Session, r: WarehouseIn) -> dict:
         "pay_status": getattr(r, "pay_status", "paid") or "paid",
         "paid_at": getattr(r, "paid_at", "") or "",
     }
+
+
+def _by_product(rows: list[WarehouseIn]) -> list[dict]:
+    """按入仓品汇总（含毛利率）：单看明细难以判断哪个入仓品更赚钱。"""
+    acc: dict[tuple, dict] = {}
+    for r in rows:
+        wp = r.product
+        key = (r.product_id or 0, r.product_name or "")
+        b = acc.setdefault(key, {
+            "product_id": r.product_id,
+            "sku": (wp.sku if wp else "") or "",
+            "product_name": r.product_name or "",
+            "category": r.category or "",
+            "unit": r.unit or "袋",
+            "records": 0,
+            "quantity": 0.0,
+            "amount": 0.0,
+            "cogs": 0.0,
+            "freight_total": 0.0,
+            "pack_cost": 0.0,
+            "profit": 0.0,
+            "last_date": "",
+        })
+        b["records"] += 1
+        b["quantity"] += float(r.quantity or 0)
+        b["amount"] += float(r.amount or 0)
+        b["cogs"] += float(r.cogs or 0)
+        b["freight_total"] += float(r.freight_total or 0)
+        b["pack_cost"] += float(r.pack_cost or 0)
+        b["profit"] += float(r.profit or 0)
+        b["last_date"] = max(b["last_date"], r.date or "")
+    out = []
+    for b in sorted(acc.values(), key=lambda x: -x["amount"]):
+        qty = b["quantity"]
+        b["amount"] = round(b["amount"], 2)
+        b["cogs"] = round(b["cogs"], 2)
+        b["freight_total"] = round(b["freight_total"], 2)
+        b["pack_cost"] = round(b["pack_cost"], 2)
+        b["profit"] = round(b["profit"], 2)
+        b["quantity"] = round(qty, 4)
+        b["profit_rate"] = _profit_rate(b["profit"], b["amount"])
+        b["unit_revenue"] = round(b["amount"] / qty, 4) if qty else 0.0
+        b["unit_profit"] = round(b["profit"] / qty, 4) if qty else 0.0
+        out.append(b)
+    return out
 
 
 # ---------------- 入仓品资料 ----------------
@@ -507,7 +568,14 @@ def list_inbounds(
         "profit": round(sum(r.profit or 0 for r in rows), 2),
         "quantity": round(sum(r.quantity or 0 for r in rows), 2),
     }
-    return {"items": items, "total": total, "count": len(rows)}
+    # 毛利率 = 合计毛利 ÷ 合计收入（不是各条毛利率的平均，避免小额记录被放大）
+    total["profit_rate"] = _profit_rate(total["profit"], total["amount"])
+    return {
+        "items": items,
+        "by_product": _by_product(rows),  # 按入仓品汇总（含毛利率）
+        "total": total,
+        "count": len(rows),
+    }
 
 
 @router.post("")

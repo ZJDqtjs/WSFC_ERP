@@ -392,6 +392,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "spec": spec,
                 "is_dropship": dropship,
                 "name": name,
+                "code": "",  # 商品编码：订单商品上一般填的是平台 SKU（京东 skuId），对外成本表按它对账
                 "qty": 0.0,
                 "amount": 0.0,
                 "gross_sales": 0.0,
@@ -440,6 +441,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             func.coalesce(func.sum(func.coalesce(OutboundLine.gross_sales, OutboundLine.amount)), 0).label("gross"),
             func.coalesce(func.sum(OutboundLine.cogs), 0).label("goods"),
             func.max(Product.name).label("pname"),
+            func.max(Product.code).label("pcode"),
         )
         .select_from(OutboundLine)
         .join(Outbound, Outbound.id == OutboundLine.outbound_id)
@@ -504,6 +506,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         d = _bucket(r.pid, r.spec, bool(r.dr), r.pname or "")
         if r.pname:  # 名称以销售行自身的商品为准（结算行只累加金额，不参与命名）
             d["name"] = r.pname
+        if r.pcode:  # 同理带上商品编码（对外成本表按平台 SKU 对账用）
+            d["code"] = r.pcode
         d["qty"] += float(r.qb or 0.0)
         d["amount"] += float(r.amt or 0.0)
         d["gross_sales"] += float(r.gross or 0.0)
@@ -565,6 +569,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "spec": d["spec"],
                 "is_dropship": d["is_dropship"],
                 "name": d["name"],
+                # 商品编码：订单商品上一般填的是平台 SKU（京东为数字 skuId）
+                "code": d.get("code") or "",
                 "qty": round(d["qty"], 4),
                 "amount": amount,
                 "gross_sales": gross_sales,

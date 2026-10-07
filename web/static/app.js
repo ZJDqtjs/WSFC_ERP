@@ -3719,7 +3719,7 @@ function buildWinGroup(recs) {
   const pnames = [...new Set(recs.map((r) => r.product_name).filter(Boolean))];
   const pns = [...new Set(recs.map((r) => r.purchase_no).filter(Boolean))];
   const centers = [...new Set(recs.map((r) => r.center).filter(Boolean))];
-  return {
+  const g = {
     import_group: recs[0].import_group,
     ids: recs.map((r) => r.id),
     records: recs,
@@ -3737,6 +3737,9 @@ function buildWinGroup(recs) {
     purchase_no: pns.length ? (pns.length === 1 ? pns[0] : `${pns[0]} 等${pns.length}个`) : "—",
     center: centers.length ? (centers.length === 1 ? centers[0] : `${centers[0]} 等${centers.length}个`) : "—",
   };
+  // 批次毛利率按「本批次毛利 ÷ 本批次收入」重算，不是各条毛利率的平均
+  g.profit_rate = g.amount ? (g.profit / g.amount) * 100 : 0;
+  return g;
 }
 function renderWarehouseIns(d) {
   const flat = d.items || [];
@@ -3757,10 +3760,12 @@ function renderWarehouseIns(d) {
   const sortable = rows.map((x) => x._group
     ? { _group: true, g: x.g, code: x.g.code, date: x.g.date, purchase_no: x.g.purchase_no,
         center: x.g.center, product: x.g.product, quantity: x.g.quantity, amount: x.g.amount,
-        cogs: x.g.cogs, freight: x.g.freight, pack_cost: x.g.pack_cost, profit: x.g.profit }
+        cogs: x.g.cogs, freight: x.g.freight, pack_cost: x.g.pack_cost, profit: x.g.profit,
+        profit_rate: x.g.profit_rate }
     : { _group: false, rec: x.rec, code: x.rec.code, date: x.rec.date, purchase_no: x.rec.purchase_no,
         center: x.rec.center, product: x.rec.product_name, quantity: x.rec.quantity, amount: x.rec.amount,
-        cogs: x.rec.cogs, freight: x.rec.freight_total, pack_cost: x.rec.pack_cost, profit: x.rec.profit });
+        cogs: x.rec.cogs, freight: x.rec.freight_total, pack_cost: x.rec.pack_cost, profit: x.rec.profit,
+        profit_rate: x.rec.profit_rate });
   sortable.sort((a, b) => {
     if (t._sort) { const dd = compareVal(a[t._sort.key], b[t._sort.key]) * t._sort.dir; if (dd) return dd; }
     return 0;
@@ -3771,7 +3776,8 @@ function renderWarehouseIns(d) {
     $("wInSummary").innerHTML =
       `共 <b>${flat.length}</b> 条 · 数量 <b>${fmtNum(tot.quantity)}</b> 袋 · ` +
       `收入 <b>${fmtMoney(tot.amount)}</b> · 商品成本 <b>${fmtMoney(tot.cogs)}</b> · ` +
-      `运费 <b>${fmtMoney(tot.freight)}</b> · 包材 <b>${fmtMoney(tot.pack_cost)}</b> · 毛利 <b style="color:var(--green)">${fmtMoney(tot.profit)}</b>`;
+      `运费 <b>${fmtMoney(tot.freight)}</b> · 包材 <b>${fmtMoney(tot.pack_cost)}</b> · ` +
+      `毛利 <b style="color:var(--green)">${fmtMoney(tot.profit)}</b> · 毛利率 <b style="color:var(--green)">${fmtNum(tot.profit_rate || 0)}%</b>`;
     $("wInSummary").style.display = flat.length ? "block" : "none";
   }
   t.innerHTML = `<thead><tr>
@@ -3787,9 +3793,10 @@ function renderWarehouseIns(d) {
     <th data-key="freight" class="num">运费${sortArrow("wInTable", "freight")}</th>
     <th data-key="pack_cost" class="num">包材成本${sortArrow("wInTable", "pack_cost")}</th>
     <th data-key="profit" class="num">毛利${sortArrow("wInTable", "profit")}</th>
+    <th data-key="profit_rate" class="num">毛利率${sortArrow("wInTable", "profit_rate")}</th>
     <th></th></tr></thead><tbody>` +
     sortable.map((x) => x._group ? renderWinGroupRow(x.g) : renderWinRow(x.rec)).join("") + `</tbody>`;
-  if (!rows.length) t.innerHTML = `<tr><td colspan="13" class="empty">该时间段暂无入仓记录，可点「导入常温贴单」或「手动入仓」</td></tr>`;
+  if (!rows.length) t.innerHTML = `<tr><td colspan="14" class="empty">该时间段暂无入仓记录，可点「导入常温贴单」或「手动入仓」</td></tr>`;
   t._rows = sortable;
   t._render = loadWarehouseIns;
   updateBatchBar("win");
@@ -3816,6 +3823,7 @@ function renderWinRow(r) {
     <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}</td>
     <td class="num mono">${r.pack_cost ? fmtMoney(r.pack_cost) : "—"}</td>
     <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
+    <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtNum(r.profit_rate || 0)}%</td>
     <td style="white-space:nowrap;">
       <button class="btn sm" onclick="wInEdit(${r.id})">改</button>
       <button class="btn sm danger" onclick="wInDelete(${r.id})">删</button>
@@ -3837,6 +3845,7 @@ function renderWinGroupRow(g) {
     <td class="num mono">${g.freight ? fmtMoney(g.freight) : "—"}</td>
     <td class="num mono">${g.pack_cost ? fmtMoney(g.pack_cost) : "—"}</td>
     <td class="num mono" style="color:${g.profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(g.profit)}</td>
+    <td class="num mono" style="color:${g.profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtNum(g.profit_rate || 0)}%</td>
     <td style="white-space:nowrap;">
       <button class="btn sm secondary" onclick="openWinGroup('${esc(g.import_group)}')">明细</button>
       <button class="btn sm danger" onclick="deleteWinGroup('${esc(g.import_group)}')">删</button>
@@ -3896,6 +3905,7 @@ function renderWinGroupPage() {
     <th data-key="freight_total" class="num">运费${sortArrow("wgTable", "freight_total")}</th>
     <th data-key="pack_cost" class="num">包材成本${sortArrow("wgTable", "pack_cost")}</th>
     <th data-key="profit" class="num">毛利${sortArrow("wgTable", "profit")}</th>
+    <th data-key="profit_rate" class="num">毛利率${sortArrow("wgTable", "profit_rate")}</th>
     <th></th></tr></thead><tbody>` + rows.map((r) => `<tr>
     <td class="mono">${esc(r.code)}</td>
     <td>${esc(r.date)}</td>
@@ -3912,6 +3922,7 @@ function renderWinGroupPage() {
     <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}</td>
     <td class="num mono">${r.pack_cost ? fmtMoney(r.pack_cost) : "—"}</td>
     <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
+    <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtNum(r.profit_rate || 0)}%</td>
     <td style="white-space:nowrap;">
       <button class="btn sm" onclick="wInEdit(${r.id})">改</button>
       <button class="btn sm danger" onclick="wInDelete(${r.id})">删</button>
