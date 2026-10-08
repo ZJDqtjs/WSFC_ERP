@@ -1875,8 +1875,8 @@ function openAiConfirm(r) {
 const AI_SETTLE_LABELS = { material: "包材", labor: "人工", express: "快递费", fee: "固定成本" };
 
 function aiSettleCatsOf(r) {
-  const cats = String((r || {}).settle_cats || "").split(",").filter(Boolean);
-  return cats.length ? cats : ["material", "labor", "express"];
+  // 默认「客户不承担」：到账只有货款，包材/人工/快递由我们承担（要计入实收就在确认框里勾）
+  return String((r || {}).settle_cats || "").split(",").filter(Boolean);
 }
 /** 当前「按金额记」的固定成本项：确认框开着时以表格里用户改过的为准，否则用识别结果 */
 function aiFeeItems() {
@@ -5799,8 +5799,9 @@ let OUT_PREVIEW = null;  // 最近一次服务端出库预览（含先进先出�
 let OUT_FEE_MANUAL = false;  // 固定费用合计是否被手动改过（改过就别让「预览结算」覆盖掉）
 
 /* ---------- 实收金额口径：客户承担的关联结算（包材 / 人工 / 快递费） ----------
-   客户的付款里含包材/工时/运费 → 勾选后计入「实收金额」（后端同样记进 settle_income 与报表收入）；
-   成本侧的包材/快递照旧结转，所以毛利不会被包材吃掉。选择记在浏览器里，下一单沿用。 */
+   默认「客户不承担」：到账金额就是货款，包材/人工/快递费由我们承担、正常扣毛利。
+   只有客户确实随货款把这部分付回来时才勾选：勾选后计入「实收金额」（后端同样记进
+   settle_income 与报表收入；成本侧的包材/快递照旧结转）。选择记在浏览器里，下一单沿用。 */
 const SETTLE_KEYS = { material: "settleMaterial", labor: "settleLabor", express: "settleExpress", fee: "settleFee" };
 const SETTLE_LABEL = { material: "包材", labor: "人工", express: "快递费", fee: "固定成本" };
 
@@ -5812,13 +5813,14 @@ function setSettleAll(on) {
   settleChanged();
 }
 function settleChanged() {
-  try { localStorage.setItem("settleCats", JSON.stringify(settleCats())); } catch (e) { /* 隐私模式忽略 */ }
+  try { localStorage.setItem("settleCatsV2", JSON.stringify(settleCats())); } catch (e) { /* 隐私模式忽略 */ }
   calcOutboundTotals();
 }
 function settleRestore() {
   try {
-    const v = JSON.parse(localStorage.getItem("settleCats") || "null");
-    if (!Array.isArray(v) || !v.length) return;   // 没记录过就保持默认（全勾）
+    // 键名带 V2：老键名里存的「默认全勾」不再生效，避免把新的默认值（全不勾）顶掉
+    const v = JSON.parse(localStorage.getItem("settleCatsV2") || "null");
+    if (!Array.isArray(v)) return;   // 没记录过就保持表单默认（全不勾）
     Object.entries(SETTLE_KEYS).forEach(([k, id]) => { if ($(id)) $(id).checked = v.includes(k); });
   } catch (e) { /* 忽略 */ }
 }
