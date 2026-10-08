@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SKU 成本接口测试</title>
+<style>
+  :root { --bd:#e3e6ea; --tx:#1f2328; --mut:#6b7280; --bg:#f6f7f9; --ok:#0a7d33; --err:#b42318; --warn:#b54708; --pri:#1a5fb4; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:20px; font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; color:var(--tx); background:var(--bg); }
+  h1 { font-size:19px; margin:0 0 4px; }
+  .sub { color:var(--mut); font-size:13px; margin-bottom:16px; }
+  .card { background:#fff; border:1px solid var(--bd); border-radius:8px; padding:16px; margin-bottom:14px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
+  .fld { display:flex; flex-direction:column; gap:4px; }
+  .fld.grow { flex:1 1 320px; }
+  label { font-size:12px; color:var(--mut); }
+  input { padding:7px 9px; border:1px solid var(--bd); border-radius:6px; font-size:13px; font-family:inherit; }
+  input.w { width:150px; }
+  button { padding:8px 14px; border:1px solid var(--bd); border-radius:6px; background:#fff; cursor:pointer; font-size:13px; font-family:inherit; }
+  button:hover { border-color:var(--pri); color:var(--pri); }
+  button.pri { background:var(--pri); border-color:var(--pri); color:#fff; }
+  button.pri:hover { opacity:.9; color:#fff; }
+  .hint { font-size:12px; color:var(--mut); margin-top:6px; }
+  .badge { display:inline-block; padding:2px 9px; border-radius:20px; font-size:12px; font-weight:600; }
+  .b-ok { background:#e3f5e9; color:var(--ok); } .b-err { background:#fdecea; color:var(--err); } .b-warn { background:#fef3e2; color:var(--warn); }
+  .cards { display:flex; gap:10px; flex-wrap:wrap; margin:12px 0 0; }
+  .mini { border:1px solid var(--bd); border-radius:6px; padding:8px 12px; min-width:118px; }
+  .mini b { display:block; font-size:18px; margin-top:2px; }
+  .mini span { font-size:11px; color:var(--mut); }
+  table { border-collapse:collapse; width:100%; font-size:12.5px; margin-top:8px; }
+  th, td { border-bottom:1px solid var(--bd); padding:6px 8px; text-align:right; white-space:nowrap; }
+  th:first-child, td:first-child, th.l, td.l { text-align:left; }
+  th { background:#f0f2f5; font-weight:600; position:sticky; top:0; }
+  tbody tr:hover { background:#fafbfc; }
+  .num { font-variant-numeric:tabular-nums; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+  pre { background:#0d1117; color:#c9d1d9; padding:12px; border-radius:6px; overflow:auto; max-height:420px; font-size:12px; margin:0; }
+  details summary { cursor:pointer; font-size:13px; color:var(--pri); }
+  .tag { display:inline-block; padding:1px 6px; border-radius:4px; background:#eef1f5; color:var(--mut); font-size:11px; }
+  .scroll { max-height:520px; overflow:auto; }
+</style>
+</head>
+<body>
+<h1>SKU 成本接口测试 · <code>GET /api/open/sku-costs</code></h1>
+<div class="sub">按京东 skuId 返回单件成本口径。<b>Token 走请求头 <code>X-Api-Token</code>，不能拼在 URL 上</b>（拼在 query 里不会被读取）。</div>
+
+<div class="card">
+  <div class="row">
+    <div class="fld grow">
+      <label>接口地址</label>
+      <input id="url" style="width:100%" />
+    </div>
+    <div class="fld grow">
+      <label>Token（保存在本浏览器 localStorage，不会写进文件）</label>
+      <input id="token" type="password" style="width:100%" placeholder="粘贴 X-Api-Token" />
+    </div>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <div class="fld"><label>date_from（可选）</label><input id="from" type="date" class="w" /></div>
+    <div class="fld"><label>date_to（可选）</label><input id="to" type="date" class="w" /></div>
+    <button class="pri" id="go">发送请求</button>
+    <button id="diag">① 先测免登录接口</button>
+    <button id="save">② 测带 Token 的成本接口</button>
+    <button id="same">地址改成当前站点</button>
+    <button id="clear">清除本机 Token</button>
+  </div>
+  <div class="hint">
+    ① 免登录接口 <code>/api/maintenance/status</code> 用来判断「网络/反代是否通」；
+    ② 成本接口用来判断「Token 与数据是否正常」。两者都 200 才算环境 OK。
+  </div>
+</div>
+
+<div class="card" id="statusCard" style="display:none">
+  <div class="cards" id="stat"></div>
+</div>
+
+<div class="card" id="tableCard" style="display:none">
+  <details open>
+    <summary>SKU 明细（<span id="cnt"></span>）</summary>
+    <div class="scroll"><table id="tbl"><thead><tr>
+      <th class="l">skuId</th><th class="l">名称</th><th class="l">来源</th>
+      <th>supply<br>结算单价</th><th>supplyGross<br>扣点前</th><th>platformRate<br>扣点率</th>
+      <th>shipping<br>运费</th><th>package<br>包材</th><th>labor<br>人工</th>
+      <th>销量</th><th>成交额</th><th>数据日期</th><th>毛利率<br>（我方）</th>
+    </tr></thead><tbody></tbody></table></div>
+  </details>
+</div>
+
+<div class="card">
+  <details>
+    <summary id="rawTitle">原始响应</summary>
+    <div style="margin:10px 0"><button id="copy">复制 JSON</button></div>
+    <pre id="raw">（尚未请求）</pre>
+  </details>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var LS = "jd_sku_costs_token";
+  var $ = function (id) { return document.getElementById(id); };
+
+  // 默认地址：固定指向 ERP 服务器。
+  // 不要用 location.origin 猜：本地预览/双击打开时它是 127.0.0.1 或 null，会把请求打到本地导致 404。
+  var ERP = "http://47.108.13.20";
+  var DEF = ERP + "/api/open/sku-costs";
+  $("url").value = DEF;
+  try { $("token").value = localStorage.getItem(LS) || ""; } catch (e) { /* 隐私模式下忽略 */ }
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function num(v, d) { return (v === null || v === undefined || v === "") ? "—" : Number(v).toFixed(d === undefined ? 2 : d); }
+  function num0(v) { return (v === null || v === undefined || v === "") ? 0 : Number(v); }
+  function qtyTip(r) {
+    var t = "区间内 " + num(r._qty, 0) + " 件";
+    if (r._totalQty !== undefined && r._totalQty !== null) {
+      t += "；全量历史 " + num(r._totalQty, 0) + " 件";
+    }
+    return t;
+  }
+  function srcTag(r) {
+    if (r._source === "warehouse") return '<span class="tag">入仓品</span>';
+    if (r._period === "all") {
+      return '<span class="tag" style="background:#fef3e2;color:#b54708">出库·全量兜底</span>';
+    }
+    return '<span class="tag">出库·区间</span>';
+  }
+  function dateTxt(r) {
+    if (r._firstDate && r._lastDate) {
+      return r._firstDate === r._lastDate ? r._firstDate : r._firstDate + " ~ " + r._lastDate;
+    }
+    if (r._lastDate) return r._lastDate;        // 入仓品：最后一次入仓日期
+    return "—";
+  }
+  function pct(v, d) { return (v === null || v === undefined) ? "—" : (Number(v) * 100).toFixed(d === undefined ? 2 : d) + "%"; }
+
+  function setStat(html) {
+    $("statusCard").style.display = "block";
+    $("stat").innerHTML = html;
+  }
+
+  function clearTips() {
+    Array.prototype.forEach.call(document.querySelectorAll(".tips"), function (n) { n.remove(); });
+  }
+
+  function addTip(text, color) {
+    clearTips();
+    var d = document.createElement("div");
+    d.className = "hint tips";
+    d.style.color = color;
+    d.innerHTML = text;
+    $("rawTitle").parentNode.appendChild(d);
+  }
+
+  function showErr(title, detail, advice) {
+    setStat('<span class="badge b-err">' + esc(title) + "</span>");
+    $("tableCard").style.display = "none";
+    $("raw").textContent = detail;
+    $("rawTitle").textContent = "原始响应 / 错误";
+    if (advice) addTip(advice, "#b42318");
+  }
+
+  function renderTable(data) {
+    var skus = data.skus || {};
+    var ids = Object.keys(skus).sort(function (a, b) {
+      return (skus[b]._turnover || 0) - (skus[a]._turnover || 0);
+    });
+    if (!ids.length) {
+      $("tableCard").style.display = "none";
+      return;
+    }
+var rows = ids.map(function (id) {
+      var r = skus[id] || {};
+      // 入仓品由接口直接给毛利率；出库商品的成本是「我方买货成本」，这里顺手算一个我方毛利率，
+      // 用于快速判断「结算价是否覆盖成本」（负值 = 亏本，应重点看）
+      var mr = r._marginRate;
+      if (mr === undefined || mr === null) {
+        var per = num0(r.supply) - num0(r._goodsCost) - num0(r.shipping) - num0(r.package) - num0(r.labor);
+        mr = num0(r.supply) > 0 ? (per / num0(r.supply)) * 100 : null;
+      }
+      var mrTxt = mr === null ? "—" : num(mr) + "%";
+      var mrColor = mr === null ? "" : (mr < 0 ? " color:#b42318;font-weight:600" : (mr < 5 ? " color:#b54708" : " color:#0a7d33"));
+      return "<tr>"
+        + '<td class="l mono">' + esc(id) + "</td>"
+        + '<td class="l">' + esc(r._name || "—") + "</td>"
+        + '<td class="l">' + srcTag(r) + "</td>"
+        + '<td class="num">' + num(r.supply) + "</td>"
+        + '<td class="num">' + num(r.supplyGross) + "</td>"
+        + '<td class="num">' + pct(r.platformRate) + "</td>"
+        + '<td class="num">' + num(r.shipping) + "</td>"
+        + '<td class="num">' + num(r.package) + "</td>"
+        + '<td class="num">' + num(r.labor) + "</td>"
+        + '<td class="num" title="' + esc(qtyTip(r)) + '">' + num(r._qty, 0) + "</td>"
+        + '<td class="num" title="' + esc(qtyTip(r)) + '">' + num(r._turnover) + "</td>"
+        + '<td class="num" style="font-size:11.5px;color:#6b7280">' + dateTxt(r) + "</td>"
+        + '<td class="num"' + (mrColor ? ' style="' + mrColor + '"' : "") + ">" + mrTxt + "</td>"
+        + "</tr>";
+    }).join("");
+    $("tbl").tBodies[0].innerHTML = rows;
+    $("cnt").textContent = ids.length + " 个 SKU";
+    $("tableCard").style.display = "block";
+  }
+
+  function render(data, url) {
+    var meta = data.meta || {};
+    var d = data.default || {};
+    var sale = meta.sale_sku_count || 0, wh = meta.warehouse_sku_count || 0;
+    var failed = (meta.failed || []).length;
+    var covered = Object.keys(data.skus || {}).filter(function (k) {
+      return data.skus[k].supply !== null && data.skus[k].supply !== undefined;
+    }).length;
+    var rng = (meta.sale_date_range || []);
+    var asked = (meta.date_from || meta.date_to)
+      ? ((meta.date_from || "最早") + " ~ " + (meta.date_to || "最新"))
+      : "全量历史";
+    setStat(
+      '<span class="badge b-ok">200 OK</span>'
+      + '<div class="mini" style="min-width:280px"><span>请求地址</span><b style="font-size:12px;font-weight:500;word-break:break-all">' + esc(url) + "</b></div>"
+      + '<div class="mini"><span>接口数据日期</span><b>' + esc(data.updatedAt || "—") + "</b></div>"
+      + '<div class="mini" style="min-width:190px"><span>出库统计区间</span><b style="font-size:13px">' + esc(asked) + "</b></div>"
+      + '<div class="mini" style="min-width:190px"><span>区间内出库实际落在</span><b style="font-size:13px">' + (rng.length === 2 ? esc(rng[0] + " ~ " + rng[1]) : "—") + "</b></div>"
+      + '<div class="mini"><span>有 supply 的 SKU</span><b>' + covered + "</b></div>"
+      + '<div class="mini"><span>SKU 总数</span><b>' + (meta.sku_count || 0) + "</b></div>"
+      + '<div class="mini" style="min-width:160px"><span>成本口径<br>区间 / 全量兜底</span><b>' + (meta.cost_period_range_count || 0) + " / " + (meta.cost_period_all_count || 0) + "</b></div>"
+      + '<div class="mini"><span>出库 / 入仓品</span><b>' + sale + " / " + wh + "</b></div>"
+      + '<div class="mini"><span>默认运费</span><b>' + num(d.shipping) + "</b></div>"
+      + '<div class="mini"><span>默认扣点</span><b>' + pct(d.platformRate) + "</b></div>"
+      + '<div class="mini"><span>默认退货率</span><b>' + pct(d.returnRate) + "</b></div>"
+      + (failed ? '<span class="badge b-warn">有 ' + failed + " 个分仓读取失败</span>" : "")
+    );
+    // 出库为 0：多半是日期写成了 2026-10-1 这种缺前导零的写法（老版本接口会整段过滤掉），
+    // 或者这段时间确实没导数据。这里明确提示，避免又白排查一轮。
+    if (!sale) {
+      addTip("所选区间内**没有任何出库记录**，所有商品的成本都用了全量历史兜底（标着「出库·全量兜底」）。" +
+        "请确认日期范围是否选对。", "#b54708");
+    } else if (meta.cost_period_all_count) {
+      addTip("有 <b>" + meta.cost_period_all_count + "</b> 个商品在你选的区间内没有出库，" +
+        "成本用了**全量历史兜底**（表格里标「出库·全量兜底」，销量按 0 计）。" +
+        "把鼠标放在销量上能看到全量历史销量。", "#b54708");
+    }
+    renderTable(data);
+    $("raw").textContent = JSON.stringify(data, null, 2);
+    $("rawTitle").textContent = "原始响应（" + ids_len(data) + " 个 SKU）";
+  }
+  function ids_len(d) { return Object.keys(d.skus || {}).length; }
+
+  function req(url, headers) {
+    var t0 = performance.now();
+    return fetch(url, { headers: headers || {}, cache: "no-store" })
+      .then(function (r) {
+        return r.text().then(function (txt) {
+          var ms = Math.round(performance.now() - t0);
+          var data = null;
+          try { data = JSON.parse(txt); } catch (e) { /* 非 JSON，原文展示 */ }
+          return { status: r.status, ok: r.ok, ms: ms, size: txt.length, data: data, txt: txt };
+        });
+      });
+  }
+
+  function report(r, url) {
+    if (!r.ok) {
+      var advice = r.status === 401
+        ? "Token 不正确 —— 请确认复制的是完整的 <code>open_api.token</code>（不要带引号/空格）。"
+        : r.status === 503
+          ? "供货方未配置 Token，接口未开放 —— 需在服务器 <code>config.local.json</code> 写入 <code>{\"open_api\":{\"token\":\"...\"}}</code> 后重启服务。"
+          : r.status === 404
+            ? "路径不对 —— 确认域名与前缀；若 Nginx 有自定义 api 前缀，请以文档中的地址为准。"
+            : "见下方原始响应。";
+      showErr("HTTP " + r.status + "（" + r.ms + " ms）",
+        "请求： " + url + "\n\n" + r.txt, advice);
+      return;
+    }
+    if (!r.data) {
+      showErr("返回不是 JSON", "请求： " + url + "\n\n" + r.txt,
+        "多半是请求被 Nginx/网关拦截或重定向到了登录页。若整段返回 HTML，说明没打到后端接口。");
+      return;
+    }
+    if (r.data.detail && !r.data.skus) {      // FastAPI 的 422/400 错误体
+      showErr("HTTP " + r.status, JSON.stringify(r.data, null, 2), "参数不合法，检查 date_from/date_to 是否为 YYYY-MM-DD。");
+      return;
+    }
+    render(r.data, url);
+  }
+
+  function costUrl() {
+    var u = $("url").value.trim();
+    var q = [];
+    if ($("from").value.trim()) q.push("date_from=" + encodeURIComponent($("from").value.trim()));
+    if ($("to").value.trim()) q.push("date_to=" + encodeURIComponent($("to").value.trim()));
+    return q.length ? u + (u.indexOf("?") >= 0 ? "&" : "?") + q.join("&") : u;
+  }
+
+  $("go").onclick = $("save").onclick = function () {
+    var url = costUrl(), tk = $("token").value.trim();
+    try { tk ? localStorage.setItem(LS, tk) : localStorage.removeItem(LS); } catch (e) { /* 忽略 */ }
+    $("rawTitle").textContent = "请求中…";
+    req(url, tk ? { "X-Api-Token": tk } : {}).then(function (r) { report(r, url); })
+      .catch(function (e) {
+        showErr("请求失败", String(e),
+          "浏览器层面就失败了：多为跨域/CORS、网络不通、或地址填错。先点「① 先测免登录接口」确认网络。");
+      });
+  };
+
+  $("diag").onclick = function () {
+    var base = $("url").value.trim().replace(/\/api\/open\/sku-costs.*$/, "");
+    var u = base + "/api/maintenance/status";
+    $("rawTitle").textContent = "请求中…";
+    req(u, {}).then(function (r) {
+      report(r, u);
+      if (r.ok) addTip("免登录接口 200 → 网络与 Nginx 正常；若成本接口仍失败，问题就在 Token 或数据上。", "#0a7d33");
+    }).catch(function (e) { showErr("请求失败", String(e), "连免登录接口都不通：请确认服务器地址、端口，以及本机能否访问该 IP。"); });
+  };
+
+  $("same").onclick = function () {
+    if (location.protocol.indexOf("http") !== 0) {
+      alert("当前页面是本地文件（file://），没有「当前站点」；请保持指向 ERP 服务器地址。");
+      return;
+    }
+    var u = location.origin + "/api/open/sku-costs";
+    if (!confirm("将把接口地址改成：\n" + u +
+      "\n\n只有当前页面本身就是从 ERP 服务器打开的（如 http://47.108.13.20/sku-costs-test.html）才应该这么改。" +
+      "\n若是本地预览/双击打开的，改了会 404。继续？")) return;
+    $("url").value = u;
+  };
+
+  $("clear").onclick = function () {
+    try { localStorage.removeItem(LS); } catch (e) { /* 忽略 */ }
+    $("token").value = "";
+    alert("已清除本浏览器保存的 Token");
+  };
+
+  $("copy").onclick = function () {
+    var txt = $("raw").textContent;
+    navigator.clipboard.writeText(txt).then(function () { alert("已复制"); },
+      function () { alert("复制失败，请手动选中下方文本"); });
+  };
+})();
+</script>
+</body>
+</html>

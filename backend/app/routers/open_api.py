@@ -17,6 +17,7 @@ SKU 口径（两边靠这个对上）：
 未配置时本接口返回 503，不会无鉴权裸奔。
 """
 import json
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -26,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from ..config import load_rules
 from ..database import get_sessionmaker, get_warehouses
-from ..models import WarehouseIn, WarehouseProduct
+from ..models import Outbound, OutboundLine, Product, WarehouseIn, WarehouseProduct
 from .report import _summary_of
 
 router = APIRouter(prefix="/api/open", tags=["open"])
@@ -47,6 +48,8 @@ PAID = "paid"
 
 # 进程内短缓存：汇总要扫区间内全部出库单，对方一天可能拉多次，10 分钟内相同参数直接复用
 _CACHE: dict = {}
+# 单仓汇总结果缓存（key = (date_from, date_to)）：方案 B 每次请求要用「区间」+「全量」两份
+_SUMMARY_CACHE: dict = {}
 _CACHE_TTL = timedelta(minutes=10)
 
 
@@ -63,6 +66,28 @@ def _require_token(x_api_token: str, authorization: str) -> None:
         got = authorization[7:].strip()
     if not got or got != expected:
         raise HTTPException(401, "Token 无效")
+
+
+def _norm_date(raw: str, field: str) -> str:
+    """把各种写法统一成 ``YYYY-MM-DD``；空串原样返回。
+
+    **这个函数是必需的，不是严谨癖**：出库日期在库里就是 ``YYYY-MM-DD`` 字符串，
+    区间过滤走的是字符串比较。调用方若传 ``2026-10-1``（缺前导零），
+    ``'2026-10-06' >= '2026-10-1'`` 会因为第 9 位 '0' < '1' 判为假，
+    于是 10-01~10-09 的数据被整段过滤掉，区间看起来「没有出库」。
+    支持 ``2026-10-1`` / ``2026/10/1`` / ``2026.10.1`` / ``20261001``。
+    """
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    m = re.fullmatch(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", s) or re.fullmatch(r"(\d{4})(\d{2})(\d{2})", s)
+    if not m:
+        raise HTTPException(422, f"{field} 日期格式应为 YYYY-MM-DD（可省略前导零），收到：{raw}")
+    y, mo, d = (int(x) for x in m.groups())
+    try:
+        return date(y, mo, d).isoformat()
+    except ValueError as e:
+        raise HTTPException(422, f"{field} 日期无效：{raw}（{e}）")
 
 
 def _defaults() -> dict:
@@ -111,6 +136,30 @@ def _sku_rows_sale(db: Session, date_from: str, date_to: str, key: str) -> dict:
         d["_cogs"] += float(r.get("goods_cogs") or 0)
         if not d["_name"]:
             d["_name"] = r.get("name") or ""
+
+    # 该商品在区间内**实际有出库**的日期范围：用来判断「数据是落在我选的那段时间，还是区间内根本没卖」。
+    # 这是另外查一次得到的（_summary_of 不返回日期），代价很小。
+    conds = [
+        OutboundLine.line_type == "sale",
+        func.coalesce(Outbound.pay_status, PAID) != "unpaid",
+        Product.code != "",
+    ]
+    if date_from:
+        conds.append(Outbound.date >= date_from)
+    if date_to:
+        conds.append(Outbound.date <= date_to)
+    for code, d0, d1 in db.execute(
+        select(Product.code, func.min(Outbound.date), func.max(Outbound.date))
+        .select_from(OutboundLine)
+        .join(Outbound, Outbound.id == OutboundLine.outbound_id)
+        .join(Product, Product.id == OutboundLine.product_id)
+        .where(*conds)
+        .group_by(Product.code)
+    ):
+        d = out.get(str(code or "").strip())
+        if d is not None:
+            d["_firstDate"] = d0 or ""
+            d["_lastDate"] = d1 or ""
     return out
 
 
@@ -129,6 +178,7 @@ def _sku_rows_warehouse(db: Session) -> dict:
             func.coalesce(func.sum(WarehouseIn.profit), 0.0),
             func.max(WarehouseIn.deduction_percent),
             func.max(WarehouseProduct.name),
+            func.max(WarehouseIn.date),
         )
         .select_from(WarehouseIn)
         .join(WarehouseProduct, WarehouseProduct.id == WarehouseIn.product_id, isouter=True)
@@ -136,7 +186,7 @@ def _sku_rows_warehouse(db: Session) -> dict:
         .group_by(WarehouseProduct.sku)
     ).all()
     out: dict = {}
-    for sku, qty, amount, gross, freight, pack, cogs, profit, ded, name in rows:
+    for sku, qty, amount, gross, freight, pack, cogs, profit, ded, name, last in rows:
         code = str(sku or "").strip()
         if not code or not float(qty or 0):
             continue  # 没维护 sku 的入仓品无法与京东 SKU 对应
@@ -151,6 +201,8 @@ def _sku_rows_warehouse(db: Session) -> dict:
             "_deduction": round(float(ded or 0) / 100, 6),
             "_name": name or "",
             "_source": "warehouse",
+            # 入仓品不按区间过滤（采购价是快照，用最近已知价），但要让人看清这个价是什么时候的
+            "_lastDate": last or "",
         }
     return out
 
@@ -161,18 +213,33 @@ def _merge_into(dst: dict, src: dict) -> dict:
         cur = dst.get(code)
         if cur is None:
             dst[code] = dict(d)
-        elif cur.get("_source") != "warehouse":      # 已有出库口径 → 继续累加
-            for k, v in d.items():
-                if k in ("_name", "_deduction", "_source"):
-                    continue
-                cur[k] = float(cur.get(k) or 0) + float(v or 0)
-        else:                                        # 已有入仓口径，被出库口径覆盖
+            continue
+        if cur.get("_source") == "warehouse":        # 已有入仓口径，被出库口径覆盖
             dst[code] = dict(d)
+            continue
+        for k, v in d.items():                       # 已有出库口径 → 金额累加，日期取并集
+            if k in ("_name", "_deduction", "_source"):
+                continue
+            if k == "_firstDate":
+                cur[k] = min(x for x in (cur.get(k) or "", v or "") if x) if (cur.get(k) or v) else ""
+                continue
+            if k == "_lastDate":
+                cur[k] = max(cur.get(k) or "", v or "")
+                continue
+            cur[k] = float(cur.get(k) or 0) + float(v or 0)
     return dst
 
 
 def _collect(date_from: str, date_to: str) -> dict:
-    """跨全部分仓汇总（单仓读取失败只记一条，不影响其它仓）。"""
+    """跨全部分仓汇总（单仓读取失败只记一条，不影响其它仓）。
+
+    带进程内缓存：方案 B 每次请求都要「区间」和「全量」两份汇总，全量那份很重，
+    缓存后同一份在 TTL 内只算一次（对方一天可能拉很多次）。
+    """
+    ck = (date_from, date_to)
+    hit = _SUMMARY_CACHE.get(ck)
+    if hit and datetime.now() - hit[0] < _CACHE_TTL:
+        return hit[1]
     sale: dict = {}
     wh: dict = {}
     failed: list = []
@@ -191,7 +258,10 @@ def _collect(date_from: str, date_to: str) -> dict:
         finally:
             if db is not None:
                 db.close()
-    return {"sale": sale, "warehouse": wh, "failed": failed}
+    out = {"sale": sale, "warehouse": wh, "failed": failed}
+    _SUMMARY_CACHE.clear()
+    _SUMMARY_CACHE[ck] = (datetime.now(), out)
+    return out
 
 
 # ---------------- 输出 ----------------
@@ -199,29 +269,42 @@ def _r(v, n: int = 4):
     return round(float(v), n)
 
 
-def _sale_item(d: dict) -> dict:
-    """订单商品 → 对方成本表的一行。"""
-    qty = d["_qty"]
-    amount = d["_amount"]
-    gross = d["_gross"] or amount
+def _sale_item(cost: dict, period: str, rq: float, ra: float, tq: float, ta: float) -> dict:
+    """订单商品 → 对方成本表的一行。
+
+    参数说明（方案 B：区间内没卖的商品也要有成本，否则对方回落全店口径算歪保本线）：
+    - ``cost``：算单件单价用的那份汇总——区间内有出库就是区间那份，否则是全量历史兜底那份；
+    - ``rq`` / ``ra``：**区间内**销量与结算额（区间内没卖就是 0，不能拿全量数顶替，否则会误读成「卖得好」）；
+    - ``tq`` / ``ta``：全量历史销量与成交额，给对方判断这个成本样本有多大。
+    """
+    qty = cost["_qty"]
+    amount = cost["_amount"]
+    gross = cost["_gross"] or amount
     return {
         # 京东结算给我们的单件金额（卖家实收 ÷ 件数）——对方口径里的「真实供货价」
         "supply": _r(amount / qty),
         "supplyGross": _r(gross / qty),
         # 单件扣点前售价：对方留空则继续用它报表里的真实客单价
         "price": None,
-        "shipping": _r(d["_express"] / qty),
-        "package": _r(d["_material"] / qty),
-        "labor": _r(d["_labor"] / qty),
+        "shipping": _r(cost["_express"] / qty),
+        "package": _r(cost["_material"] / qty),
+        "labor": _r(cost["_labor"] / qty),
         # 导入时已按店铺扣点从销售额里扣掉，这里反推真实扣点比例
         "platformRate": _r((gross - amount) / gross, 6) if gross else None,
         "returnRate": None,   # ERP 不记退货率，交给对方 default
         # 以下为附带信息，便于人工核对（对方可忽略）
-        "_name": d["_name"],
+        "_name": cost["_name"],
         "_source": "sale",
-        "_qty": _r(qty, 2),
-        "_turnover": _r(amount, 2),
-        "_goodsCost": _r(d["_cogs"] / qty),   # 我方买货成本，仅供参考，不等于 supply
+        # 成本取自哪个口径：range=所选区间的均值，all=区间内没卖，用了全量历史兜底
+        "_period": period,
+        "_qty": _r(rq, 2),
+        "_turnover": _r(ra, 2),
+        "_totalQty": _r(tq, 2),
+        "_totalTurnover": _r(ta, 2),
+        "_goodsCost": _r(cost["_cogs"] / qty),   # 我方买货成本，仅供参考，不等于 supply
+        # 成本所依据的日期范围：period=range 时是区间内实际出库的日子，=all 时是全量历史上的日子
+        "_firstDate": cost.get("_firstDate") or "",
+        "_lastDate": cost.get("_lastDate") or "",
     }
 
 
@@ -240,10 +323,16 @@ def _warehouse_item(d: dict) -> dict:
         "returnRate": None,
         "_name": d["_name"],
         "_source": "warehouse",
+        # 入仓品不按区间过滤（采购价是快照），一律全量口径
+        "_period": "all",
         "_qty": _r(qty, 2),
         "_turnover": _r(d["_amount"], 2),
+        "_totalQty": _r(qty, 2),
+        "_totalTurnover": _r(d["_amount"], 2),
         "_goodsCost": _r(d["_cogs"] / qty),
         "_marginRate": _r(d["_profit"] / d["_amount"] * 100, 2) if d["_amount"] else None,
+        # 入仓品不按区间过滤，这里给出「这批采购价最后一次入仓的日期」，便于判断价格是否还新鲜
+        "_lastDate": d.get("_lastDate") or "",
     }
 
 
@@ -257,39 +346,81 @@ def sku_costs(
     """按京东 skuId 返回单件成本口径（对方成本表的直接替代）。
 
     查询参数：
-    - ``date_from`` / ``date_to``：统计区间（YYYY-MM-DD），只影响**出库商品**的单件均值；
-      留空表示全量历史。入仓品始终按全部记录汇总。
+    - ``date_from`` / ``date_to``：统计区间，``YYYY-MM-DD``（前导零可省，也支持 ``2026/10/1``）。
+      只影响**出库商品**的单件均值，留空表示全量历史。
+      入仓品不按区间过滤（采购价是快照，用最近已知价），但会给出 ``_lastDate`` 标明价格日期。
+    - 区间内**没有出库记录**的商品不会出现在结果里；每个出库商品都带 ``_firstDate`` /
+      ``_lastDate``，可用来确认数据到底落在哪几天。
 
     鉴权：请求头 ``X-Api-Token: <token>``（或 ``Authorization: Bearer <token>``）。
     """
     _require_token(x_api_token, authorization)
 
-    ck = (date_from, date_to)
+    # 规范化日期：库里是 YYYY-MM-DD 字符串、区间走字符串比较，
+    # 传 2026-10-1 会让 10-01~10-09 被整段过滤掉（详见 _norm_date 注释）
+    df = _norm_date(date_from, "date_from")
+    dt = _norm_date(date_to, "date_to")
+    if df and dt and df > dt:
+        df, dt = dt, df
+
+    ck = (df, dt)
     hit = _CACHE.get(ck)
     if hit and datetime.now() - hit[0] < _CACHE_TTL:
         return hit[1]
 
-    data = _collect(date_from, date_to)
-    skus: dict = {}
-    for code, d in data["warehouse"].items():
-        skus[code] = _warehouse_item(d)
-    for code, d in data["sale"].items():      # 同码时出库口径覆盖入仓品口径
-        skus[code] = _sale_item(d)
+    # 方案 B：区间汇总 + 全量历史汇总。
+    # 区间内没卖的商品也用全量历史给出成本（不让对方回落全店口径），并标 _period=all 让人看得见。
+    has_range = bool(df or dt)
+    rng = _collect(df, dt) if has_range else None
+    full = _collect("", "")
+    if rng is None:
+        rng = full
 
+    skus: dict = {}
+    for code, d in full["warehouse"].items():
+        skus[code] = _warehouse_item(d)
+    sale_codes = set(full["sale"]) | set(rng["sale"])
+    period_count = {"range": 0, "all": 0}
+    for code in sale_codes:
+        in_range = code in rng["sale"]
+        cost = rng["sale"][code] if in_range else full["sale"][code]
+        tq, ta = full["sale"][code]["_qty"], full["sale"][code]["_amount"]
+        if in_range:
+            rq, ra = rng["sale"][code]["_qty"], rng["sale"][code]["_amount"]
+            period = "range"
+        else:
+            rq = ra = 0.0        # 区间内一件没卖，销量如实记 0
+            period = "all"
+        period_count[period] += 1
+        # 同码时出库口径覆盖入仓品口径
+        skus[code] = _sale_item(cost, period, rq, ra, tq, ta)
+
+    range_dates = sorted({v.get("_lastDate") or "" for v in rng["sale"].values() if v.get("_lastDate")})
     payload = {
         "updatedAt": date.today().isoformat(),
         "default": _defaults(),
         "skus": skus,
         "meta": {
-            "date_from": date_from,
-            "date_to": date_to,
+            # 回显规范化后的区间：调用方据此就能发现「自己传的 2026-10-1 被当成别的区间」
+            "date_from": df,
+            "date_to": dt,
+            "date_from_raw": date_from,
+            "date_to_raw": date_to,
+            # 区间内出库数据实际落在哪几天（可能比所选区间窄，也可能为空）
+            "sale_date_range": [range_dates[0], range_dates[-1]] if range_dates else [],
             "warehouse_count": len(get_warehouses()),
             "sku_count": len(skus),
-            "sale_sku_count": len(data["sale"]),
-            "warehouse_sku_count": len(data["warehouse"]),
-            "failed": data["failed"],
-            "note": "supply=结算给我们的单件金额；price 留空请用报表真实客单价；"
-                    "null 字段回落到 default；_ 前缀为附带信息可忽略",
+            # cost_period_range_count：成本取自所选区间；cost_period_all_count：区间内没卖、用全量历史兜底
+            "cost_period_range_count": period_count["range"],
+            "cost_period_all_count": period_count["all"],
+            "sale_sku_count": len(rng["sale"]),
+            "sale_sku_total": len(full["sale"]),
+            "warehouse_sku_count": len(full["warehouse"]),
+            "failed": full["failed"],
+            "note": "supply=结算给我们的单件金额；price 留空请用报表真实客单价；null 回落到 default；"
+                    "_period=range 表示成本取自所选区间，=all 表示该商品区间内没有出库、用全量历史兜底；"
+                    "_qty/_turnover 是区间内销量，_totalQty/_totalTurnover 是全量历史（判断样本大小用）；"
+                    "入仓品不按区间过滤，看 _lastDate 判断采购价日期",
         },
     }
     _CACHE.clear()
