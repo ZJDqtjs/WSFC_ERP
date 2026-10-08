@@ -410,16 +410,16 @@
               </div>
             </div>
             <div class="field" style="grid-column:1/-1;margin-top:10px;">
-              <label>实收金额包含（客户随货款一起付的关联结算）<span class="muted"> · 默认不勾：到账只有货款，包材/人工/快递由我们承担</span></label>
+              <label>实收金额包含（客户随货款一起付的关联结算）</label>
               <div class="toolbar" style="margin:0;flex-wrap:wrap;gap:14px;">
                 <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
-                  <input type="checkbox" id="settleMaterial" onchange="settleChanged()" /> 包材 / 耗材
+                  <input type="checkbox" id="settleMaterial" checked onchange="settleChanged()" /> 包材 / 耗材
                 </label>
                 <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
-                  <input type="checkbox" id="settleLabor" onchange="settleChanged()" /> 人工（打包费）
+                  <input type="checkbox" id="settleLabor" checked onchange="settleChanged()" /> 人工（打包费）
                 </label>
                 <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
-                  <input type="checkbox" id="settleExpress" onchange="settleChanged()" /> 快递费
+                  <input type="checkbox" id="settleExpress" checked onchange="settleChanged()" /> 快递费
                 </label>
                 <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;" title="工时 / 胶带这类按金额记的固定成本也由客户随货款付回时勾上（结算表里的「工时」行就是它）">
                   <input type="checkbox" id="settleFee" onchange="settleChanged()" /> 固定成本
