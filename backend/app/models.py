@@ -381,6 +381,9 @@ class WarehouseProduct(Base):
         ForeignKey("products.id"), nullable=True, index=True
     )  # 关联的库存商品（成本按库存管理的均价/参考成本计算）
     bag_weight: Mapped[float] = mapped_column(Float, default=0.0)  # 每袋净重（关联库存商品的基础单位，通常克）
+    # 代发成本（元/袋）：**不关联库存商品**时直接手填的每袋商品成本（本仓不持有该商品库存，
+    # 成本无从按库存均价推算，只能手填）。关联了库存商品时忽略此值，成本按 净重 × 库存单位成本 算。
+    dropship_cost: Mapped[float] = mapped_column(Float, default=0.0)
     shelf_life: Mapped[str] = mapped_column(String(32), default="")  # 保质期，如 半年/一年
     remark: Mapped[str] = mapped_column(String(255), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -421,6 +424,9 @@ class WarehouseIn(Base):
     stock_product_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 关联库存商品
     bag_weight: Mapped[float] = mapped_column(Float, default=0.0)  # 每袋净重快照（基础单位）
     unit_cost: Mapped[float] = mapped_column(Float, default=0.0)  # 库存单位成本快照（元/基础单位）
+    # 每袋商品成本（元/袋）快照：关联库存商品时 = 净重 × 单位成本；未关联（代发）时取入仓品的「代发成本」。
+    # 商品成本 cogs = 数量 × bag_cost，成本口径集中在这一个值上（老数据为 0，读取时回退按净重×单位成本算）。
+    bag_cost: Mapped[float] = mapped_column(Float, default=0.0)
     cogs: Mapped[float] = mapped_column(Float, default=0.0)  # 商品成本
     amount: Mapped[float] = mapped_column(Float, default=0.0)  # 收入合计（=数量×采购价）
     freight_total: Mapped[float] = mapped_column(Float, default=0.0)  # 运费合计

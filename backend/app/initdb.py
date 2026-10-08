@@ -455,9 +455,11 @@ _EXTRA_COLUMNS = {
         # 随货包材结算：明细快照 + 成本合计
         ("pack_items", "JSON"),
         ("pack_cost", "FLOAT DEFAULT 0"),
+        # 每袋商品成本（元/袋）：代发（未关联库存商品）时来自入仓品的「代发成本」
+        ("bag_cost", "FLOAT DEFAULT 0"),
     ),
-    # 入仓品：关联结算（随货包材）清单，每袋用量
-    "warehouse_products": (("pack_items", "JSON"),),
+    # 入仓品：关联结算（随货包材）清单，每袋用量；代发成本（不关联库存商品时手填的每袋商品成本）
+    "warehouse_products": (("pack_items", "JSON"), ("dropship_cost", "FLOAT DEFAULT 0")),
     # 出库行：代发标记（订单商品未关联库存大类 → 不扣库存，只记代发数量/成本）
     "outbound_lines": (("is_dropship", "BOOLEAN DEFAULT 0"),),
     # 商品：关联的库存商品清单（订单商品关联多个库存商品扣减 / 成本回写用）
