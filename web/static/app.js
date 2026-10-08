@@ -13,6 +13,7 @@ const prSel = new Set();  // 一单多货批量选择
 const winSel = new Set(); // 入仓记录批量选择
 let OUT_GROUP = null;  // 当前打开的出库批次（array of Outbound 记录）
 let WGROUP = null;     // 当前打开的入仓批次（array of WarehouseIn 记录）
+let WG_DETAIL = false; // 入仓批次明细视图：false=按商品名汇总（默认），true=按记录明细
 let WIN_DEDUCT = 0;    // 入仓品扣点%（在「扣点」页统一维护）
 
 /* ---------- 批量选择工具 ---------- */
@@ -3870,16 +3871,62 @@ async function batchDeleteWarehouseIns() {
     loadWarehouseIns();
   } catch (e) { toast("删除失败：" + e.message); }
 }
-/* 打开批次二级页 */
+/* 打开批次二级页（默认按商品汇总，可切换为记录明细） */
 function openWinGroup(groupKey) {
   WGROUP = (WINS || []).filter((r) => r.import_group === groupKey);
   if (!WGROUP.length) { toast("未找到该批次"); return; }
+  WG_DETAIL = false;
+  const t = $("wgTable");
+  if (t) t._sort = null;
   goPage("wingroup");
+}
+/* 切换「按商品汇总 / 批次明细」视图 */
+function toggleWinGroupMode() {
+  WG_DETAIL = !WG_DETAIL;
+  const t = $("wgTable");
+  if (t) t._sort = null;   // 两种视图列不同，切换时清空排序避免错列
+  renderWinGroupPage();
+}
+/* 按商品名汇总批次内记录：同类商品合并，不区分单号 / 采购单号 / 配送中心 */
+function buildWinProductGroups(recs) {
+  const map = new Map();
+  for (const r of recs) {
+    const key = r.product_name || "（未命名）";
+    if (!map.has(key)) map.set(key, {
+      product_name: key, count: 0, quantity: 0, box_count: 0,
+      amount: 0, cogs: 0, freight_total: 0, pack_cost: 0, profit: 0,
+      stock_product_name: r.stock_product_name || "", packs: new Map(),
+    });
+    const g = map.get(key);
+    g.count += 1;
+    g.quantity += r.quantity || 0;
+    g.box_count += r.box_count || 0;
+    g.amount += r.amount || 0;
+    g.cogs += r.cogs || 0;
+    g.freight_total += r.freight_total || 0;
+    g.pack_cost += r.pack_cost || 0;
+    g.profit += r.profit || 0;
+    (r.pack_items || []).forEach((it) => {
+      const k = `${it.name || "?"}|${it.unit || ""}`;
+      g.packs.set(k, (g.packs.get(k) || 0) + (it.quantity || 0));
+    });
+  }
+  return [...map.values()].map((g) => ({
+    ...g,
+    unit_price: g.quantity ? g.amount / g.quantity : 0,
+    profit_rate: g.amount ? (g.profit / g.amount) * 100 : 0,
+    pack_text: [...g.packs.entries()].map(([k, q]) => {
+      const [name, unit] = k.split("|");
+      return `${esc(name)}×${fmtNum(q)}${esc(unit)}`;
+    }).join("、"),
+  }));
 }
 /* 批次二级页渲染（支持表头排序） */
 function renderWinGroupPage() {
   if (!WGROUP || !WGROUP.length) return;
   const g = buildWinGroup(WGROUP);
+  const modeBtn = $("wgModeBtn");
+  if (modeBtn) modeBtn.textContent = WG_DETAIL ? "按商品汇总" : "显示批次明细";
   $("wgTitle").textContent = `入仓批次明细 · ${g.count} 条`;
   $("wgHint").textContent = `批次 ${g.import_group} · ${esc(g.date)}`;
   $("wgSummary").innerHTML = `
@@ -3890,6 +3937,7 @@ function renderWinGroupPage() {
     <div class="stat"><div class="label">包材成本</div><div class="value">${fmtMoney(g.pack_cost)}</div></div>
     <div class="stat success"><div class="label">毛利</div><div class="value" style="color:var(--green)">${fmtMoney(g.profit)}</div></div>`;
   const t = $("wgTable");
+  if (!WG_DETAIL) { renderWinSummaryTable(t); return; }
   const rows = applyTableSort(t, WGROUP);
   t.innerHTML = `<thead><tr>
     <th data-key="code">单号${sortArrow("wgTable", "code")}</th>
@@ -3927,6 +3975,39 @@ function renderWinGroupPage() {
       <button class="btn sm" onclick="wInEdit(${r.id})">改</button>
       <button class="btn sm danger" onclick="wInDelete(${r.id})">删</button>
     </td></tr>`).join("") + `</tbody>`;
+  t._rows = rows;
+  t._render = renderWinGroupPage;
+}
+/* 默认视图：按商品名汇总（不区分单号 / 采购单号 / 配送中心） */
+function renderWinSummaryTable(t) {
+  const rows = applyTableSort(t, buildWinProductGroups(WGROUP));
+  t.innerHTML = `<thead><tr>
+    <th data-key="product_name">商品${sortArrow("wgTable", "product_name")}</th>
+    <th data-key="count" class="num">记录数${sortArrow("wgTable", "count")}</th>
+    <th data-key="quantity" class="num">数量(袋)${sortArrow("wgTable", "quantity")}</th>
+    <th data-key="box_count" class="num">箱数${sortArrow("wgTable", "box_count")}</th>
+    <th data-key="unit_price" class="num">采购价(收入/袋)${sortArrow("wgTable", "unit_price")}</th>
+    <th data-key="amount" class="num">收入${sortArrow("wgTable", "amount")}</th>
+    <th data-key="cogs" class="num">商品成本${sortArrow("wgTable", "cogs")}</th>
+    <th data-key="freight_total" class="num">运费${sortArrow("wgTable", "freight_total")}</th>
+    <th data-key="pack_cost" class="num">包材成本${sortArrow("wgTable", "pack_cost")}</th>
+    <th data-key="profit" class="num">毛利${sortArrow("wgTable", "profit")}</th>
+    <th data-key="profit_rate" class="num">毛利率${sortArrow("wgTable", "profit_rate")}</th>
+    </tr></thead><tbody>` + rows.map((r) => `<tr>
+    <td><b>${esc(r.product_name)}</b>
+      <div class="muted" style="font-size:12px;">${r.stock_product_name ? esc(r.stock_product_name) + " · " : ""}${r.count} 条记录 · 合计 ${fmtNum(r.quantity)} 袋</div>
+      ${r.pack_text ? `<div class="muted" style="font-size:12px;">随货包材：${r.pack_text}</div>` : ""}</td>
+    <td class="num mono">${r.count}</td>
+    <td class="num mono">${fmtNum(r.quantity)}</td>
+    <td class="num mono">${r.box_count ? fmtNum(r.box_count) : "—"}</td>
+    <td class="num mono">${fmtMoney(r.unit_price)}</td>
+    <td class="num mono">${fmtMoney(r.amount)}</td>
+    <td class="num mono">${fmtMoney(r.cogs)}</td>
+    <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}</td>
+    <td class="num mono">${r.pack_cost ? fmtMoney(r.pack_cost) : "—"}</td>
+    <td class="num mono" style="color:${r.profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
+    <td class="num mono" style="color:${r.profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtNum(r.profit_rate || 0)}%</td>
+    </tr>`).join("") + `</tbody>`;
   t._rows = rows;
   t._render = renderWinGroupPage;
 }
