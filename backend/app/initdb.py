@@ -495,8 +495,14 @@ def ensure_columns(engine: Engine) -> None:
         conn.commit()
 
 
-def init_warehouse(key: str, copy_users_from: str | None = None) -> None:
-    """幂等初始化分仓：建表 + 迁移 + 单位/账号种子 + 回填。"""
+def init_warehouse(key: str, copy_users_from: str | None = None, seed_catalog: bool = False) -> None:
+    """幂等初始化分仓：建表 + 迁移 + 单位/账号种子 + 回填。
+
+    seed_catalog：是否播种「入仓品资料」（_WAREHOUSE_PRODUCT_SEED，那套玉米/花生的模板清单）。
+    **默认不播**：入仓品资料是每个分仓自己的台账，新分仓一建出来就带着模板清单，
+    看起来就像"别的仓的入仓品串过来了"（用户反馈过）。只有原始仓（首次初始化，见 main.lifespan）
+    才传 True 保留历史行为；其余分仓一律从空开始，避免每次重启又把用户删掉的模板行种回去。
+    """
     eng = get_engine(key)
     Base.metadata.create_all(bind=eng)
     ensure_columns(eng)
@@ -509,7 +515,8 @@ def init_warehouse(key: str, copy_users_from: str | None = None) -> None:
             copy_users(copy_users_from, key)  # 先拷用户（空表显式 id 插入），再 ensure 兜底
         ensure_seed_users(db)
         _backfill_products(db)
-        seed_warehouse_products(db)
+        if seed_catalog:
+            seed_warehouse_products(db)
         ensure_warehouse_deduction(db)
         db.commit()
     finally:

@@ -106,9 +106,10 @@ async def lifespan(app: FastAPI):
     resumed = on_service_start()
     if resumed:
         print(f"[维护模式] 主服务已启动，自动结束「{resumed}」状态，恢复正常访问")
-    # 1) 默认仓（奥斯迪）初始化（幂等）
-    init_warehouse(DEFAULT_WAREHOUSE_KEY)
-    # 2) 初始化默认分仓（新登录会话的起点）：与奥斯迪不同时也初始化（防 db 文件在但表/种子缺失）
+    # 1) 默认仓（奥斯迪）初始化（幂等）；只有它会播种「入仓品资料」模板清单（历史行为），
+    #    其它分仓一律不播——入仓品资料是各分仓自己的台账，不能互相串（见 init_warehouse.seed_catalog）
+    init_warehouse(DEFAULT_WAREHOUSE_KEY, seed_catalog=True)
+    # 2) 初始化默认分仓（新登录会话的起点）：与奥斯迪不同时也初始化（防 db 文件在但表缺失）
     default_key = get_default_key()
     if default_key != DEFAULT_WAREHOUSE_KEY:
         init_warehouse(default_key)
