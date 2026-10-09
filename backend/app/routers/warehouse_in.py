@@ -31,8 +31,9 @@ router = APIRouter(prefix="/api/warehouse-in", tags=["warehouse-in"])
 
 # 未显式指定工作表时，按「当前分仓」决定读哪张贴单表 —— 一个仓对应一个温层。
 # 奥斯迪仓 / 昆明蔬菜仓是常温品（常温贴单），wh02「薯条脱皮玉米粒」是冷冻品（冷冻贴单）。
-# 没配置的分仓一律用 DEFAULT_SHEET；配置的表在文件里不存在时，回落到含「贴单」的第一张，
-# 最后回落到第一张表（兼容旧格式文件）。
+# 没配置的分仓一律用 DEFAULT_SHEET；配置的表在文件里不存在时，退而用含「贴单」的第一张
+# （防表名被微调）；连贴单表都没有则直接报错，让用户手动选 —— 绝不回落到第一张表，
+# 因为这类文件的第一张往往是「什锦菜」这类商品明细表，列头一样、会被静默当贴单导进去。
 DEFAULT_SHEET = "常温贴单"
 WAREHOUSE_SHEET = {
     "wh02": "冷冻贴单",
@@ -55,7 +56,8 @@ def _pick_sheet(all_sheets: list[str], wanted: str, wh_key: str = "") -> str:
 
     - ``wanted`` 显式指定（前端下拉/接口参数）：只用它；不存在时报错并列出全部可选；
     - 未指定：按当前分仓取 ``WAREHOUSE_SHEET``（wh02 → 冷冻贴单，其余 → 常温贴单）；
-      该仓配的表在文件里没有时，回落到名字含「贴单」的第一张，最后回落到第一张表。
+      该仓配的表在文件里没有时，退而用名字含「贴单」的第一张；
+      连贴单表都没有则报错让用户手动选（不回落到第一张表，避免把商品明细表当贴单导入）。
     """
     names = list(all_sheets or [])
     wanted = (wanted or "").strip()
@@ -68,7 +70,14 @@ def _pick_sheet(all_sheets: list[str], wanted: str, wh_key: str = "") -> str:
     preferred = WAREHOUSE_SHEET.get((wh_key or "").strip(), DEFAULT_SHEET)
     if preferred in names:
         return preferred
-    return next((s for s in names if SHEET_KEYWORD in s), names[0])
+    hit = next((s for s in names if SHEET_KEYWORD in s), None)
+    if hit:
+        return hit
+    raise HTTPException(
+        400,
+        f"未找到「{preferred}」工作表，也没有其他名字含「{SHEET_KEYWORD}」的工作表；"
+        f"请在工作表下拉里手动选择要导入的那张。可选：{'、'.join(names)}",
+    )
 
 
 def _norm(s) -> str:
