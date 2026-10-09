@@ -801,6 +801,14 @@ hr {
   flex: 1; 
 }
 
+/* 工具栏里的可搜索下拉不要占满整行：.scombo 默认 width:100%，在 flex 工具栏里会把后面的
+   日期框 / 查询按钮挤到第二行，展开的下拉又正好盖住它们（盘点记录页就是这个表现） */
+.toolbar > .scombo {
+  width: auto; 
+  flex: 0 1 240px; 
+  min-width: 180px; 
+}
+
 .toolbar input, .toolbar select {
   border: 1px solid var(--border); 
   border-radius: var(--radius); 

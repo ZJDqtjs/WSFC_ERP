@@ -238,7 +238,7 @@
         <div id="stock-overview">
           <div class="card">
             <div class="toolbar">
-              <select id="stockCategory" class="searchable" onchange="renderStock()"><option value="">全部分类</option></select>
+              <select id="stockCategory" onchange="renderStock()"><option value="">全部分类</option></select>
               <input id="stockSearch" placeholder="🔍 搜索商品名称 / 分类..." oninput="renderStock()" />
               <div class="grow"></div>
               <button class="btn secondary" onclick="openAdjust()"><svg class="ic"><use href="#i-edit"/></svg> 盘点调整</button>
@@ -256,7 +256,7 @@
         <div id="stock-adjustments" style="display:none;">
           <div class="card">
             <div class="toolbar">
-              <select id="adjProductFilter" class="searchable"><option value="0">全部商品</option></select>
+              <input id="adjSearch" placeholder="🔍 搜索商品名称 / 备注 / 操作员" style="min-width:260px;" oninput="renderAdjustments()" />
               <input id="adjDateFrom" type="date" /><span>-</span><input id="adjDateTo" type="date" />
               <button class="btn" onclick="loadAdjustments()">查询</button>
               <div class="grow"></div>
@@ -269,7 +269,7 @@
         <div id="stock-movements" style="display:none;">
           <div class="card">
             <div class="toolbar">
-              <select id="mvProduct" class="searchable"><option value="0">全部商品</option></select>
+              <select id="mvProduct" onchange="mvResetPage(); loadMovements()"><option value="0">全部商品</option></select>
               <input id="mvDateFrom" type="date" /><span>-</span><input id="mvDateTo" type="date" />
               <input id="mvSearch" placeholder="🔍 筛选流水..." oninput="onMvSearch()" />
               <label class="check-inline" title="把同一商品、同一扣减量的出库行合并成一行（显示单数与合计出库量）">
@@ -504,6 +504,7 @@
           <div class="card-head">
             <h3 id="wgTitle">入仓批次明细</h3><span class="hint" id="wgHint"></span>
             <div class="grow"></div>
+            <button class="btn secondary" id="wgModeBtn" onclick="toggleWinGroupMode()">显示批次明细</button>
             <button class="btn danger" onclick="WGROUP && WGROUP[0] && deleteWinGroup(WGROUP[0].import_group)">删 除本批</button>
             <button class="btn secondary" onclick="goPage('warehouse-in')">← 返回入仓列表</button>
           </div>

@@ -9,6 +9,7 @@ from ..models import (
     CodeMapping,
     FinanceRecord,
     Inbound,
+    Outbound,
     OutboundLine,
     Product,
     StockMovement,
@@ -326,8 +327,14 @@ def delete_product(pid: int, db: Session = Depends(get_db), user: User = Depends
     p = db.get(Product, pid)
     if not p:
         raise HTTPException(404, "商品不存在")
-    if _product_referenced(db, pid):
-        raise HTTPException(400, f"商品「{p.name}」已被出入库/财务流水/入仓品或其他商品关联引用，无法删除")
+    sources = _product_reference_sources(db, pid)
+    if sources:
+        # 逐条列出引用来源（前端弹窗展示）：只说「已被引用」用户根本不知道卡在哪
+        raise HTTPException(400, "\n".join(
+            [f"商品「{p.name}」仍被以下数据引用，无法删除："]
+            + [f"- {s}" for s in sources]
+            + ["（可先删除对应单据 / 盘点调整记录，或把该商品改为「停用」）"]
+        ))
     db.delete(p)
     db.commit()
     return {"ok": True}
@@ -349,32 +356,90 @@ class BatchProductUpdate(BaseModel):
     free_shipping: bool | None = None
 
 
-def _product_referenced(db: Session, pid: int) -> bool:
-    """该商品是否已被单据/流水/编码关联/其他商品关联或订单商品引用。"""
-    for model in (StockMovement, Inbound, OutboundLine, CodeMapping, FinanceRecord):
-        if db.scalar(select(func.count()).select_from(model).where(model.product_id == pid)):
-            return True
-    # 入仓品关联的库存商品
-    if db.scalar(
-        select(func.count()).select_from(WarehouseProduct).where(WarehouseProduct.stock_product_id == pid)
-    ):
-        return True
-    # 入仓品的关联结算（随货包材）清单引用
-    if any(
-        (it or {}).get("product_id") == pid
-        for wp in db.execute(select(WarehouseProduct)).scalars()
-        for it in (wp.pack_items or [])
-    ):
-        return True
-    # 被其他商品的关联结算清单引用，或被订单商品作为库存扣减关联引用
+def _names_brief(names: list[str], limit: int = 4) -> str:
+    """名称列表缩略展示：最多 limit 个，超出用「…」。（引用来源里动辄几十个商品，列全了没法看）"""
+    names = [str(n or "—") for n in names]
+    return "、".join(names[:limit]) + ("…" if len(names) > limit else "")
+
+
+def _product_reference_sources(db: Session, pid: int) -> list[str]:
+    """列出「阻止删除该商品」的引用来源（人话版，供前端弹窗逐条展示）；无引用返回空列表。
+
+    判定口径与旧版 _product_referenced 完全一致（哪些引用会拦住删除没变），只是把
+    「被什么引用」说清楚——用户删完关联结算清单后，也能看懂到底是哪条数据还挂着。
+    """
+    out: list[str] = []
+
+    n = db.scalar(select(func.count()).select_from(StockMovement).where(StockMovement.product_id == pid)) or 0
+    if n:
+        last = db.execute(
+            select(StockMovement).where(StockMovement.product_id == pid)
+            .order_by(StockMovement.date.desc(), StockMovement.id.desc()).limit(1)
+        ).scalars().first()
+        n_manual = db.scalar(
+            select(func.count()).select_from(StockMovement)
+            .where(StockMovement.product_id == pid, StockMovement.ref_type == "manual")
+        ) or 0
+        detail = f"（最近一条：{last.date} {last.move_type}"
+        if (last.remark or "").strip():
+            detail += f"·{last.remark.strip()[:30]}"
+        detail += "）"
+        if n_manual:
+            detail += f"；其中盘点调整 {n_manual} 条，可到「库存 → 盘点调整」删除对应记录"
+        out.append(f"库存流水 {n} 条{detail}")
+
+    n = db.scalar(select(func.count()).select_from(OutboundLine).where(OutboundLine.product_id == pid)) or 0
+    if n:
+        codes = [c for (c,) in db.execute(
+            select(Outbound.code).join(OutboundLine, OutboundLine.outbound_id == Outbound.id)
+            .where(OutboundLine.product_id == pid).order_by(Outbound.date.desc(), Outbound.id.desc()).limit(3)
+        )]
+        out.append(f"出库 / 销售明细 {n} 行（最近单据：{_names_brief(codes)}）")
+
+    n = db.scalar(select(func.count()).select_from(Inbound).where(Inbound.product_id == pid)) or 0
+    if n:
+        codes = [c for (c,) in db.execute(
+            select(Inbound.code).where(Inbound.product_id == pid)
+            .order_by(Inbound.date.desc(), Inbound.id.desc()).limit(3)
+        )]
+        out.append(f"入库单 {n} 张（最近：{_names_brief(codes)}）")
+
+    n = db.scalar(select(func.count()).select_from(FinanceRecord).where(FinanceRecord.product_id == pid)) or 0
+    if n:
+        out.append(f"财务流水 {n} 条")
+
+    n = db.scalar(select(func.count()).select_from(CodeMapping).where(CodeMapping.product_id == pid)) or 0
+    if n:
+        out.append(f"商品编码关联（平台编码映射）{n} 条")
+
+    # 入仓品：关联库存商品 / 关联结算（随货包材）清单
+    wp_linked, wp_packs = [], []
+    for wp in db.execute(select(WarehouseProduct)).scalars():
+        if wp.stock_product_id == pid:
+            wp_linked.append(wp.name)
+        if any((it or {}).get("product_id") == pid for it in (wp.pack_items or [])):
+            wp_packs.append(wp.name)
+    if wp_linked:
+        out.append(f"被入仓品当作「关联库存商品」：{_names_brief(wp_linked)}")
+    if wp_packs:
+        out.append(f"挂在入仓品的「关联结算（随货包材）」清单里：{_names_brief(wp_packs)}")
+
+    # 其他商品：扣减库存商品 / 关联结算清单
+    p_sub, p_links, p_packs = [], [], []
     for o in db.execute(select(Product).where(Product.id != pid)).scalars():
         if o.stock_product_id == pid:
-            return True
+            p_sub.append(o.name)
         if any((it or {}).get("product_id") == pid for it in (o.stock_links or [])):
-            return True
+            p_links.append(o.name)
         if any((it or {}).get("product_id") == pid for it in (o.pack_items or [])):
-            return True
-    return False
+            p_packs.append(o.name)
+    if p_sub:
+        out.append(f"被订单商品当作「扣减库存商品」：{_names_brief(p_sub)}")
+    if p_links:
+        out.append(f"在订单商品的「扣减库存商品」清单里：{_names_brief(p_links)}")
+    if p_packs:
+        out.append(f"在商品的「出库关联结算清单」里：{_names_brief(p_packs)}")
+    return out
 
 
 @router.post("/products/batch-delete")
@@ -384,13 +449,19 @@ def batch_delete_products(data: BatchIds, db: Session = Depends(get_db), user: U
         p = db.get(Product, pid)
         if not p:
             continue
-        if _product_referenced(db, pid):
-            blocked.append(p.name)
+        sources = _product_reference_sources(db, pid)
+        if sources:
+            blocked.append({"id": p.id, "name": p.name, "sources": sources})
             continue
         db.delete(p)
         deleted += 1
     db.commit()
-    return {"ok": True, "deleted": deleted, "blocked": blocked}
+    return {
+        "ok": True,
+        "deleted": deleted,
+        "blocked": [b["name"] for b in blocked],   # 兼容旧前端：只回名称
+        "blocked_items": blocked,                  # 带引用来源，前端弹窗逐条展示
+    }
 
 
 @router.post("/products/batch-update")

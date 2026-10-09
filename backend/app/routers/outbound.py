@@ -66,7 +66,7 @@ class OutboundIn(BaseModel):
     pay_status: str = "paid"  # paid 已付款/已回款（默认）/ unpaid 待付款（先进「待付款账单」）
     # 金额调整（给客户抹零/凑整）：正=加收，负=抹零。商品成本不变，差额自动记「金额调整」其他开支
     adjust_amount: float = 0.0
-    # 客户承担的关联结算类别（包材/人工/快递费）→ 计入实收金额；不传 = 默认客户全额承担
+    # 客户承担的关联结算类别（包材/人工/快递费）→ 计入实收金额；不传 = 默认客户不承担（到账只有货款）
     settle_cats: list[str] | None = None
 
 

@@ -147,6 +147,18 @@ def _stock_default_unit(sp: Product | None) -> str:
     return (sp.default_unit or sp.base_unit) if sp else ""
 
 
+def _goods_bag_cost(product: WarehouseProduct | None, bag_weight: float, unit_cost: float) -> float:
+    """每袋商品成本（元/袋）——成本口径的唯一入口。
+
+    - 关联了库存商品：净重 × 库存单位成本（均价优先，无则参考成本）
+    - **未关联库存商品（代发）**：直接取入仓品手填的「代发成本」，本仓没有该商品库存，
+      成本推不出来；没填就是 0（与改造前的行为一致）。
+    """
+    if product is not None and not product.stock_product_id:
+        return round(float(getattr(product, "dropship_cost", 0.0) or 0.0), 4)
+    return round((bag_weight or 0.0) * (unit_cost or 0.0), 4)
+
+
 # 入仓品扣点：统一在「扣点」页维护，保留类别名「入仓品」
 WAREHOUSE_DEDUCTION_CATEGORY = "入仓品"
 
@@ -187,14 +199,26 @@ def _product_dict(db: Session, p: WarehouseProduct) -> dict:
         "stock_default_unit": _stock_default_unit(sp),
         "stock_unit_cost": round(unit_cost, 6),  # 元/默认单位（如 元/公斤）
         "bag_weight": p.bag_weight,  # 每袋净重（默认单位，如 公斤）
-        "bag_cost": round((p.bag_weight or 0) * unit_cost, 4),  # 每袋商品成本
+        # 代发成本（元/袋）：不关联库存商品时手填的每袋商品成本
+        "dropship_cost": round(float(getattr(p, "dropship_cost", 0.0) or 0.0), 4),
+        # 每袋商品成本：关联库存 = 净重×单位成本；未关联 = 代发成本
+        "bag_cost": _goods_bag_cost(p, p.bag_weight or 0.0, unit_cost),
         "shelf_life": p.shelf_life, "remark": p.remark, "is_active": p.is_active,
         "pack_items": pack_items,  # 关联结算（随货包材）清单（每袋用量）
     }
 
 
+def _profit_rate(profit: float | None, amount: float | None) -> float:
+    """毛利率（%）= 毛利 ÷ 收入。收入为 0 时返回 0，避免除零。"""
+    amt = float(amount or 0)
+    if not amt:
+        return 0.0
+    return round(float(profit or 0) / amt * 100, 2)
+
+
 def _in_dict(db: Session, r: WarehouseIn) -> dict:
     sp = db.get(Product, r.stock_product_id) if r.stock_product_id else None
+    qty = float(r.quantity or 0)
     return {
         "id": r.id, "code": r.code, "product_id": r.product_id,
         "product_name": r.product_name, "category": r.category, "unit": r.unit,
@@ -205,7 +229,18 @@ def _in_dict(db: Session, r: WarehouseIn) -> dict:
         "stock_product_name": sp.name if sp else "",
         "stock_default_unit": _stock_default_unit(sp),
         "bag_weight": r.bag_weight, "unit_cost": r.unit_cost,
+        # 每袋商品成本（元/袋）：代发（未关联库存商品）的记录存的就是手填的代发成本；
+        # 老记录没有这列值（0），回退按 净重 × 单位成本 算，口径与改造前一致
+        "bag_cost": float(getattr(r, "bag_cost", 0.0) or 0.0)
+        or round(float(r.bag_weight or 0) * float(r.unit_cost or 0), 4),
         "cogs": r.cogs, "amount": r.amount, "freight_total": r.freight_total, "profit": r.profit,
+        # 毛利率与每袋口径：成本类字段都是整单金额，除以袋数才是「每袋赚多少」
+        "profit_rate": _profit_rate(r.profit, r.amount),
+        "unit_revenue": round(float(r.amount or 0) / qty, 4) if qty else 0.0,   # 每袋结算收入（已扣点）
+        "unit_goods_cost": round(float(r.cogs or 0) / qty, 4) if qty else 0.0,    # 每袋商品成本
+        "unit_freight": round(float(r.freight_total or 0) / qty, 4) if qty else 0.0,  # 每袋运费
+        "unit_pack_cost": round(float(r.pack_cost or 0) / qty, 4) if qty else 0.0,  # 每袋随货包材
+        "unit_profit": round(float(r.profit or 0) / qty, 4) if qty else 0.0,      # 每袋毛利
         "pack_items": r.pack_items or [],  # 随货包材结算快照
         "pack_cost": r.pack_cost or 0.0,
         "date": r.date, "operator": r.operator, "remark": r.remark,
@@ -213,6 +248,51 @@ def _in_dict(db: Session, r: WarehouseIn) -> dict:
         "pay_status": getattr(r, "pay_status", "paid") or "paid",
         "paid_at": getattr(r, "paid_at", "") or "",
     }
+
+
+def _by_product(rows: list[WarehouseIn]) -> list[dict]:
+    """按入仓品汇总（含毛利率）：单看明细难以判断哪个入仓品更赚钱。"""
+    acc: dict[tuple, dict] = {}
+    for r in rows:
+        wp = r.product
+        key = (r.product_id or 0, r.product_name or "")
+        b = acc.setdefault(key, {
+            "product_id": r.product_id,
+            "sku": (wp.sku if wp else "") or "",
+            "product_name": r.product_name or "",
+            "category": r.category or "",
+            "unit": r.unit or "袋",
+            "records": 0,
+            "quantity": 0.0,
+            "amount": 0.0,
+            "cogs": 0.0,
+            "freight_total": 0.0,
+            "pack_cost": 0.0,
+            "profit": 0.0,
+            "last_date": "",
+        })
+        b["records"] += 1
+        b["quantity"] += float(r.quantity or 0)
+        b["amount"] += float(r.amount or 0)
+        b["cogs"] += float(r.cogs or 0)
+        b["freight_total"] += float(r.freight_total or 0)
+        b["pack_cost"] += float(r.pack_cost or 0)
+        b["profit"] += float(r.profit or 0)
+        b["last_date"] = max(b["last_date"], r.date or "")
+    out = []
+    for b in sorted(acc.values(), key=lambda x: -x["amount"]):
+        qty = b["quantity"]
+        b["amount"] = round(b["amount"], 2)
+        b["cogs"] = round(b["cogs"], 2)
+        b["freight_total"] = round(b["freight_total"], 2)
+        b["pack_cost"] = round(b["pack_cost"], 2)
+        b["profit"] = round(b["profit"], 2)
+        b["quantity"] = round(qty, 4)
+        b["profit_rate"] = _profit_rate(b["profit"], b["amount"])
+        b["unit_revenue"] = round(b["amount"] / qty, 4) if qty else 0.0
+        b["unit_profit"] = round(b["profit"] / qty, 4) if qty else 0.0
+        out.append(b)
+    return out
 
 
 # ---------------- 入仓品资料 ----------------
@@ -232,6 +312,8 @@ class ProductIn(BaseModel):
     freight: float = 0.0
     stock_product_id: int | None = None
     bag_weight: float = 0.0
+    # 代发成本（元/袋）：不关联库存商品时的每袋商品成本（成本来源改为手填）
+    dropship_cost: float = 0.0
     shelf_life: str = ""
     remark: str = ""
     is_active: bool = True
@@ -435,13 +517,14 @@ def _create_record(db: Session, payload: dict, operator: str, import_group: str 
     if not name:
         raise ValueError("缺少商品名称")
 
-    # 成本口径：库存管理的默认单位成本 × 每袋净重（默认单位）
+    # 成本口径：每袋商品成本 × 数量。关联库存 = 净重 × 单位成本；未关联 = 入仓品手填的「代发成本」
     stock_product_id = product.stock_product_id if product else None
     sp, _base_cost, _factor, unit_cost = _stock_info(db, stock_product_id)
     bag_weight = float(payload.get("bag_weight") or 0) or float((product.bag_weight if product else 0) or 0)
+    bag_cost = _goods_bag_cost(product, bag_weight, unit_cost)
     deduction = _warehouse_deduction(db)
     revenue = round(quantity * unit_price * (1 - deduction / 100), 2)
-    cogs = round(quantity * bag_weight * unit_cost, 2)
+    cogs = round(quantity * bag_cost, 2)
     freight_total = round(quantity * freight, 2)
     # 随货包材：每袋用量 × 袋数，成本按 FIFO 结转
     pack_items, pack_cost = _settle_pack_items(db, product, quantity)
@@ -464,6 +547,7 @@ def _create_record(db: Session, payload: dict, operator: str, import_group: str 
         stock_product_id=sp.id if sp else None,
         bag_weight=bag_weight,
         unit_cost=unit_cost,
+        bag_cost=bag_cost,
         cogs=cogs,
         amount=revenue,
         freight_total=freight_total,
@@ -507,7 +591,14 @@ def list_inbounds(
         "profit": round(sum(r.profit or 0 for r in rows), 2),
         "quantity": round(sum(r.quantity or 0 for r in rows), 2),
     }
-    return {"items": items, "total": total, "count": len(rows)}
+    # 毛利率 = 合计毛利 ÷ 合计收入（不是各条毛利率的平均，避免小额记录被放大）
+    total["profit_rate"] = _profit_rate(total["profit"], total["amount"])
+    return {
+        "items": items,
+        "by_product": _by_product(rows),  # 按入仓品汇总（含毛利率）
+        "total": total,
+        "count": len(rows),
+    }
 
 
 @router.post("")
@@ -550,15 +641,16 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
     rec.remark = (d.get("remark") or "").strip()
     rec.pay_status = "unpaid" if (d.get("pay_status") or "").strip() == "unpaid" else "paid"
     rec.paid_at = "" if rec.pay_status == "unpaid" else (rec.paid_at or rec.date)
-    # 成本重算：关联库存商品/每袋净重变化时同步成本口径
+    # 成本重算：关联库存商品/每袋净重/代发成本变化时同步成本口径
     stock_product_id = product.stock_product_id if product else rec.stock_product_id
     sp, _base_cost, _factor, unit_cost = _stock_info(db, stock_product_id)
     rec.stock_product_id = sp.id if sp else None
     rec.bag_weight = float(d.get("bag_weight") or 0) or float((product.bag_weight if product else 0) or 0) or rec.bag_weight
     rec.unit_cost = unit_cost
+    rec.bag_cost = _goods_bag_cost(product, rec.bag_weight, unit_cost)
     rec.deduction_percent = _warehouse_deduction(db)
     rec.amount = round(rec.quantity * rec.unit_price * (1 - (rec.deduction_percent or 0) / 100), 2)
-    rec.cogs = round(rec.quantity * rec.bag_weight * rec.unit_cost, 2)
+    rec.cogs = round(rec.quantity * rec.bag_cost, 2)
     rec.freight_total = round(rec.quantity * rec.freight, 2)
     # 随货包材：先清除旧结算流水，再按新入仓品/数量重算
     old_affected = _clear_pack_settlement(db, rec.id)
@@ -686,7 +778,9 @@ def import_preview(
         unit_price = product.purchase_price if product else 0.0
         freight = product.freight if product else 0.0
         revenue = round(qty * unit_price * (1 - deduction / 100), 2)
-        cogs = round(qty * bag_weight * unit_cost, 2)
+        # 未关联库存商品的入仓品：成本取它手填的「代发成本」（每袋）
+        bag_cost = _goods_bag_cost(product, bag_weight, unit_cost)
+        cogs = round(qty * bag_cost, 2)
         freight_total = round(qty * freight, 2)
         items.append({
             "row": i + 1,
@@ -705,6 +799,7 @@ def import_preview(
             "freight": freight,
             "bag_weight": bag_weight,
             "unit_cost": unit_cost,
+            "bag_cost": bag_cost,  # 每袋商品成本（未关联库存商品时为代发成本）
             "stock_product_name": sp.name if sp else "",
             "stock_default_unit": _stock_default_unit(sp),
             "revenue": revenue,

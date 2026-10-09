@@ -13,6 +13,7 @@ const prSel = new Set();  // 一单多货批量选择
 const winSel = new Set(); // 入仓记录批量选择
 let OUT_GROUP = null;  // 当前打开的出库批次（array of Outbound 记录）
 let WGROUP = null;     // 当前打开的入仓批次（array of WarehouseIn 记录）
+let WG_DETAIL = false; // 入仓批次明细视图：false=按商品名汇总（默认），true=按记录明细
 let WIN_DEDUCT = 0;    // 入仓品扣点%（在「扣点」页统一维护）
 
 /* ---------- 批量选择工具 ---------- */
@@ -76,6 +77,9 @@ function clearBatch(kind) {
 }
 
 /* ---------- 可搜索下拉（点击选择，输入可快速筛选） ---------- */
+/* 中文输入法（IME）友好：拼音组合输入（还没选字）期间一律不重画列表——部分浏览器/输入法会在
+   每次 DOM 重画时打断组合，表现就是「怎么打字都进不去字」。等 compositionend 再筛选。
+   列表改用事件委托（原来每敲一个键都重画并把每个选项重新挂一遍事件，200+ 选项时又慢又抖）。 */
 function bindSearchable(root = document) {
   root.querySelectorAll("select.searchable").forEach((sel) => {
     if (sel.dataset.scombo) return;
@@ -92,14 +96,20 @@ function bindSearchable(root = document) {
     sel.style.display = "none";
     sel.parentNode.insertBefore(wrap, sel.nextSibling);
 
+    let composing = false;       // 输入法组合中：不动 DOM，避免打断中文输入
+    let rendered = null;         // 上次渲染用的筛选词，内容没变就不重画
+
     function syncInput() {
       const o = sel.options[sel.selectedIndex];
       input.value = o ? o.text : "";
+      rendered = null;           // 文本被外部改动，下次打开重新渲染
     }
     sel.addEventListener("change", syncInput);
 
     function renderList(filter) {
       const f = (filter || "").toLowerCase().trim();
+      if (f === rendered) return;
+      rendered = f;
       const items = [];
       for (const o of sel.options) {
         const text = o.text;
@@ -107,27 +117,56 @@ function bindSearchable(root = document) {
         items.push(`<div class="scombo-item" data-v="${o.value}">${esc(text)}</div>`);
       }
       list.innerHTML = items.join("") || '<div class="scombo-empty">无匹配选项</div>';
-      list.querySelectorAll(".scombo-item").forEach((it) => {
-        it.addEventListener("mousedown", (e) => {
-          e.preventDefault();
-          sel.value = it.dataset.v;
-          sel.dispatchEvent(new Event("change", { bubbles: true }));
-          syncInput();
-          list.style.display = "none";
-          input.blur();
-        });
-      });
+      list.scrollTop = 0;
     }
-    input.addEventListener("focus", () => {
-      // 聚焦即清空旧文本，展示全部选项供选择或输入筛选（否则只剩当前选中项）
-      input.value = "";
+    function openList(filter) {
       list.style.display = "block";
-      renderList("");
+      renderList(filter);
+    }
+    /** 选中某一项：写回 select、触发 change（让页面的渲染/查询跟上来） */
+    function pick(it) {
+      if (!it) return;
+      sel.value = it.dataset.v;
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      syncInput();
+      list.style.display = "none";
+    }
+    // 事件委托：整个列表只挂一个监听，输入时不再逐项挂/摘事件
+    list.addEventListener("mousedown", (e) => {
+      const it = e.target.closest(".scombo-item");
+      if (!it) return;
+      e.preventDefault();   // 保住输入框焦点，否则 blur 会把文本重置回原选项
+      pick(it);
+    });
+    input.addEventListener("focus", () => {
+      // 不再清空文本（清空会让人以为「打不进去字」）：只全选，直接输入即可覆盖
+      if (input.value) input.select();
+      openList("");
     });
     input.addEventListener("blur", () => { syncInput(); });
-    input.addEventListener("input", () => { renderList(input.value); list.style.display = "block"; });
+    input.addEventListener("compositionstart", () => { composing = true; });
+    input.addEventListener("compositionend", () => { composing = false; openList(input.value); });
+    input.addEventListener("input", (e) => {
+      if (composing || e.isComposing) return;   // 中文输入法组合中：先别动列表
+      openList(input.value);
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        list.style.display = "none";
+        syncInput();
+        input.blur();
+        return;
+      }
+      if (e.key !== "Enter" || list.style.display === "none") return;
+      const first = list.querySelector(".scombo-item");
+      if (!first) return;
+      e.preventDefault();
+      pick(first);
+    });
     document.addEventListener("click", (e) => {
-      if (!wrap.contains(e.target)) { list.style.display = "none"; syncInput(); }
+      if (wrap.contains(e.target)) return;
+      list.style.display = "none";
+      if (!composing) syncInput();   // 输入法组合中不要改 value（程序化改 value 会取消组合）
     });
   });
 }
@@ -1071,30 +1110,28 @@ async function submitAdjust() {
 }
 
 /* ---------- 盘点调整记录（查看谁盘点的，支持删除回退） ---------- */
-let ADJ_PRODS = [];
-function ensureAdjFilter() {
-  const sel = $("adjProductFilter");
-  if (!sel) return;
-  // 补充盘点记录里出现但未在 PRODUCTS 中的商品（如已停用），主列表在初始化时已填充
-  const existing = new Set([...sel.options].map((o) => o.value));
-  ADJ_PRODS.forEach((p) => {
-    if (p && p.id && !existing.has(String(p.id))) {
-      sel.insertAdjacentHTML("beforeend", `<option value="${p.id}">${esc(p.name)}</option>`);
-      existing.add(String(p.id));
-    }
-  });
-}
+/* 商品维度的「下拉选一个商品」已去掉（列表太长、选起来麻烦）：直接用关键词搜索过滤，
+   商品名 / 备注 / 操作员 / 日期 都能匹配。 */
+let ADJ_ROWS = [];   // 当前拉到的盘点记录（关键词筛选在本地做，不重新请求）
 async function loadAdjustments() {
-  try { ensureAdjFilter(); } catch (e) {}
-  const pid = $("adjProductFilter")?.value || "0";
   const from = $("adjDateFrom")?.value || "", to = $("adjDateTo")?.value || "";
-  let rows = await api(`/api/adjustments?product_id=${pid}&date_from=${from || ""}&date_to=${to || ""}`);
-  rows.forEach((r) => ADJ_PRODS.push({ id: r.product_id, name: r.product_name, is_active: true, product_type: "stock", category: "" }));
+  ADJ_ROWS = await api(`/api/adjustments?date_from=${from}&date_to=${to}`);
+  renderAdjustments();
+}
+/** 渲染盘点记录（带关键词筛选：商品名 / 备注 / 操作员 / 日期，纯前端过滤，不用再点查询） */
+function renderAdjustments() {
   const t = $("adjRecordTable");
+  if (!t) return;
+  const kw = ($("adjSearch")?.value || "").trim().toLowerCase();
+  let rows = ADJ_ROWS;
+  if (kw) {
+    rows = rows.filter((r) =>
+      [r.product_name, r.remark, r.operator, r.date, r.created_at].join(" ").toLowerCase().includes(kw));
+  }
   rows = applyTableSort(t, rows);
   if (!rows.length) {
-    t.innerHTML = `<tr><td colspan="8" class="empty">暂无盘点调整记录</td></tr>`;
-    t._render = loadAdjustments;
+    t.innerHTML = `<tr><td colspan="8" class="empty">${ADJ_ROWS.length ? "没有符合筛选条件的盘点记录（清空关键词试试）" : "暂无盘点调整记录"}</td></tr>`;
+    t._render = renderAdjustments;
     t._rows = rows;
     return;
   }
@@ -1121,7 +1158,7 @@ async function loadAdjustments() {
       </tr>`;
     }).join("") + `</tbody>`;
   t._rows = rows;
-  t._render = loadAdjustments;
+  t._render = renderAdjustments;
 }
 async function deleteAdjustment(gid) {
   if (!confirm("确认删除该盘点调整记录？将回退其对库存、平均成本与成本单价的影响。")) return;
@@ -1874,6 +1911,7 @@ function openAiConfirm(r) {
 const AI_SETTLE_LABELS = { material: "包材", labor: "人工", express: "快递费", fee: "固定成本" };
 
 function aiSettleCatsOf(r) {
+  // AI 出库也是手动单（客户随货款付回包材/人工/快递费），没识别到口径时兜底全勾
   const cats = String((r || {}).settle_cats || "").split(",").filter(Boolean);
   return cats.length ? cats : ["material", "labor", "express"];
 }
@@ -3531,8 +3569,10 @@ function renderWarehouseProducts() {
       <td class="num mono">${fmtMoney(p.purchase_price)}</td>
       <td class="num mono">${p.freight ? fmtMoney(p.freight) : "—"}</td>
       <td class="num mono">${p.bag_cost ? fmtMoney(p.bag_cost) : "—"}</td>
-      <td>${p.stock_product_name ? esc(p.stock_product_name) : '<span class="muted">未关联</span>'}
-        ${p.stock_product_id ? `<div class="muted" style="font-size:12px;">单位成本 ${fmtMoney(p.stock_unit_cost)}/${esc(p.stock_default_unit || "单位")}</div>` : ""}</td>
+      <td>${p.stock_product_name ? esc(p.stock_product_name) : '<span class="muted">未关联（代发）</span>'}
+        ${p.stock_product_id
+          ? `<div class="muted" style="font-size:12px;">单位成本 ${fmtMoney(p.stock_unit_cost)}/${esc(p.stock_default_unit || "单位")}</div>`
+          : `<div class="muted" style="font-size:12px;${p.dropship_cost ? "" : "color:var(--red);"}">代发成本 ${p.dropship_cost ? fmtMoney(p.dropship_cost) + "/袋" : "未填（成本按 0 计）"}</div>`}</td>
       <td>${(p.pack_items || []).length ? wprodPackText(p) : '<span class="muted">未关联</span>'}</td>
       <td>${esc(p.shelf_life) || "—"}</td>
       <td style="white-space:nowrap;">
@@ -3635,6 +3675,9 @@ function wprodEdit(id) {
       <div class="field"><label>采购价（元/袋，收入）</label><input id="wpPrice" type="number" step="any" min="0" value="${p.purchase_price || ""}" /></div>
       <div class="field"><label>运费（元/袋）</label><input id="wpFreight" type="number" step="any" min="0" value="${p.freight || ""}" placeholder="可留空，后续维护" /></div>
       <div class="field"><label>关联库存商品（成本来源）</label><select id="wpStock" class="searchable">${stockProductOptions(p.stock_product_id)}</select></div>
+      <div class="field"><label>代发成本（元/袋）</label><input id="wpDropshipCost" type="number" step="any" min="0" value="${p.dropship_cost || ""}" placeholder="不关联库存商品时填" oninput="wprodCostHint()" />
+        <div class="field-hint">不关联库存商品（代发，本仓不持有该商品库存）时，商品成本 = 数量 × 这个值；关联了库存商品则按「净重 × 库存单位成本」自动算，此值忽略。</div>
+      </div>
       <div class="field"><label>每袋净重（默认单位，如 公斤）</label><input id="wpBagWeight" type="number" step="any" min="0" value="${p.bag_weight || ""}" placeholder="如 1" oninput="wprodCostHint()" /></div>
       <div class="field"><label>保质期</label><input id="wpShelf" value="${esc(p.shelf_life || "")}" placeholder="如 半年 / 一年" /></div>
       <div class="field" style="grid-column:1/-1;"><label>备注</label><input id="wpRemark" value="${esc(p.remark || "")}" /></div>
@@ -3656,14 +3699,30 @@ function wprodCostHint() {
   const du = sp ? (sp.default_unit || sp.base_unit) : "";
   const factor = sp ? ((sp.conversions || {})[du] || 1) : 1;
   const uc = sp ? ((sp.avg_cost > 0 ? sp.avg_cost : sp.unit_cost) || 0) * factor : 0;
+  const dcInput = $("wpDropshipCost");
+  const dc = parseFloat(dcInput?.value) || 0;
+  if (dcInput) {
+    // 成本来源只能有一个：关联了库存商品就按库存推算，代发成本置灰不参与计算
+    dcInput.disabled = !!sp;
+    dcInput.style.background = sp ? "#f3f4f6" : "";
+  }
   const hint = $("wpCostHint");
   if (!hint) return;
-  if (!sp) { hint.textContent = "未关联库存商品：商品成本将按 0 计。"; return; }
+  if (!sp) {
+    hint.innerHTML = dc
+      ? `未关联库存商品（代发）：商品成本 = 数量 × 代发成本 <b>${fmtMoney(dc)}/袋</b>`
+      : `未关联库存商品（代发）：请填「代发成本」，否则入仓时商品成本按 <b>0</b> 计（毛利会虚高）。`;
+    return;
+  }
   hint.textContent = `库存单位成本 ${fmtMoney(uc)}/${du}（库存均价优先，无则用参考成本）；每袋成本 = ${fmtNum(bw)} × ${fmtMoney(uc)} = ${fmtMoney(bw * uc)}`;
 }
 async function wprodSave(id) {
   const name = ($("wpName").value || "").trim();
   if (!name) { toast("请填写名称"); return; }
+  const stockId = +$("wpStock").value || null;
+  const dropshipCost = parseFloat($("wpDropshipCost").value) || 0;
+  // 不关联库存商品时成本只能手填；没填会让入仓成本=0、毛利虚高，先确认一句（同「代发商品」的参考成本提醒）
+  if (!stockId && !dropshipCost && !confirm("未关联库存商品且未填「代发成本」：入仓时商品成本将按 0 计（毛利会虚高）。仍要保存？")) return;
   const body = {
     name,
     category: $("wpCat").value.trim(),
@@ -3672,8 +3731,9 @@ async function wprodSave(id) {
     box_spec: parseFloat($("wpBoxSpec").value) || 0,
     purchase_price: parseFloat($("wpPrice").value) || 0,
     freight: parseFloat($("wpFreight").value) || 0,
-    stock_product_id: +$("wpStock").value || null,
+    stock_product_id: stockId,
     bag_weight: parseFloat($("wpBagWeight").value) || 0,
+    dropship_cost: dropshipCost,
     shelf_life: $("wpShelf").value.trim(),
     remark: $("wpRemark").value.trim(),
     pack_items: wCollectPacks(),
@@ -3719,7 +3779,7 @@ function buildWinGroup(recs) {
   const pnames = [...new Set(recs.map((r) => r.product_name).filter(Boolean))];
   const pns = [...new Set(recs.map((r) => r.purchase_no).filter(Boolean))];
   const centers = [...new Set(recs.map((r) => r.center).filter(Boolean))];
-  return {
+  const g = {
     import_group: recs[0].import_group,
     ids: recs.map((r) => r.id),
     records: recs,
@@ -3737,6 +3797,9 @@ function buildWinGroup(recs) {
     purchase_no: pns.length ? (pns.length === 1 ? pns[0] : `${pns[0]} 等${pns.length}个`) : "—",
     center: centers.length ? (centers.length === 1 ? centers[0] : `${centers[0]} 等${centers.length}个`) : "—",
   };
+  // 批次毛利率按「本批次毛利 ÷ 本批次收入」重算，不是各条毛利率的平均
+  g.profit_rate = g.amount ? (g.profit / g.amount) * 100 : 0;
+  return g;
 }
 function renderWarehouseIns(d) {
   const flat = d.items || [];
@@ -3757,10 +3820,12 @@ function renderWarehouseIns(d) {
   const sortable = rows.map((x) => x._group
     ? { _group: true, g: x.g, code: x.g.code, date: x.g.date, purchase_no: x.g.purchase_no,
         center: x.g.center, product: x.g.product, quantity: x.g.quantity, amount: x.g.amount,
-        cogs: x.g.cogs, freight: x.g.freight, pack_cost: x.g.pack_cost, profit: x.g.profit }
+        cogs: x.g.cogs, freight: x.g.freight, pack_cost: x.g.pack_cost, profit: x.g.profit,
+        profit_rate: x.g.profit_rate }
     : { _group: false, rec: x.rec, code: x.rec.code, date: x.rec.date, purchase_no: x.rec.purchase_no,
         center: x.rec.center, product: x.rec.product_name, quantity: x.rec.quantity, amount: x.rec.amount,
-        cogs: x.rec.cogs, freight: x.rec.freight_total, pack_cost: x.rec.pack_cost, profit: x.rec.profit });
+        cogs: x.rec.cogs, freight: x.rec.freight_total, pack_cost: x.rec.pack_cost, profit: x.rec.profit,
+        profit_rate: x.rec.profit_rate });
   sortable.sort((a, b) => {
     if (t._sort) { const dd = compareVal(a[t._sort.key], b[t._sort.key]) * t._sort.dir; if (dd) return dd; }
     return 0;
@@ -3771,7 +3836,8 @@ function renderWarehouseIns(d) {
     $("wInSummary").innerHTML =
       `共 <b>${flat.length}</b> 条 · 数量 <b>${fmtNum(tot.quantity)}</b> 袋 · ` +
       `收入 <b>${fmtMoney(tot.amount)}</b> · 商品成本 <b>${fmtMoney(tot.cogs)}</b> · ` +
-      `运费 <b>${fmtMoney(tot.freight)}</b> · 包材 <b>${fmtMoney(tot.pack_cost)}</b> · 毛利 <b style="color:var(--green)">${fmtMoney(tot.profit)}</b>`;
+      `运费 <b>${fmtMoney(tot.freight)}</b> · 包材 <b>${fmtMoney(tot.pack_cost)}</b> · ` +
+      `毛利 <b style="color:var(--green)">${fmtMoney(tot.profit)}</b> · 毛利率 <b style="color:var(--green)">${fmtNum(tot.profit_rate || 0)}%</b>`;
     $("wInSummary").style.display = flat.length ? "block" : "none";
   }
   t.innerHTML = `<thead><tr>
@@ -3787,9 +3853,10 @@ function renderWarehouseIns(d) {
     <th data-key="freight" class="num">运费${sortArrow("wInTable", "freight")}</th>
     <th data-key="pack_cost" class="num">包材成本${sortArrow("wInTable", "pack_cost")}</th>
     <th data-key="profit" class="num">毛利${sortArrow("wInTable", "profit")}</th>
+    <th data-key="profit_rate" class="num">毛利率${sortArrow("wInTable", "profit_rate")}</th>
     <th></th></tr></thead><tbody>` +
     sortable.map((x) => x._group ? renderWinGroupRow(x.g) : renderWinRow(x.rec)).join("") + `</tbody>`;
-  if (!rows.length) t.innerHTML = `<tr><td colspan="13" class="empty">该时间段暂无入仓记录，可点「导入常温贴单」或「手动入仓」</td></tr>`;
+  if (!rows.length) t.innerHTML = `<tr><td colspan="14" class="empty">该时间段暂无入仓记录，可点「导入常温贴单」或「手动入仓」</td></tr>`;
   t._rows = sortable;
   t._render = loadWarehouseIns;
   updateBatchBar("win");
@@ -3807,7 +3874,9 @@ function renderWinRow(r) {
     <td class="mono">${esc(r.purchase_no) || "—"}</td>
     <td>${esc(r.center) || "—"}</td>
     <td><b>${esc(r.product_name)}</b>${r.product_id ? "" : ' <span class="badge" style="background:#fff3cd;color:#8a6d3b;">未关联</span>'}
-      <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"} · 净重 ${r.bag_weight ? `${fmtNum(r.bag_weight)} ${esc(r.stock_default_unit || "")}`.trim() : "—"} · 单位成本 ${fmtMoney(r.unit_cost)}/${esc(r.stock_default_unit || "单位")}${r.deduction_percent ? ` · 扣点 ${fmtNum(r.deduction_percent)}%` : ""}</div>
+      <div class="muted" style="font-size:12px;">${r.stock_product_name
+        ? `${esc(r.stock_product_name)} · 净重 ${r.bag_weight ? `${fmtNum(r.bag_weight)} ${esc(r.stock_default_unit || "")}`.trim() : "—"} · 单位成本 ${fmtMoney(r.unit_cost)}/${esc(r.stock_default_unit || "单位")}`
+        : `未关联库存商品（代发） · 每袋成本 ${fmtMoney(r.bag_cost)}/袋`}${r.deduction_percent ? ` · 扣点 ${fmtNum(r.deduction_percent)}%` : ""}</div>
       ${packTxt ? `<div class="muted" style="font-size:12px;">随货包材：${packTxt}</div>` : ""}
     </td>
     <td class="num mono">${fmtNum(r.quantity)}</td>
@@ -3816,6 +3885,7 @@ function renderWinRow(r) {
     <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}</td>
     <td class="num mono">${r.pack_cost ? fmtMoney(r.pack_cost) : "—"}</td>
     <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
+    <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtNum(r.profit_rate || 0)}%</td>
     <td style="white-space:nowrap;">
       <button class="btn sm" onclick="wInEdit(${r.id})">改</button>
       <button class="btn sm danger" onclick="wInDelete(${r.id})">删</button>
@@ -3837,6 +3907,7 @@ function renderWinGroupRow(g) {
     <td class="num mono">${g.freight ? fmtMoney(g.freight) : "—"}</td>
     <td class="num mono">${g.pack_cost ? fmtMoney(g.pack_cost) : "—"}</td>
     <td class="num mono" style="color:${g.profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(g.profit)}</td>
+    <td class="num mono" style="color:${g.profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtNum(g.profit_rate || 0)}%</td>
     <td style="white-space:nowrap;">
       <button class="btn sm secondary" onclick="openWinGroup('${esc(g.import_group)}')">明细</button>
       <button class="btn sm danger" onclick="deleteWinGroup('${esc(g.import_group)}')">删</button>
@@ -3861,16 +3932,62 @@ async function batchDeleteWarehouseIns() {
     loadWarehouseIns();
   } catch (e) { toast("删除失败：" + e.message); }
 }
-/* 打开批次二级页 */
+/* 打开批次二级页（默认按商品汇总，可切换为记录明细） */
 function openWinGroup(groupKey) {
   WGROUP = (WINS || []).filter((r) => r.import_group === groupKey);
   if (!WGROUP.length) { toast("未找到该批次"); return; }
+  WG_DETAIL = false;
+  const t = $("wgTable");
+  if (t) t._sort = null;
   goPage("wingroup");
+}
+/* 切换「按商品汇总 / 批次明细」视图 */
+function toggleWinGroupMode() {
+  WG_DETAIL = !WG_DETAIL;
+  const t = $("wgTable");
+  if (t) t._sort = null;   // 两种视图列不同，切换时清空排序避免错列
+  renderWinGroupPage();
+}
+/* 按商品名汇总批次内记录：同类商品合并，不区分单号 / 采购单号 / 配送中心 */
+function buildWinProductGroups(recs) {
+  const map = new Map();
+  for (const r of recs) {
+    const key = r.product_name || "（未命名）";
+    if (!map.has(key)) map.set(key, {
+      product_name: key, count: 0, quantity: 0, box_count: 0,
+      amount: 0, cogs: 0, freight_total: 0, pack_cost: 0, profit: 0,
+      stock_product_name: r.stock_product_name || "", packs: new Map(),
+    });
+    const g = map.get(key);
+    g.count += 1;
+    g.quantity += r.quantity || 0;
+    g.box_count += r.box_count || 0;
+    g.amount += r.amount || 0;
+    g.cogs += r.cogs || 0;
+    g.freight_total += r.freight_total || 0;
+    g.pack_cost += r.pack_cost || 0;
+    g.profit += r.profit || 0;
+    (r.pack_items || []).forEach((it) => {
+      const k = `${it.name || "?"}|${it.unit || ""}`;
+      g.packs.set(k, (g.packs.get(k) || 0) + (it.quantity || 0));
+    });
+  }
+  return [...map.values()].map((g) => ({
+    ...g,
+    unit_price: g.quantity ? g.amount / g.quantity : 0,
+    profit_rate: g.amount ? (g.profit / g.amount) * 100 : 0,
+    pack_text: [...g.packs.entries()].map(([k, q]) => {
+      const [name, unit] = k.split("|");
+      return `${esc(name)}×${fmtNum(q)}${esc(unit)}`;
+    }).join("、"),
+  }));
 }
 /* 批次二级页渲染（支持表头排序） */
 function renderWinGroupPage() {
   if (!WGROUP || !WGROUP.length) return;
   const g = buildWinGroup(WGROUP);
+  const modeBtn = $("wgModeBtn");
+  if (modeBtn) modeBtn.textContent = WG_DETAIL ? "按商品汇总" : "显示批次明细";
   $("wgTitle").textContent = `入仓批次明细 · ${g.count} 条`;
   $("wgHint").textContent = `批次 ${g.import_group} · ${esc(g.date)}`;
   $("wgSummary").innerHTML = `
@@ -3881,6 +3998,7 @@ function renderWinGroupPage() {
     <div class="stat"><div class="label">包材成本</div><div class="value">${fmtMoney(g.pack_cost)}</div></div>
     <div class="stat success"><div class="label">毛利</div><div class="value" style="color:var(--green)">${fmtMoney(g.profit)}</div></div>`;
   const t = $("wgTable");
+  if (!WG_DETAIL) { renderWinSummaryTable(t); return; }
   const rows = applyTableSort(t, WGROUP);
   t.innerHTML = `<thead><tr>
     <th data-key="code">单号${sortArrow("wgTable", "code")}</th>
@@ -3896,13 +4014,16 @@ function renderWinGroupPage() {
     <th data-key="freight_total" class="num">运费${sortArrow("wgTable", "freight_total")}</th>
     <th data-key="pack_cost" class="num">包材成本${sortArrow("wgTable", "pack_cost")}</th>
     <th data-key="profit" class="num">毛利${sortArrow("wgTable", "profit")}</th>
+    <th data-key="profit_rate" class="num">毛利率${sortArrow("wgTable", "profit_rate")}</th>
     <th></th></tr></thead><tbody>` + rows.map((r) => `<tr>
     <td class="mono">${esc(r.code)}</td>
     <td>${esc(r.date)}</td>
     <td class="mono">${esc(r.purchase_no) || "—"}</td>
     <td>${esc(r.center) || "—"}</td>
     <td><b>${esc(r.product_name)}</b>
-      <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"} · 净重 ${r.bag_weight ? `${fmtNum(r.bag_weight)} ${esc(r.stock_default_unit || "")}`.trim() : "—"}${r.deduction_percent ? ` · 扣点 ${fmtNum(r.deduction_percent)}%` : ""}</div>
+      <div class="muted" style="font-size:12px;">${r.stock_product_name
+        ? `${esc(r.stock_product_name)} · 净重 ${r.bag_weight ? `${fmtNum(r.bag_weight)} ${esc(r.stock_default_unit || "")}`.trim() : "—"}`
+        : `未关联库存商品（代发） · 每袋成本 ${fmtMoney(r.bag_cost)}/袋`}${r.deduction_percent ? ` · 扣点 ${fmtNum(r.deduction_percent)}%` : ""}</div>
       ${wInPackText(r) ? `<div class="muted" style="font-size:12px;">随货包材：${wInPackText(r)}</div>` : ""}</td>
     <td class="num mono">${fmtNum(r.quantity)}</td>
     <td class="num mono">${r.box_count ? fmtNum(r.box_count) : "—"}</td>
@@ -3912,10 +4033,44 @@ function renderWinGroupPage() {
     <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}</td>
     <td class="num mono">${r.pack_cost ? fmtMoney(r.pack_cost) : "—"}</td>
     <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
+    <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtNum(r.profit_rate || 0)}%</td>
     <td style="white-space:nowrap;">
       <button class="btn sm" onclick="wInEdit(${r.id})">改</button>
       <button class="btn sm danger" onclick="wInDelete(${r.id})">删</button>
     </td></tr>`).join("") + `</tbody>`;
+  t._rows = rows;
+  t._render = renderWinGroupPage;
+}
+/* 默认视图：按商品名汇总（不区分单号 / 采购单号 / 配送中心） */
+function renderWinSummaryTable(t) {
+  const rows = applyTableSort(t, buildWinProductGroups(WGROUP));
+  t.innerHTML = `<thead><tr>
+    <th data-key="product_name">商品${sortArrow("wgTable", "product_name")}</th>
+    <th data-key="count" class="num">记录数${sortArrow("wgTable", "count")}</th>
+    <th data-key="quantity" class="num">数量(袋)${sortArrow("wgTable", "quantity")}</th>
+    <th data-key="box_count" class="num">箱数${sortArrow("wgTable", "box_count")}</th>
+    <th data-key="unit_price" class="num">采购价(收入/袋)${sortArrow("wgTable", "unit_price")}</th>
+    <th data-key="amount" class="num">收入${sortArrow("wgTable", "amount")}</th>
+    <th data-key="cogs" class="num">商品成本${sortArrow("wgTable", "cogs")}</th>
+    <th data-key="freight_total" class="num">运费${sortArrow("wgTable", "freight_total")}</th>
+    <th data-key="pack_cost" class="num">包材成本${sortArrow("wgTable", "pack_cost")}</th>
+    <th data-key="profit" class="num">毛利${sortArrow("wgTable", "profit")}</th>
+    <th data-key="profit_rate" class="num">毛利率${sortArrow("wgTable", "profit_rate")}</th>
+    </tr></thead><tbody>` + rows.map((r) => `<tr>
+    <td><b>${esc(r.product_name)}</b>
+      <div class="muted" style="font-size:12px;">${r.stock_product_name ? esc(r.stock_product_name) + " · " : ""}${r.count} 条记录 · 合计 ${fmtNum(r.quantity)} 袋</div>
+      ${r.pack_text ? `<div class="muted" style="font-size:12px;">随货包材：${r.pack_text}</div>` : ""}</td>
+    <td class="num mono">${r.count}</td>
+    <td class="num mono">${fmtNum(r.quantity)}</td>
+    <td class="num mono">${r.box_count ? fmtNum(r.box_count) : "—"}</td>
+    <td class="num mono">${fmtMoney(r.unit_price)}</td>
+    <td class="num mono">${fmtMoney(r.amount)}</td>
+    <td class="num mono">${fmtMoney(r.cogs)}</td>
+    <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}</td>
+    <td class="num mono">${r.pack_cost ? fmtMoney(r.pack_cost) : "—"}</td>
+    <td class="num mono" style="color:${r.profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
+    <td class="num mono" style="color:${r.profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtNum(r.profit_rate || 0)}%</td>
+    </tr>`).join("") + `</tbody>`;
   t._rows = rows;
   t._render = renderWinGroupPage;
 }
@@ -4009,6 +4164,13 @@ function wPackEstimate(p, qty) {
   });
   return { text: parts.join("、") || "—", cost };
 }
+/** 每袋商品成本（元/袋）：与后端 warehouse_in._goods_bag_cost 同口径。
+ *  关联库存商品 = 净重 × 库存单位成本；未关联（代发）= 入仓品手填的「代发成本」。 */
+function wiBagCost(p, bw) {
+  if (!p) return 0;
+  if (!p.stock_product_id) return Number(p.dropship_cost) || 0;
+  return (Number(bw) || 0) * (Number(p.stock_unit_cost) || 0);
+}
 function wInCalc() {
   const sel = $("wiProduct");
   const p = (WPROD || []).find((x) => x.id === +sel.value);
@@ -4018,8 +4180,9 @@ function wInCalc() {
   const price = parseFloat($("wiPrice").value) || 0;
   const freight = parseFloat($("wiFreight").value) || 0;
   const bw = parseFloat($("wiBagWeight").value) || 0;
+  const bagCost = wiBagCost(p, bw);
   const revenue = qty * price * (1 - pct / 100);
-  const cogs = qty * bw * uc;
+  const cogs = qty * bagCost;   // 每袋商品成本 × 袋数（代发时即代发成本）
   const ft = qty * freight;
   const pe = wPackEstimate(p, qty);
   $("wiAmount").value = revenue.toFixed(2);
@@ -4029,9 +4192,11 @@ function wInCalc() {
   $("wiProfit").value = (revenue - cogs - ft - pe.cost).toFixed(2);
   const hint = $("wiCostHint");
   if (hint) {
-    const base = p && p.stock_product_name
-      ? `收入 = 采购价 × (1 − 扣点${fmtNum(pct)}%)；成本来源：${p.stock_product_name}，单位成本 ${fmtMoney(uc)}/${p.stock_default_unit || "单位"}`
-      : `扣点 ${fmtNum(pct)}%；未关联库存商品：商品成本按 0 计。`;
+    const base = p && p.stock_product_id
+      ? `收入 = 采购价 × (1 − 扣点${fmtNum(pct)}%)；成本来源：${p.stock_product_name}，单位成本 ${fmtMoney(uc)}/${p.stock_default_unit || "单位"}，每袋成本 ${fmtMoney(bagCost)}`
+      : (p
+        ? `扣点 ${fmtNum(pct)}%；未关联库存商品（代发）：每袋成本按入仓品的代发成本 ${fmtMoney(bagCost)}/袋 计`
+        : `扣点 ${fmtNum(pct)}%；未选择入仓品：商品成本按 0 计。`);
     hint.textContent = `${base}；随货包材：${pe.text}（预估成本 ${fmtMoney(pe.cost)}）`;
   }
 }
@@ -4156,7 +4321,7 @@ function renderWImportPreview(d, dateVal) {
             <div class="muted" style="font-size:12px;">${esc(r.purchase_no) || "—"} · ${esc(r.center) || "—"}</div>
           </td>
           <td><select class="wi-prod" onchange="wImportPick(${i})">${opts(r.product_id)}</select>
-            <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || "未关联库存商品"}${r.deduction_percent ? ` · 扣点 ${fmtNum(r.deduction_percent)}%` : ""}</div>
+            <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || `未关联库存商品（代发 ${fmtMoney(r.bag_cost || 0)}/袋）`}${r.deduction_percent ? ` · 扣点 ${fmtNum(r.deduction_percent)}%` : ""}</div>
             <div class="muted wi-pack" style="font-size:12px;"></div></td>
           <td><input class="wi-box" type="number" step="any" min="0" value="${r.box_count || ""}" style="width:58px;" /></td>
           <td><input class="wi-qty" type="number" step="any" min="0" value="${r.quantity}" style="width:68px;" oninput="wImportCalc()" /></td>
@@ -4187,7 +4352,7 @@ function wImportPick(i) {
     tr.querySelector(".wi-freight").value = p.freight || "";
     if (p.bag_weight) tr.querySelector(".wi-weight").value = p.bag_weight;
     const sub = tr.querySelector("td:nth-child(2) .muted");
-    if (sub) sub.textContent = (p.stock_product_name || "未关联库存商品") + (WIN_DEDUCT ? ` · 扣点 ${fmtNum(WIN_DEDUCT)}%` : "");
+    if (sub) sub.textContent = (p.stock_product_name || `未关联库存商品（代发 ${fmtMoney(p.dropship_cost || 0)}/袋）`) + (WIN_DEDUCT ? ` · 扣点 ${fmtNum(WIN_DEDUCT)}%` : "");
   }
   wImportCalc();
 }
@@ -4198,12 +4363,11 @@ function wImportCalc() {
     const pr = parseFloat(tr.querySelector(".wi-price").value) || 0;
     const fr = parseFloat(tr.querySelector(".wi-freight").value) || 0;
     const bw = parseFloat(tr.querySelector(".wi-weight").value) || 0;
-    const uc = +(tr.dataset.uc || 0);
     const pct = +(tr.dataset.pct || 0);
     const pid = +tr.dataset.pid || null;
     const p = (WPROD || []).find((x) => x.id === pid);
     const pe = wPackEstimate(p, q);
-    const rowCogs = q * bw * uc;
+    const rowCogs = q * wiBagCost(p, bw);   // 代发（未关联库存）时 = 数量 × 代发成本
     const cell = tr.querySelector(".wi-cogs");
     if (cell) cell.textContent = fmtMoney(rowCogs);
     const pc = tr.querySelector(".wi-packcost");
@@ -5000,7 +5164,20 @@ async function saveProduct(pid) {
 async function deleteProduct(pid) {
   if (!confirm("确认删除该商品？其历史单据会一并删除，请谨慎。")) return;
   try { await api("/api/products/" + pid, "DELETE"); closeModal(); toast("已删除"); PRODUCTS = await api("/api/products"); renderProducts(); }
-  catch (e) { toast("删除失败：" + e.message); }
+  catch (e) { showDeleteBlocked("商品", e.message); }
+}
+
+/** 删除被拒时弹窗：后端把「引用来源」逐行放在 detail 里（首行是结论，其余以「- 」开头），逐条列出来 */
+function showDeleteBlocked(subject, message) {
+  const lines = String(message || "").split("\n").map((x) => x.trim()).filter(Boolean);
+  const head = lines.length ? lines[0] : `${subject}仍被引用，无法删除`;
+  const items = lines.slice(1).map((x) => `<li>${esc(x.replace(/^[-•]\s*/, ""))}</li>`).join("");
+  openModal(`
+    <h3>${esc(subject)}无法删除 <button class="close" onclick="closeModal()">✕</button></h3>
+    <p style="margin:10px 0 6px;">${esc(head)}</p>
+    ${items ? `<ul style="margin:0 0 14px 20px;line-height:1.9;">${items}</ul>` : ""}
+    <div class="field-hint">提示：清掉上面的引用后即可删除；只想让它在列表里不再出现，也可以把商品改成「停用」。</div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">知道了</button></div>`);
 }
 
 /* =============== 一单多货（多货合并打包规则） =============== */
@@ -5707,8 +5884,10 @@ let OUT_PREVIEW = null;  // 最近一次服务端出库预览（含先进先出�
 let OUT_FEE_MANUAL = false;  // 固定费用合计是否被手动改过（改过就别让「预览结算」覆盖掉）
 
 /* ---------- 实收金额口径：客户承担的关联结算（包材 / 人工 / 快递费） ----------
-   客户的付款里含包材/工时/运费 → 勾选后计入「实收金额」（后端同样记进 settle_income 与报表收入）；
-   成本侧的包材/快递照旧结转，所以毛利不会被包材吃掉。选择记在浏览器里，下一单沿用。 */
+   手动出库 / AI 出库：客户的付款里含包材/工时/运费 → 默认全勾，勾选后计入「实收金额」
+   （后端同样记进 settle_income 与报表收入；成本侧的包材/快递照旧结转）。
+   选择记在浏览器里，下一单沿用。
+   注意：导入路径（聚水潭/批量/一键）不带口径，按 services.DEFAULT_SETTLE_CATS 记「客户不承担」。 */
 const SETTLE_KEYS = { material: "settleMaterial", labor: "settleLabor", express: "settleExpress", fee: "settleFee" };
 const SETTLE_LABEL = { material: "包材", labor: "人工", express: "快递费", fee: "固定成本" };
 
@@ -5726,7 +5905,7 @@ function settleChanged() {
 function settleRestore() {
   try {
     const v = JSON.parse(localStorage.getItem("settleCats") || "null");
-    if (!Array.isArray(v) || !v.length) return;   // 没记录过就保持默认（全勾）
+    if (!Array.isArray(v)) return;   // 没记录过就保持表单默认（全勾）；显式存过（含全不选）才覆盖
     Object.entries(SETTLE_KEYS).forEach(([k, id]) => { if ($(id)) $(id).checked = v.includes(k); });
   } catch (e) { /* 忽略 */ }
 }
@@ -6636,9 +6815,15 @@ async function batchDeleteProducts() {
     prodSel.clear();
     PRODUCTS = await api("/api/products");
     renderProducts();
-    let msg = `已删除 ${r.deleted} 个商品`;
-    if (r.blocked && r.blocked.length) msg += `；${r.blocked.length} 个因被引用已跳过（${r.blocked.slice(0, 5).join("、")}${r.blocked.length > 5 ? "…" : ""}）`;
-    toast(msg, 4200);
+    // 被拦下的一定要弹窗说清「被谁引用」，否则用户只知道「删不掉」
+    const blocked = r.blocked_items || (r.blocked || []).map((n) => ({ name: n, sources: [] }));
+    if (!blocked.length) { toast(`已删除 ${r.deleted} 个商品`); return; }
+    const shown = blocked.slice(0, 20);
+    const lines = shown.map((b) =>
+      "- " + b.name + (b.sources && b.sources.length ? "：" + b.sources.join("；") : ""));
+    showDeleteBlocked("商品",
+      `已删除 ${r.deleted} 个，以下 ${blocked.length} 个仍被引用已跳过${blocked.length > shown.length ? `（只列前 ${shown.length} 个）` : ""}：\n`
+      + lines.join("\n"));
   } catch (e) { toast("批量删除失败：" + e.message); }
 }
 function openBatchProductModal() {
@@ -9196,9 +9381,6 @@ function startMaintenanceWatch() {
   try {
     $("mvProduct").innerHTML = `<option value="0">全部商品</option>` +
       PRODUCTS.filter((p) => !["人工", "快递"].includes(p.category)).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
-    const adjF = $("adjProductFilter");
-    if (adjF) adjF.innerHTML = `<option value="0">全部商品</option>` +
-      PRODUCTS.filter((p) => p.is_active && p.product_type === "stock" && !["人工", "快递"].includes(p.category)).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
   } catch (e) {}
   try { bindSearchable(document); } catch (e) {}
   applyNavVisibility();     // 侧边栏按本机偏好显隐（设置 → 模块显示）

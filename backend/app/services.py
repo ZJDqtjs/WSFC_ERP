@@ -845,14 +845,18 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
 #   实收金额 = 销售收入 + 抹零凑整 + settle_income（勾选类别的关联结算金额）
 # 关联结算成本本来就已经在 total_cogs 里（毛利被它扣掉），这部分是客户代付回来的钱，
 # 所以收入侧也计一笔，包材/快递才不会把毛利吃成负数。勾选哪几类由单据上的 settle_cats 记录。
+# 注意：默认是「客户不承担」（DEFAULT_SETTLE_CATS 为空）——客户的到账金额就是货款，
+# 包材/人工/快递费全额由我们承担、正常扣毛利；只有客户确实随货款付回时才勾选。
 SETTLE_CAT_LABEL = {"material": "包材", "labor": "人工", "express": "快递费", "fee": "固定成本"}
 SETTLE_CAT_ORDER = ("material", "labor", "express", "fee")
 # 固定成本（人工打包费/工時/胶带这类不好量化的项目）也常由客户随货款付回（结算表里就是一行金额），
 # 勾了 "fee" 就把 pack_fee_total 一起计入实收；不勾则只算关联结算行。
 SETTLE_FEE_CAT = "fee"
-# 默认「客户全额承担」：导入路径（聚水潭/批量/一键）不带 settle_cats 时按此口径记，
-# 手动出库由表单上的开关决定。
-DEFAULT_SETTLE_CATS = ("material", "labor", "express")
+# 默认「客户不承担」：导入路径（聚水潭/批量/一键）不带 settle_cats 时按此口径记 ——
+# 客户到账的就是货款，包材/人工/快递费是我们自己的成本，不计入实收。
+# 确实有「客户随货款把包材/人工/快递费付回来」的单子（如放单仓结算表里列了这些行）时，
+# 在手动出库表单上勾选，或在出库单编辑弹窗里改口径。
+DEFAULT_SETTLE_CATS: tuple[str, ...] = ()
 
 
 def pack_settle_cat(category: str | None, name: str | None) -> str:
@@ -873,8 +877,9 @@ def pack_settle_cat(category: str | None, name: str | None) -> str:
 def normalize_settle_cats(cats) -> list[str]:
     """把前端 / 导入传来的类别归一：去重、丢掉未知项、按固定顺序排列。
 
-    None / 空 → 默认「客户全额承担」（DEFAULT_SETTLE_CATS）；
-    显式传空列表则视为「客户不承担」（旧口径，实收不含关联结算）。
+    None / 空 → 默认「客户不承担」（DEFAULT_SETTLE_CATS，空）：
+    实收金额 = 货款 + 抹零凑整，包材/人工/快递费全额由我们承担、正常扣毛利。
+    只有显式传了 material / labor / express / fee 才计入 settle_income（关联结算代收）。
     """
     if cats is None:
         return list(DEFAULT_SETTLE_CATS)
@@ -1210,7 +1215,7 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
         payload.get("auto_express", True),   # 手动出库可关掉自动快递费；批量导入等默认开
         allow_self_stock,
         # 客户承担的关联结算类别（包材/人工/快递费）：手动单由表单开关传，
-        # 导入路径不传 → 默认「客户全额承担」（见 normalize_settle_cats）
+        # 导入路径不传 → 默认「客户不承担」（见 normalize_settle_cats）
         settle_cats=payload.get("settle_cats"),
     )
     op = (payload.get("operator") or "").strip() or operator
