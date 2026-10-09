@@ -3534,11 +3534,18 @@ async function submitFreshInbound(rows) {
 /* =============== 入仓 =============== */
 let WPROD = [];       // 入仓品资料缓存
 let WINS = [];        // 入仓记录缓存
-let WIMPORT = null;   // 常温贴单导入预览结果
+let WIMPORT = null;   // 贴单导入预览结果
 let WI_FILE = null;   // 导入用的 Excel 文件（保持引用，便于切换工作表重新解析）
+let WIN_SHEET = "常温贴单";  // 本分仓默认导入的贴单工作表（后端给：wh02=冷冻贴单，其余=常温贴单）
 
 async function loadWarehouseIn() {
-  try { const d = await api("/api/warehouse-in/deduction"); WIN_DEDUCT = d.percent || 0; } catch (e) {}
+  try {
+    const d = await api("/api/warehouse-in/deduction");
+    WIN_DEDUCT = d.percent || 0;
+    WIN_SHEET = d.sheet || "常温贴单";
+    const btn = $("winSheetName");
+    if (btn) btn.textContent = WIN_SHEET;   // 按钮文案随分仓变（wh02 显示「导入冷冻贴单」）
+  } catch (e) {}
   await Promise.all([loadWarehouseProducts(), loadWarehouseIns()]);
 }
 
@@ -3856,7 +3863,7 @@ function renderWarehouseIns(d) {
     <th data-key="profit_rate" class="num">毛利率${sortArrow("wInTable", "profit_rate")}</th>
     <th></th></tr></thead><tbody>` +
     sortable.map((x) => x._group ? renderWinGroupRow(x.g) : renderWinRow(x.rec)).join("") + `</tbody>`;
-  if (!rows.length) t.innerHTML = `<tr><td colspan="14" class="empty">该时间段暂无入仓记录，可点「导入常温贴单」或「手动入仓」</td></tr>`;
+  if (!rows.length) t.innerHTML = `<tr><td colspan="14" class="empty">该时间段暂无入仓记录，可点「导入${esc(WIN_SHEET)}」或「手动入仓」</td></tr>`;
   t._rows = sortable;
   t._render = loadWarehouseIns;
   updateBatchBar("win");
@@ -4244,13 +4251,13 @@ async function wInDelete(id) {
   catch (e) { toast("删除失败：" + e.message); }
 }
 
-/* ---------- 导入《入仓配送明细》常温贴单 ---------- */
+/* ---------- 导入《入仓配送明细》贴单（本分仓默认 常温贴单 / wh02 冷冻贴单） ---------- */
 function openWarehouseInImport() {
   WIMPORT = null; WI_FILE = null;
   openModal(`
-    <h3>导入《入仓配送明细》常温贴单 <button class="close" onclick="closeModal()">✕</button></h3>
+    <h3>导入《入仓配送明细》${esc(WIN_SHEET)} <button class="close" onclick="closeModal()">✕</button></h3>
     <p class="hint" style="margin-bottom:12px;">
-      上传《入仓配送明细》后选择工作表（默认「常温贴单」）；系统按每行「商品名称 + 数量」自动匹配入仓品，
+      上传《入仓配送明细》后选择工作表（默认「${esc(WIN_SHEET)}」）；系统按每行「商品名称 + 数量」自动匹配入仓品，
       确认后按对应数量入仓。未匹配的行可手动选择入仓品，运费可留空后续维护。
     </p>
     <div class="form-grid">
@@ -4272,7 +4279,7 @@ async function wImportPreview(sheet) {
   if (!WI_FILE) { toast("请先选择 Excel 文件"); return; }
   const dateVal = $("wiImportDate")?.value || today();
   $("modalBox").innerHTML =
-    `<h3>导入《入仓配送明细》常温贴单 <button class="close" onclick="closeModal()">✕</button></h3>` +
+    `<h3>导入《入仓配送明细》${esc(WIN_SHEET)} <button class="close" onclick="closeModal()">✕</button></h3>` +
     `<div id="wiImportResult"><div class="alert ok">⏳ 正在解析…</div></div>`;
   $("modalBox").classList.add("wide");
   const out = $("wiImportResult");

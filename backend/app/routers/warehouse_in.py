@@ -5,7 +5,8 @@
   并关联一个「库存商品(大类)」+ 每袋净重（库存管理的基础单位，通常克），用于成本核算。
 - 入仓记录：收入 = 数量 × 采购价；商品成本 = 数量 × 每袋净重 × 库存单位成本（库存均价优先，回退参考成本）；
   运费 = 数量 × 运费单价；毛利 = 收入 − 商品成本 − 运费。
-- 导入《入仓配送明细》常温贴单：表头「采购单号 / 商品名称 / 箱数 / 配送中心 / 数量 / 箱规」，
+- 导入《入仓配送明细》贴单：表头「采购单号 / 商品名称 / 箱数 / 配送中心 / 数量 / 箱规」，
+  工作表按分仓自动选（奥斯迪/昆明蔬菜仓=常温贴单，wh02=冷冻贴单），也可手动指定；
   采购单号为合并单元格时自动向下回填；每袋净重优先从商品名解析（净重2斤 / 228g / 1.2kg），
   否则取入仓品的每袋净重；箱数、数量、价格、运费、净重均可在预览页修正。
 
@@ -208,8 +209,17 @@ def _warehouse_deduction(db: Session) -> float:
 
 @router.get("/deduction")
 def get_warehouse_deduction(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """返回入仓品扣点百分比（供入仓页使用）。"""
-    return {"percent": _warehouse_deduction(db)}
+    """返回入仓品扣点百分比 + 本分仓默认导入的贴单工作表（供入仓页文案与导入预览使用）。
+
+    sheet 由后端按分仓给（wh02=冷冻贴单，其余=常温贴单），前端不再写死文案，
+    以后新增分仓只改 WAREHOUSE_SHEET 一处即可。
+    """
+    wh_key = get_current_key()
+    return {
+        "percent": _warehouse_deduction(db),
+        "warehouse_key": wh_key,
+        "sheet": WAREHOUSE_SHEET.get((wh_key or "").strip(), DEFAULT_SHEET),
+    }
 
 
 # ---------------- 序列化 ----------------
