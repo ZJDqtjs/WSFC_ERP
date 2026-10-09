@@ -123,7 +123,12 @@
     return t;
   }
   function srcTag(r) {
-    if (r._source === "warehouse") return '<span class="tag">入仓品</span>';
+    if (r._source === "warehouse") {
+      if (r._period === "spec") {
+        return '<span class="tag" style="background:#e8f0fe;color:#1a5fb4">入仓品·资料价</span>';
+      }
+      return '<span class="tag">入仓品</span>';
+    }
     if (r._period === "all") {
       return '<span class="tag" style="background:#fef3e2;color:#b54708">出库·全量兜底</span>';
     }
@@ -227,6 +232,7 @@ var rows = ids.map(function (id) {
       + '<div class="mini"><span>SKU 总数</span><b>' + (meta.sku_count || 0) + "</b></div>"
       + '<div class="mini" style="min-width:160px"><span>成本口径<br>区间 / 全量兜底</span><b>' + (meta.cost_period_range_count || 0) + " / " + (meta.cost_period_all_count || 0) + "</b></div>"
       + '<div class="mini"><span>出库 / 入仓品</span><b>' + sale + " / " + wh + "</b></div>"
+      + '<div class="mini" style="min-width:150px"><span>入仓品 记录 / 资料价</span><b>' + (meta.warehouse_record_count || 0) + " / " + (meta.warehouse_spec_count || 0) + "</b></div>"
       + '<div class="mini"><span>默认运费</span><b>' + num(d.shipping) + "</b></div>"
       + '<div class="mini"><span>默认扣点</span><b>' + pct(d.platformRate) + "</b></div>"
       + '<div class="mini"><span>默认退货率</span><b>' + pct(d.returnRate) + "</b></div>"
@@ -234,14 +240,18 @@ var rows = ids.map(function (id) {
     );
     // 出库为 0：多半是日期写成了 2026-10-1 这种缺前导零的写法（老版本接口会整段过滤掉），
     // 或者这段时间确实没导数据。这里明确提示，避免又白排查一轮。
+    var tips = [];
     if (!sale) {
-      addTip("所选区间内**没有任何出库记录**，所有商品的成本都用了全量历史兜底（标着「出库·全量兜底」）。" +
-        "请确认日期范围是否选对。", "#b54708");
+      tips.push("所选区间内<b>没有任何出库记录</b>，所有商品的成本都用了全量历史兜底（标「出库·全量兜底」）。请确认日期范围是否选对。");
     } else if (meta.cost_period_all_count) {
-      addTip("有 <b>" + meta.cost_period_all_count + "</b> 个商品在你选的区间内没有出库，" +
-        "成本用了**全量历史兜底**（表格里标「出库·全量兜底」，销量按 0 计）。" +
-        "把鼠标放在销量上能看到全量历史销量。", "#b54708");
+      tips.push("有 <b>" + meta.cost_period_all_count + "</b> 个商品在你选的区间内没有出库，成本用了<b>全量历史兜底</b>" +
+        "（标「出库·全量兜底」，销量按 0 计；鼠标放销量上能看到全量历史销量）。");
     }
+    if (meta.warehouse_spec_count) {
+      tips.push("有 <b>" + meta.warehouse_spec_count + "</b> 个入仓品<b>只有资料、还没录入仓记录</b>，" +
+        "成本用的是资料上的采购价（标「入仓品·资料价」）。录入仓记录后会自动改为按实际结算价。");
+    }
+    if (tips.length) addTip(tips.join("<br>"), "#b54708");
     renderTable(data);
     $("raw").textContent = JSON.stringify(data, null, 2);
     $("rawTitle").textContent = "原始响应（" + ids_len(data) + " 个 SKU）";

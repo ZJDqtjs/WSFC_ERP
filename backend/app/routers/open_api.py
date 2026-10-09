@@ -29,6 +29,8 @@ from ..config import load_rules
 from ..database import get_sessionmaker, get_warehouses
 from ..models import Outbound, OutboundLine, Product, WarehouseIn, WarehouseProduct
 from .report import _summary_of
+# 入仓品的随货包材结算与「入仓品扣点」都只有一处实现（warehouse_in），这里复用它算每袋包材成本
+from .warehouse_in import _settle_pack_items, _warehouse_deduction
 
 router = APIRouter(prefix="/api/open", tags=["open"])
 
@@ -165,7 +167,14 @@ def _sku_rows_sale(db: Session, date_from: str, date_to: str, key: str) -> dict:
 
 # ---------------- 入仓品 ----------------
 def _sku_rows_warehouse(db: Session) -> dict:
-    """按入仓品 sku 汇总入仓记录 → 每袋结算收入（京东采购价）/ 运费 / 包材 / 毛利率。"""
+    """按入仓品 sku 汇总 → 每袋结算收入（京东采购价）/ 运费 / 包材 / 毛利率。
+
+    两条来源（缺一不可，否则「只建了入仓品资料、还没录入仓记录」的仓会查不到任何东西）：
+    1. **入仓记录**（``warehouse_ins``）：真实结算，带扣点/运费/包材快照，优先；
+    2. **入仓品资料**（``warehouse_products``）：有记录的商品跳过；没记录的用资料上的
+       采购价/运费 + 「入仓品」扣点 + 随货包材清单兜底，单价按「1 袋」虚拟基准算，
+       输出时标 ``_period=spec``（资料价，不是实际结算价），销量记 0。
+    """
     rows = db.execute(
         select(
             WarehouseProduct.sku,
@@ -204,6 +213,33 @@ def _sku_rows_warehouse(db: Session) -> dict:
             # 入仓品不按区间过滤（采购价是快照，用最近已知价），但要让人看清这个价是什么时候的
             "_lastDate": last or "",
         }
+
+    # ② 只有入仓品资料、还没有入仓记录的：用资料价兜底（否则新建仓「建了资料但没录记录」就查不到）
+    ded = float(_warehouse_deduction(db) or 0) / 100
+    for wp in db.execute(
+        select(WarehouseProduct).where(func.coalesce(WarehouseProduct.is_active, 1) != 0)
+    ).scalars():
+        code = str(wp.sku or "").strip()
+        if not code or code in out:
+            continue
+        if not (wp.purchase_price or 0):
+            continue  # 连采购价都没维护，给不出成本
+        _items, pack_cost = _settle_pack_items(db, wp, 1.0)   # 按「1 袋」算随货包材成本（只读，不落库）
+        gross = float(wp.purchase_price or 0)
+        out[code] = {
+            "_qty": 1.0,                                   # 虚拟基准：单件价 = 总额 ÷ 1
+            "_amount": round(gross * (1 - ded), 6),
+            "_gross": gross,
+            "_freight": float(wp.freight or 0),
+            "_pack": float(pack_cost or 0),
+            "_cogs": 0.0,                                  # 没有实际入仓，商品成本无从得知
+            "_profit": 0.0,
+            "_deduction": round(ded, 6),
+            "_name": wp.name or "",
+            "_source": "warehouse",
+            "_specOnly": True,                             # 标记：资料价，不是实际结算价
+            "_lastDate": "",
+        }
     return out
 
 
@@ -215,7 +251,9 @@ def _merge_into(dst: dict, src: dict) -> dict:
             dst[code] = dict(d)
             continue
         if cur.get("_source") == "warehouse":        # 已有入仓口径，被出库口径覆盖
-            dst[code] = dict(d)
+            # 两个仓都有这个入仓品时，优先保留**有实际入仓记录**的那份：资料价不该盖掉真实结算价
+            if cur.get("_specOnly") and not d.get("_specOnly"):
+                dst[code] = dict(d)
             continue
         for k, v in d.items():                       # 已有出库口径 → 金额累加，日期取并集
             if k in ("_name", "_deduction", "_source"):
@@ -311,6 +349,7 @@ def _sale_item(cost: dict, period: str, rq: float, ra: float, tq: float, ta: flo
 def _warehouse_item(d: dict) -> dict:
     """入仓品 → 对方成本表的一行。"""
     qty = d["_qty"]
+    spec_only = bool(d.get("_specOnly"))
     return {
         # 入仓品的采购价就是京东向我们下的采购单单价（入仓收入 ÷ 袋数，已扣入仓品扣点）
         "supply": _r(d["_amount"] / qty),
@@ -323,15 +362,16 @@ def _warehouse_item(d: dict) -> dict:
         "returnRate": None,
         "_name": d["_name"],
         "_source": "warehouse",
-        # 入仓品不按区间过滤（采购价是快照），一律全量口径
-        "_period": "all",
-        "_qty": _r(qty, 2),
-        "_turnover": _r(d["_amount"], 2),
-        "_totalQty": _r(qty, 2),
-        "_totalTurnover": _r(d["_amount"], 2),
-        "_goodsCost": _r(d["_cogs"] / qty),
-        "_marginRate": _r(d["_profit"] / d["_amount"] * 100, 2) if d["_amount"] else None,
-        # 入仓品不按区间过滤，这里给出「这批采购价最后一次入仓的日期」，便于判断价格是否还新鲜
+        # all=按入仓记录汇总；spec=只有入仓品资料、还没录入仓记录，用的是资料上的采购价
+        "_period": "spec" if spec_only else "all",
+        # 资料价没有实际入仓量，销量如实记 0（虚拟基准不对外暴露）
+        "_qty": 0.0 if spec_only else _r(qty, 2),
+        "_turnover": 0.0 if spec_only else _r(d["_amount"], 2),
+        "_totalQty": 0.0 if spec_only else _r(qty, 2),
+        "_totalTurnover": 0.0 if spec_only else _r(d["_amount"], 2),
+        "_goodsCost": None if spec_only else _r(d["_cogs"] / qty),
+        "_marginRate": None if spec_only else (_r(d["_profit"] / d["_amount"] * 100, 2) if d["_amount"] else None),
+        # 按入仓记录汇总时给出「这批采购价最后一次入仓的日期」，便于判断价格是否还新鲜
         "_lastDate": d.get("_lastDate") or "",
     }
 
@@ -395,6 +435,7 @@ def sku_costs(
         # 同码时出库口径覆盖入仓品口径
         skus[code] = _sale_item(cost, period, rq, ra, tq, ta)
 
+    wh_spec = sum(1 for d in full["warehouse"].values() if d.get("_specOnly"))
     range_dates = sorted({v.get("_lastDate") or "" for v in rng["sale"].values() if v.get("_lastDate")})
     payload = {
         "updatedAt": date.today().isoformat(),
@@ -416,9 +457,13 @@ def sku_costs(
             "sale_sku_count": len(rng["sale"]),
             "sale_sku_total": len(full["sale"]),
             "warehouse_sku_count": len(full["warehouse"]),
+            # 入仓品里：有实际入仓记录的 / 只有资料价（还没录入仓记录）
+            "warehouse_record_count": len(full["warehouse"]) - wh_spec,
+            "warehouse_spec_count": wh_spec,
             "failed": full["failed"],
             "note": "supply=结算给我们的单件金额；price 留空请用报表真实客单价；null 回落到 default；"
-                    "_period=range 表示成本取自所选区间，=all 表示该商品区间内没有出库、用全量历史兜底；"
+                    "_period=range 成本取自所选区间，=all 区间内没卖用全量历史兜底，"
+                    "=spec 入仓品只有资料、还没录入仓记录（用的是资料上的采购价）；"
                     "_qty/_turnover 是区间内销量，_totalQty/_totalTurnover 是全量历史（判断样本大小用）；"
                     "入仓品不按区间过滤，看 _lastDate 判断采购价日期",
         },
