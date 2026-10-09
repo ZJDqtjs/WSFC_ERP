@@ -77,6 +77,9 @@ function clearBatch(kind) {
 }
 
 /* ---------- 可搜索下拉（点击选择，输入可快速筛选） ---------- */
+/* 中文输入法（IME）友好：拼音组合输入（还没选字）期间一律不重画列表——部分浏览器/输入法会在
+   每次 DOM 重画时打断组合，表现就是「怎么打字都进不去字」。等 compositionend 再筛选。
+   列表改用事件委托（原来每敲一个键都重画并把每个选项重新挂一遍事件，200+ 选项时又慢又抖）。 */
 function bindSearchable(root = document) {
   root.querySelectorAll("select.searchable").forEach((sel) => {
     if (sel.dataset.scombo) return;
@@ -93,14 +96,20 @@ function bindSearchable(root = document) {
     sel.style.display = "none";
     sel.parentNode.insertBefore(wrap, sel.nextSibling);
 
+    let composing = false;       // 输入法组合中：不动 DOM，避免打断中文输入
+    let rendered = null;         // 上次渲染用的筛选词，内容没变就不重画
+
     function syncInput() {
       const o = sel.options[sel.selectedIndex];
       input.value = o ? o.text : "";
+      rendered = null;           // 文本被外部改动，下次打开重新渲染
     }
     sel.addEventListener("change", syncInput);
 
     function renderList(filter) {
       const f = (filter || "").toLowerCase().trim();
+      if (f === rendered) return;
+      rendered = f;
       const items = [];
       for (const o of sel.options) {
         const text = o.text;
@@ -108,27 +117,56 @@ function bindSearchable(root = document) {
         items.push(`<div class="scombo-item" data-v="${o.value}">${esc(text)}</div>`);
       }
       list.innerHTML = items.join("") || '<div class="scombo-empty">无匹配选项</div>';
-      list.querySelectorAll(".scombo-item").forEach((it) => {
-        it.addEventListener("mousedown", (e) => {
-          e.preventDefault();
-          sel.value = it.dataset.v;
-          sel.dispatchEvent(new Event("change", { bubbles: true }));
-          syncInput();
-          list.style.display = "none";
-          input.blur();
-        });
-      });
+      list.scrollTop = 0;
     }
-    input.addEventListener("focus", () => {
-      // 聚焦即清空旧文本，展示全部选项供选择或输入筛选（否则只剩当前选中项）
-      input.value = "";
+    function openList(filter) {
       list.style.display = "block";
-      renderList("");
+      renderList(filter);
+    }
+    /** 选中某一项：写回 select、触发 change（让页面的渲染/查询跟上来） */
+    function pick(it) {
+      if (!it) return;
+      sel.value = it.dataset.v;
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      syncInput();
+      list.style.display = "none";
+    }
+    // 事件委托：整个列表只挂一个监听，输入时不再逐项挂/摘事件
+    list.addEventListener("mousedown", (e) => {
+      const it = e.target.closest(".scombo-item");
+      if (!it) return;
+      e.preventDefault();   // 保住输入框焦点，否则 blur 会把文本重置回原选项
+      pick(it);
+    });
+    input.addEventListener("focus", () => {
+      // 不再清空文本（清空会让人以为「打不进去字」）：只全选，直接输入即可覆盖
+      if (input.value) input.select();
+      openList("");
     });
     input.addEventListener("blur", () => { syncInput(); });
-    input.addEventListener("input", () => { renderList(input.value); list.style.display = "block"; });
+    input.addEventListener("compositionstart", () => { composing = true; });
+    input.addEventListener("compositionend", () => { composing = false; openList(input.value); });
+    input.addEventListener("input", (e) => {
+      if (composing || e.isComposing) return;   // 中文输入法组合中：先别动列表
+      openList(input.value);
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        list.style.display = "none";
+        syncInput();
+        input.blur();
+        return;
+      }
+      if (e.key !== "Enter" || list.style.display === "none") return;
+      const first = list.querySelector(".scombo-item");
+      if (!first) return;
+      e.preventDefault();
+      pick(first);
+    });
     document.addEventListener("click", (e) => {
-      if (!wrap.contains(e.target)) { list.style.display = "none"; syncInput(); }
+      if (wrap.contains(e.target)) return;
+      list.style.display = "none";
+      if (!composing) syncInput();   // 输入法组合中不要改 value（程序化改 value 会取消组合）
     });
   });
 }
@@ -1072,30 +1110,28 @@ async function submitAdjust() {
 }
 
 /* ---------- 盘点调整记录（查看谁盘点的，支持删除回退） ---------- */
-let ADJ_PRODS = [];
-function ensureAdjFilter() {
-  const sel = $("adjProductFilter");
-  if (!sel) return;
-  // 补充盘点记录里出现但未在 PRODUCTS 中的商品（如已停用），主列表在初始化时已填充
-  const existing = new Set([...sel.options].map((o) => o.value));
-  ADJ_PRODS.forEach((p) => {
-    if (p && p.id && !existing.has(String(p.id))) {
-      sel.insertAdjacentHTML("beforeend", `<option value="${p.id}">${esc(p.name)}</option>`);
-      existing.add(String(p.id));
-    }
-  });
-}
+/* 商品维度的「下拉选一个商品」已去掉（列表太长、选起来麻烦）：直接用关键词搜索过滤，
+   商品名 / 备注 / 操作员 / 日期 都能匹配。 */
+let ADJ_ROWS = [];   // 当前拉到的盘点记录（关键词筛选在本地做，不重新请求）
 async function loadAdjustments() {
-  try { ensureAdjFilter(); } catch (e) {}
-  const pid = $("adjProductFilter")?.value || "0";
   const from = $("adjDateFrom")?.value || "", to = $("adjDateTo")?.value || "";
-  let rows = await api(`/api/adjustments?product_id=${pid}&date_from=${from || ""}&date_to=${to || ""}`);
-  rows.forEach((r) => ADJ_PRODS.push({ id: r.product_id, name: r.product_name, is_active: true, product_type: "stock", category: "" }));
+  ADJ_ROWS = await api(`/api/adjustments?date_from=${from}&date_to=${to}`);
+  renderAdjustments();
+}
+/** 渲染盘点记录（带关键词筛选：商品名 / 备注 / 操作员 / 日期，纯前端过滤，不用再点查询） */
+function renderAdjustments() {
   const t = $("adjRecordTable");
+  if (!t) return;
+  const kw = ($("adjSearch")?.value || "").trim().toLowerCase();
+  let rows = ADJ_ROWS;
+  if (kw) {
+    rows = rows.filter((r) =>
+      [r.product_name, r.remark, r.operator, r.date, r.created_at].join(" ").toLowerCase().includes(kw));
+  }
   rows = applyTableSort(t, rows);
   if (!rows.length) {
-    t.innerHTML = `<tr><td colspan="8" class="empty">暂无盘点调整记录</td></tr>`;
-    t._render = loadAdjustments;
+    t.innerHTML = `<tr><td colspan="8" class="empty">${ADJ_ROWS.length ? "没有符合筛选条件的盘点记录（清空关键词试试）" : "暂无盘点调整记录"}</td></tr>`;
+    t._render = renderAdjustments;
     t._rows = rows;
     return;
   }
@@ -1122,7 +1158,7 @@ async function loadAdjustments() {
       </tr>`;
     }).join("") + `</tbody>`;
   t._rows = rows;
-  t._render = loadAdjustments;
+  t._render = renderAdjustments;
 }
 async function deleteAdjustment(gid) {
   if (!confirm("确认删除该盘点调整记录？将回退其对库存、平均成本与成本单价的影响。")) return;
@@ -5128,7 +5164,20 @@ async function saveProduct(pid) {
 async function deleteProduct(pid) {
   if (!confirm("确认删除该商品？其历史单据会一并删除，请谨慎。")) return;
   try { await api("/api/products/" + pid, "DELETE"); closeModal(); toast("已删除"); PRODUCTS = await api("/api/products"); renderProducts(); }
-  catch (e) { toast("删除失败：" + e.message); }
+  catch (e) { showDeleteBlocked("商品", e.message); }
+}
+
+/** 删除被拒时弹窗：后端把「引用来源」逐行放在 detail 里（首行是结论，其余以「- 」开头），逐条列出来 */
+function showDeleteBlocked(subject, message) {
+  const lines = String(message || "").split("\n").map((x) => x.trim()).filter(Boolean);
+  const head = lines.length ? lines[0] : `${subject}仍被引用，无法删除`;
+  const items = lines.slice(1).map((x) => `<li>${esc(x.replace(/^[-•]\s*/, ""))}</li>`).join("");
+  openModal(`
+    <h3>${esc(subject)}无法删除 <button class="close" onclick="closeModal()">✕</button></h3>
+    <p style="margin:10px 0 6px;">${esc(head)}</p>
+    ${items ? `<ul style="margin:0 0 14px 20px;line-height:1.9;">${items}</ul>` : ""}
+    <div class="field-hint">提示：清掉上面的引用后即可删除；只想让它在列表里不再出现，也可以把商品改成「停用」。</div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">知道了</button></div>`);
 }
 
 /* =============== 一单多货（多货合并打包规则） =============== */
@@ -6766,9 +6815,15 @@ async function batchDeleteProducts() {
     prodSel.clear();
     PRODUCTS = await api("/api/products");
     renderProducts();
-    let msg = `已删除 ${r.deleted} 个商品`;
-    if (r.blocked && r.blocked.length) msg += `；${r.blocked.length} 个因被引用已跳过（${r.blocked.slice(0, 5).join("、")}${r.blocked.length > 5 ? "…" : ""}）`;
-    toast(msg, 4200);
+    // 被拦下的一定要弹窗说清「被谁引用」，否则用户只知道「删不掉」
+    const blocked = r.blocked_items || (r.blocked || []).map((n) => ({ name: n, sources: [] }));
+    if (!blocked.length) { toast(`已删除 ${r.deleted} 个商品`); return; }
+    const shown = blocked.slice(0, 20);
+    const lines = shown.map((b) =>
+      "- " + b.name + (b.sources && b.sources.length ? "：" + b.sources.join("；") : ""));
+    showDeleteBlocked("商品",
+      `已删除 ${r.deleted} 个，以下 ${blocked.length} 个仍被引用已跳过${blocked.length > shown.length ? `（只列前 ${shown.length} 个）` : ""}：\n`
+      + lines.join("\n"));
   } catch (e) { toast("批量删除失败：" + e.message); }
 }
 function openBatchProductModal() {
@@ -9326,9 +9381,6 @@ function startMaintenanceWatch() {
   try {
     $("mvProduct").innerHTML = `<option value="0">全部商品</option>` +
       PRODUCTS.filter((p) => !["人工", "快递"].includes(p.category)).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
-    const adjF = $("adjProductFilter");
-    if (adjF) adjF.innerHTML = `<option value="0">全部商品</option>` +
-      PRODUCTS.filter((p) => p.is_active && p.product_type === "stock" && !["人工", "快递"].includes(p.category)).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
   } catch (e) {}
   try { bindSearchable(document); } catch (e) {}
   applyNavVisibility();     // 侧边栏按本机偏好显隐（设置 → 模块显示）
