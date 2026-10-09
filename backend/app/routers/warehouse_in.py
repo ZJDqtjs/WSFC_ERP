@@ -23,26 +23,26 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
-from ..database import get_db
+from ..database import get_current_key, get_db
 from ..models import Deduction, Product, StockMovement, User, WarehouseIn, WarehouseProduct
 from ..services import fifo_state, fifo_take, pay_fields, recompute_product, unit_to_base
 
 router = APIRouter(prefix="/api/warehouse-in", tags=["warehouse-in"])
 
-# 「贴单」sheet 的识别关键词：未显式指定 sheet 时，读取**所有名字含该关键词**的工作表并合并。
-# 一个《入仓配送明细》里现在会同时有「常温贴单」和「冷冻贴单」（薯条/蔬菜等冷冻品走冷链），
-# 只认「常温贴单」会把冷冻那一半漏掉；两个 sheet 的商品互不重叠，合并导入是安全的。
-SHEET_KEYWORD = "贴单"
-# 兼容旧调用：都命中关键词时优先用它（排序用，不再是唯一选择）
+# 未显式指定工作表时，按「当前分仓」决定读哪张贴单表 —— 一个仓对应一个温层。
+# 奥斯迪仓 / 昆明蔬菜仓是常温品（常温贴单），wh02「薯条脱皮玉米粒」是冷冻品（冷冻贴单）。
+# 没配置的分仓一律用 DEFAULT_SHEET；配置的表在文件里不存在时，回落到含「贴单」的第一张，
+# 最后回落到第一张表（兼容旧格式文件）。
 DEFAULT_SHEET = "常温贴单"
+WAREHOUSE_SHEET = {
+    "wh02": "冷冻贴单",
+}
+SHEET_KEYWORD = "贴单"
 
 # ---------------- Excel 表头别名 ----------------
 WH_ALIASES = {
     "purchase_no": ["采购单号", "采购订单号", "采购编号", "单号"],
     "product": ["商品名称", "商品", "名称", "商品编码或名称"],
-    # 京东 SKU：有的明细表会带（如《采购订单明细导出》的「商品编号」），
-    # 带上就能按 SKU 精确匹配入仓品，不受商品名写法差异影响（如「什锦蔬菜1000g」vs 入仓品名「欧式杂菜1000g」）
-    "sku": ["商品编号", "SKU", "sku", "商品SKU", "商品编码", "京东SKU", "京东商品编号"],
     "box_count": ["箱数", "件数"],
     "center": ["配送中心", "收货仓", "仓库", "仓"],
     "quantity": ["数量"],
@@ -50,24 +50,25 @@ WH_ALIASES = {
 }
 
 
-def _pick_sheets(all_sheets: list[str], wanted: str) -> list[str]:
-    """决定本次要读哪些工作表。
+def _pick_sheet(all_sheets: list[str], wanted: str, wh_key: str = "") -> str:
+    """决定本次要读哪张工作表（单张）。
 
-    - ``wanted`` 显式指定（前端下拉/接口参数）：只读它；不存在时报错并列出全部可选；
-    - 未指定：读取**所有名字含「贴单」**的工作表（常温贴单 + 冷冻贴单 一起导入），
-      其中 DEFAULT_SHEET 排在最前；一张都没有时回落到第一张表（兼容旧格式文件）。
+    - ``wanted`` 显式指定（前端下拉/接口参数）：只用它；不存在时报错并列出全部可选；
+    - 未指定：按当前分仓取 ``WAREHOUSE_SHEET``（wh02 → 冷冻贴单，其余 → 常温贴单）；
+      该仓配的表在文件里没有时，回落到名字含「贴单」的第一张，最后回落到第一张表。
     """
     names = list(all_sheets or [])
     wanted = (wanted or "").strip()
     if wanted:
         if wanted not in names:
             raise HTTPException(400, f"工作表「{wanted}」不存在，可选：{'、'.join(names)}")
-        return [wanted]
-    hit = [s for s in names if SHEET_KEYWORD in s]
-    if hit:
-        hit.sort(key=lambda s: (s != DEFAULT_SHEET, s))  # 常温贴单优先，其余按下标原序
-        return hit
-    return [names[0]] if names else []
+        return wanted
+    if not names:
+        return ""
+    preferred = WAREHOUSE_SHEET.get((wh_key or "").strip(), DEFAULT_SHEET)
+    if preferred in names:
+        return preferred
+    return next((s for s in names if SHEET_KEYWORD in s), names[0])
 
 
 def _norm(s) -> str:
@@ -724,22 +725,9 @@ def batch_delete(data: BatchIds, db: Session = Depends(get_db), user: User = Dep
     return {"ok": True, "deleted": deleted}
 
 
-# ---------------- 导入常温贴单 ----------------
-def _match_product(
-    products: list[WarehouseProduct], name: str, sku: str = ""
-) -> tuple[WarehouseProduct | None, float]:
-    """匹配入仓品：**先按京东 SKU 精确匹配**，再退回按名称（精确名 → 核心名 → 模糊）。
-
-    优先 SKU 是因为商品名的写法在两边经常不一致（京东表里叫「什锦蔬菜1000g」，
-    入仓品班里叫「欧式杂菜1000g」；「薯条2kg/袋」对应「冷冻细薯条」），
-    靠名称无论是精确还是模糊都对不上；只要明细表带「商品编号/SKU」列，用 SKU 就一定能对上。
-    返回 (入仓品, 匹配分)。
-    """
-    sid = (sku or "").strip()
-    if sid:
-        for p in products:
-            if (p.sku or "").strip() == sid:
-                return p, 1.0
+# ---------------- 导入贴单（奥斯迪/昆明蔬菜仓=常温贴单，wh02=冷冻贴单） ----------------
+def _match_product(products: list[WarehouseProduct], name: str) -> tuple[WarehouseProduct | None, float]:
+    """按名称匹配入仓品：先精确名，再核心名精确/模糊。返回 (入仓品, 匹配分)。"""
     key = (name or "").strip()
     if not key:
         return None, 0.0
@@ -777,35 +765,25 @@ def import_preview(
 ):
     wb = _load_workbook(file)
     sheets = wb.sheetnames
-    used = _pick_sheets(sheets, sheet)
-    if not used:
+    # 工作表按当前分仓自动选：wh02=冷冻贴单，其余（奥斯迪/昆明蔬菜仓）=常温贴单；
+    # 前端下拉显式选过则用所选那张
+    wh_key = get_current_key()
+    sheet_name = _pick_sheet(sheets, sheet, wh_key)
+    if not sheet_name:
         raise HTTPException(400, "Excel 中没有可读取的工作表")
-
-    # 逐表探测表头，把数据行拼成一条流（每行带上所属工作表与行号）——
-    # 未指定 sheet 时 used 可能是「常温贴单 + 冷冻贴单」两张表，一起导入才算完整。
-    jobs: list[tuple] = []
-    failed: list = []
-    for sheet_name in used:
-        ws = wb[sheet_name]
-        rows = [list(r) for r in ws.iter_rows(values_only=True)]
-        mapping, start = _detect_header(rows, WH_ALIASES)
-        if not mapping or "product" not in mapping:
-            # 个别表结构不符（例如夹带了一张商品明细表）不该让整份文件失败，只记一条
-            failed.append({"sheet": sheet_name, "row": 0, "reason": "未识别到表头（需包含「商品名称」等列）"})
-            continue
-        for i in range(start, len(rows)):
-            jobs.append((sheet_name, i + 1, rows[i], mapping))
+    ws = wb[sheet_name]
+    rows = [list(r) for r in ws.iter_rows(values_only=True)]
+    mapping, start = _detect_header(rows, WH_ALIASES)
+    if not mapping or "product" not in mapping:
+        raise HTTPException(400, "未识别到表头（需包含「商品名称」等列），请确认工作表内容")
 
     products = list(db.execute(select(WarehouseProduct)).scalars())
     deduction = _warehouse_deduction(db)
     default_date = (date or "").strip() or datetime.now().strftime("%Y-%m-%d")
-    items = []
+    items, failed = [], []
     last_purchase_no = ""
-    last_sheet = None
-    for sheet_name, row_no, row, mapping in jobs:
-        if sheet_name != last_sheet:  # 换表时重置「采购单号」合并单元格的回填状态
-            last_purchase_no = ""
-            last_sheet = sheet_name
+    for i in range(start, len(rows)):
+        row = rows[i]
         raw_pn = _cell(row, mapping.get("purchase_no"))
         if raw_pn:  # 合并单元格：采购单号仅首行有值，向下回填
             last_purchase_no = raw_pn
@@ -815,13 +793,11 @@ def import_preview(
             continue
         qty = _to_float(_cell(row, mapping.get("quantity")), 0.0)
         if qty <= 0:
-            failed.append({"sheet": sheet_name, "row": row_no, "reason": f"「{name}」数量无效"})
+            failed.append({"row": i + 1, "reason": f"「{name}」数量无效"})
             continue
         box_count = _to_float(_cell(row, mapping.get("box_count")), 0.0)
         box_spec = _to_float(_cell(row, mapping.get("box_spec")), 0.0)
-        # 明细表带「商品编号/SKU」时按 SKU 精确匹配（商品名两边写法经常不一致，靠名字对不上）
-        sku = _cell(row, mapping.get("sku"))
-        product, score = _match_product(products, name, sku)
+        product, score = _match_product(products, name)
         sp, _base_cost, factor, unit_cost = _stock_info(db, product.stock_product_id if product else None)
         # 每袋净重（默认单位）：优先商品名内嵌规格(克) ÷ 换算系数，其次入仓品维护值
         grams = _parse_weight_grams(name)
@@ -834,18 +810,16 @@ def import_preview(
         cogs = round(qty * bag_cost, 2)
         freight_total = round(qty * freight, 2)
         items.append({
-            "row": row_no,
-            "sheet": sheet_name,
+            "row": i + 1,
             "purchase_no": purchase_no,
             "product_name": name,
-            "sku": sku,                                    # 表格里带的 SKU（没有则为空）
             "center": _cell(row, mapping.get("center")),
             "quantity": qty,
             "box_count": box_count,
             "box_spec": box_spec or (product.box_spec if product else 0.0),
             "product_id": product.id if product else None,
             "matched_name": product.name if product else "",
-            "matched_sku": (product.sku if product else "") or "",  # 匹配到的入仓品 SKU
+            "matched_sku": (product.sku if product else "") or "",  # 匹配到的入仓品的京东 SKU（预览核对用）
             "category": product.category if product else "",
             "unit_price": unit_price,
             "deduction_percent": deduction,
@@ -870,10 +844,10 @@ def import_preview(
         "quantity": round(sum(it["quantity"] for it in items), 2),
     }
     return {
-        # sheet：本次实际读取的工作表（多个用「、」连接）；sheet_auto=True 表示是按「贴单」关键词自动选的
-        "sheet": "、".join(used),
+        # sheet：本次实际读取的工作表；sheet_auto=True 表示是按分仓自动选的（未显式指定）
+        "sheet": sheet_name,
         "sheet_auto": not (sheet or "").strip(),
-        "sheets_used": used,
+        "warehouse_key": wh_key,
         "sheets": sheets,
         "matched": sum(1 for it in items if it["product_id"]),
         "unmatched": sum(1 for it in items if not it["product_id"]),

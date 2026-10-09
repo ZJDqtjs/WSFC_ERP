@@ -4296,8 +4296,8 @@ async function wImportPreview(sheet) {
 }
 function renderWImportPreview(d, dateVal) {
   const box = $("wiImportResult");
-  // 「自动」= 读取全部名字含「贴单」的工作表（常温贴单 + 冷冻贴单 一起导入）
-  const sheets = `<option value="" ${d.sheet_auto ? "selected" : ""}>自动（全部含「贴单」的工作表）</option>`
+  // 「自动」= 按当前分仓选表（奥斯迪/昆明蔬菜仓=常温贴单，wh02=冷冻贴单）
+  const sheets = `<option value="" ${d.sheet_auto ? "selected" : ""}>自动（按分仓：常温贴单 / 冷冻贴单）</option>`
     + (d.sheets || []).map((s) => `<option ${(!d.sheet_auto && s === d.sheet) ? "selected" : ""}>${esc(s)}</option>`).join("");
   const opts = (selId) => ['<option value="">（不关联）</option>']
     .concat((WPROD || []).map((x) => `<option value="${x.id}" ${selId === x.id ? "selected" : ""}>${esc(x.name)}</option>`)).join("");
@@ -4308,7 +4308,7 @@ function renderWImportPreview(d, dateVal) {
       <select id="wiSheetSel" onchange="wImportPreview(this.value)">${sheets}</select>
       <label class="muted">日期</label>
       <input id="wiImportDate" type="date" value="${esc(dateVal || d.date || today())}" />
-      <span class="muted">已读 <b>${esc(d.sheet || "")}</b> · 解析 <b>${rows.length}</b> 行 · 匹配 <b>${d.matched ?? 0}</b>${d.unmatched ? ` · <span style="color:var(--red)">未匹配 ${d.unmatched}</span>` : ""}${d.failed_count ? `（<span style="color:var(--red)">${d.failed_count} 行异常</span>）` : ""}</span>
+      <span class="muted">工作表 <b>${esc(d.sheet || "")}</b>${d.sheet_auto ? "（按分仓自动）" : ""} · 解析 <b>${rows.length}</b> 行 · 匹配 <b>${d.matched ?? 0}</b>${d.unmatched ? ` · <span style="color:var(--red)">未匹配 ${d.unmatched}</span>` : ""}${d.failed_count ? `（<span style="color:var(--red)">${d.failed_count} 行异常</span>）` : ""}</span>
       <div class="grow"></div>
       <span class="muted" id="wiImportTotal"></span>
     </div>
@@ -4320,7 +4320,7 @@ function renderWImportPreview(d, dateVal) {
         </tr></thead>
         <tbody>${rows.map((r, i) => `<tr data-i="${i}" data-uc="${r.unit_cost || 0}" data-pct="${r.deduction_percent || 0}" data-pid="${r.product_id || ""}">
           <td>${esc(r.product_name)}
-            <div class="muted" style="font-size:12px;">${esc(r.purchase_no) || "—"} · ${esc(r.center) || "—"}${r.sku ? ` · 表内SKU ${esc(r.sku)}` : ""}${r.matched_sku ? ` · 匹配SKU ${esc(r.matched_sku)}` : ""}${r.sheet ? ` · ${esc(r.sheet)}` : ""}</div>
+            <div class="muted" style="font-size:12px;">${esc(r.purchase_no) || "—"} · ${esc(r.center) || "—"}${r.matched_sku ? ` · SKU ${esc(r.matched_sku)}` : ""}</div>
           </td>
           <td><select class="wi-prod" onchange="wImportPick(${i})">${opts(r.product_id)}</select>
             <div class="muted" style="font-size:12px;">${esc(r.stock_product_name) || `未关联库存商品（代发 ${fmtMoney(r.bag_cost || 0)}/袋）`}${r.deduction_percent ? ` · 扣点 ${fmtNum(r.deduction_percent)}%` : ""}</div>
