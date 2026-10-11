@@ -1842,7 +1842,7 @@ function openAiConfirm(r) {
       <td style="min-width:250px;">${prodSel}${aiNewNameHtml(ln)}<div style="margin-top:4px;">${ambiBadge}${np ? '<span class="badge ai-newbadge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 提交后新增</span>' : ""}</div></td>
       <td><input type="date" class="ai-date" value="${esc(ln.date || docDate)}" style="width:138px;" title="这一行的单据日期（对账单/送货单逐行日期）" /></td>
       ${qtyCell}
-      <td><input class="ai-unit" list="aiUnitList-${i}" value="${esc(ln.unit || "")}" style="width:84px;" title="单位：可下拉选该商品已有单位，也可手填；改动会立即重算库存" onchange="aiUnitChanged(${i})" /><datalist id="aiUnitList-${i}">${aiUnitSuggest(ln.product_id, ln.unit)}</datalist>${unitBadge}</td>
+      <td><input class="ai-unit" list="aiUnitList-${i}" value="${esc(ln.unit || (ln.matched ? "" : "个"))}" style="width:84px;" title="单位：可下拉选该商品已有单位，也可手填；改动会立即重算库存；未匹配到商品的待新增行若票据没写单位，默认「个」" onchange="aiUnitChanged(${i})" /><datalist id="aiUnitList-${i}">${aiUnitSuggest(ln.product_id, ln.unit)}</datalist>${unitBadge}</td>
       ${priceCell}
       ${payCell}
       <td class="muted ai-hint" style="font-size:12px;min-width:200px;">${esc(ln.hint || "")}</td>

@@ -920,10 +920,16 @@ def _line_candidates(db: Session, name: str, op_type: str, cat: str) -> list[Pro
         if p.id in seen:
             continue
         pn = _tight(p.name)
-        hit = (qname in pn or pn in qname)
-        if not hit and cat == "pack":
+        if cat == "pack":
+            # 包材：_pack_key 已经把「纸箱/拖箱/泡沫箱/箱」这类容器词去掉，键相同才是同一种箱
+            # （「纸箱3号箱」「3号纸箱」「3号箱」→ 键都是「3号」）。
+            # 键不同时只认「档案名比识别名更长」这一向（识别「松茸6号」→ 档案「松茸6号纸箱A」）；
+            # 反过来（识别名更长）说明多了实义词 —— 如「7号玉米纸箱」比「7号纸箱」多了「玉米」，
+            # 那是另一种包材：不能再当近似候选，否则会被静默配到普通纸箱，也不会新建商品。
             pkey = _pack_key(p.name)
-            hit = (qkey in pkey or pkey in qkey)
+            hit = (pkey == qkey) or (pkey.startswith(qkey) and pkey != qkey)
+        else:
+            hit = (qname in pn or pn in qname)
         if hit:
             sub.append(p)
     sub.sort(key=lambda p: -min(len(_tight(p.name)), len(qname)))
@@ -1421,7 +1427,9 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
             # 包材判定分四级，优先级从高到低：
             #   ① 同名（忽略空白）：票据「8号拖箱」必须命中档案里的「8号拖箱」，绝不串到「8号纸箱」
             #   ② 去「箱/纸/拖」后等价且唯一：「3号箱」→「3号纸箱」；「纸箱3号箱」（票据两列拼起来）→「3号纸箱」
-            #   ③ 前缀近似且唯一：「松茸6号」→「松茸6号箱」
+            #   ③ 前缀近似且唯一，且只认「档案名更长」这一向：「松茸6号」→「松茸6号箱」
+            #      （反向 = 识别名更长，说明多了实义词，如「7号玉米纸箱」vs「7号纸箱」，是另一种包材，
+            #        不能配 —— 否则会静默记到普通纸箱上、也不会新建商品）
             #   ④ 同编号多箱型时按名称里的箱型词定位：「纸箱8号箱」→「8号纸箱」
             # 仍剩多个候选（如「8号箱」同时对上 8号纸箱 / 8号拖箱）才算歧义，交给用户挑选。
             qname = _tight(name)
@@ -1431,9 +1439,8 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
             sub = [
                 c for c in cands
                 if c not in exact_name and c not in loose
-                and (
-                    _pack_key(c.name).startswith(qkey) or qkey.startswith(_pack_key(c.name))
-                )
+                and _pack_key(c.name) != qkey
+                and _pack_key(c.name).startswith(qkey)
             ]
             cands = exact_name + loose + sub
             # 识别名里写了箱型词（纸箱/拖箱）时，同箱型的候选排前面
