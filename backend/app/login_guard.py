@@ -34,6 +34,8 @@ from .database import DATA_DIR
 
 SCOPE_ERP = "erp"
 SCOPE_KEYADMIN = "keyadmin"
+# 对外只读接口（/api/open/*）：没有账号，按客户端 IP 计数，复用同一套分级锁定
+SCOPE_OPEN_API = "open_api"
 
 FAILS_PER_STEP = 3
 LADDER_SECONDS = (60, 180, 300, 3600, 86400)

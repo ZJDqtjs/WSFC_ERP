@@ -1888,6 +1888,16 @@ function openAiConfirm(r) {
       <tbody id="aiLines">${linesHtml || `<tr><td colspan="${isStock ? 8 : 9}" class="empty">未识别到明细</td></tr>`}</tbody>
     </table></div>
     ${aiChargeWrapHtml(r)}
+    <div class="ai-followup">
+      <h4 class="block-title" style="margin:0 0 6px;">🤖 识别得不对？跟 AI 说一句，让它重新识别</h4>
+      <div class="row" style="gap:8px;align-items:flex-start;">
+        <textarea id="aiFollowText" rows="1" style="flex:1;min-width:220px;"
+          placeholder="例如：灵芝是按公斤算不是按袋 ｜ 第 3 行应该是白拇指袋子 ｜ 这单其实是入库 ｜ 单价不对，按 12.5 一斤 ｜ 快递费应该是 12"></textarea>
+        <button class="btn" id="aiFollowBtn" onclick="aiFollowup()">让 AI 重认</button>
+      </div>
+      <div class="field-hint" id="aiFollowStage">会在原来的文字 / 票据基础上，按你的要求重新识别，结果直接更新到这条待办；可以连续追问多次。</div>
+      ${aiFollowHistoryHtml()}
+    </div>
     <div class="modal-foot">
       <span class="muted" style="margin-right:auto;">改完可先点「暂存修改」；直接关掉也会自动暂存，中途离开 / 刷新都不会丢</span>
       <button class="btn secondary" onclick="closeModal()">取消</button>
@@ -2288,6 +2298,116 @@ function aiSaveDraft(silent) {
   if (!silent) toast("✅ 已暂存：中途离开或刷新后，打开这条待办还能接着改");
   return true;
 }
+
+/* =============== 连续对话：不满意就让 AI 按你的要求重新识别 =============== */
+/** 这条待办问过几次（追问历史，显示在确认框里） */
+function aiFollowHistoryHtml() {
+  const job = aiCurrentJob();
+  const chat = (job && job.chat) || [];
+  if (!chat.length) return "";
+  return `<div class="ai-follow-hist">` + chat.map((c, i) =>
+    `<div>· 第 ${i + 1} 次追问：${esc(c.text)}<span class="muted">（${esc((c.at || "").slice(11, 16))} 已重认）</span></div>`
+  ).join("") + `</div>`;
+}
+/** 当前确认框各行的紧凑 JSON（含你在界面上的手改）——追问时作为「上一次结果」发给模型 */
+function aiConfirmPrevJson() {
+  const r = AI_CONFIRM || {};
+  const type = (($("aiType") || {}).value) || r.type || "";
+  const o = {
+    type,
+    date: (($("aiDate") || {}).value) || r.date || "",
+    lines: (r.lines || []).filter((ln) => !ln._deleted).map((ln) => ({
+      product: ln.product_name || ln.recognized_name || "",
+      quantity: ln.stock_counted != null ? ln.stock_counted : ln.quantity,
+      unit: ln.unit || "",
+      unit_price: ln.unit_price || 0,
+      date: ln.date || "",
+      category: ln.category || "",
+    })),
+  };
+  const partyEl = $("aiParty");
+  if (partyEl) {
+    if (type === "outbound") o.customer = partyEl.value.trim();
+    else if (type === "inbound") o.supplier = partyEl.value.trim();
+  }
+  return JSON.stringify(o);
+}
+/** 追问重识别用的原图：优先内存里的 File（当次粘贴的），没了就用识别时存下的票据地址取回来 */
+async function aiJobImageFile(job) {
+  const f = AI_QUEUE_FILES.get(job.id);
+  if (f) return f;
+  const url = (job.result && job.result.image_url) || "";
+  if (!url) throw new Error("原图已丢失，请回到工作台重新粘贴这张图片");
+  const res = await fetch(routePath(url));
+  if (!res.ok) throw new Error("取回原图失败（HTTP " + res.status + "）");
+  const blob = await res.blob();
+  return new File([blob], job.image_name || "invoice.jpg", { type: blob.type || "image/jpeg" });
+}
+/** 连续对话：按用户这次的要求重新识别，结果直接更新到这条待办（可连续追问） */
+async function aiFollowup() {
+  const job = aiCurrentJob();
+  const askEl = $("aiFollowText");
+  const btn = $("aiFollowBtn");
+  const stage = $("aiFollowStage");
+  if (!job || !askEl) { toast("这条识别结果不在待办队列里，无法追问"); return; }
+  const ask = (askEl.value || "").trim();
+  if (!ask) { toast("先写一句要让 AI 改什么，例如「灵芝是按公斤算的」"); return; }
+  const prev = aiConfirmPrevJson();
+  const setStage = (s) => { if (stage) stage.textContent = s; };
+  if (btn) { btn.disabled = true; btn.textContent = "重新识别中…"; }
+  setStage("已把你的要求发给 AI，正在重新识别…（票据可能要 1~2 分钟）");
+  const abort = new AbortController();
+  AI_QUEUE_CTRL = abort;
+  let thinkBuf = "";
+  const sink = {
+    think: (s) => {
+      thinkBuf = (thinkBuf + (s || "")).slice(-160);
+      setStage("AI 思考中… " + thinkBuf.replace(/\s+/g, " ").slice(-90));
+    },
+    stage: (s) => setStage(s),
+    answer: () => {},
+  };
+  try {
+    let result;
+    if (job.kind === "image") {
+      const f = await aiJobImageFile(job);
+      const fd = new FormData();
+      fd.append("file", f);
+      fd.append("text", job.text || "");
+      fd.append("hint", ask);
+      fd.append("prev", prev);
+      const res = await fetch(routePath("/api/ai/parse-image/stream"), { method: "POST", body: fd, signal: abort.signal });
+      result = await aiCollectStream(res, sink);
+    } else {
+      const res = await fetch(routePath("/api/ai/parse/stream"), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: job.text || "", hint: ask, prev }), signal: abort.signal,
+      });
+      result = await aiCollectStream(res, sink);
+    }
+    // 更新这条待办（结果替换成新的、记下这次追问），重新打开能看到历史
+    job.result = result;
+    job.status = "done";
+    job.error = "";
+    job.think = "";
+    job.answer = "";
+    job.chat = [...(job.chat || []), { text: ask, at: new Date().toISOString() }];
+    job.draft_at = "";
+    aiQueueSave();
+    refreshEvaBadge();
+    AI_CONFIRM = null;   // 先清掉：避免 closeModal 的自动暂存把旧明细写回去
+    closeModal();
+    openAiConfirm(result);
+    toast("✅ 已按你的要求重新识别，核对后再提交");
+  } catch (e) {
+    if (e && e.name === "AbortError") toast("已取消这次追问");
+    else toast("重新识别失败：" + (e && e.message ? e.message : e));
+    if (btn) { btn.disabled = false; btn.textContent = "让 AI 重认"; }
+    setStage("重新识别失败，可以改改说法再试一次");
+  } finally {
+    AI_QUEUE_CTRL = null;
+  }
+}
 // 每行「是否已付款」开关：默认已付款；点成「待付款」后该笔提交时计入「待付款账单」
 function aiPayHtml(ln, i) {
   const paid = ln.paid !== false;
@@ -2451,6 +2571,7 @@ function aiQueueSave() {
       think: (j.think || "").slice(-AI_QUEUE_THINK_KEEP), answer: (j.answer || "").slice(-4000),
       created_at: j.created_at, finished_at: j.finished_at || "", submitted_at: j.submitted_at || "",
       elapsed: j.elapsed || 0, draft_at: j.draft_at || "",
+      chat: j.chat || [],                 // 连续对话的追问历史（重新打开还能看到问过什么）
     }));
     localStorage.setItem(aiQueueKey(), JSON.stringify(items));
   } catch (e) { /* 配额满等：不影响主流程 */ }

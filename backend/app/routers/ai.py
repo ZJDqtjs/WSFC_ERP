@@ -156,6 +156,8 @@ JSON 结构：
 
 class ParseIn(BaseModel):
     text: str
+    hint: str = ""   # 连续对话：用户这次要求改什么（如「灵芝按公斤算，不是按袋」）
+    prev: str = ""   # 连续对话：上一次的识别结果（紧凑 JSON），让它只改该改的地方
 
 
 def _llm_config() -> dict:
@@ -1031,6 +1033,26 @@ def _user_msg(text: str) -> str:
     return f"今天是 {date.today().isoformat()}（务必以这个日期作为\"今天\"）。\n\n【用户描述】\n{text}"
 
 
+def _followup_block(prev: str, hint: str) -> str:
+    """连续对话（追问重识别）：把「上一次结果 + 用户这次的要求」一起给模型。
+
+    用户在确认框里改不动、或者识别结果不满意时，可以再补一句要求（如「灵芝是按公斤算的」），
+    这里让模型在上一次结果的基础上只改被指出的地方，其余保持不动，避免整单重来又跑偏。
+    """
+    hint = (hint or "").strip()
+    prev = (prev or "").strip()
+    if not hint and not prev:
+        return ""
+    parts = ["\n\n【连续对话·请在上一次结果的基础上修正】"]
+    if prev:
+        parts.append(f"上一次的识别结果（JSON，作为基准）：\n{prev[:4000]}")
+    if hint:
+        parts.append(f"用户这次的要求（必须改到位）：\n{hint}")
+    parts.append("只修改用户指出的部分，其余（没被提到的商品/数量/单位/日期/类型）保持与上一次结果一致；"
+                 "若用户的要求与票据/描述矛盾，以用户的要求为准。仍旧只输出「思路」和一个 JSON 对象。")
+    return "\n".join(parts)
+
+
 def _image_user_msg(text: str) -> str:
     """构造图片识别的用户消息：日期 + 补充说明 + 「别名 -> 正式名称」对应表。
 
@@ -1601,18 +1623,21 @@ def parse_stream(data: ParseIn, db: Session = Depends(get_db), user: User = Depe
 
     def gen():
         try:
-            quick = _quick_parse_text(text)
-            if quick:
-                try:
-                    quick_result = _build_result(db, quick, text)
-                    # 本地快速识别已成功：直接返回，不再调用慢速大模型（识别即出结果）
-                    yield event({"result": quick_result, "source": "quick", "confidence": "high"})
-                    return
-                except HTTPException:
-                    pass
-            yield event({"stage": "正在调用大模型识别…"})
+            # 追问（连续对话）时不走本地快速识别：用户要的是按他的要求重新识别，规则式解析满足不了
+            if not (data.hint or "").strip():
+                quick = _quick_parse_text(text)
+                if quick:
+                    try:
+                        quick_result = _build_result(db, quick, text)
+                        # 本地快速识别已成功：直接返回，不再调用慢速大模型（识别即出结果）
+                        yield event({"result": quick_result, "source": "quick", "confidence": "high"})
+                        return
+                    except HTTPException:
+                        pass
+            yield event({"stage": "正在调用大模型识别…" if not (data.hint or "").strip()
+                         else "正在按你的要求重新识别…"})
             buf = ""
-            for kind, piece in _chat_stream(cfg, SYSTEM_PROMPT, _user_msg(text)):
+            for kind, piece in _chat_stream(cfg, SYSTEM_PROMPT, _user_msg(text) + _followup_block(data.prev, data.hint)):
                 if kind == "think":
                     yield event({"think": piece})    # 模型的思考过程，实时展示
                 else:
@@ -1657,6 +1682,8 @@ def _save_invoice(data: bytes, filename: str) -> str:
 async def parse_image_stream(
     file: UploadFile = File(...),
     text: str = Form(""),
+    hint: str = Form(""),   # 连续对话：用户这次要求改什么
+    prev: str = Form(""),   # 连续对话：上一次的识别结果（紧凑 JSON）
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -1674,7 +1701,8 @@ async def parse_image_stream(
     image_url = _save_invoice(data, file.filename or "invoice.jpg")
 
     # 补充说明里若有「别名 -> 正式名称」，额外列一遍并提示可类推，让模型少犯错
-    user_msg = _image_user_msg(text)
+    # 追问（连续对话）时再带上「上一次结果 + 用户要求」，只改被指出的地方
+    user_msg = _image_user_msg(text) + _followup_block(prev, hint)
 
     def event(obj: dict) -> str:
         return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
@@ -1682,7 +1710,8 @@ async def parse_image_stream(
     def gen():
         try:
             uri = _image_data_uri(data, file.filename or "invoice.jpg")
-            yield event({"stage": "正在调用大模型识别票据…"})
+            yield event({"stage": "正在按你的要求重新识别票据…" if (hint or "").strip()
+                         else "正在调用大模型识别票据…"})
             buf = ""
             for kind, piece in _chat_stream_mm(cfg, IMAGE_SYSTEM_PROMPT, user_msg, uri):
                 if kind == "think":

@@ -1528,6 +1528,23 @@ body.notice-on .login-mask { padding-top: 40px; }
   font-size: 12px; line-height: 20px; cursor: pointer;
 }
 .ai-pending-x:hover { background: rgba(0, 0, 0, .78); }
+/* 连续对话：在确认框里让 AI 按补充要求重新识别 */
+.ai-followup {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius-lg);
+  background: var(--bg-soft, #fafafa);
+}
+.ai-followup textarea { width: 100%; resize: vertical; }
+.ai-follow-hist {
+  margin-top: 6px; padding-top: 6px;
+  border-top: 1px dashed var(--border-light, var(--border));
+  font-size: 12px; color: var(--text-secondary);
+  max-height: 92px; overflow: auto;
+}
+.ai-follow-hist .muted { font-size: 11px; }
 .ai-thinking {
   margin-top: 10px;
   border: 1px solid var(--border);

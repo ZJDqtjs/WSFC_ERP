@@ -73,27 +73,93 @@
           <van-field v-model="mvFilter.product_id" readonly placeholder="全部商品" style="flex:1;background:#f7f8fa;border-radius:6px;padding:6px 10px;" @click="openProductFilter('mv')" />
           <van-field v-model="mvFilter.from" type="date" placeholder="起" style="max-width:130px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
           <van-field v-model="mvFilter.to" type="date" placeholder="止" style="max-width:130px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
-          <van-button size="small" type="primary" @click="loadMovements">查询</van-button>
+          <van-button size="small" type="primary" @click="mvFirstPage">查询</van-button>
           <van-button size="small" plain @click="quickMv(0)">今天</van-button>
           <van-button size="small" plain @click="quickMv(7)">近7天</van-button>
           <van-button size="small" plain @click="quickMv(null)">全部</van-button>
         </div>
+        <van-field
+          v-model="mvFilter.keyword"
+          placeholder="筛选流水（商品 / 单号 / 备注 / 操作员）"
+          style="background:#f7f8fa;border-radius:6px;margin-top:8px;"
+          @update:model-value="onMvKeyword"
+        />
+        <van-checkbox
+          v-model="mvFilter.mergeOut"
+          shape="square"
+          style="margin-top:8px;"
+          @update:model-value="mvFirstPage"
+        >合并出库</van-checkbox>
+        <div class="muted" style="margin-top:6px;">
+          把同一商品、同一扣减量的出库行合并成一行（显示单数与合计出库量）；表格为完整流水，图表只统计真实库存进出。
+        </div>
+      </div>
+
+      <!-- 库存变动柱状图（数据来自聚合接口，不受分页影响） -->
+      <div v-if="mvChart.length" class="card">
+        <div class="card-title">
+          <span class="grow">库存变动</span>
+          <van-button size="mini" plain @click="mvSplitScale = !mvSplitScale">
+            {{ mvSplitScale ? '上下同一刻度' : '上下独立刻度' }}
+          </van-button>
+        </div>
+        <div v-for="s in mvChart" :key="s.unit" class="mv-group">
+          <div class="mv-unit">
+            单位：{{ s.unit }} · 入库 +{{ fmtNum(s.total_in) }} / 出库 −{{ fmtNum(s.total_out) }}
+          </div>
+          <div class="mv-cols">
+            <div
+              v-for="d in s.days"
+              :key="d.date"
+              class="mv-col"
+              :title="`${d.date}：入库 +${fmtNum(d.in)} / 出库 -${fmtNum(d.out)} ${s.unit}`"
+            >
+              <div class="mv-pos"><div class="mv-bar in" :style="{ height: mvBarH(s, d, 'in') }"></div></div>
+              <div class="mv-neg"><div class="mv-bar out" :style="{ height: mvBarH(s, d, 'out') }"></div></div>
+              <div class="mv-x">{{ d.date.slice(5) }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
         <van-pull-refresh v-model="refreshing" @refresh="loadMovements">
           <div v-if="!mvList.length" class="empty">暂无流水</div>
-          <div v-for="m in mvList" :key="m.id" class="list-item">
+          <div v-for="(m, i) in mvList" :key="m.id || i" class="list-item" :class="{ 'mv-merged': m._merged }">
             <div class="row">
               <span class="grow item-title">{{ m.product_name }}</span>
-              <span :class="m.quantity_display >= 0 ? 'up' : 'down'">
-                {{ m.quantity_display >= 0 ? '+' : '' }}{{ fmtNum(m.quantity_display) }} {{ m.unit }}
+              <span v-if="m._merged" class="down">−{{ fmtNum(Math.abs(num(m._merged.total))) }} {{ m.unit }}</span>
+              <span v-else :class="num(m.quantity_display) >= 0 ? 'up' : 'down'">
+                {{ num(m.quantity_display) >= 0 ? '+' : '' }}{{ fmtNum(m.quantity_display) }} {{ m.unit }}
               </span>
             </div>
             <div class="item-meta">
-              {{ m.date }} · {{ moveTypeLabel(m.move_type) }}{{ m.amount ? ' · ' + fmtMoney(m.amount) : '' }}
-              {{ m.operator ? ' · ' + m.operator : '' }}
+              {{ m.date }} · {{ m._merged ? '出库（已合并）' : moveTypeLabel(m.move_type) }}{{ m.amount ? ' · ' + fmtMoney(m.amount) : '' }}{{ m.operator ? ' · ' + m.operator : '' }}
             </div>
-            <div v-if="m.remark" class="item-meta">{{ m.remark }}</div>
+            <div v-if="m._merged" class="item-meta">
+              {{ fmtNum(Math.abs(num(m._merged.per))) }} {{ m.unit }}/单 × {{ m._merged.count }} 单<template v-if="m._merged.days > 1">（跨 {{ m._merged.days }} 天）</template>
+              · {{ (m._merged.codes || []).slice(0, 3).join('、') }}<template v-if="(m._merged.codes || []).length > 3"> …</template>
+            </div>
+            <div v-else-if="m.remark" class="item-meta">{{ m.remark }}</div>
           </div>
         </van-pull-refresh>
+
+        <!-- 分页：明细与图表分开取，翻页不影响图表口径 -->
+        <div class="mv-pager">
+          <div class="muted">
+            第 {{ mvTotal ? mvOffset + 1 : 0 }}–{{ Math.min(mvOffset + mvSize, mvTotal) }} 条，共 {{ mvTotal }} 条{{ mvMerged ? '（出库已合并）' : '' }}
+          </div>
+          <div v-if="mvTruncated" class="mv-warn">区间内流水过多，本次只处理了最新的一部分，请缩小时间范围</div>
+          <div class="row" style="gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap;">
+            <van-button size="mini" plain :disabled="mvPage <= 0" @click="mvGo(mvPage - 1)">‹ 上一页</van-button>
+            <span class="muted">第 {{ mvPage + 1 }} / {{ mvPages }} 页</span>
+            <van-button size="mini" plain :disabled="mvPage + 1 >= mvPages" @click="mvGo(mvPage + 1)">下一页 ›</van-button>
+            <div class="grow"></div>
+            <select class="mv-size" :value="mvSize" @change="mvSetSize($event.target.value)">
+              <option v-for="n in MV_SIZES" :key="n" :value="n">每页 {{ n }} 条</option>
+            </select>
+          </div>
+        </div>
       </div>
     </template>
 
@@ -216,7 +282,20 @@ const onlyLow = ref(false)
 const adjList = ref([])
 const adjFilter = reactive({ product_id: '', from: '', to: '' })
 const mvList = ref([])
-const mvFilter = reactive({ product_id: '', from: '', to: '' })
+const mvFilter = reactive({ product_id: '', from: '', to: '', keyword: '', mergeOut: true })
+/* 流水分页：「合并出库 → 关键字筛选 → 排序 → 切片」都在后端做，前端只记页码，
+   否则「合计出库 N 单」会随翻页变化（同一批出库在不同页显示成不同单数）。 */
+const MV_SIZES = [50, 100, 200, 500]
+const mvPage = ref(0)
+const mvSize = ref(100)
+const mvTotal = ref(0)
+const mvOffset = ref(0)
+const mvMerged = ref(false)
+const mvTruncated = ref(false)
+const mvPages = computed(() => Math.max(1, Math.ceil(mvTotal.value / mvSize.value)))
+/* 库存变动柱状图：走聚合接口，口径只含真实库存进出，且不受分页影响 */
+const mvChart = ref([])
+const mvSplitScale = ref(true)
 const wlFilter = reactive({ from: '', to: '' })
 const wl = ref({})
 
@@ -258,6 +337,7 @@ async function loadStock() {
 function goProductMv(p) {
   mvFilter.product_id = p.id
   tab.value = 'mv'
+  mvPage.value = 0
   loadMovements()
 }
 
@@ -389,13 +469,47 @@ async function submitAdjust() {
 /* ---------- 流水 ---------- */
 async function loadMovements() {
   try {
-    const q = []
-    if (mvFilter.product_id) q.push(`product_id=${mvFilter.product_id}`)
-    if (mvFilter.from) q.push(`date_from=${mvFilter.from}`)
-    if (mvFilter.to) q.push(`date_to=${mvFilter.to}`)
-    mvList.value = await api('/api/movements' + (q.length ? '?' + q.join('&') : ''))
+    const q = new URLSearchParams({
+      product_id: String(mvFilter.product_id || 0),
+      date_from: mvFilter.from || '',
+      date_to: mvFilter.to || '',
+      keyword: (mvFilter.keyword || '').trim(),
+      merge_out: mvFilter.mergeOut ? 'true' : 'false',
+      limit: String(mvSize.value),
+      offset: String(mvPage.value * mvSize.value),
+    })
+    const pid = mvFilter.product_id || 0
+    // 明细与图表分开取：图表走聚合接口，口径只含真实库存进出，且不受分页影响
+    const [res, chart] = await Promise.all([
+      api(`/api/movements?${q.toString()}`),
+      api(`/api/movements/chart?product_id=${pid}&date_from=${mvFilter.from || ''}&date_to=${mvFilter.to || ''}`),
+    ])
+    mvList.value = res.rows || []
+    mvTotal.value = res.total || 0
+    mvOffset.value = res.offset || 0
+    mvMerged.value = !!res.merged
+    mvTruncated.value = !!res.truncated
+    mvChart.value = (chart.series || []).filter((s) => (num(s.total_in) + num(s.total_out)) > 0)
   } catch (e) { showToast(e.message || '加载失败') }
   refreshing.value = false
+}
+function mvFirstPage() { mvPage.value = 0; loadMovements() }
+function mvGo(n) { mvPage.value = Math.max(0, n); loadMovements() }
+function mvSetSize(v) { mvSize.value = +v || 100; mvPage.value = 0; loadMovements() }
+/* 关键词筛选在后端做，输入要防抖，否则每敲一个字都发一次请求 */
+let mvKwTimer = null
+function onMvKeyword() {
+  clearTimeout(mvKwTimer)
+  mvKwTimer = setTimeout(() => { mvPage.value = 0; loadMovements() }, 300)
+}
+/** 柱高（%）：上下独立刻度时两半各按自己的峰值；同一刻度时共用峰值 */
+function mvBarH(s, d, side) {
+  const days = s.days || []
+  const peakIn = Math.max(1, ...days.map((x) => num(x.in)))
+  const peakOut = Math.max(1, ...days.map((x) => num(x.out)))
+  const max = mvSplitScale.value ? (side === 'in' ? peakIn : peakOut) : Math.max(1, peakIn, peakOut)
+  const v = num(d[side])
+  return v > 0 ? Math.max(2, Math.round((v / max) * 100)) + '%' : '0%'
 }
 function quickMv(days) {
   if (days === null) { mvFilter.from = ''; mvFilter.to = '' }
@@ -405,7 +519,7 @@ function quickMv(days) {
     mvFilter.from = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
     mvFilter.to = todayStr()
   }
-  loadMovements()
+  mvFirstPage()
 }
 
 /* ---------- 工作量 ---------- */
@@ -440,7 +554,7 @@ function openProductFilter(target = 'adj') {
   }
 }
 function onPick(p) {
-  if (pickTarget === 'mv') { mvFilter.product_id = p.id; loadMovements() }
+  if (pickTarget === 'mv') { mvFilter.product_id = p.id; mvPage.value = 0; loadMovements() }
   else {
     adjPicked.value = p
     adjPickedName.value = p.name
@@ -459,6 +573,7 @@ watch(() => route.query.mv, (v) => {
   if (!v) return
   mvFilter.product_id = +v
   tab.value = 'mv'
+  mvPage.value = 0
   loadMovements()
 })
 
@@ -467,6 +582,7 @@ onMounted(async () => {
   if (route.query.mv) {
     mvFilter.product_id = +route.query.mv
     tab.value = 'mv'
+    mvPage.value = 0
     loadMovements()
   }
 })
@@ -480,5 +596,27 @@ onActivated(() => { if (tab.value === 'overview') loadStock() })
 .adj-preview {
   background: #f7f8fa; border-radius: 8px; padding: 10px 12px;
   font-size: 12px; line-height: 1.9; color: #646566;
+}
+
+/* ---------- 库存流水：图表 / 分页 ---------- */
+.mv-merged { background: #fafcff; }
+.mv-group { margin-bottom: 12px; }
+.mv-group:last-child { margin-bottom: 0; }
+.mv-unit { font-size: 12px; color: #646566; margin-bottom: 4px; }
+/* 一组柱：上半绿=入库（贴中线向上）、下半红=出库（贴中线向下），中线在正中间 */
+.mv-cols { display: flex; gap: 2px; overflow-x: auto; padding-bottom: 2px; }
+.mv-col { flex: 0 0 auto; width: 22px; display: flex; flex-direction: column; }
+.mv-pos, .mv-neg { height: 56px; display: flex; align-items: flex-end; }
+.mv-pos { border-bottom: 1px solid #ebedf0; }
+.mv-neg { align-items: flex-start; }
+.mv-bar { width: 100%; border-radius: 2px 2px 0 0; }
+.mv-bar.in { background: #07c160; }
+.mv-bar.out { background: #ee0a24; border-radius: 0 0 2px 2px; }
+.mv-x { font-size: 9px; color: #969799; text-align: center; margin-top: 2px; writing-mode: horizontal-tb; }
+.mv-pager { border-top: 1px solid #f5f5f5; margin-top: 10px; padding-top: 8px; }
+.mv-warn { color: #ed6a0c; font-size: 12px; margin-top: 4px; }
+.mv-size {
+  font-size: 12px; padding: 3px 6px; border: 1px solid #dcdee0;
+  border-radius: 6px; background: #fff; color: #323233;
 }
 </style>

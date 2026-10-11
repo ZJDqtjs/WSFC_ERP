@@ -236,6 +236,21 @@
     <van-action-sheet v-model:show="unitPickShow" :actions="unitActions" cancel-text="取消" @select="onUnitPick" />
     <van-action-sheet v-model:show="packUnitPickShow" :actions="packUnitActions" cancel-text="取消" @select="onPackUnitPick" />
     <van-action-sheet v-model:show="batchUnitPickShow" :actions="batchUnitActions" cancel-text="取消" @select="onBatchUnitPick" />
+
+    <!-- 删除被拒：逐条列出「被什么引用」 -->
+    <van-popup v-model:show="blockedShow" position="bottom" round :style="{ maxHeight: '80%' }">
+      <div class="sheet-body">
+        <div class="sheet-title">{{ blockedTitle }}</div>
+        <div class="muted" style="margin-bottom:8px;">{{ blockedHead }}</div>
+        <div v-for="(s, i) in blockedItems" :key="i" class="blocked-item">· {{ s }}</div>
+        <div class="muted" style="margin-top:10px;line-height:1.6;">
+          提示：清掉上面的引用后即可删除；只想让它在列表里不再出现，也可以把商品改成「停用」。
+        </div>
+        <div class="sheet-foot">
+          <van-button block type="primary" @click="blockedShow = false">知道了</van-button>
+        </div>
+      </div>
+    </van-popup>
   </div>
 </template>
 
@@ -473,7 +488,25 @@ async function delProductById(id, name) {
     showToast('已删除')
     editShow.value = false
     await load()
-  } catch (e) { showToast('删除失败（可能已被引用，请用批量删除查看原因）') }
+  } catch (e) {
+    // 后端把引用来源逐行放在 detail 里（首行结论，其余以「- 」开头）
+    if (/无法删除|仍被以下数据引用/.test(e.message || '')) showBlocked('商品', e.message)
+    else showToast('删除失败：' + e.message)
+  }
+}
+
+/* ---------- 删除被拒：逐条列出引用来源 ---------- */
+const blockedShow = ref(false)
+const blockedTitle = ref('')
+const blockedHead = ref('')
+const blockedItems = ref([])
+/** 把后端返回的多行 detail（首行结论 + 「- 引用来源」）拆成弹窗内容 */
+function showBlocked(subject, message) {
+  const lines = String(message || '').split('\n').map((x) => x.trim()).filter(Boolean)
+  blockedTitle.value = `${subject}无法删除`
+  blockedHead.value = lines.length ? lines[0] : `${subject}仍被引用，无法删除`
+  blockedItems.value = lines.slice(1).map((x) => x.replace(/^[-•]\s*/, '')).filter(Boolean)
+  blockedShow.value = true
 }
 
 /* 关联结算清单选择 */
@@ -579,9 +612,16 @@ async function batchDelete() {
   } catch (e) { return }
   try {
     const r = await api('/api/products/batch-delete', 'POST', { ids: selected.value })
-    let msg = `已删除 ${r.deleted} 项`
-    if (r.blocked && r.blocked.length) msg += `；${r.blocked.length} 项被引用未删除：${r.blocked.slice(0, 5).join('、')}`
-    showToast(msg)
+    const blocked = r.blocked_items || []
+    if (blocked.length) {
+      // 逐条列出「被什么引用」，比只报「N 项被跳过」有用得多
+      blockedTitle.value = '部分商品无法删除'
+      blockedHead.value = `已删除 ${r.deleted} 项；以下 ${blocked.length} 项仍被引用，未删除：`
+      blockedItems.value = blocked.map((b) => `${b.name}：${(b.sources || []).join('；')}`)
+      blockedShow.value = true
+    } else {
+      showToast(`已删除 ${r.deleted} 项`)
+    }
     selected.value = []
     await load()
   } catch (e) { showToast('删除失败：' + e.message) }
@@ -635,4 +675,5 @@ onMounted(async () => {
 .batch-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: #fff7e6; border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
 .pack-edit-row { padding: 8px 0; border-bottom: 1px dashed #f0f0f0; }
 .pack-name { font-weight: 600; font-size: 13px; color: #1989fa; }
+.blocked-item { font-size: 13px; line-height: 1.7; color: #323233; }
 </style>

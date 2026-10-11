@@ -15,18 +15,23 @@ SKU 口径（两边靠这个对上）：
 鉴权：请求头 ``X-Api-Token: <token>``（也兼容 ``Authorization: Bearer <token>``）。
 令牌读 ``config.local.json`` 的 ``open_api.token``（本机私有、已 gitignore）；
 未配置时本接口返回 503，不会无鉴权裸奔。
+
+令牌连续错误按客户端 IP 分级锁定（复用 app/login_guard.py 的规则：每累计 3 次失败依次等待
+1 分钟 → 3 分钟 → 5 分钟 → 1 小时 → 24 小时），锁定期内即使令牌正确也一律拒绝。
 """
 import json
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import login_guard as guard
 from ..config import load_rules
 from ..database import get_sessionmaker, get_warehouses
+from ..maintenance import client_ip
 from ..models import Outbound, OutboundLine, Product, WarehouseIn, WarehouseProduct
 from .report import _summary_of
 # 入仓品的随货包材结算与「入仓品扣点」都只有一处实现（warehouse_in），这里复用它算每袋包材成本
@@ -59,15 +64,34 @@ def _configured_token() -> str:
     return str((load_rules().get("open_api") or {}).get("token") or "").strip()
 
 
-def _require_token(x_api_token: str, authorization: str) -> None:
+def _require_token(request: Request, x_api_token: str, authorization: str) -> None:
+    """校验令牌；错误按客户端 IP 复用登录那套分级锁定（见 app/login_guard.py）。
+
+    - 未配置令牌 → 503（服务端配置问题，不计入失败）；
+    - 该 IP 处于锁定期 → 429，并给出剩余时长；
+    - 令牌缺失/错误 → 记一次失败，到档位返回 429，否则 401；
+    - 校验通过 → 清零该 IP 的失败计数。
+    """
     expected = _configured_token()
     if not expected:
         raise HTTPException(503, "未配置 open_api.token，接口未开放")
+    ip = client_ip(request) or "-"
+    left = guard.locked_left(guard.SCOPE_OPEN_API, ip)
+    if left:
+        raise HTTPException(
+            429, f"Token 连续错误次数过多，该 IP 已锁定 {guard.humanize(left)}，请稍后再试"
+        )
     got = (x_api_token or "").strip()
     if not got and authorization.lower().startswith("bearer "):
         got = authorization[7:].strip()
     if not got or got != expected:
+        wait = guard.record_fail(guard.SCOPE_OPEN_API, ip)
+        if wait:
+            raise HTTPException(
+                429, f"Token 连续错误次数过多，该 IP 已锁定 {guard.humanize(wait)}，请稍后再试"
+            )
         raise HTTPException(401, "Token 无效")
+    guard.reset(guard.SCOPE_OPEN_API, ip)
 
 
 def _norm_date(raw: str, field: str) -> str:
@@ -378,6 +402,7 @@ def _warehouse_item(d: dict) -> dict:
 
 @router.get("/sku-costs")
 def sku_costs(
+    request: Request,
     date_from: str = "",
     date_to: str = "",
     x_api_token: str = Header(""),
@@ -393,8 +418,9 @@ def sku_costs(
       ``_lastDate``，可用来确认数据到底落在哪几天。
 
     鉴权：请求头 ``X-Api-Token: <token>``（或 ``Authorization: Bearer <token>``）。
+    令牌连续错误按客户端 IP 分级锁定（见 app/login_guard.py）。
     """
-    _require_token(x_api_token, authorization)
+    _require_token(request, x_api_token, authorization)
 
     # 规范化日期：库里是 YYYY-MM-DD 字符串、区间走字符串比较，
     # 传 2026-10-1 会让 10-01~10-09 被整段过滤掉（详见 _norm_date 注释）

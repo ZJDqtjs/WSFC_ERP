@@ -82,7 +82,11 @@ const batchState = {
         </div>
         <div v-for="(pl, i) in preview.pack_lines || []" :key="i" class="pack-line">
           <div class="row">
-            <span class="grow item-title">{{ pl.product_name }}</span>
+            <span class="grow item-title">
+              {{ pl.product_name }}
+              <van-tag v-if="pl.manual" type="primary" plain style="margin-left:4px;">手动</van-tag>
+              <van-tag plain style="margin-left:4px;">{{ settleCatLabel(packSettleCat(pl)) }}</van-tag>
+            </span>
             <van-icon name="cross" color="#ee0a24" @click="removePackLine(i)" />
           </div>
           <div class="row mt8">
@@ -90,17 +94,24 @@ const batchState = {
               单位 {{ pl.unit }}（点击切换）
             </span>
             <div class="grow"></div>
-            <van-field v-model="pl.quantity" type="number" label="数量" @update:model-value="calcPreview" />
+            <van-field v-model="pl.quantity" type="number" label="数量" />
             <div class="io-amount">{{ fmtMoney(packLineCost(pl)) }}</div>
           </div>
           <div class="muted">{{ fmtMoney(packLineUnitPrice(pl)) }}/{{ pl.unit }} · 成本小计 {{ fmtMoney(packLineCost(pl)) }}</div>
+        </div>
+
+        <div class="row" style="gap:8px;margin-top:10px;align-items:flex-start;">
+          <van-button size="small" plain type="primary" icon="plus" @click="openPackPicker">添加关联物品</van-button>
+          <span class="muted" style="flex:1;">
+            手动挑选本单实际用到的包材 / 人工 / 快递费等（任意商品都可选）；数量按本单用量填，提交时与自动带出的结算项一起结转成本
+          </span>
         </div>
 
         <div class="divider"></div>
         <div class="form-row">
           <span class="lbl">固定费用合计（人工打包费等）</span>
           <div class="inline-field">
-            <van-field v-model="packFeeTotal" type="number" style="width:96px;" @update:model-value="calcPreview" />
+            <van-field v-model="packFeeTotal" type="number" style="width:96px;" @update:model-value="onFeeInput" />
             <span class="muted">元</span>
           </div>
         </div>
@@ -108,7 +119,7 @@ const batchState = {
         <div class="form-row">
           <span class="lbl">调整（给客户抹零 / 凑整）</span>
           <div class="inline-field">
-            <van-field v-model="form.adjust" type="number" style="width:96px;" placeholder="0.00" @update:model-value="calcPreview" />
+            <van-field v-model="form.adjust" type="number" style="width:96px;" placeholder="0.00" />
             <span class="muted">元</span>
           </div>
         </div>
@@ -116,17 +127,47 @@ const batchState = {
           正=加收，负=抹零；差额自动记「金额调整」其他开支，商品成本不变。
         </div>
 
+        <div class="divider"></div>
+        <div class="row" style="justify-content:space-between;">
+          <span class="lbl">实收金额包含（客户随货款一起付的）</span>
+        </div>
+        <van-checkbox-group v-model="settleCats" direction="horizontal" style="margin-top:6px;">
+          <van-checkbox
+            v-for="c in SETTLE_OPTS"
+            :key="c.key"
+            :name="c.key"
+            shape="square"
+            style="margin:0 12px 6px 0;"
+          >{{ c.label }}</van-checkbox>
+        </van-checkbox-group>
+        <div class="row" style="gap:8px;">
+          <van-button size="mini" plain @click="setSettleAll(true)">全选</van-button>
+          <van-button size="mini" plain @click="setSettleAll(false)">全不选</van-button>
+          <span class="muted" style="flex:1;">{{ settleHint }}</span>
+        </div>
+        <div class="muted" style="margin-top:4px;">
+          勾选的类别会计入「实收金额」与报表收入（客户是付了这笔钱的）；成本照旧含包材/快递，所以毛利不会被包材吃掉。
+          「固定成本」= 上面的固定费用合计（工时/胶带这类按金额记的），客户付回时才勾。不勾 = 实收只算货款 + 调整。
+        </div>
+
         <div class="stat-grid cols2" style="margin-top:10px;">
           <div class="stat"><div class="label">销售收入</div><div class="value">{{ fmtMoney(totals.amount) }}</div></div>
-          <div class="stat accent"><div class="label">实收金额</div><div class="value">{{ fmtMoney(totals.final) }}</div></div>
+          <div class="stat accent">
+            <div class="label">实收金额</div>
+            <div class="value">{{ fmtMoney(totals.final) }}</div>
+            <div v-if="totals.settleIn" class="sub">含代收 {{ fmtMoney(totals.settleIn) }}</div>
+          </div>
           <div class="stat"><div class="label">结转成本</div><div class="value">{{ fmtMoney(totals.cogs) }}</div></div>
           <div class="stat success"><div class="label">毛利</div><div class="value">{{ fmtMoney(totals.gross) }}</div></div>
           <div class="stat success"><div class="label">净利</div><div class="value">{{ fmtMoney(totals.net) }}</div></div>
         </div>
         <div class="muted" style="margin-top:6px;">
           结转成本含商品成本、包装耗材{{ autoExpress ? '与快递费' : '' }}；毛利 = 收入 − 成本。
+          <template v-if="totals.settleIn">
+            实收含客户代收的{{ settleCatsLabel() }} {{ fmtMoney(totals.settleIn) }}。
+          </template>
           <template v-if="totals.adjust">
-            实收 = 收入 {{ fmtMoney(totals.amount) }} {{ totals.adjust > 0 ? '+' : '−' }} {{ fmtMoney(Math.abs(totals.adjust)) }} = {{ fmtMoney(totals.final) }}，净利按实收口径。
+            实收 = 收入 {{ fmtMoney(totals.amount) }}{{ totals.settleIn ? ' + 代收 ' + fmtMoney(totals.settleIn) : '' }} {{ totals.adjust > 0 ? '+' : '−' }} {{ fmtMoney(Math.abs(totals.adjust)) }} = {{ fmtMoney(totals.final) }}，净利按实收口径。
           </template>
           合计成本 {{ fmtMoney(totals.cogs) }}。
           <template v-if="!autoExpress">已关闭自动计快递费，本单不算快递费。</template>
@@ -233,6 +274,15 @@ const batchState = {
       title="选择销售商品"
       :products="pickableProducts"
       @pick="onPick"
+    />
+
+    <!-- 手动挑选关联出库物品（包材 / 人工 / 快递费等，任意在用商品都可选） -->
+    <ProductPicker
+      v-model:show="packPickerShow"
+      title="选择关联出库物品"
+      :products="allPickableProducts"
+      :type-tabs="false"
+      @pick="onPickPack"
     />
 
     <!-- 批次内选择要修改的出库单 -->
@@ -460,7 +510,7 @@ const batchState = {
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onActivated } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api, { upload, downloadFile } from '../api'
@@ -485,6 +535,65 @@ const preview = ref(null)
 const packFeeTotal = ref('0')
 // 是否按整单毛重自动结算快递费（关掉就不加快递费行；预览里删掉「快递费」行也会自动关掉）
 const autoExpress = ref(true)
+// 固定费用合计是否被手动改过（改过就别让「预览结算」覆盖掉用户的数）
+const feeManual = ref(false)
+
+/* ---------- 实收金额口径：客户承担的关联结算（包材 / 人工 / 快递费 / 固定成本） ----------
+   客户付款里含包材/工时/运费时勾上（默认全勾），勾选后计入「实收金额」与报表收入；
+   成本侧的包材/快递照旧结转。选择记在浏览器里，下一单沿用（与桌面端同一口径）。 */
+const SETTLE_OPTS = [
+  { key: 'material', label: '包材 / 耗材' },
+  { key: 'labor', label: '人工（打包费）' },
+  { key: 'express', label: '快递费' },
+  { key: 'fee', label: '固定成本' },
+]
+const SETTLE_LABEL = { material: '包材', labor: '人工', express: '快递费', fee: '固定成本' }
+const settleCatLabel = (k) => SETTLE_LABEL[k] || '其他'
+
+function loadSettleCats() {
+  try {
+    const v = JSON.parse(localStorage.getItem('settleCats') || 'null')
+    // 没记录过就保持表单默认（全勾）；显式存过（含全不选）才覆盖
+    if (Array.isArray(v)) return v.filter((k) => k in SETTLE_LABEL)
+  } catch (e) { /* 隐私模式忽略 */ }
+  return ['material', 'labor', 'express']
+}
+const settleCats = ref(loadSettleCats())
+watch(settleCats, (v) => {
+  try { localStorage.setItem('settleCats', JSON.stringify(v || [])) } catch (e) { /* 忽略 */ }
+}, { deep: true })
+function setSettleAll(on) { settleCats.value = on ? SETTLE_OPTS.map((c) => c.key) : [] }
+const settleCatsLabel = () => (settleCats.value || []).map((k) => SETTLE_LABEL[k]).filter(Boolean).join('、')
+
+/** 关联结算行归到「实收」的哪一类（与后端 services.pack_settle_cat 口径一致） */
+function packSettleCat(pl) {
+  if (pl && pl.settle_cat) return pl.settle_cat
+  const p = PRODUCTS.value.find((x) => x.id === (pl && pl.product_id))
+  const c = ((p && p.category) || '').trim()
+  const n = ((p && p.name) || '').trim()
+  if (c === '人工') return 'labor'
+  if (c === '快递') return 'express'
+  if (n.endsWith('打包')) return 'labor'
+  return 'material'
+}
+/** 勾选的关联结算合计（= 客户代收，计入实收金额） */
+function settleIncomeLocal() {
+  const p = preview.value
+  if (!p) return 0
+  const cats = settleCats.value || []
+  let sum = 0
+  ;(p.pack_lines || []).forEach((pl) => {
+    if (cats.includes(packSettleCat(pl))) sum += packLineCost(pl)
+  })
+  if (cats.includes('fee')) sum += num(packFeeTotal.value)
+  return Math.round(sum * 100) / 100
+}
+const settleHint = computed(() => {
+  const s = settleIncomeLocal()
+  return s
+    ? `客户代收：${settleCatsLabel()} ${fmtMoney(s)} → 实收 ${fmtMoney(saleAmount.value + s + num(form.adjust))}`
+    : '当前：实收 = 货款 + 调整（客户不承担关联结算）'
+})
 
 function newRow() {
   return { product_id: '', name: '', unit: '', qty: '1', price: '0', _factor: 1, _base_unit: '', _product: null }
@@ -493,7 +602,7 @@ const saleAmount = computed(() => rows.value.reduce((s, r) => s + rowAmount(r), 
 const rowAmount = (r) => (r.product_id ? num(r.qty) * num(r.price) : 0)
 
 function addRow() { rows.value.push(newRow()) }
-function clearRows() { rows.value = [newRow()]; preview.value = null; form.adjust = '' }
+function clearRows() { rows.value = [newRow()]; preview.value = null; form.adjust = ''; feeManual.value = false }
 function removeRow(i) { rows.value.splice(i, 1) }
 
 /** 实收金额（= 销售收入 + 抹零/凑整调整） */
@@ -510,11 +619,38 @@ async function doPreview() {
   if (!lines.length) { showToast('请至少添加一行销售商品'); return }
   previewing.value = true
   try {
-    const r = await api('/api/outbounds/preview', 'POST', { lines, auto_express: autoExpress.value })
-    preview.value = r
-    packFeeTotal.value = String(r.total_fee != null ? r.total_fee : 0)
+    const r = await api('/api/outbounds/preview', 'POST', {
+      lines,
+      auto_express: autoExpress.value,
+      // 手动挑选的关联物品带上：后端追加在自动带出的结算项后面，一起按 FIFO 算成本
+      extra_pack_lines: manualPackLines(),
+      settle_cats: settleCats.value,   // 实收含哪些关联结算（后端据此回 settle_income）
+    })
+    applyPreview(r)
   } catch (e) { showToast('预览失败：' + e.message) }
   previewing.value = false
+}
+
+/** 接管服务端预览结果：记下每行「原展示单位」，换单位后 FIFO 单价不再适用 */
+function applyPreview(r) {
+  ;(r.pack_lines || []).forEach((pl) => { pl._orig_unit = pl.unit })
+  preview.value = r
+  // 固定费用：手动改过就保留用户的数（服务端建议值不覆盖）
+  if (!feeManual.value) packFeeTotal.value = String(r.total_fee != null ? r.total_fee : 0)
+}
+/** 固定费用被手动改过 → 记住，别被「预览结算」覆盖 */
+function onFeeInput() { feeManual.value = true }
+/** 手动挑选的关联物品：重新预览时交回后端，一起按 FIFO 算成本 */
+function manualPackLines() {
+  return (preview.value?.pack_lines || [])
+    .filter((pl) => pl.manual && num(pl.quantity) > 0)
+    .map((pl) => ({ product_id: pl.product_id, unit: pl.unit, quantity: num(pl.quantity) }))
+}
+/** 是否是「按整单毛重自动算出来的快递费行」（提交时要排除：后端会自己按 auto_express 再算） */
+function isAutoExpressLine(pl) {
+  if (pl.manual) return false
+  const p = PRODUCTS.value.find((x) => x.id === pl.product_id)
+  return !!(p && p.category === '快递')
 }
 
 /* 预览区成本重算（包材数量/单位被手动改过时）
@@ -527,7 +663,9 @@ function packLineBaseCost(pl) {
   return p ? (num(p.avg_cost) || num(p.unit_cost)) : 0
 }
 function packLineUnitPrice(pl) {
-  const up = num(pl.unit_price)
+  // 单位被改过：后端的 FIFO 单价是按原单位给的，不再适用 → 用库存均价估算兜底
+  const sameUnit = pl._orig_unit == null || pl._orig_unit === pl.unit
+  const up = sameUnit ? num(pl.unit_price) : 0
   if (up > 0) return up
   const base = packLineBaseCost(pl)
   if (base > 0) {
@@ -535,6 +673,24 @@ function packLineUnitPrice(pl) {
     return base * unitFactor(p, pl.unit)
   }
   return 0
+}
+/** 关联物品选择器 + 手动行（后端会按 FIFO 实算成本，重新预览时继续带上） */
+const packPickerShow = ref(false)
+async function openPackPicker() {
+  if (!preview.value) { showToast('先点「预览结算」，再挑关联出库物品'); return }
+  await ensureProducts()
+  packPickerShow.value = true
+}
+function onPickPack(p) {
+  const list = preview.value.pack_lines
+  const unit = defaultUnit(p)
+  list.push({
+    product_id: p.id, product_name: p.name, unit, quantity: 1,
+    unit_price: 0, manual: true, settle_cat: packSettleCat({ product_id: p.id }),
+    _orig_unit: unit,
+  })
+  showToast(`已添加关联物品：${p.name}（数量按本单用量改）`)
+  doPreview()   // 立刻重算一次：让它按 FIFO 出准成本，而不是停留在均价估算
 }
 function packLineCost(pl) {
   return packLineUnitPrice(pl) * num(pl.quantity)
@@ -553,28 +709,31 @@ function removePackLine(i) {
 
 const totals = computed(() => {
   const p = preview.value
-  if (!p) return { amount: 0, final: 0, adjust: 0, cogs: 0, gross: 0, net: 0 }
+  if (!p) return { amount: 0, settleIn: 0, final: 0, adjust: 0, cogs: 0, gross: 0, net: 0 }
   const amount = (p.sale_lines || []).reduce((s, l) => s + num(l.amount), 0)
   const goodsCogs = (p.sale_lines || []).reduce((s, l) => s + num(l.cogs), 0)
   const packCogs = (p.pack_lines || []).reduce((s, l) => s + packLineCost(l), 0)
   const fee = num(packFeeTotal.value)
   const adjust = num(form.adjust)      // 抹零/凑整：正=加收，负=抹零（差额记「金额调整」其他开支）
-  const final = amount + adjust        // 实收金额
+  const settleIn = settleIncomeLocal() // 客户随货款付回的关联结算（勾选的类别）
+  const final = amount + settleIn + adjust   // 实收金额
   const cogs = goodsCogs + packCogs
-  // 净利按实收口径：与报表口径一致（抹零差额已计入其他开支）
-  return { amount, final, adjust, cogs, gross: amount - cogs, net: final - cogs - fee }
+  // 毛利 = 收入 + 代收 − 成本；净利按实收口径（抹零差额已计入其他开支）
+  return { amount, settleIn, final, adjust, cogs, gross: amount + settleIn - cogs, net: final - cogs - fee }
 })
 function calcPreview() {}
 
 async function submit() {
   const lines = saleLines()
   if (!lines.length) { showToast('请至少添加一行销售商品'); return }
+  // 自动算出来的「快递费」行不提交：后端会按整单毛重自己结算（提交会被算两遍）
   const packLines = (preview.value?.pack_lines || [])
-    .filter((l) => num(l.quantity) > 0)
+    .filter((l) => num(l.quantity) > 0 && !isAutoExpressLine(l))
     .map((l) => ({ product_id: l.product_id, unit: l.unit, quantity: num(l.quantity) }))
   saving.value = true
   try {
     const adjust = num(form.adjust)   // 抹零/凑整：差额自动记「金额调整」其他开支
+    const settleIn = settleIncomeLocal()
     const r = await api('/api/outbounds', 'POST', {
       customer: form.customer,
       operator: form.operator,
@@ -586,11 +745,14 @@ async function submit() {
       auto_express: autoExpress.value,   // 与预览一致：关掉就不再自动加快递费
       pay_status: form.pay_status,
       adjust_amount: adjust,
+      settle_cats: settleCats.value,     // 实收含哪些关联结算（客户随货款付回来的包材/人工/运费）
     })
     const warns = (r.warnings || []).length ? '\n⚠ ' + r.warnings.join('；') : ''
+    const settleTip = settleIn ? `（实收含${settleCatsLabel()} ${fmtMoney(settleIn)}）` : ''
     showToast(
       '出库成功'
       + (adjust ? `（调整 ${adjust > 0 ? '+' : '−'}${Math.abs(adjust).toFixed(2)}，已记其他开支）` : '')
+      + settleTip
       + (form.pay_status === 'unpaid' ? '（待付款，已进待付款账单）' : '')
       + warns
     )
@@ -599,6 +761,7 @@ async function submit() {
     form.remark = ''
     form.pay_status = 'paid'
     autoExpress.value = true   // 复位：下一笔仍默认自动计快递费
+    feeManual.value = false
     loadList()
   } catch (e) { showToast('出库失败：' + e.message) }
   saving.value = false
@@ -611,6 +774,8 @@ let pickIndex = 0
 const pickableProducts = computed(() =>
   PRODUCTS.value.filter((p) => p.is_active && !['人工', '快递'].includes(p.category))
 )
+// 手动挑选关联出库物品：任意在用商品都可选（含包材 / 人工 / 快递费）
+const allPickableProducts = computed(() => PRODUCTS.value.filter((p) => p.is_active))
 async function ensureProducts() {
   if (PRODUCTS.value.length) return
   try { PRODUCTS.value = await api('/api/products') } catch (e) {}
@@ -670,6 +835,8 @@ function openPackUnit(i) {
 function onPackUnitSelect(a) {
   const pl = preview.value.pack_lines[packIndex]
   pl.unit = a.value
+  // 换了单位：后端给的 FIFO 单价是按原单位算的，清掉让它回退库存均价估算
+  if (pl._orig_unit != null && pl._orig_unit !== a.value) pl.unit_price = 0
   packUnitShow.value = false
 }
 
