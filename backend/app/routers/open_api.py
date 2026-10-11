@@ -295,12 +295,17 @@ def _merge_into(dst: dict, src: dict) -> dict:
 def _collect(date_from: str, date_to: str) -> dict:
     """跨全部分仓汇总（单仓读取失败只记一条，不影响其它仓）。
 
-    带进程内缓存：方案 B 每次请求都要「区间」和「全量」两份汇总，全量那份很重，
-    缓存后同一份在 TTL 内只算一次（对方一天可能拉很多次）。
+    带进程内缓存：方案 B 每次请求都要「区间」和「全量」两份汇总，全量那份很重。
+    缓存按 (date_from, date_to) 分键保存，两份互不挤占，同一份在 TTL 内只算一次。
     """
     ck = (date_from, date_to)
+    now = datetime.now()
+    # 惰性淘汰过期项即可，不要 clear 整张表：否则「区间」那份会把「全量历史」那份挤掉，
+    # 每次换区间请求都得重算全量历史（实测 ~3.8s，是接口慢的主因）。
+    for k in [k for k, (t, _) in _SUMMARY_CACHE.items() if now - t >= _CACHE_TTL]:
+        _SUMMARY_CACHE.pop(k, None)
     hit = _SUMMARY_CACHE.get(ck)
-    if hit and datetime.now() - hit[0] < _CACHE_TTL:
+    if hit is not None:
         return hit[1]
     sale: dict = {}
     wh: dict = {}
@@ -321,7 +326,6 @@ def _collect(date_from: str, date_to: str) -> dict:
             if db is not None:
                 db.close()
     out = {"sale": sale, "warehouse": wh, "failed": failed}
-    _SUMMARY_CACHE.clear()
     _SUMMARY_CACHE[ck] = (datetime.now(), out)
     return out
 
@@ -430,8 +434,12 @@ def sku_costs(
         df, dt = dt, df
 
     ck = (df, dt)
+    now = datetime.now()
+    # 同 _collect：按区间分键缓存，过期项惰性淘汰，不要 clear 整张表
+    for k in [k for k, (t, _) in _CACHE.items() if now - t >= _CACHE_TTL]:
+        _CACHE.pop(k, None)
     hit = _CACHE.get(ck)
-    if hit and datetime.now() - hit[0] < _CACHE_TTL:
+    if hit is not None:
         return hit[1]
 
     # 方案 B：区间汇总 + 全量历史汇总。
@@ -494,6 +502,5 @@ def sku_costs(
                     "入仓品不按区间过滤，看 _lastDate 判断采购价日期",
         },
     }
-    _CACHE.clear()
     _CACHE[ck] = (datetime.now(), payload)
     return payload
