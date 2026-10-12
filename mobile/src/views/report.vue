@@ -306,7 +306,7 @@
             <span class="bold" style="margin-left:6px;">{{ fmtMoney(p.amount) }}</span>
           </div>
           <div class="item-meta">
-            <template v-if="p.spec">规格 {{ p.spec }} · </template>销量 {{ fmtNum(p.qty) }}{{ p.unit || '' }}
+            <template v-if="p.spec">规格 {{ p.spec }} · </template>销量 {{ fmtNum(p.qty) }}{{ p.unit || '' }} · 重量 {{ fmtKg(p.weight_kg) }}
           </div>
           <div class="item-meta">
             总成本 {{ fmtMoney(totalCogsOf(p)) }} · 毛利
@@ -491,6 +491,9 @@ const pctOf = (v) => (rep.value.cogs ? (v / rep.value.cogs) * 100 : 0)
 // 旧版后端不返回该字段，回退到 cogs（此时等于商品本身成本），避免整列显示成 ¥0.00
 const totalCogsOf = (p) => num(p.total_cogs != null ? p.total_cogs : p.cogs)
 const grossProfitOf = (p) => num(p.amount) - totalCogsOf(p)
+
+// 重量（kg）：后端 by_product.weight_kg 是净重（口径同出库结算快递费），0 显示「—」
+const fmtKg = (v) => { const n = num(v); return n ? n.toFixed(2) : '—' }
 
 // 毛利率分母用扣点前销售金额（gross_sales），无值时回退实收金额——与出库批次页口径一致
 function gpRateText(p) {

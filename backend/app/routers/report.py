@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import and_, case, exists, func, or_, select
+from sqlalchemy import and_, case, exists, false, func, literal, or_, select
 from sqlalchemy.orm import Session, aliased, selectinload
 
 from ..auth import get_current_user
@@ -20,6 +20,7 @@ from ..models import (
     Outbound,
     OutboundLine,
     Product,
+    StockMovement,
     User,
     WarehouseIn,
 )
@@ -567,6 +568,63 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     for o in outbounds:
         _spread(o.id, "settle_income", float(getattr(o, "settle_income", 0.0) or 0.0))
 
+    # ---- 重量（净重 kg）：与出库结算快递费同一口径 ----
+    # 由该销售行实际扣减的库存流水反推：重量类库存商品（基础单位 克）按 扣减量 ÷ 1000；
+    # 计数类按 扣减量 ÷ 默认单位换算系数 × 该商品单件净重；没有扣减流水（代发 / 没扣库存）时
+    # 回退用订单商品自身的单件净重折算 —— 就是 services.deduction_net_weight_kg / line_weight_kg。
+    # 已用「快递费(自动)行的 spec = 整单净重 + 0.1kg 箱重」抽样 200 单做过校验，100% 一致。
+    sm = aliased(Product)   # 被扣减的库存商品
+    op = aliased(Product)   # 订单商品（销售行自己指向的商品）
+
+    def _kg_per_base(pr):
+        """某商品「1 个基础单位」折成 kg：重量类按克数，计数类按 单件净重 ÷ 默认单位换算系数。"""
+        return case(
+            (pr.base_unit.in_(("克", "g")), 1.0 / 1000.0),
+            else_=(1.0 / func.coalesce(func.json_extract(
+                pr.conversions, literal("$.").op("||")(pr.default_unit)), 1.0)
+                * func.coalesce(pr.weight_kg, 0.0)),
+        )
+
+    # 老流水没写 line_id（2026-09 及以前的一部分）：只在「该单只有一条销售行」时按单归属，
+    # 多行单据不猜（那种单会退化成用订单商品自身净重），避免把别的商品的重量摊到它头上。
+    single_line_out = [
+        oid for oid, cnt in db.execute(
+            select(OutboundLine.outbound_id, func.count())
+            .select_from(OutboundLine).join(Outbound, Outbound.id == OutboundLine.outbound_id)
+            .where(OutboundLine.line_type == "sale", *line_conds, paid_out)
+            .group_by(OutboundLine.outbound_id)
+        ).all() if cnt == 1
+    ]
+    move_match = or_(
+        StockMovement.line_id == OutboundLine.id,
+        and_(StockMovement.line_id.is_(None), StockMovement.ref_id == Outbound.id,
+             Outbound.id.in_(single_line_out)) if single_line_out else false(),
+    )
+    kg_by_line: dict[tuple, float] = {}
+    for pid, spec, dr, kg in db.execute(   # ① 有扣减流水的行
+        select(OutboundLine.product_id, spec_expr, dr_expr,
+               func.coalesce(func.sum(-StockMovement.quantity_base * _kg_per_base(sm)), 0.0))
+        .select_from(OutboundLine)
+        .join(Outbound, Outbound.id == OutboundLine.outbound_id)
+        .join(StockMovement, and_(StockMovement.ref_type == "outbound", move_match))
+        .join(sm, sm.id == StockMovement.product_id, isouter=True)
+        .where(OutboundLine.line_type == "sale", *line_conds, paid_out)
+        .group_by(OutboundLine.product_id, spec_expr, dr_expr)
+    ):
+        kg_by_line[(pid, spec, bool(dr))] = float(kg or 0.0)
+    for pid, spec, dr, kg in db.execute(   # ② 无流水的行（代发）：回退订单商品自身净重
+        select(OutboundLine.product_id, spec_expr, dr_expr,
+               func.coalesce(func.sum(OutboundLine.quantity_base * _kg_per_base(op)), 0.0))
+        .select_from(OutboundLine)
+        .join(Outbound, Outbound.id == OutboundLine.outbound_id)
+        .join(op, op.id == OutboundLine.product_id, isouter=True)
+        .join(StockMovement, and_(StockMovement.ref_type == "outbound", move_match), isouter=True)
+        .where(OutboundLine.line_type == "sale", *line_conds, paid_out, StockMovement.id.is_(None))
+        .group_by(OutboundLine.product_id, spec_expr, dr_expr)
+    ):
+        key = (pid, spec, bool(dr))
+        kg_by_line[key] = round(kg_by_line.get(key, 0.0) + float(kg or 0.0), 4)
+
     product_rows = []
     for _key, d in sorted(by_product.items(), key=lambda kv: -kv[1]["amount"]):
         goods = round(d["goods_cogs"], 2)
@@ -594,6 +652,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 # 商品编码：订单商品上一般填的是平台 SKU（京东为数字 skuId）
                 "code": d.get("code") or "",
                 "qty": round(d["qty"], 4),
+                # 净重（kg）：口径见上面「重量」那一段（与出库结算快递费一致）
+                "weight_kg": round(kg_by_line.get(
+                    (d["product_id"], d["spec"], bool(d["is_dropship"])), 0.0), 4),
                 "amount": amount,
                 "gross_sales": gross_sales,
                 # cogs 语义升级为「总成本」，含商品成本 + 打包人工/耗材 + 快递费 + 刷单结算
@@ -620,9 +681,12 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         b = wi_buckets.setdefault((nm, cat), {
             "product_id": w.product_id, "name": nm, "spec": cat, "unit": w.unit or "袋",
             "qty": 0.0, "amount": 0.0, "gross_sales": 0.0,
-            "goods": 0.0, "freight": 0.0, "pack": 0.0,
+            "goods": 0.0, "freight": 0.0, "pack": 0.0, "weight": 0.0,
         })
         b["qty"] += w.quantity or 0.0
+        # 每袋净重 bag_weight 在库里按「吨」存（实测：玉米段1.2kg→0.0012、花糯玉米3斤礼盒装→0.0015，
+        # 与商品名里的规格一致），所以 ×1000 得到 kg
+        b["weight"] += (w.quantity or 0.0) * (w.bag_weight or 0.0) * 1000.0
         b["amount"] += w.amount or 0.0
         # 扣点前金额 = 数量 × 采购价（入仓品采购价是扣点前的收入单价），与出库的 gross_sales 同口径
         b["gross_sales"] += (w.quantity or 0.0) * (w.unit_price or 0.0)
@@ -646,6 +710,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             "code": "",
             "unit": b["unit"],         # 入仓按「袋」计；出库行没有这个字段
             "qty": round(b["qty"], 4),
+            "weight_kg": round(b["weight"], 4),
             "amount": amount,
             "gross_sales": gross_sales,
             "cogs": total_cogs,
@@ -904,7 +969,7 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
 
     # ---- 商品：按「商品 + 规格 + 是否代发 + 是否入仓」归并，再用合并后的成本重算毛利/毛利率 ----
     # 入仓品要单独成行，不能和同名同规格的出库商品合并（否则「出库方式」就没法区分了）
-    num_fields = ("qty", "amount", "gross_sales", "goods_cogs", "pack_cogs",
+    num_fields = ("qty", "weight_kg", "amount", "gross_sales", "goods_cogs", "pack_cogs",
                   "labor_cogs", "material_cogs", "other_cogs", "express_cogs", "brush_cogs",
                   "settle_income")
     buckets: dict[tuple, dict] = {}

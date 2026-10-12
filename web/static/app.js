@@ -7376,6 +7376,8 @@ function renderReportGoods() {
     const rate = ((Number(p.amount) + settle - total) / denom) * 100;
     return rate.toFixed(1) + "%";
   };
+  // 重量（kg）：后端给的是净重 kg（口径与出库结算快递费一致），保留 2 位；0 用「—」占位
+  const fmtKg = (v) => { const n = Number(v) || 0; return n ? n.toFixed(2) : "—"; };
   if (!prodRows.length) {
     pt.innerHTML = `<tr><td class="empty" colspan="8">${all.length ? `没有匹配「${esc(kw)}」的商品，换个关键词试试` : "本期无销售"}</td></tr>`;
     pt._rows = [];
@@ -7384,18 +7386,19 @@ function renderReportGoods() {
   }
   const sum = prodRows.reduce((a, p) => {
     a.qty += Number(p.qty) || 0;
+    a.weight += Number(p.weight_kg) || 0;
     a.amount += Number(p.amount) || 0;
     a.settle += settleOf(p);
     a.cogs += Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
     return a;
-  }, { qty: 0, amount: 0, settle: 0, cogs: 0 });
+  }, { qty: 0, weight: 0, amount: 0, settle: 0, cogs: 0 });
   const sumGp = sum.amount + sum.settle - sum.cogs;
   const sumColor = sumGp >= 0 ? "var(--green)" : "var(--red)";
   pt.innerHTML = `<thead><tr>
     <th data-key="name">商品${sortArrow("repProductTable", "name")}</th>
-    <th data-key="spec">规格${sortArrow("repProductTable", "spec")}</th>
     <th data-key="is_dropship">出库方式${sortArrow("repProductTable", "is_dropship")}</th>
     <th data-key="qty" class="num">销量${sortArrow("repProductTable", "qty")}</th>
+    <th data-key="weight_kg" class="num">重量(kg)${sortArrow("repProductTable", "weight_kg")}</th>
     <th data-key="amount" class="num">收入${sortArrow("repProductTable", "amount")}</th>
     <th data-key="cogs" class="num">总成本${sortArrow("repProductTable", "cogs")}</th>
     <th data-key="gross" class="num">毛利${sortArrow("repProductTable", "gross")}</th>
@@ -7412,9 +7415,9 @@ function renderReportGoods() {
       const way = wayBadgeOf(p);
       return `<tr>
       <td>${esc(p.name)}${split}</td>
-      <td class="muted">${esc(p.spec) || "—"}</td>
       <td>${way}</td>
       <td class="num mono">${fmtNum(p.qty)}${p.unit ? esc(p.unit) : ""}</td>
+      <td class="num mono">${fmtKg(p.weight_kg)}</td>
       <td class="num mono">${fmtMoney((Number(p.amount) || 0) + settle)}${settle ? `<div class="muted" style="font-size:11px;" title="客户随货款一起付的包材/人工/快递费（成本里已含，收入侧也计一笔）">含代收 ${fmtMoney(settle)}</div>` : ""}</td>
       <td class="num mono">${fmtMoney(total)}</td>
       <td class="num mono" style="color:${color}">${fmtMoney(gp)}</td>
@@ -7422,8 +7425,9 @@ function renderReportGoods() {
     }).join("") + `</tbody>
     <tfoot><tr>
       <td><b>${k ? "筛选合计" : "本期合计"}</b> <span class="muted">${prodRows.length} 个商品</span></td>
-      <td></td><td></td>
+      <td></td>
       <td class="num mono"><b>${fmtNum(sum.qty)}</b></td>
+      <td class="num mono"><b>${fmtKg(sum.weight)}</b></td>
       <td class="num mono"><b>${fmtMoney(sum.amount + sum.settle)}</b>${sum.settle ? `<div class="muted" style="font-size:11px;">含代收 ${fmtMoney(sum.settle)}</div>` : ""}</td>
       <td class="num mono"><b>${fmtMoney(sum.cogs)}</b></td>
       <td class="num mono" style="color:${sumColor}"><b>${fmtMoney(sumGp)}</b></td>
