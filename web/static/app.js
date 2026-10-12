@@ -6600,16 +6600,17 @@ function costSplitText(r) {
   const material = split ? (Number(r.material_cogs) || 0) : 0;
   const other = split ? (Number(r.other_cogs) || 0) : 0;
   const brush = Number(r.brush_cogs) || 0;   // 芳谊放单仓刷单结算（分摊到该商品的部分）
+  const isWi = !!r.is_warehouse_in;   // 入仓行：material/express 字段装的是「包材/运费」，标签要换
   if (!(r.is_dropship || oldPack || express || labor || material || other || brush)) return "";
   const parts = [`${r.is_dropship ? "代发成本" : "商品成本"} ${fmtMoney(goods)}`];
   if (split) {
     if (labor) parts.push(`打包人工 ${fmtMoney(labor)}`);
-    if (material) parts.push(`耗材 ${fmtMoney(material)}`);
+    if (material) parts.push(`${isWi ? "包材" : "耗材"} ${fmtMoney(material)}`);
     if (other) parts.push(`其他关联结算 ${fmtMoney(other)}`);
   } else if (oldPack) {
     parts.push(`打包人工+耗材 ${fmtMoney(oldPack)}`);
   }
-  if (express) parts.push(`快递费 ${fmtMoney(express)}`);
+  if (express) parts.push(`${isWi ? "运费" : "快递费"} ${fmtMoney(express)}`);
   if (brush) parts.push(`刷单成本 ${fmtMoney(brush)}`);
   return parts.join(" ＋ ");
 }
@@ -7104,7 +7105,7 @@ async function loadAllWarehouses(from, to) {
     const tot = d.total || {};
     const rate = (v, base) => (base ? ((v / base) * 100).toFixed(1) + "%" : "—");
     $("repAllStats").innerHTML = `
-      <div class="stat blue"><div class="label">全仓销售收入</div><div class="value">${fmtMoney(tot.revenue)}</div><div class="sub">${tot.orders || 0} 单 · ${tot.warehouse_count || 0} 个分仓</div></div>
+      <div class="stat blue"><div class="label">全仓销售收入</div><div class="value">${fmtMoney(tot.revenue)}</div><div class="sub">${tot.orders || 0} 单${tot.warehouse_ins ? ` · 入仓 ${tot.warehouse_ins} 条` : ""} · ${tot.warehouse_count || 0} 个分仓</div></div>
       <div class="stat amber"><div class="label">全仓结转成本</div><div class="value">${fmtMoney(tot.cogs)}</div><div class="sub">全仓毛利 ${fmtMoney(tot.gross)}（${rate(tot.gross, tot.revenue)}）</div></div>
       <div class="stat red"><div class="label">全仓支出</div><div class="value">${fmtMoney(tot.total_expense)}</div><div class="sub">采购 ${fmtMoney(tot.purchase)} ＋ 期间费用 ${fmtMoney(tot.expense)}</div></div>
       <div class="stat ${(tot.net_profit || 0) >= 0 ? "green" : "red"}"><div class="label">全仓净利润</div><div class="value">${fmtMoney(tot.net_profit)}</div><div class="sub">净利率 ${rate(tot.net_profit, tot.revenue)}</div></div>
@@ -7123,8 +7124,8 @@ async function loadAllWarehouses(from, to) {
     const rows = items.filter((x) => !x.error);
     const totalRow = `<tr>
       <td><b>全仓合计</b></td>
-      <td class="num mono"><b>${fmtMoney(tot.revenue)}</b></td>
-      <td class="num mono"><b>${fmtMoney(tot.cogs)}</b></td>
+      <td class="num mono"><b>${fmtMoney(tot.revenue)}</b>${tot.warehouse_in_revenue ? `<div class="muted" style="font-size:11px;">含入仓 ${fmtMoney(tot.warehouse_in_revenue)}</div>` : ""}</td>
+      <td class="num mono"><b>${fmtMoney(tot.cogs)}</b>${tot.warehouse_in_cogs ? `<div class="muted" style="font-size:11px;">含入仓 ${fmtMoney(tot.warehouse_in_cogs)}</div>` : ""}</td>
       <td class="num mono"><b>${fmtMoney(tot.gross)}</b></td>
       <td class="num mono">${rate(tot.gross, tot.revenue)}</td>
       <td class="num mono"><b>${fmtMoney(tot.expense)}</b></td>
@@ -7148,8 +7149,8 @@ async function loadAllWarehouses(from, to) {
             : "";
           return `<tr${cur ? ' style="background:var(--primary-50,#eff6ff);"' : ""}>
             <td><b>${esc(w.name)}</b>${cur ? ' <span class="badge" style="background:var(--primary,#2563eb);color:#fff;">当前</span>' : ""}${pendTip}</td>
-            <td class="num mono">${fmtMoney(w.revenue)}</td>
-            <td class="num mono">${fmtMoney(w.cogs)}</td>
+            <td class="num mono">${fmtMoney(w.revenue)}${w.warehouse_in_revenue ? `<div class="muted" style="font-size:11px;">含入仓 ${fmtMoney(w.warehouse_in_revenue)}</div>` : ""}</td>
+            <td class="num mono">${fmtMoney(w.cogs)}${w.warehouse_in_cogs ? `<div class="muted" style="font-size:11px;">含入仓 ${fmtMoney(w.warehouse_in_cogs)}</div>` : ""}</td>
             <td class="num mono">${fmtMoney(w.gross)}</td>
             <td class="num mono">${rate(w.gross, w.revenue)}</td>
             <td class="num mono">${fmtMoney(w.expense)}</td>
@@ -7217,9 +7218,17 @@ async function loadReport() {
   }
   const packTotal = rep.pack_cost_total || 0;
   const pre = all ? "全仓" : "";   // 全仓总览给统计卡加前缀，避免和单仓混淆
+  // 入仓（入仓品卖到京东）：收入/成本已并入上面的口径，这里把拆分显示出来便于核对
+  const wiRev = rep.warehouse_in_revenue || 0;
+  const wiCogs = rep.warehouse_in_cogs || 0;
+  const wiCnt = rep.warehouse_in_count || 0;
+  const wiParts = [
+    wiCnt ? `入仓 ${wiCnt} 条` : "",
+    wiRev ? fmtMoney(wiRev) : "",
+  ].filter(Boolean).join(" ");
   $("repStats").innerHTML = `
-    <div class="stat blue"><div class="label">${pre}销售收入</div><div class="value">${fmtMoney(rep.revenue)}</div><div class="sub">${rep.order_count} 单${all ? ` · ${rep.warehouse_count || 0} 个分仓` : ""}</div></div>
-    <div class="stat amber"><div class="label">${pre}结转成本</div><div class="value">${fmtMoney(rep.cogs)}</div><div class="sub">含关联结算 ${fmtMoney(packTotal)}</div></div>
+    <div class="stat blue"><div class="label">${pre}销售收入</div><div class="value">${fmtMoney(rep.revenue)}</div><div class="sub">${rep.order_count} 单${wiParts ? ` · ${wiParts}` : ""}${all ? ` · ${rep.warehouse_count || 0} 个分仓` : ""}</div></div>
+    <div class="stat amber"><div class="label">${pre}结转成本</div><div class="value">${fmtMoney(rep.cogs)}</div><div class="sub">含关联结算 ${fmtMoney(packTotal)}${wiCogs ? ` · 含入仓 ${fmtMoney(wiCogs)}` : ""}</div></div>
     ${rep.brush_cost ? `<div class="stat red"><div class="label">${pre}刷单成本</div><div class="value">${fmtMoney(rep.brush_cost)}</div><div class="sub">芳谊放单仓 · 已从毛利扣减</div></div>` : ""}
     <div class="stat green"><div class="label">${pre}毛利</div><div class="value">${fmtMoney(rep.gross_profit)}</div><div class="sub">${rep.revenue ? ((rep.gross_profit / rep.revenue) * 100).toFixed(1) + "%" : "—"}</div></div>
     <div class="stat red"><div class="label">${pre}期间费用</div><div class="value">${fmtMoney(rep.expense)}</div><div class="sub">其他开支 ${fmtMoney(rep.other_expense)} · 手工记账 ${fmtMoney(rep.manual_expense)}</div></div>
@@ -7290,12 +7299,18 @@ function renderCostBreakdown(rep) {
     return;
   }
   const pctOf = (v) => (total ? (v / total) * 100 : 0);
-  const COLORS = { "包材耗材": "#ff976a", "人工打包费": "#7232dd", "快递运费": "#07c160", "其他关联结算": "#969799", "刷单成本": "#ee0a24" };
+  const COLORS = { "包材耗材": "#ff976a", "人工打包费": "#7232dd", "快递运费": "#07c160", "其他关联结算": "#969799", "刷单成本": "#ee0a24", "入仓运费": "#00b8d9", "入仓包材": "#ffc400" };
+  // 入仓（入仓品卖到京东）的运费/随货包材：同样已计入结转成本，单独列出让成本构成相加等于成本合计
+  const wiFreight = rep.warehouse_in_freight || 0;
+  const wiPack = rep.warehouse_in_pack || 0;
+  const wiCost = wiFreight + wiPack;
   const rows = [
     { name: "商品成本", value: goods, color: "#1989fa", tag: "" },
     ...Object.entries(packs)
       .sort((a, b) => b[1] - a[1])
       .map(([k, v]) => ({ name: k, value: v, color: COLORS[k] || "#969799", tag: "自动结算" })),
+    ...(wiFreight ? [{ name: "入仓运费", value: wiFreight, color: COLORS["入仓运费"], tag: "入仓" }] : []),
+    ...(wiPack ? [{ name: "入仓包材", value: wiPack, color: COLORS["入仓包材"], tag: "入仓" }] : []),
     ...(brush ? [{ name: "刷单成本", value: brush, color: COLORS["刷单成本"], tag: "放单仓" }] : []),
   ];
   box.innerHTML = `
@@ -7312,20 +7327,30 @@ function renderCostBreakdown(rep) {
         <td class="num mono">${pctOf(r.value).toFixed(1)}%</td>
         <td class="muted">${r.name === "刷单成本"
           ? "芳谊放单仓：导入确认时按单填写的刷单成本（+ 快递包装固定费覆盖差），已从毛利扣减"
+          : r.tag === "入仓" ? "入仓（入仓品卖到京东）：每袋运费 / 随货包材，已计入入仓成本"
           : r.tag ? "出库时按包装清单自动结算，已计入结转成本" : "销售商品本身的先进先出成本"}</td>
       </tr>`).join("")}</tbody>
       <tfoot><tr>
         <td><b>成本合计</b></td>
         <td class="num mono"><b>${fmtMoney(total)}</b></td>
         <td class="num mono">100%</td>
-        <td class="muted">关联结算 ${fmtMoney(packTotal)}${brush ? ` · 刷单 ${fmtMoney(brush)}` : ""}</td>
+        <td class="muted">关联结算 ${fmtMoney(packTotal)}${wiCost ? ` · 入仓 ${fmtMoney(wiCost)}` : ""}${brush ? ` · 刷单 ${fmtMoney(brush)}` : ""}</td>
       </tr></tfoot>
     </table></div>
-    ${packTotal ? "" : `<div class="alert warn" style="margin-top:10px;">本期没有包材 / 人工 / 快递等关联结算成本。若商品已配置包装清单，请确认出库时是否生成了关联结算行。</div>`}`;
+    ${packTotal || wiCost ? "" : `<div class="alert warn" style="margin-top:10px;">本期没有包材 / 人工 / 快递等关联结算成本。若商品已配置包装清单，请确认出库时是否生成了关联结算行。</div>`}`;
 }
 /* 商品销售明细表：带「商品名称筛选」（与移动端财务报表同一套口径——名称 / 规格任一包含关键词即命中）。
    输入即过滤、点表头排序都只重渲染这张表，不再请求后端；筛选词在重新查询后保留。 */
 let REP_PROD_ROWS = null;   // 最近一次报表的商品明细原始行（未筛选、未排序）
+
+/* 出库方式：入仓（入仓品卖到京东）/ 代发（别人发货，不扣本仓库存）/ 库存出库。
+   搜索栏输入「入仓」「代发」「库存」都能筛出对应类型的行。 */
+const isWarehouseIn = (p) => !!p.is_warehouse_in;
+const wayTextOf = (p) => (isWarehouseIn(p) ? "入仓" : (p.is_dropship ? "代发" : "库存出库"));
+const wayBadgeOf = (p) => (isWarehouseIn(p)
+  ? '<span class="badge pack">入仓</span>'
+  : (p.is_dropship ? '<span class="badge income">代发</span>' : '<span class="badge adjust">库存出库</span>'));
+
 function renderReportGoods() {
   const pt = $("repProductTable");
   if (!pt) return;
@@ -7333,7 +7358,8 @@ function renderReportGoods() {
   const kwEl = $("repGoodsKw");
   const kw = ((kwEl && kwEl.value) || "").trim();
   const k = kw.toLowerCase();
-  const hit = k ? all.filter((p) => `${p.name || ""} ${p.spec || ""}`.toLowerCase().includes(k)) : all;
+  // 关键词命中：商品名 / 规格 / 出库方式（输入「入仓」筛出入仓品，输入「代发」筛出代发商品）
+  const hit = k ? all.filter((p) => `${p.name || ""} ${p.spec || ""} ${wayTextOf(p)}`.toLowerCase().includes(k)) : all;
   const prodRows = applyTableSort(pt, hit);
   const hint = $("repGoodsHint");
   if (hint) hint.textContent = all.length ? (k ? `匹配 ${prodRows.length} / ${all.length} 个商品` : `共 ${all.length} 个商品`) : "";
@@ -7382,15 +7408,13 @@ function renderReportGoods() {
       // 成本构成：代发行也要列出来（代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 其他关联结算 ＋ 快递费）
       const splitText = costSplitText(p);
       const split = splitText ? `<div class="muted" style="font-size:11px;">${splitText}</div>` : "";
-      // 出库方式：代发（别人发货，不扣本仓库存）单独标出，不和库存商品混在一起
-      const way = p.is_dropship
-        ? '<span class="badge income">代发</span>'
-        : '<span class="badge adjust">库存出库</span>';
+      // 出库方式：入仓 / 代发（别人发货，不扣本仓库存）/ 库存出库
+      const way = wayBadgeOf(p);
       return `<tr>
       <td>${esc(p.name)}${split}</td>
       <td class="muted">${esc(p.spec) || "—"}</td>
       <td>${way}</td>
-      <td class="num mono">${fmtNum(p.qty)}</td>
+      <td class="num mono">${fmtNum(p.qty)}${p.unit ? esc(p.unit) : ""}</td>
       <td class="num mono">${fmtMoney((Number(p.amount) || 0) + settle)}${settle ? `<div class="muted" style="font-size:11px;" title="客户随货款一起付的包材/人工/快递费（成本里已含，收入侧也计一笔）">含代收 ${fmtMoney(settle)}</div>` : ""}</td>
       <td class="num mono">${fmtMoney(total)}</td>
       <td class="num mono" style="color:${color}">${fmtMoney(gp)}</td>
