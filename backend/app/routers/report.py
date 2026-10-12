@@ -329,6 +329,11 @@ def summary(
     return _summary_of(db, date_from, date_to, resolve_key(wh), bool(exclude_other))
 
 
+# 重量单位 → kg（与 warehouse_in._BASE_UNIT_GRAMS 同源）。入仓的「每袋净重」以关联库存商品的
+# 默认单位计，只有这些重量单位才折算得出 kg；瓶/个/袋 这类计数单位下它不是重量。
+WI_UNIT_KG = {"克": 0.001, "g": 0.001, "两": 0.05, "斤": 0.5, "公斤": 1.0, "千克": 1.0, "kg": 1.0}
+
+
 def _inbound_landed(i) -> float:
     """入库实际支出 = 货款 + 运费 + 装卸费（运费/装卸已计入批次成本，故期间费用不重复扣）。"""
     return round((i.total_amount or 0.0) + (getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0), 2)
@@ -674,6 +679,21 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         )
 
     # ---- 入仓品：按「入仓品名 + 分类」单独成行（出库方式=入仓），不与出库商品合并 ----
+    # 入仓的「每袋净重」bag_weight 是按「关联库存商品的默认单位」记的（如 公斤），因此要按该单位
+    # 折算成 kg；默认单位是 瓶/个 这类计数单位时 bag_weight 不代表重量，算不出净重就记 0（前端显示「—」）。
+    wi_unit_of: dict[int, str] = {}
+    wi_sp_ids = {w.stock_product_id for w in warehouse_ins if w.stock_product_id}
+    if wi_sp_ids:
+        for _sp in db.execute(select(Product).where(Product.id.in_(wi_sp_ids))).scalars():
+            wi_unit_of[_sp.id] = (_sp.default_unit or _sp.base_unit or "").strip()
+
+    def _wi_weight(w) -> float:
+        """入仓一行的净重 kg = 袋数 × 每袋净重 × (默认单位→kg)。"""
+        factor = WI_UNIT_KG.get(wi_unit_of.get(w.stock_product_id, ""), 0.0)
+        if not factor:
+            return 0.0
+        return (w.quantity or 0.0) * (w.bag_weight or 0.0) * factor
+
     wi_buckets: dict[tuple, dict] = {}
     for w in warehouse_ins:
         nm = (w.product_name or "").strip()
@@ -684,9 +704,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             "goods": 0.0, "freight": 0.0, "pack": 0.0, "weight": 0.0,
         })
         b["qty"] += w.quantity or 0.0
-        # 每袋净重 bag_weight 在库里按「吨」存（实测：玉米段1.2kg→0.0012、花糯玉米3斤礼盒装→0.0015，
-        # 与商品名里的规格一致），所以 ×1000 得到 kg
-        b["weight"] += (w.quantity or 0.0) * (w.bag_weight or 0.0) * 1000.0
+        b["weight"] += _wi_weight(w)
         b["amount"] += w.amount or 0.0
         # 扣点前金额 = 数量 × 采购价（入仓品采购价是扣点前的收入单价），与出库的 gross_sales 同口径
         b["gross_sales"] += (w.quantity or 0.0) * (w.unit_price or 0.0)
