@@ -156,6 +156,8 @@ JSON 结构：
 
 class ParseIn(BaseModel):
     text: str
+    hint: str = ""   # 连续对话：用户这次要求改什么（如「灵芝按公斤算，不是按袋」）
+    prev: str = ""   # 连续对话：上一次的识别结果（紧凑 JSON），让它只改该改的地方
 
 
 def _llm_config() -> dict:
@@ -918,10 +920,16 @@ def _line_candidates(db: Session, name: str, op_type: str, cat: str) -> list[Pro
         if p.id in seen:
             continue
         pn = _tight(p.name)
-        hit = (qname in pn or pn in qname)
-        if not hit and cat == "pack":
+        if cat == "pack":
+            # 包材：_pack_key 已经把「纸箱/拖箱/泡沫箱/箱」这类容器词去掉，键相同才是同一种箱
+            # （「纸箱3号箱」「3号纸箱」「3号箱」→ 键都是「3号」）。
+            # 键不同时只认「档案名比识别名更长」这一向（识别「松茸6号」→ 档案「松茸6号纸箱A」）；
+            # 反过来（识别名更长）说明多了实义词 —— 如「7号玉米纸箱」比「7号纸箱」多了「玉米」，
+            # 那是另一种包材：不能再当近似候选，否则会被静默配到普通纸箱，也不会新建商品。
             pkey = _pack_key(p.name)
-            hit = (qkey in pkey or pkey in qkey)
+            hit = (pkey == qkey) or (pkey.startswith(qkey) and pkey != qkey)
+        else:
+            hit = (qname in pn or pn in qname)
         if hit:
             sub.append(p)
     sub.sort(key=lambda p: -min(len(_tight(p.name)), len(qname)))
@@ -1029,6 +1037,26 @@ def _normalize_line(db: Session, p: Product | None, line: dict, op_type: str, au
 def _user_msg(text: str) -> str:
     """构造发送给模型的用户消息：显式告知今天日期避免模型幻觉。"""
     return f"今天是 {date.today().isoformat()}（务必以这个日期作为\"今天\"）。\n\n【用户描述】\n{text}"
+
+
+def _followup_block(prev: str, hint: str) -> str:
+    """连续对话（追问重识别）：把「上一次结果 + 用户这次的要求」一起给模型。
+
+    用户在确认框里改不动、或者识别结果不满意时，可以再补一句要求（如「灵芝是按公斤算的」），
+    这里让模型在上一次结果的基础上只改被指出的地方，其余保持不动，避免整单重来又跑偏。
+    """
+    hint = (hint or "").strip()
+    prev = (prev or "").strip()
+    if not hint and not prev:
+        return ""
+    parts = ["\n\n【连续对话·请在上一次结果的基础上修正】"]
+    if prev:
+        parts.append(f"上一次的识别结果（JSON，作为基准）：\n{prev[:4000]}")
+    if hint:
+        parts.append(f"用户这次的要求（必须改到位）：\n{hint}")
+    parts.append("只修改用户指出的部分，其余（没被提到的商品/数量/单位/日期/类型）保持与上一次结果一致；"
+                 "若用户的要求与票据/描述矛盾，以用户的要求为准。仍旧只输出「思路」和一个 JSON 对象。")
+    return "\n".join(parts)
 
 
 def _image_user_msg(text: str) -> str:
@@ -1399,7 +1427,9 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
             # 包材判定分四级，优先级从高到低：
             #   ① 同名（忽略空白）：票据「8号拖箱」必须命中档案里的「8号拖箱」，绝不串到「8号纸箱」
             #   ② 去「箱/纸/拖」后等价且唯一：「3号箱」→「3号纸箱」；「纸箱3号箱」（票据两列拼起来）→「3号纸箱」
-            #   ③ 前缀近似且唯一：「松茸6号」→「松茸6号箱」
+            #   ③ 前缀近似且唯一，且只认「档案名更长」这一向：「松茸6号」→「松茸6号箱」
+            #      （反向 = 识别名更长，说明多了实义词，如「7号玉米纸箱」vs「7号纸箱」，是另一种包材，
+            #        不能配 —— 否则会静默记到普通纸箱上、也不会新建商品）
             #   ④ 同编号多箱型时按名称里的箱型词定位：「纸箱8号箱」→「8号纸箱」
             # 仍剩多个候选（如「8号箱」同时对上 8号纸箱 / 8号拖箱）才算歧义，交给用户挑选。
             qname = _tight(name)
@@ -1409,9 +1439,8 @@ def _build_result(db: Session, parsed: dict, text: str) -> dict:
             sub = [
                 c for c in cands
                 if c not in exact_name and c not in loose
-                and (
-                    _pack_key(c.name).startswith(qkey) or qkey.startswith(_pack_key(c.name))
-                )
+                and _pack_key(c.name) != qkey
+                and _pack_key(c.name).startswith(qkey)
             ]
             cands = exact_name + loose + sub
             # 识别名里写了箱型词（纸箱/拖箱）时，同箱型的候选排前面
@@ -1601,18 +1630,21 @@ def parse_stream(data: ParseIn, db: Session = Depends(get_db), user: User = Depe
 
     def gen():
         try:
-            quick = _quick_parse_text(text)
-            if quick:
-                try:
-                    quick_result = _build_result(db, quick, text)
-                    # 本地快速识别已成功：直接返回，不再调用慢速大模型（识别即出结果）
-                    yield event({"result": quick_result, "source": "quick", "confidence": "high"})
-                    return
-                except HTTPException:
-                    pass
-            yield event({"stage": "正在调用大模型识别…"})
+            # 追问（连续对话）时不走本地快速识别：用户要的是按他的要求重新识别，规则式解析满足不了
+            if not (data.hint or "").strip():
+                quick = _quick_parse_text(text)
+                if quick:
+                    try:
+                        quick_result = _build_result(db, quick, text)
+                        # 本地快速识别已成功：直接返回，不再调用慢速大模型（识别即出结果）
+                        yield event({"result": quick_result, "source": "quick", "confidence": "high"})
+                        return
+                    except HTTPException:
+                        pass
+            yield event({"stage": "正在调用大模型识别…" if not (data.hint or "").strip()
+                         else "正在按你的要求重新识别…"})
             buf = ""
-            for kind, piece in _chat_stream(cfg, SYSTEM_PROMPT, _user_msg(text)):
+            for kind, piece in _chat_stream(cfg, SYSTEM_PROMPT, _user_msg(text) + _followup_block(data.prev, data.hint)):
                 if kind == "think":
                     yield event({"think": piece})    # 模型的思考过程，实时展示
                 else:
@@ -1657,6 +1689,8 @@ def _save_invoice(data: bytes, filename: str) -> str:
 async def parse_image_stream(
     file: UploadFile = File(...),
     text: str = Form(""),
+    hint: str = Form(""),   # 连续对话：用户这次要求改什么
+    prev: str = Form(""),   # 连续对话：上一次的识别结果（紧凑 JSON）
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -1674,7 +1708,8 @@ async def parse_image_stream(
     image_url = _save_invoice(data, file.filename or "invoice.jpg")
 
     # 补充说明里若有「别名 -> 正式名称」，额外列一遍并提示可类推，让模型少犯错
-    user_msg = _image_user_msg(text)
+    # 追问（连续对话）时再带上「上一次结果 + 用户要求」，只改被指出的地方
+    user_msg = _image_user_msg(text) + _followup_block(prev, hint)
 
     def event(obj: dict) -> str:
         return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
@@ -1682,7 +1717,8 @@ async def parse_image_stream(
     def gen():
         try:
             uri = _image_data_uri(data, file.filename or "invoice.jpg")
-            yield event({"stage": "正在调用大模型识别票据…"})
+            yield event({"stage": "正在按你的要求重新识别票据…" if (hint or "").strip()
+                         else "正在调用大模型识别票据…"})
             buf = ""
             for kind, piece in _chat_stream_mm(cfg, IMAGE_SYSTEM_PROMPT, user_msg, uri):
                 if kind == "think":

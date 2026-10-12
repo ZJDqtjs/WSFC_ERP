@@ -15,20 +15,27 @@ SKU 口径（两边靠这个对上）：
 鉴权：请求头 ``X-Api-Token: <token>``（也兼容 ``Authorization: Bearer <token>``）。
 令牌读 ``config.local.json`` 的 ``open_api.token``（本机私有、已 gitignore）；
 未配置时本接口返回 503，不会无鉴权裸奔。
+
+令牌连续错误按客户端 IP 分级锁定（复用 app/login_guard.py 的规则：每累计 3 次失败依次等待
+1 分钟 → 3 分钟 → 5 分钟 → 1 小时 → 24 小时），锁定期内即使令牌正确也一律拒绝。
 """
 import json
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import login_guard as guard
 from ..config import load_rules
 from ..database import get_sessionmaker, get_warehouses
+from ..maintenance import client_ip
 from ..models import Outbound, OutboundLine, Product, WarehouseIn, WarehouseProduct
 from .report import _summary_of
+# 入仓品的随货包材结算与「入仓品扣点」都只有一处实现（warehouse_in），这里复用它算每袋包材成本
+from .warehouse_in import _settle_pack_items, _warehouse_deduction
 
 router = APIRouter(prefix="/api/open", tags=["open"])
 
@@ -57,15 +64,34 @@ def _configured_token() -> str:
     return str((load_rules().get("open_api") or {}).get("token") or "").strip()
 
 
-def _require_token(x_api_token: str, authorization: str) -> None:
+def _require_token(request: Request, x_api_token: str, authorization: str) -> None:
+    """校验令牌；错误按客户端 IP 复用登录那套分级锁定（见 app/login_guard.py）。
+
+    - 未配置令牌 → 503（服务端配置问题，不计入失败）；
+    - 该 IP 处于锁定期 → 429，并给出剩余时长；
+    - 令牌缺失/错误 → 记一次失败，到档位返回 429，否则 401；
+    - 校验通过 → 清零该 IP 的失败计数。
+    """
     expected = _configured_token()
     if not expected:
         raise HTTPException(503, "未配置 open_api.token，接口未开放")
+    ip = client_ip(request) or "-"
+    left = guard.locked_left(guard.SCOPE_OPEN_API, ip)
+    if left:
+        raise HTTPException(
+            429, f"Token 连续错误次数过多，该 IP 已锁定 {guard.humanize(left)}，请稍后再试"
+        )
     got = (x_api_token or "").strip()
     if not got and authorization.lower().startswith("bearer "):
         got = authorization[7:].strip()
     if not got or got != expected:
+        wait = guard.record_fail(guard.SCOPE_OPEN_API, ip)
+        if wait:
+            raise HTTPException(
+                429, f"Token 连续错误次数过多，该 IP 已锁定 {guard.humanize(wait)}，请稍后再试"
+            )
         raise HTTPException(401, "Token 无效")
+    guard.reset(guard.SCOPE_OPEN_API, ip)
 
 
 def _norm_date(raw: str, field: str) -> str:
@@ -165,7 +191,14 @@ def _sku_rows_sale(db: Session, date_from: str, date_to: str, key: str) -> dict:
 
 # ---------------- 入仓品 ----------------
 def _sku_rows_warehouse(db: Session) -> dict:
-    """按入仓品 sku 汇总入仓记录 → 每袋结算收入（京东采购价）/ 运费 / 包材 / 毛利率。"""
+    """按入仓品 sku 汇总 → 每袋结算收入（京东采购价）/ 运费 / 包材 / 毛利率。
+
+    两条来源（缺一不可，否则「只建了入仓品资料、还没录入仓记录」的仓会查不到任何东西）：
+    1. **入仓记录**（``warehouse_ins``）：真实结算，带扣点/运费/包材快照，优先；
+    2. **入仓品资料**（``warehouse_products``）：有记录的商品跳过；没记录的用资料上的
+       采购价/运费 + 「入仓品」扣点 + 随货包材清单兜底，单价按「1 袋」虚拟基准算，
+       输出时标 ``_period=spec``（资料价，不是实际结算价），销量记 0。
+    """
     rows = db.execute(
         select(
             WarehouseProduct.sku,
@@ -204,6 +237,33 @@ def _sku_rows_warehouse(db: Session) -> dict:
             # 入仓品不按区间过滤（采购价是快照，用最近已知价），但要让人看清这个价是什么时候的
             "_lastDate": last or "",
         }
+
+    # ② 只有入仓品资料、还没有入仓记录的：用资料价兜底（否则新建仓「建了资料但没录记录」就查不到）
+    ded = float(_warehouse_deduction(db) or 0) / 100
+    for wp in db.execute(
+        select(WarehouseProduct).where(func.coalesce(WarehouseProduct.is_active, 1) != 0)
+    ).scalars():
+        code = str(wp.sku or "").strip()
+        if not code or code in out:
+            continue
+        if not (wp.purchase_price or 0):
+            continue  # 连采购价都没维护，给不出成本
+        _items, pack_cost = _settle_pack_items(db, wp, 1.0)   # 按「1 袋」算随货包材成本（只读，不落库）
+        gross = float(wp.purchase_price or 0)
+        out[code] = {
+            "_qty": 1.0,                                   # 虚拟基准：单件价 = 总额 ÷ 1
+            "_amount": round(gross * (1 - ded), 6),
+            "_gross": gross,
+            "_freight": float(wp.freight or 0),
+            "_pack": float(pack_cost or 0),
+            "_cogs": 0.0,                                  # 没有实际入仓，商品成本无从得知
+            "_profit": 0.0,
+            "_deduction": round(ded, 6),
+            "_name": wp.name or "",
+            "_source": "warehouse",
+            "_specOnly": True,                             # 标记：资料价，不是实际结算价
+            "_lastDate": "",
+        }
     return out
 
 
@@ -215,7 +275,9 @@ def _merge_into(dst: dict, src: dict) -> dict:
             dst[code] = dict(d)
             continue
         if cur.get("_source") == "warehouse":        # 已有入仓口径，被出库口径覆盖
-            dst[code] = dict(d)
+            # 两个仓都有这个入仓品时，优先保留**有实际入仓记录**的那份：资料价不该盖掉真实结算价
+            if cur.get("_specOnly") and not d.get("_specOnly"):
+                dst[code] = dict(d)
             continue
         for k, v in d.items():                       # 已有出库口径 → 金额累加，日期取并集
             if k in ("_name", "_deduction", "_source"):
@@ -233,12 +295,17 @@ def _merge_into(dst: dict, src: dict) -> dict:
 def _collect(date_from: str, date_to: str) -> dict:
     """跨全部分仓汇总（单仓读取失败只记一条，不影响其它仓）。
 
-    带进程内缓存：方案 B 每次请求都要「区间」和「全量」两份汇总，全量那份很重，
-    缓存后同一份在 TTL 内只算一次（对方一天可能拉很多次）。
+    带进程内缓存：方案 B 每次请求都要「区间」和「全量」两份汇总，全量那份很重。
+    缓存按 (date_from, date_to) 分键保存，两份互不挤占，同一份在 TTL 内只算一次。
     """
     ck = (date_from, date_to)
+    now = datetime.now()
+    # 惰性淘汰过期项即可，不要 clear 整张表：否则「区间」那份会把「全量历史」那份挤掉，
+    # 每次换区间请求都得重算全量历史（实测 ~3.8s，是接口慢的主因）。
+    for k in [k for k, (t, _) in _SUMMARY_CACHE.items() if now - t >= _CACHE_TTL]:
+        _SUMMARY_CACHE.pop(k, None)
     hit = _SUMMARY_CACHE.get(ck)
-    if hit and datetime.now() - hit[0] < _CACHE_TTL:
+    if hit is not None:
         return hit[1]
     sale: dict = {}
     wh: dict = {}
@@ -259,7 +326,6 @@ def _collect(date_from: str, date_to: str) -> dict:
             if db is not None:
                 db.close()
     out = {"sale": sale, "warehouse": wh, "failed": failed}
-    _SUMMARY_CACHE.clear()
     _SUMMARY_CACHE[ck] = (datetime.now(), out)
     return out
 
@@ -311,6 +377,7 @@ def _sale_item(cost: dict, period: str, rq: float, ra: float, tq: float, ta: flo
 def _warehouse_item(d: dict) -> dict:
     """入仓品 → 对方成本表的一行。"""
     qty = d["_qty"]
+    spec_only = bool(d.get("_specOnly"))
     return {
         # 入仓品的采购价就是京东向我们下的采购单单价（入仓收入 ÷ 袋数，已扣入仓品扣点）
         "supply": _r(d["_amount"] / qty),
@@ -323,21 +390,23 @@ def _warehouse_item(d: dict) -> dict:
         "returnRate": None,
         "_name": d["_name"],
         "_source": "warehouse",
-        # 入仓品不按区间过滤（采购价是快照），一律全量口径
-        "_period": "all",
-        "_qty": _r(qty, 2),
-        "_turnover": _r(d["_amount"], 2),
-        "_totalQty": _r(qty, 2),
-        "_totalTurnover": _r(d["_amount"], 2),
-        "_goodsCost": _r(d["_cogs"] / qty),
-        "_marginRate": _r(d["_profit"] / d["_amount"] * 100, 2) if d["_amount"] else None,
-        # 入仓品不按区间过滤，这里给出「这批采购价最后一次入仓的日期」，便于判断价格是否还新鲜
+        # all=按入仓记录汇总；spec=只有入仓品资料、还没录入仓记录，用的是资料上的采购价
+        "_period": "spec" if spec_only else "all",
+        # 资料价没有实际入仓量，销量如实记 0（虚拟基准不对外暴露）
+        "_qty": 0.0 if spec_only else _r(qty, 2),
+        "_turnover": 0.0 if spec_only else _r(d["_amount"], 2),
+        "_totalQty": 0.0 if spec_only else _r(qty, 2),
+        "_totalTurnover": 0.0 if spec_only else _r(d["_amount"], 2),
+        "_goodsCost": None if spec_only else _r(d["_cogs"] / qty),
+        "_marginRate": None if spec_only else (_r(d["_profit"] / d["_amount"] * 100, 2) if d["_amount"] else None),
+        # 按入仓记录汇总时给出「这批采购价最后一次入仓的日期」，便于判断价格是否还新鲜
         "_lastDate": d.get("_lastDate") or "",
     }
 
 
 @router.get("/sku-costs")
 def sku_costs(
+    request: Request,
     date_from: str = "",
     date_to: str = "",
     x_api_token: str = Header(""),
@@ -353,8 +422,9 @@ def sku_costs(
       ``_lastDate``，可用来确认数据到底落在哪几天。
 
     鉴权：请求头 ``X-Api-Token: <token>``（或 ``Authorization: Bearer <token>``）。
+    令牌连续错误按客户端 IP 分级锁定（见 app/login_guard.py）。
     """
-    _require_token(x_api_token, authorization)
+    _require_token(request, x_api_token, authorization)
 
     # 规范化日期：库里是 YYYY-MM-DD 字符串、区间走字符串比较，
     # 传 2026-10-1 会让 10-01~10-09 被整段过滤掉（详见 _norm_date 注释）
@@ -364,8 +434,12 @@ def sku_costs(
         df, dt = dt, df
 
     ck = (df, dt)
+    now = datetime.now()
+    # 同 _collect：按区间分键缓存，过期项惰性淘汰，不要 clear 整张表
+    for k in [k for k, (t, _) in _CACHE.items() if now - t >= _CACHE_TTL]:
+        _CACHE.pop(k, None)
     hit = _CACHE.get(ck)
-    if hit and datetime.now() - hit[0] < _CACHE_TTL:
+    if hit is not None:
         return hit[1]
 
     # 方案 B：区间汇总 + 全量历史汇总。
@@ -395,6 +469,7 @@ def sku_costs(
         # 同码时出库口径覆盖入仓品口径
         skus[code] = _sale_item(cost, period, rq, ra, tq, ta)
 
+    wh_spec = sum(1 for d in full["warehouse"].values() if d.get("_specOnly"))
     range_dates = sorted({v.get("_lastDate") or "" for v in rng["sale"].values() if v.get("_lastDate")})
     payload = {
         "updatedAt": date.today().isoformat(),
@@ -416,13 +491,16 @@ def sku_costs(
             "sale_sku_count": len(rng["sale"]),
             "sale_sku_total": len(full["sale"]),
             "warehouse_sku_count": len(full["warehouse"]),
+            # 入仓品里：有实际入仓记录的 / 只有资料价（还没录入仓记录）
+            "warehouse_record_count": len(full["warehouse"]) - wh_spec,
+            "warehouse_spec_count": wh_spec,
             "failed": full["failed"],
             "note": "supply=结算给我们的单件金额；price 留空请用报表真实客单价；null 回落到 default；"
-                    "_period=range 表示成本取自所选区间，=all 表示该商品区间内没有出库、用全量历史兜底；"
+                    "_period=range 成本取自所选区间，=all 区间内没卖用全量历史兜底，"
+                    "=spec 入仓品只有资料、还没录入仓记录（用的是资料上的采购价）；"
                     "_qty/_turnover 是区间内销量，_totalQty/_totalTurnover 是全量历史（判断样本大小用）；"
                     "入仓品不按区间过滤，看 _lastDate 判断采购价日期",
         },
     }
-    _CACHE.clear()
     _CACHE[ck] = (datetime.now(), payload)
     return payload

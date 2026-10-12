@@ -13,7 +13,7 @@
         <van-field
           v-model="gkw"
           clearable
-          placeholder="筛选商品名称（如 土豆、上海青；留空＝全部商品）"
+          placeholder="筛选 商品名称 / 规格 / 出库方式（入仓、代发；留空＝全部商品）"
           style="margin-top:6px;background:#f7f8fa;border-radius:6px;"
         />
         <div class="seg" style="margin:8px 0 0;">
@@ -286,7 +286,7 @@
       <div class="card">
         <div class="card-title">
           <span class="grow">商品销售明细</span>
-          <span class="muted">成本为总成本</span>
+          <span class="muted">成本为总成本 · 入仓品按入仓成本</span>
         </div>
         <div v-if="gkwQ" class="row" style="margin-bottom:6px;">
           <span class="grow muted" style="font-size:12px;">
@@ -300,12 +300,13 @@
         <div v-for="(p, i) in byProduct" :key="i" class="list-item">
           <div class="row">
             <span class="grow item-title">{{ p.name }}</span>
-            <van-tag v-if="p.is_dropship" type="warning" plain>代发</van-tag>
-            <van-tag v-else type="primary" plain style="margin-left:4px;">库存出库</van-tag>
+            <van-tag :type="isWarehouseIn(p) ? 'success' : (p.is_dropship ? 'warning' : 'primary')" plain style="margin-left:4px;">
+              {{ wayOf(p) }}
+            </van-tag>
             <span class="bold" style="margin-left:6px;">{{ fmtMoney(p.amount) }}</span>
           </div>
           <div class="item-meta">
-            <template v-if="p.spec">规格 {{ p.spec }} · </template>销量 {{ fmtNum(p.qty) }}
+            <template v-if="p.spec">规格 {{ p.spec }} · </template>销量 {{ fmtNum(p.qty) }}{{ p.unit || '' }} · 重量 {{ fmtKg(p.weight_kg) }}
           </div>
           <div class="item-meta">
             总成本 {{ fmtMoney(totalCogsOf(p)) }} · 毛利
@@ -463,11 +464,15 @@ const gkwQ = computed(() => gkwTrim.value.toLowerCase())
 function clearGkw() { gkw.value = '' }
 
 const byProductAll = computed(() => rep.value.by_product || [])
-/** 商品名称 / 规格任一包含关键词即命中 */
+/** 出库方式：入仓（入仓品卖到京东）/ 代发（别人发货）/ 库存出库 */
+const isWarehouseIn = (p) => !!p.is_warehouse_in
+const wayOf = (p) => (isWarehouseIn(p) ? '入仓' : (p.is_dropship ? '代发' : '库存出库'))
+
+/** 商品名称 / 规格 / 出库方式任一包含关键词即命中（输入「入仓」即筛出入仓品） */
 const byProduct = computed(() => {
   const s = gkwQ.value
   if (!s) return byProductAll.value
-  return byProductAll.value.filter((p) => `${p.name || ''} ${p.spec || ''}`.toLowerCase().includes(s))
+  return byProductAll.value.filter((p) => `${p.name || ''} ${p.spec || ''} ${wayOf(p)}`.toLowerCase().includes(s))
 })
 /** 筛选结果的合计：销量 / 销售额 / 总成本 / 毛利 / 毛利率 */
 const gTotal = computed(() => {
@@ -479,13 +484,16 @@ const gTotal = computed(() => {
   return { n: rows.length, qty, amount, cogs, gross, rate: amount ? (gross / amount) * 100 : null }
 })
 
-const COST_COLORS = { 包材耗材: '#ff976a', 人工打包费: '#7232dd', 快递运费: '#07c160', 其他关联结算: '#969799' }
+const COST_COLORS = { 包材耗材: '#ff976a', 人工打包费: '#7232dd', 快递运费: '#07c160', 其他关联结算: '#969799', 入仓运费: '#00b8d9', 入仓包材: '#ffc400' }
 const pctOf = (v) => (rep.value.cogs ? (v / rep.value.cogs) * 100 : 0)
 
 // 商品总成本：后端 by_product.total_cogs（商品成本 + 打包人工/耗材 + 快递费），
 // 旧版后端不返回该字段，回退到 cogs（此时等于商品本身成本），避免整列显示成 ¥0.00
 const totalCogsOf = (p) => num(p.total_cogs != null ? p.total_cogs : p.cogs)
 const grossProfitOf = (p) => num(p.amount) - totalCogsOf(p)
+
+// 重量（kg）：后端 by_product.weight_kg 是净重（口径同出库结算快递费），0 显示「—」
+const fmtKg = (v) => { const n = num(v); return n ? n.toFixed(2) : '—' }
 
 // 毛利率分母用扣点前销售金额（gross_sales），无值时回退实收金额——与出库批次页口径一致
 function gpRateText(p) {
@@ -505,17 +513,18 @@ function costSplitText(p) {
   const labor = split ? num(p.labor_cogs) : 0
   const material = split ? num(p.material_cogs) : 0
   const other = split ? num(p.other_cogs) : 0
+  const isWi = isWarehouseIn(p)   // 入仓行：material/express 字段装的是「包材/运费」，标签要换
   if (!(p.is_dropship || oldPack || express || labor || material || other)) return ''
   const goods = num(p.goods_cogs != null ? p.goods_cogs : p.cogs)
   const parts = [`${p.is_dropship ? '代发成本' : '商品成本'} ${fmtMoney(goods)}`]
   if (split) {
     if (labor) parts.push(`打包人工 ${fmtMoney(labor)}`)
-    if (material) parts.push(`耗材 ${fmtMoney(material)}`)
+    if (material) parts.push(`${isWi ? '包材' : '耗材'} ${fmtMoney(material)}`)
     if (other) parts.push(`其他关联结算 ${fmtMoney(other)}`)
   } else if (oldPack) {
     parts.push(`打包人工+耗材 ${fmtMoney(oldPack)}`)
   }
-  if (express) parts.push(`快递费 ${fmtMoney(express)}`)
+  if (express) parts.push(`${isWi ? '运费' : '快递费'} ${fmtMoney(express)}`)
   return parts.join(' ＋ ')
 }
 
@@ -526,6 +535,11 @@ const costRows = computed(() => {
   Object.entries(packs)
     .sort((a, b) => b[1] - a[1])
     .forEach(([k, v]) => rows.push({ name: k, value: v, color: COST_COLORS[k] || '#969799', tag: '自动结算' }))
+  // 入仓（入仓品卖到京东）的运费/随货包材：同样已计入结转成本，列出来成本构成才能和成本合计对上
+  const wiFreight = num(rep.value.warehouse_in_freight)
+  const wiPack = num(rep.value.warehouse_in_pack)
+  if (wiFreight) rows.push({ name: '入仓运费', value: wiFreight, color: COST_COLORS['入仓运费'], tag: '入仓' })
+  if (wiPack) rows.push({ name: '入仓包材', value: wiPack, color: COST_COLORS['入仓包材'], tag: '入仓' })
   return rows
 })
 

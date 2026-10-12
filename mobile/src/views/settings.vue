@@ -161,7 +161,7 @@ const batchStore = {
       </template>
 
       <!-- ==================== 聚水潭关联 ==================== -->
-      <template v-else>
+      <template v-else-if="panel === 'jushuitan'">
         <div class="card">
           <div class="card-title">① 上传聚水潭销售出库单并自动新增关联</div>
           <div class="muted" style="margin-bottom:8px;">
@@ -194,6 +194,92 @@ const batchStore = {
           <div class="card-title">② 导入聚水潭出库单（自动结算）</div>
           <div class="muted" style="margin-bottom:8px;">按已保存的关联生成出库单并核算成本；先解析预览，确认后才出库。</div>
           <van-button size="small" type="success" icon="upgrade" @click="startBatch('jushuitan')">选择 Excel 并预览</van-button>
+        </div>
+      </template>
+
+      <template v-else-if="panel === 'jstauto'">
+        <!-- 自动出库设置 -->
+        <div class="card">
+          <div class="card-title">自动出库设置（聚水潭定时导出 + 导入当前分仓）</div>
+          <div class="muted" style="margin-bottom:8px;">
+            当前分仓：<b>{{ jst.warehouse_name || '—' }}</b>。
+            账号 / 密码 / Cookie / 执行分仓 / 待办通知等高级项请在电脑端「设置 → 自动出库设置」配置；
+            这里用于查看状态、开关定时与手动跑一次。
+          </div>
+          <div class="row" style="gap:10px;align-items:center;">
+            <span class="lbl">启用定时</span>
+            <div class="grow"></div>
+            <van-switch v-model="jstWh.enabled" size="20" />
+          </div>
+          <div class="form-row">
+            <span class="lbl">执行区间规则</span>
+            <div class="grow"></div>
+            <select class="pick" v-model="jstWh.window">
+              <option v-for="w in jst.windows || []" :key="w.value" :value="w.value">{{ w.label }}</option>
+            </select>
+          </div>
+          <div v-if="windowHelpText" class="muted">{{ windowHelpText }}</div>
+          <div class="form-row">
+            <span class="lbl">定时浮动（分钟）</span>
+            <div class="grow"></div>
+            <van-field v-model="jstWh.jitter_minutes" type="number" style="width:80px;background:#f7f8fa;border-radius:6px;" />
+          </div>
+          <div class="row" style="gap:10px;align-items:center;margin-top:6px;">
+            <span class="lbl">执行后自动导入出库单</span>
+            <div class="grow"></div>
+            <van-switch v-model="jstWh.auto_import" size="20" />
+          </div>
+          <div class="row" style="gap:10px;align-items:center;margin-top:6px;">
+            <span class="lbl">跳过已导入单据</span>
+            <div class="grow"></div>
+            <van-switch v-model="jstWh.skip_imported" size="20" />
+          </div>
+          <div class="muted" style="margin-top:8px;">
+            下次执行：{{ (jst.next_runs || []).join('、') || (jstWh.enabled ? '（未设定时时间，不会自动跑）' : '未启用定时（仍可手动执行）') }}
+          </div>
+          <div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap;">
+            <van-button size="small" type="primary" :loading="jstSaving" @click="saveJst">保存设置</van-button>
+            <van-button size="small" type="success" :loading="jstRunning" @click="runJst">立即执行一次</van-button>
+            <van-button size="small" plain icon="replay" @click="loadJst">刷新</van-button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">最近执行记录</div>
+          <div v-if="!(jstHistory || []).length" class="empty">暂无执行记录</div>
+          <div v-for="(h, i) in jstHistory" :key="i" class="list-item">
+            <div class="row">
+              <span class="grow">{{ h.started_at || h.time || h.at || '—' }}</span>
+              <van-tag :type="h.ok === false ? 'danger' : 'success'" plain>{{ h.ok === false ? '失败' : '成功' }}</van-tag>
+            </div>
+            <div class="item-meta">
+              {{ h.window || '' }}
+              <template v-if="h.downloaded != null"> · 下载 {{ h.downloaded }} 份</template>
+              <template v-if="h.imported != null"> · 导入 {{ h.imported }} 单</template>
+            </div>
+            <div v-if="h.message" class="item-meta">{{ h.message }}</div>
+          </div>
+        </div>
+      </template>
+
+      <template v-else-if="panel === 'modules'">
+        <!-- 模块显示 -->
+        <div class="card">
+          <div class="card-title">工作台功能显示</div>
+          <div class="muted" style="margin-bottom:8px;">
+            勾选要显示在工作台「全部功能」里的入口（记在这台设备上，不影响其他人）；不勾的会隐藏。
+          </div>
+          <div v-for="m in NAV_MODULES" :key="m.key" class="row" style="padding:8px 0;border-bottom:1px solid #f5f5f5;">
+            <span class="grow">{{ m.label }}</span>
+            <van-checkbox
+              :model-value="!navHidden.includes(m.key)"
+              shape="square"
+              @click="toggleNavModule(m.key)"
+            />
+          </div>
+          <div class="row" style="gap:8px;margin-top:10px;">
+            <van-button size="small" plain @click="resetNavModules">恢复全部显示</van-button>
+          </div>
         </div>
       </template>
     </div>
@@ -344,6 +430,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api, { upload, downloadFile, downloadJson } from '../api'
 import { fmtMoney, fmtNum, num } from '../utils/format'
+import { NAV_MODULES, getHiddenNav, setHiddenNav } from '../utils/navModules'
 
 const route = useRoute()
 const router = useRouter()
@@ -358,6 +445,8 @@ const panels = [
   { key: 'backup', label: '备份与恢复' },
   { key: 'import', label: '批量导入' },
   { key: 'jushuitan', label: '聚水潭关联' },
+  { key: 'jstauto', label: '自动出库设置' },
+  { key: 'modules', label: '模块显示' },
 ]
 const panel = ref('wh')
 
@@ -366,6 +455,82 @@ function switchPanel(k) {
   if (k === 'pdata') loadPdata()
   if (k === 'backup') loadBackup()
   if (k === 'wh') loadWarehouses()
+  if (k === 'jstauto') loadJst()
+}
+
+/* ==================== 自动出库设置（聚水潭定时导出 + 导入当前分仓） ==================== */
+const jst = ref({})
+const jstWh = reactive({ enabled: false, window: '', jitter_minutes: 0, auto_import: true, skip_imported: true })
+const jstSaving = ref(false)
+const jstRunning = ref(false)
+const jstHistory = ref([])
+const windowHelpText = computed(() => {
+  const help = jst.value.window_help
+  if (!help) return ''
+  return typeof help === 'string' ? help : (help[jstWh.window] || '')
+})
+
+async function loadJst() {
+  try {
+    const d = await api('/api/jst-auto/settings')
+    jst.value = d
+    const wh = d.warehouse || {}
+    jstWh.enabled = !!wh.enabled
+    jstWh.window = wh.window || ''
+    jstWh.jitter_minutes = wh.jitter_minutes ?? 0
+    jstWh.auto_import = wh.auto_import !== false
+    jstWh.skip_imported = wh.skip_imported !== false
+    await loadJstHistory()
+  } catch (e) { showToast('加载自动出库设置失败：' + e.message) }
+}
+async function loadJstHistory() {
+  try {
+    const d = await api('/api/jst-auto/history')
+    // 只列最近 10 条，且新的在上面
+    jstHistory.value = (d.history || d.runs || []).slice(-10).reverse()
+  } catch (e) { jstHistory.value = [] }
+}
+/** 只提交当前分仓的设置（globals 不传 = 不动账号 / Cookie 等全局项） */
+async function saveJst() {
+  jstSaving.value = true
+  try {
+    await api('/api/jst-auto/settings', 'POST', {
+      warehouse: {
+        enabled: jstWh.enabled,
+        window: jstWh.window,
+        jitter_minutes: num(jstWh.jitter_minutes),
+        auto_import: jstWh.auto_import,
+        skip_imported: jstWh.skip_imported,
+      },
+    })
+    showToast('已保存')
+    await loadJst()
+  } catch (e) { showToast('保存失败：' + e.message) }
+  jstSaving.value = false
+}
+async function runJst() {
+  try {
+    await showConfirmDialog({ title: '立即执行一次', message: '将按当前设置在后台执行聚水潭导出与导入，确认？' })
+  } catch (e) { return }
+  jstRunning.value = true
+  try {
+    await api('/api/jst-auto/run', 'POST', {})
+    showToast('已开始执行，稍后点「刷新」查看结果')
+  } catch (e) { showToast('执行失败：' + e.message) }
+  jstRunning.value = false
+}
+
+/* ==================== 模块显示（工作台功能宫格显隐） ==================== */
+const navHidden = ref(getHiddenNav())
+function toggleNavModule(key) {
+  const set = new Set(navHidden.value)
+  if (set.has(key)) set.delete(key)
+  else set.add(key)
+  navHidden.value = setHiddenNav([...set])
+}
+function resetNavModules() {
+  navHidden.value = setHiddenNav([])
+  showToast('已恢复显示全部模块')
 }
 
 /* ==================== 分仓 ==================== */
@@ -881,4 +1046,11 @@ onMounted(() => {
 .agg-row .bold { font-size: 13.5px; }
 .agg-row .muted { font-size: 12px; }
 code { background: #f2f3f5; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+
+/* 自动出库设置 / 模块显示 */
+.lbl { color: #646566; font-size: 13px; }
+.pick {
+  font-size: 13px; padding: 4px 6px; max-width: 62%;
+  border: 1px solid #dcdee0; border-radius: 6px; background: #fff; color: #323233;
+}
 </style>

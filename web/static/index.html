@@ -465,7 +465,7 @@
         <div class="card">
           <div class="card-head">
             <h3>入仓品资料</h3>
-            <span class="hint">按「袋」采购的备货商品（半加工等）：采购价为给「我」的收入单价；商品成本按「关联库存商品的单位成本 × 每袋净重」计算；可配置「关联结算（随货包材）」，入仓时按每袋用量扣减包材库存并计入成本；运费可留空，后续维护</span>
+            <span class="hint">按「袋」采购的备货商品（半加工等）：采购价为给「我」的收入单价；商品成本按「关联库存商品的单位成本 × 每袋数量」计算；<b>每袋净重</b>（带单位，如 每瓶 228 克）用于报表的重量统计，库存单位是 瓶/个 这类非重量单位时必须维护；可配置「关联结算（随货包材）」，入仓时按每袋用量扣减包材库存并计入成本；运费可留空，后续维护</span>
             <div class="grow"></div>
             <button class="btn green" onclick="wprodEdit()"><svg class="ic"><use href="#i-plus"/></svg> 新增入仓品</button>
             <button class="btn secondary" onclick="loadWarehouseProducts()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
@@ -478,7 +478,7 @@
             <h3>入仓记录</h3>
             <span class="hint" id="winHint"></span>
             <div class="grow"></div>
-            <button class="btn" onclick="openWarehouseInImport()"><svg class="ic"><use href="#i-download"/></svg> 导入常温贴单</button>
+            <button class="btn" onclick="openWarehouseInImport()"><svg class="ic"><use href="#i-download"/></svg> 导入<span id="winSheetName">常温贴单</span></button>
             <button class="btn secondary" onclick="openWarehouseInAdd()"><svg class="ic"><use href="#i-plus"/></svg> 手动入仓</button>
             <button class="btn secondary" onclick="loadWarehouseIns()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
           </div>
@@ -704,7 +704,7 @@
           <div class="card">
             <div class="card-head">
               <h3>商品销售明细</h3>
-              <input id="repGoodsKw" placeholder="🔍 筛选商品名称 / 规格..." oninput="renderReportGoods()" style="min-width:230px;" />
+              <input id="repGoodsKw" placeholder="🔍 筛选 商品名称 / 规格 / 出库方式（入仓、代发）..." oninput="renderReportGoods()" style="min-width:230px;" />
               <button class="btn sm secondary" onclick="clearRepGoodsKw()" title="清空商品筛选">清除</button>
               <span class="muted" id="repGoodsHint"></span>
               <div class="grow"></div>

@@ -5,7 +5,8 @@
   并关联一个「库存商品(大类)」+ 每袋净重（库存管理的基础单位，通常克），用于成本核算。
 - 入仓记录：收入 = 数量 × 采购价；商品成本 = 数量 × 每袋净重 × 库存单位成本（库存均价优先，回退参考成本）；
   运费 = 数量 × 运费单价；毛利 = 收入 − 商品成本 − 运费。
-- 导入《入仓配送明细》常温贴单：表头「采购单号 / 商品名称 / 箱数 / 配送中心 / 数量 / 箱规」，
+- 导入《入仓配送明细》贴单：表头「采购单号 / 商品名称 / 箱数 / 配送中心 / 数量 / 箱规」，
+  工作表按分仓自动选（奥斯迪/昆明蔬菜仓=常温贴单，wh02=冷冻贴单），也可手动指定；
   采购单号为合并单元格时自动向下回填；每袋净重优先从商品名解析（净重2斤 / 228g / 1.2kg），
   否则取入仓品的每袋净重；箱数、数量、价格、运费、净重均可在预览页修正。
 
@@ -18,19 +19,27 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from openpyxl import load_workbook
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
-from ..database import get_db
+from ..database import get_current_key, get_db
 from ..models import Deduction, Product, StockMovement, User, WarehouseIn, WarehouseProduct
 from ..services import fifo_state, fifo_take, pay_fields, recompute_product, unit_to_base
 
 router = APIRouter(prefix="/api/warehouse-in", tags=["warehouse-in"])
 
-# 常温贴单所在表名（导入时若未指定则优先使用）
+# 未显式指定工作表时，按「当前分仓」决定读哪张贴单表 —— 一个仓对应一个温层。
+# 奥斯迪仓 / 昆明蔬菜仓是常温品（常温贴单），wh02「薯条脱皮玉米粒」是冷冻品（冷冻贴单）。
+# 没配置的分仓一律用 DEFAULT_SHEET；配置的表在文件里不存在时，退而用含「贴单」的第一张
+# （防表名被微调）；连贴单表都没有则直接报错，让用户手动选 —— 绝不回落到第一张表，
+# 因为这类文件的第一张往往是「什锦菜」这类商品明细表，列头一样、会被静默当贴单导进去。
 DEFAULT_SHEET = "常温贴单"
+WAREHOUSE_SHEET = {
+    "wh02": "冷冻贴单",
+}
+SHEET_KEYWORD = "贴单"
 
 # ---------------- Excel 表头别名 ----------------
 WH_ALIASES = {
@@ -41,6 +50,35 @@ WH_ALIASES = {
     "quantity": ["数量"],
     "box_spec": ["箱规", "每箱", "规格"],
 }
+
+
+def _pick_sheet(all_sheets: list[str], wanted: str, wh_key: str = "") -> str:
+    """决定本次要读哪张工作表（单张）。
+
+    - ``wanted`` 显式指定（前端下拉/接口参数）：只用它；不存在时报错并列出全部可选；
+    - 未指定：按当前分仓取 ``WAREHOUSE_SHEET``（wh02 → 冷冻贴单，其余 → 常温贴单）；
+      该仓配的表在文件里没有时，退而用名字含「贴单」的第一张；
+      连贴单表都没有则报错让用户手动选（不回落到第一张表，避免把商品明细表当贴单导入）。
+    """
+    names = list(all_sheets or [])
+    wanted = (wanted or "").strip()
+    if wanted:
+        if wanted not in names:
+            raise HTTPException(400, f"工作表「{wanted}」不存在，可选：{'、'.join(names)}")
+        return wanted
+    if not names:
+        return ""
+    preferred = WAREHOUSE_SHEET.get((wh_key or "").strip(), DEFAULT_SHEET)
+    if preferred in names:
+        return preferred
+    hit = next((s for s in names if SHEET_KEYWORD in s), None)
+    if hit:
+        return hit
+    raise HTTPException(
+        400,
+        f"未找到「{preferred}」工作表，也没有其他名字含「{SHEET_KEYWORD}」的工作表；"
+        f"请在工作表下拉里手动选择要导入的那张。可选：{'、'.join(names)}",
+    )
 
 
 def _norm(s) -> str:
@@ -103,6 +141,42 @@ def _parse_weight_grams(name: str) -> float:
     if m:
         return round(float(m.group(1)), 4)
     return 0.0
+
+
+# 基础单位 → 克：只有按重量计的基础单位，才能把商品名里的规格换算成默认单位
+_BASE_UNIT_GRAMS = {
+    "克": 1.0, "g": 1.0, "两": 50.0, "斤": 500.0,
+    "公斤": 1000.0, "千克": 1000.0, "kg": 1000.0,
+}
+
+# 入仓品「每袋净重」可选单位 → 克（重量统计口径）。与 _BASE_UNIT_GRAMS 同源，前端下拉框也用这组值。
+# 成本口径的「每袋数量」按关联库存商品的默认单位，不在这个列表里（瓶/个 也能填）。
+NET_WEIGHT_UNITS = dict(_BASE_UNIT_GRAMS)
+NET_WEIGHT_UNIT_CHOICES = ("克", "两", "斤", "公斤")   # 给前端下拉框用（去掉 g/kg/千克 等别名）
+
+
+def net_weight_kg(value: float, unit: str) -> float:
+    """把「每袋净重」换算成 kg；单位不是重量单位（或没填）时返回 0。"""
+    grams = _BASE_UNIT_GRAMS.get((unit or "").strip(), 0.0)
+    if not grams:
+        return 0.0
+    return round(float(value or 0.0) * grams / 1000.0, 6)
+
+
+def _bag_weight_from_name(name: str, sp: Product | None, factor: float, fallback: float) -> float:
+    """每袋净重（默认单位）：能安全换算就用商品名里的规格，否则用入仓品维护值。
+
+    换算链是「克 ÷ 基础单位克数 ÷ 换算系数」，因此**只在基础单位按重量计时才成立**。
+
+    反例（用户反馈的冻干花生）：入仓品「冻干花生228g」关联的库存商品是「冻干花生（瓶，
+    12.5 元/瓶）」，名称里的 228g 是瓶子规格、不是每袋净重；照旧按 228 ÷ 1 算成「228 瓶」，
+    每袋成本虚高 228 倍（12.5 → 2850 元）。这种基础单位不是重量的情况一律用入仓品维护值。
+    """
+    grams = _parse_weight_grams(name)
+    base_grams = _BASE_UNIT_GRAMS.get((getattr(sp, "base_unit", "") or "").strip().lower(), 0.0) if sp else 0.0
+    if grams and base_grams:
+        return round(grams / base_grams / (factor or 1), 6)
+    return round(float(fallback or 0), 6)
 
 
 def _detect_header(rows, aliases) -> tuple[dict, int]:
@@ -171,8 +245,17 @@ def _warehouse_deduction(db: Session) -> float:
 
 @router.get("/deduction")
 def get_warehouse_deduction(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """返回入仓品扣点百分比（供入仓页使用）。"""
-    return {"percent": _warehouse_deduction(db)}
+    """返回入仓品扣点百分比 + 本分仓默认导入的贴单工作表（供入仓页文案与导入预览使用）。
+
+    sheet 由后端按分仓给（wh02=冷冻贴单，其余=常温贴单），前端不再写死文案，
+    以后新增分仓只改 WAREHOUSE_SHEET 一处即可。
+    """
+    wh_key = get_current_key()
+    return {
+        "percent": _warehouse_deduction(db),
+        "warehouse_key": wh_key,
+        "sheet": WAREHOUSE_SHEET.get((wh_key or "").strip(), DEFAULT_SHEET),
+    }
 
 
 # ---------------- 序列化 ----------------
@@ -198,7 +281,11 @@ def _product_dict(db: Session, p: WarehouseProduct) -> dict:
         "stock_base_unit": (sp.base_unit if sp else ""),
         "stock_default_unit": _stock_default_unit(sp),
         "stock_unit_cost": round(unit_cost, 6),  # 元/默认单位（如 元/公斤）
-        "bag_weight": p.bag_weight,  # 每袋净重（默认单位，如 公斤）
+        "bag_weight": p.bag_weight,  # 每袋数量（按库存默认单位，成本口径）
+        # 每袋净重（重量统计口径，选填）+ 单位：报表「商品销售明细 → 重量(kg)」用它，留空则回退按上面折算
+        "bag_net_weight": round(float(getattr(p, "bag_net_weight", 0.0) or 0.0), 4),
+        "bag_net_unit": (getattr(p, "bag_net_unit", "") or "克"),
+        "net_weight_units": list(NET_WEIGHT_UNIT_CHOICES),   # 前端下拉框选项
         # 代发成本（元/袋）：不关联库存商品时手填的每袋商品成本
         "dropship_cost": round(float(getattr(p, "dropship_cost", 0.0) or 0.0), 4),
         # 每袋商品成本：关联库存 = 净重×单位成本；未关联 = 代发成本
@@ -312,12 +399,23 @@ class ProductIn(BaseModel):
     freight: float = 0.0
     stock_product_id: int | None = None
     bag_weight: float = 0.0
+    # 每袋净重 + 单位（重量统计口径，选填）：报表「商品销售明细 → 重量(kg)」按 袋数 × 本值 算。
+    # 瓶/个 这类库存单位本身不是重量时（如花生按瓶入、每瓶 228g）必须填这里，否则算不出重量。
+    bag_net_weight: float = 0.0
+    bag_net_unit: str = "克"
     # 代发成本（元/袋）：不关联库存商品时的每袋商品成本（成本来源改为手填）
     dropship_cost: float = 0.0
     shelf_life: str = ""
     remark: str = ""
     is_active: bool = True
     pack_items: list[PackItemDef] = []  # 关联结算（随货包材）清单，每袋用量
+
+    @field_validator("bag_net_unit")
+    @classmethod
+    def _net_unit(cls, v: str) -> str:
+        """单位只认重量单位，其它（含空）一律按「克」，避免存进算不出重量的值。"""
+        u = (v or "").strip()
+        return u if u in NET_WEIGHT_UNITS else "克"
 
 
 def _clean_pack_items(db: Session, items: list[PackItemDef]) -> list[dict]:
@@ -697,7 +795,7 @@ def batch_delete(data: BatchIds, db: Session = Depends(get_db), user: User = Dep
     return {"ok": True, "deleted": deleted}
 
 
-# ---------------- 导入常温贴单 ----------------
+# ---------------- 导入贴单（奥斯迪/昆明蔬菜仓=常温贴单，wh02=冷冻贴单） ----------------
 def _match_product(products: list[WarehouseProduct], name: str) -> tuple[WarehouseProduct | None, float]:
     """按名称匹配入仓品：先精确名，再核心名精确/模糊。返回 (入仓品, 匹配分)。"""
     key = (name or "").strip()
@@ -737,11 +835,10 @@ def import_preview(
 ):
     wb = _load_workbook(file)
     sheets = wb.sheetnames
-    sheet_name = (sheet or "").strip()
-    if sheet_name and sheet_name not in sheets:
-        raise HTTPException(400, f"工作表「{sheet_name}」不存在，可选：{'、'.join(sheets)}")
-    if not sheet_name:
-        sheet_name = next((s for s in sheets if "常温" in s), None) or (sheets[0] if sheets else "")
+    # 工作表按当前分仓自动选：wh02=冷冻贴单，其余（奥斯迪/昆明蔬菜仓）=常温贴单；
+    # 前端下拉显式选过则用所选那张
+    wh_key = get_current_key()
+    sheet_name = _pick_sheet(sheets, sheet, wh_key)
     if not sheet_name:
         raise HTTPException(400, "Excel 中没有可读取的工作表")
     ws = wb[sheet_name]
@@ -772,9 +869,11 @@ def import_preview(
         box_spec = _to_float(_cell(row, mapping.get("box_spec")), 0.0)
         product, score = _match_product(products, name)
         sp, _base_cost, factor, unit_cost = _stock_info(db, product.stock_product_id if product else None)
-        # 每袋净重（默认单位）：优先商品名内嵌规格(克) ÷ 换算系数，其次入仓品维护值
-        grams = _parse_weight_grams(name)
-        bag_weight = round(grams / factor, 6) if (grams and factor) else float((product.bag_weight if product else 0) or 0)
+        # 每袋净重（默认单位）：商品名内嵌规格只在「关联库存商品按重量计」时可用，
+        # 否则（瓶/单/袋…）用入仓品维护值——否则「冻干花生228g」会被算成 228 瓶，成本虚高百倍
+        bag_weight = _bag_weight_from_name(
+            name, sp, factor, float((product.bag_weight if product else 0) or 0)
+        )
         unit_price = product.purchase_price if product else 0.0
         freight = product.freight if product else 0.0
         revenue = round(qty * unit_price * (1 - deduction / 100), 2)
@@ -792,6 +891,7 @@ def import_preview(
             "box_spec": box_spec or (product.box_spec if product else 0.0),
             "product_id": product.id if product else None,
             "matched_name": product.name if product else "",
+            "matched_sku": (product.sku if product else "") or "",  # 匹配到的入仓品的京东 SKU（预览核对用）
             "category": product.category if product else "",
             "unit_price": unit_price,
             "deduction_percent": deduction,
@@ -816,8 +916,13 @@ def import_preview(
         "quantity": round(sum(it["quantity"] for it in items), 2),
     }
     return {
+        # sheet：本次实际读取的工作表；sheet_auto=True 表示是按分仓自动选的（未显式指定）
         "sheet": sheet_name,
+        "sheet_auto": not (sheet or "").strip(),
+        "warehouse_key": wh_key,
         "sheets": sheets,
+        "matched": sum(1 for it in items if it["product_id"]),
+        "unmatched": sum(1 for it in items if not it["product_id"]),
         "date": default_date,
         "items": items,
         "totals": totals,

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import and_, case, exists, func, or_, select
+from sqlalchemy import and_, case, exists, false, func, literal, or_, select
 from sqlalchemy.orm import Session, aliased, selectinload
 
 from ..auth import get_current_user
@@ -13,7 +13,19 @@ from ..database import (
     get_warehouses,
     resolve_key,
 )
-from ..models import FinanceRecord, Inbound, OtherExpense, Outbound, OutboundLine, Product, User
+from ..models import (
+    FinanceRecord,
+    Inbound,
+    OtherExpense,
+    Outbound,
+    OutboundLine,
+    Product,
+    StockMovement,
+    User,
+    WarehouseIn,
+    WarehouseProduct,
+)
+from .warehouse_in import net_weight_kg
 from ..services import INBOUND_FEE_REF
 
 router = APIRouter(prefix="/api", tags=["report"])
@@ -68,12 +80,15 @@ def _income_of(o) -> float:
     return (o.total_amount or 0.0) + (getattr(o, "settle_income", 0.0) or 0.0)
 
 
-def _pending_stats(inbounds: list, outbounds: list, others: list, finances: list) -> dict:
+def _pending_stats(inbounds: list, outbounds: list, others: list, finances: list,
+                   warehouse_ins: list | None = None) -> dict:
     """未计入本报表的待付款/待收款汇总（按来源单据算，避免自动流水重复计数）。"""
     payables = [i.total_amount or 0.0 for i in inbounds]                    # 入库（采购）
     payables += [e.amount or 0.0 for e in others]                           # 其他开支
     payables += [f.amount or 0.0 for f in finances if f.type == "expense" and f.ref_type == "manual"]
     receivables = [_income_of(o) for o in outbounds]                         # 出库（销售，含客户代收的包材等）
+    # 入仓（入仓品卖到京东）也是销售渠道：未回款的同样算「待收」
+    receivables += [w.amount or 0.0 for w in (warehouse_ins or [])]
     receivables += [f.amount or 0.0 for f in finances if f.type == "income" and f.ref_type == "manual"]
     return {
         "payables_count": len(payables),
@@ -351,9 +366,19 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     # 与「待付款账单」页的应付金额（货款 + 调整 + 运费/装卸）保持一致。
     others = [e for e in others if e.ref_type != INBOUND_FEE_REF]
 
+    # 入仓（入仓品卖到京东那条线）：与出库同属销售渠道，收入/成本一并计入本报表口径，
+    # 这样「商品销售明细」里入仓品能作为单独的行列出，且明细合计 = 汇总。
+    # 口径：收入 = 入仓收入（已扣入仓品扣点）；成本 = 商品成本 + 运费 + 随货包材。
+    warehouse_ins, unpaid_warehouse_ins = _split_paid(list(db.execute(scope(WarehouseIn)).scalars()))
+    wi_revenue = round(sum(w.amount or 0.0 for w in warehouse_ins), 2)
+    wi_goods = round(sum(w.cogs or 0.0 for w in warehouse_ins), 2)
+    wi_freight = round(sum(w.freight_total or 0.0 for w in warehouse_ins), 2)
+    wi_pack = round(sum(w.pack_cost or 0.0 for w in warehouse_ins), 2)
+    wi_cogs = round(wi_goods + wi_freight + wi_pack, 2)
+
     # 收入 = 销售收入 + 客户代收的关联结算（包材/人工/快递费）：与出库单「实收金额」同口径
-    revenue = sum(_income_of(o) for o in outbounds)
-    cogs = sum(o.total_cogs for o in outbounds)
+    revenue = sum(_income_of(o) for o in outbounds) + wi_revenue
+    cogs = sum(o.total_cogs for o in outbounds) + wi_cogs
     # 芳谊放单仓刷单结算：刷单成本（我填的）+ 固定费覆盖差；非放单仓订单都是 0。
     # 注意 cogs 里**不**含这笔钱（cogs 仍是商品/包材/快递的结转成本），毛利单独扣它，
     # 这样「商品成本 goods_cogs」不会被刷单成本污染。
@@ -545,6 +570,63 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     for o in outbounds:
         _spread(o.id, "settle_income", float(getattr(o, "settle_income", 0.0) or 0.0))
 
+    # ---- 重量（净重 kg）：与出库结算快递费同一口径 ----
+    # 由该销售行实际扣减的库存流水反推：重量类库存商品（基础单位 克）按 扣减量 ÷ 1000；
+    # 计数类按 扣减量 ÷ 默认单位换算系数 × 该商品单件净重；没有扣减流水（代发 / 没扣库存）时
+    # 回退用订单商品自身的单件净重折算 —— 就是 services.deduction_net_weight_kg / line_weight_kg。
+    # 已用「快递费(自动)行的 spec = 整单净重 + 0.1kg 箱重」抽样 200 单做过校验，100% 一致。
+    sm = aliased(Product)   # 被扣减的库存商品
+    op = aliased(Product)   # 订单商品（销售行自己指向的商品）
+
+    def _kg_per_base(pr):
+        """某商品「1 个基础单位」折成 kg：重量类按克数，计数类按 单件净重 ÷ 默认单位换算系数。"""
+        return case(
+            (pr.base_unit.in_(("克", "g")), 1.0 / 1000.0),
+            else_=(1.0 / func.coalesce(func.json_extract(
+                pr.conversions, literal("$.").op("||")(pr.default_unit)), 1.0)
+                * func.coalesce(pr.weight_kg, 0.0)),
+        )
+
+    # 老流水没写 line_id（2026-09 及以前的一部分）：只在「该单只有一条销售行」时按单归属，
+    # 多行单据不猜（那种单会退化成用订单商品自身净重），避免把别的商品的重量摊到它头上。
+    single_line_out = [
+        oid for oid, cnt in db.execute(
+            select(OutboundLine.outbound_id, func.count())
+            .select_from(OutboundLine).join(Outbound, Outbound.id == OutboundLine.outbound_id)
+            .where(OutboundLine.line_type == "sale", *line_conds, paid_out)
+            .group_by(OutboundLine.outbound_id)
+        ).all() if cnt == 1
+    ]
+    move_match = or_(
+        StockMovement.line_id == OutboundLine.id,
+        and_(StockMovement.line_id.is_(None), StockMovement.ref_id == Outbound.id,
+             Outbound.id.in_(single_line_out)) if single_line_out else false(),
+    )
+    kg_by_line: dict[tuple, float] = {}
+    for pid, spec, dr, kg in db.execute(   # ① 有扣减流水的行
+        select(OutboundLine.product_id, spec_expr, dr_expr,
+               func.coalesce(func.sum(-StockMovement.quantity_base * _kg_per_base(sm)), 0.0))
+        .select_from(OutboundLine)
+        .join(Outbound, Outbound.id == OutboundLine.outbound_id)
+        .join(StockMovement, and_(StockMovement.ref_type == "outbound", move_match))
+        .join(sm, sm.id == StockMovement.product_id, isouter=True)
+        .where(OutboundLine.line_type == "sale", *line_conds, paid_out)
+        .group_by(OutboundLine.product_id, spec_expr, dr_expr)
+    ):
+        kg_by_line[(pid, spec, bool(dr))] = float(kg or 0.0)
+    for pid, spec, dr, kg in db.execute(   # ② 无流水的行（代发）：回退订单商品自身净重
+        select(OutboundLine.product_id, spec_expr, dr_expr,
+               func.coalesce(func.sum(OutboundLine.quantity_base * _kg_per_base(op)), 0.0))
+        .select_from(OutboundLine)
+        .join(Outbound, Outbound.id == OutboundLine.outbound_id)
+        .join(op, op.id == OutboundLine.product_id, isouter=True)
+        .join(StockMovement, and_(StockMovement.ref_type == "outbound", move_match), isouter=True)
+        .where(OutboundLine.line_type == "sale", *line_conds, paid_out, StockMovement.id.is_(None))
+        .group_by(OutboundLine.product_id, spec_expr, dr_expr)
+    ):
+        key = (pid, spec, bool(dr))
+        kg_by_line[key] = round(kg_by_line.get(key, 0.0) + float(kg or 0.0), 4)
+
     product_rows = []
     for _key, d in sorted(by_product.items(), key=lambda kv: -kv[1]["amount"]):
         goods = round(d["goods_cogs"], 2)
@@ -572,6 +654,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 # 商品编码：订单商品上一般填的是平台 SKU（京东为数字 skuId）
                 "code": d.get("code") or "",
                 "qty": round(d["qty"], 4),
+                # 净重（kg）：口径见上面「重量」那一段（与出库结算快递费一致）
+                "weight_kg": round(kg_by_line.get(
+                    (d["product_id"], d["spec"], bool(d["is_dropship"])), 0.0), 4),
                 "amount": amount,
                 "gross_sales": gross_sales,
                 # cogs 语义升级为「总成本」，含商品成本 + 打包人工/耗材 + 快递费 + 刷单结算
@@ -590,6 +675,88 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             }
         )
 
+    # ---- 入仓品：按「入仓品名 + 分类」单独成行（出库方式=入仓），不与出库商品合并 ----
+    # 重量口径两条路，优先第一条：
+    #   ① 入仓品资料里维护的「每袋净重 + 单位」（bag_net_weight / bag_net_unit）——
+    #      关联库存商品的单位是「瓶/个」这类计数单位时（如花生按瓶入、每瓶 228g），
+    #      成本口径的 bag_weight 是「每袋 1 瓶」而不是重量，只有这里能给出真实净重；
+    #   ② 没维护时回退：把「每袋数量」bag_weight 当作库存默认单位下的净重折算（公斤/斤/克 才有意义）。
+    # 两条都算不出（库存单位不是重量且没维护净重）就记 0，前端显示「—」，不凭空造数。
+    wi_net_of: dict[int, tuple[float, str]] = {}   # 入仓品 id → (每袋净重, 单位)
+    wi_unit_of: dict[int, str] = {}                # 关联库存商品 id → 默认单位
+    wi_pids = {w.product_id for w in warehouse_ins if w.product_id}
+    if wi_pids:
+        for _wp in db.execute(
+            select(WarehouseProduct).where(WarehouseProduct.id.in_(wi_pids))
+        ).scalars():
+            wi_net_of[_wp.id] = (float(_wp.bag_net_weight or 0.0), (_wp.bag_net_unit or "").strip())
+    wi_sp_ids = {w.stock_product_id for w in warehouse_ins if w.stock_product_id}
+    if wi_sp_ids:
+        for _sp in db.execute(select(Product).where(Product.id.in_(wi_sp_ids))).scalars():
+            wi_unit_of[_sp.id] = (_sp.default_unit or _sp.base_unit or "").strip()
+
+    def _wi_weight(w) -> float:
+        """入仓一行的净重 kg。"""
+        qty = w.quantity or 0.0
+        net, unit = wi_net_of.get(w.product_id or 0, (0.0, ""))
+        if net > 0:
+            return qty * net_weight_kg(net, unit)
+        return qty * net_weight_kg(w.bag_weight or 0.0, wi_unit_of.get(w.stock_product_id, ""))
+
+    wi_buckets: dict[tuple, dict] = {}
+    for w in warehouse_ins:
+        nm = (w.product_name or "").strip()
+        cat = (w.category or "").strip()
+        b = wi_buckets.setdefault((nm, cat), {
+            "product_id": w.product_id, "name": nm, "spec": cat, "unit": w.unit or "袋",
+            "qty": 0.0, "amount": 0.0, "gross_sales": 0.0,
+            "goods": 0.0, "freight": 0.0, "pack": 0.0, "weight": 0.0,
+        })
+        b["qty"] += w.quantity or 0.0
+        b["weight"] += _wi_weight(w)
+        b["amount"] += w.amount or 0.0
+        # 扣点前金额 = 数量 × 采购价（入仓品采购价是扣点前的收入单价），与出库的 gross_sales 同口径
+        b["gross_sales"] += (w.quantity or 0.0) * (w.unit_price or 0.0)
+        b["goods"] += w.cogs or 0.0
+        b["freight"] += w.freight_total or 0.0
+        b["pack"] += w.pack_cost or 0.0
+    for b in wi_buckets.values():
+        goods = round(b["goods"], 2)
+        freight = round(b["freight"], 2)
+        pack = round(b["pack"], 2)
+        total_cogs = round(goods + freight + pack, 2)
+        amount = round(b["amount"], 2)
+        gross_sales = round(b["gross_sales"], 2)
+        gp = round(amount - total_cogs, 2)
+        product_rows.append({
+            "product_id": b["product_id"],
+            "spec": b["spec"],
+            "is_dropship": False,
+            "is_warehouse_in": True,   # 前端据此把「出库方式」标成「入仓」
+            "name": b["name"] or "（未命名入仓品）",
+            "code": "",
+            "unit": b["unit"],         # 入仓按「袋」计；出库行没有这个字段
+            "qty": round(b["qty"], 4),
+            "weight_kg": round(b["weight"], 4),
+            "amount": amount,
+            "gross_sales": gross_sales,
+            "cogs": total_cogs,
+            "goods_cogs": goods,
+            # 入仓的包材/运费复用 material/express 字段（成本构成小字按 is_warehouse_in 换标签）
+            "pack_cogs": pack,
+            "labor_cogs": 0.0,
+            "material_cogs": pack,
+            "other_cogs": 0.0,
+            "express_cogs": freight,
+            "brush_cogs": 0.0,
+            "settle_income": 0.0,
+            "total_cogs": total_cogs,
+            "gross_profit": gp,
+            "gp_rate": round(gp / gross_sales * 100, 2) if gross_sales else 0.0,
+        })
+    # 出库行原本已按收入倒序，这里把入仓行并进来后统一重排，保证整表按收入从大到小
+    product_rows.sort(key=lambda r: -r["amount"])
+
     # 关联结算成本拆分（包材/人工/快递）——已含在 cogs 内，单独列出供分析。
     # 按「商品分类 + 名称」分组聚合即可（与 _pack_cost_category_of 同口径），不必逐行累加。
     pack_costs: dict[str, float] = {}
@@ -604,8 +771,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         cat_key = _pack_cost_category_of(pcat, pname)   # 注意别用 key：那是分仓标识参数
         pack_costs[cat_key] = round(pack_costs.get(cat_key, 0.0) + float(amt or 0.0), 2)
     pack_total = round(sum(pack_costs.values()), 2)
-    # 商品本身成本 = 总成本 - 关联结算成本
-    goods_cogs = round(cogs - pack_total, 2)
+    # 商品本身成本 = 总成本 − 出库关联结算成本 − 入仓运费/随货包材
+    # （入仓的运费/包材单独列在 warehouse_in_* 字段里，不混进「关联结算」口径）
+    goods_cogs = round(cogs - pack_total - wi_freight - wi_pack, 2)
 
     # 账外费用（finance_records 中登记的手工支出），按类别归集
     manual_fees: dict[str, float] = {}
@@ -717,12 +885,21 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         "warehouse": {"key": key, "name": current_warehouse_name(key)},
         "is_current": key == resolve_key(""),
         # 以下金额一律只含「已付款」单据（待付款的在 pending 里，点「已支付」后自动转入）
-        "pending": _pending_stats(unpaid_inbounds, unpaid_outbounds, unpaid_others, unpaid_finances),
+        "pending": _pending_stats(unpaid_inbounds, unpaid_outbounds, unpaid_others, unpaid_finances,
+                                  unpaid_warehouse_ins),
         "revenue": round(revenue, 2),
         # 其中：客户随货款一起付的关联结算（包材/人工/快递费）——只在勾了「实收含关联结算」的单据上
         "settle_income": round(sum(float(getattr(o, "settle_income", 0.0) or 0.0) for o in outbounds), 2),
         "cogs": round(cogs, 2),
         "goods_cogs": goods_cogs,
+        # 入仓（入仓品卖到京东）拆分：上面的 revenue / cogs / goods_cogs 已包含它，这里单列便于核对
+        "warehouse_in_revenue": wi_revenue,
+        "warehouse_in_cogs": wi_cogs,
+        "warehouse_in_goods_cogs": wi_goods,
+        "warehouse_in_freight": wi_freight,
+        "warehouse_in_pack": wi_pack,
+        "warehouse_in_qty": round(sum(w.quantity or 0.0 for w in warehouse_ins), 4),
+        "warehouse_in_count": len(warehouse_ins),
         # 刷单结算（芳谊放单仓）：刷单成本 + 固定费覆盖差，已从下面的毛利/净利里扣掉
         "brush_cost": brush_total,
         "brush_input_cost": brush_cost,   # 其中「我填的刷单成本」原值合计（展示用）
@@ -817,14 +994,16 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
     def pend(field: str) -> float:
         return round(sum(float((p.get("pending") or {}).get(field) or 0) for p in parts), 2)
 
-    # ---- 商品：按「商品 + 规格 + 是否代发」归并，再用合并后的成本重算毛利/毛利率 ----
-    num_fields = ("qty", "amount", "gross_sales", "goods_cogs", "pack_cogs",
+    # ---- 商品：按「商品 + 规格 + 是否代发 + 是否入仓」归并，再用合并后的成本重算毛利/毛利率 ----
+    # 入仓品要单独成行，不能和同名同规格的出库商品合并（否则「出库方式」就没法区分了）
+    num_fields = ("qty", "weight_kg", "amount", "gross_sales", "goods_cogs", "pack_cogs",
                   "labor_cogs", "material_cogs", "other_cogs", "express_cogs", "brush_cogs",
                   "settle_income")
     buckets: dict[tuple, dict] = {}
     for p in parts:
         for r in p.get("by_product") or []:
-            k = (r.get("name") or "", r.get("spec") or "", bool(r.get("is_dropship")))
+            k = (r.get("name") or "", r.get("spec") or "", bool(r.get("is_dropship")),
+                 bool(r.get("is_warehouse_in")))
             d = buckets.get(k)
             if d is None:
                 d = {**r}
@@ -913,6 +1092,14 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
         "revenue": s("revenue"),
         "cogs": s("cogs"),
         "goods_cogs": s("goods_cogs"),
+        # 入仓（入仓品卖到京东）：各分仓已把收入/成本并入上面的 revenue/cogs/goods_cogs，这里只相加
+        "warehouse_in_revenue": s("warehouse_in_revenue"),
+        "warehouse_in_cogs": s("warehouse_in_cogs"),
+        "warehouse_in_goods_cogs": s("warehouse_in_goods_cogs"),
+        "warehouse_in_freight": s("warehouse_in_freight"),
+        "warehouse_in_pack": s("warehouse_in_pack"),
+        "warehouse_in_qty": s("warehouse_in_qty"),
+        "warehouse_in_count": i("warehouse_in_count"),
         # 刷单结算（芳谊放单仓）合计：各分仓已按同口径扣减，这里只相加
         "brush_cost": s("brush_cost"),
         "brush_input_cost": s("brush_input_cost"),
@@ -1201,6 +1388,22 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
     revenue, cogs, brush = float(revenue), float(cogs), round(float(brush), 2)
     settle_total = round(float(settle_total or 0), 2)
 
+    # 入仓（入仓品卖到京东）：与出库同为销售渠道，收入/成本一并计入（口径与 /report/summary 一致）
+    wi_cnt, wi_revenue, wi_cogs = db.execute(
+        select(
+            func.count(),
+            func.coalesce(func.sum(WarehouseIn.amount), 0),
+            func.coalesce(func.sum(
+                func.coalesce(WarehouseIn.cogs, 0)
+                + func.coalesce(WarehouseIn.freight_total, 0)
+                + func.coalesce(WarehouseIn.pack_cost, 0)
+            ), 0),
+        ).where(*_date_conds(WarehouseIn), paid(WarehouseIn))
+    ).one()
+    wi_cnt, wi_revenue, wi_cogs = int(wi_cnt), float(wi_revenue), float(wi_cogs)
+    revenue += wi_revenue
+    cogs += wi_cogs
+
     manual_expense = float(db.execute(
         select(func.coalesce(func.sum(FinanceRecord.amount), 0))
         .where(*_date_conds(FinanceRecord), paid(FinanceRecord),
@@ -1241,6 +1444,8 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
     ob_c, ob_a = unpaid_count_sum(Outbound, _income_expr())
     fi_in_c, fi_in_a = unpaid_count_sum(FinanceRecord, FinanceRecord.amount,
                                         (FinanceRecord.type == "income", FinanceRecord.ref_type == "manual"))
+    # 待收：未回款的入仓单（入仓也是销售渠道，应收口径与出库一致）
+    wi_un_c, wi_un_a = unpaid_count_sum(WarehouseIn, WarehouseIn.amount)
 
     return {
         "key": key,
@@ -1249,6 +1454,9 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
         # 其中：客户随货款一起付的关联结算（包材/人工/快递费）
         "settle_income": settle_total,
         "cogs": round(cogs, 2),
+        # 入仓（入仓品卖到京东）：上面的 revenue/cogs 已包含它，这里单列便于核对
+        "warehouse_in_revenue": round(wi_revenue, 2),
+        "warehouse_in_cogs": round(wi_cogs, 2),
         "brush_cost": brush,
         "gross": round(revenue - cogs - brush, 2),
         "expense": expense,
@@ -1261,12 +1469,13 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
         "net_profit": round(revenue - cogs - brush - expense, 2),
         "orders": int(orders),
         "inbounds": int(inb_cnt),
+        "warehouse_ins": wi_cnt,
         "stock_value": stock_value,
         "pending": {
             "payables_count": ib_c + oe_c + fi_out_c,
             "payables_amount": round(ib_a + oe_a + fi_out_a, 2),
-            "receivables_count": ob_c + fi_in_c,
-            "receivables_amount": round(ob_a + fi_in_a, 2),
+            "receivables_count": ob_c + fi_in_c + wi_un_c,
+            "receivables_amount": round(ob_a + fi_in_a + wi_un_a, 2),
         },
     }
 
@@ -1308,6 +1517,9 @@ def all_warehouses(
     total = {
         "revenue": s("revenue"),
         "cogs": s("cogs"),
+        # 入仓（入仓品卖到京东）：各分仓已按同口径并入 revenue/cogs，这里只相加
+        "warehouse_in_revenue": s("warehouse_in_revenue"),
+        "warehouse_in_cogs": s("warehouse_in_cogs"),
         # 刷单结算（芳谊放单仓）：各分仓已扣减，这里只相加
         "brush_cost": s("brush_cost"),
         "gross": s("gross"),
@@ -1320,6 +1532,7 @@ def all_warehouses(
         "net_profit": s("net_profit"),
         "orders": int(sum(int(x.get("orders") or 0) for x in ok)),
         "inbounds": int(sum(int(x.get("inbounds") or 0) for x in ok)),
+        "warehouse_ins": int(sum(int(x.get("warehouse_ins") or 0) for x in ok)),
         "stock_value": s("stock_value"),
         "warehouse_count": len(ok),
         "pending": {

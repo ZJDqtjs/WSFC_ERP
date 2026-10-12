@@ -459,7 +459,14 @@ _EXTRA_COLUMNS = {
         ("bag_cost", "FLOAT DEFAULT 0"),
     ),
     # 入仓品：关联结算（随货包材）清单，每袋用量；代发成本（不关联库存商品时手填的每袋商品成本）
-    "warehouse_products": (("pack_items", "JSON"), ("dropship_cost", "FLOAT DEFAULT 0")),
+    # bag_net_weight/bag_net_unit：每袋净重 + 单位（重量统计口径）—— 
+    # bag_weight 是「按库存单位的每袋数量」（成本口径），瓶/个 这类库存单位下它不是重量，故单独维护。
+    "warehouse_products": (
+        ("pack_items", "JSON"),
+        ("dropship_cost", "FLOAT DEFAULT 0"),
+        ("bag_net_weight", "FLOAT DEFAULT 0"),
+        ("bag_net_unit", "VARCHAR(8) DEFAULT '克'"),
+    ),
     # 出库行：代发标记（订单商品未关联库存大类 → 不扣库存，只记代发数量/成本）
     "outbound_lines": (("is_dropship", "BOOLEAN DEFAULT 0"),),
     # 商品：关联的库存商品清单（订单商品关联多个库存商品扣减 / 成本回写用）
