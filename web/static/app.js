@@ -3681,6 +3681,26 @@ async function loadWarehouseProducts() {
 function wprodPackText(p) {
   return (p.pack_items || []).map((it) => `${esc(it.name || "?")}×${fmtNum(it.quantity)}${esc(it.unit || "")}`).join("、") || "—";
 }
+/* ---------- 入仓品「每袋净重」：单位与换算（与后端 warehouse_in._BASE_UNIT_GRAMS 同源） ---------- */
+const WP_WEIGHT_UNITS = ["克", "g", "两", "斤", "公斤", "千克", "kg"];
+const WP_UNIT_GRAMS = { "克": 1, "g": 1, "两": 50, "斤": 500, "公斤": 1000, "千克": 1000, "kg": 1000 };
+/** 每袋净重（值 + 单位）→ kg；单位不是重量单位时返回 0（算不出重量） */
+function wpToKg(v, unit) {
+  const g = WP_UNIT_GRAMS[unit] || 0;
+  return g ? ((Number(v) || 0) * g) / 1000 : 0;
+}
+/** 列表「每袋净重」：优先用资料里维护的值；否则回退按库存单位折算，非重量单位时明确提醒 */
+function wpNetText(p) {
+  const costLine = p.bag_weight
+    ? `<div class="muted" style="font-size:11px;">成本口径 ${fmtNum(p.bag_weight)}${esc(p.stock_default_unit || "")}</div>`
+    : "";
+  if (p.bag_net_weight) return `${fmtNum(p.bag_net_weight)} ${esc(p.bag_net_unit || "克")}${costLine}`;
+  const du = p.stock_default_unit || "";
+  if (!p.bag_weight) return "—";
+  if (WP_WEIGHT_UNITS.includes(du)) return `${fmtNum(p.bag_weight)} ${esc(du)}`;
+  return `<span class="muted">${fmtNum(p.bag_weight)} ${esc(du || "单位")}</span>`
+    + `<div class="muted" style="font-size:11px;color:var(--red);">单位非重量，重量统计显示「—」</div>`;
+}
 function renderWarehouseProducts() {
   const t = $("wprodTable");
   const rows = WPROD || [];
@@ -3693,7 +3713,7 @@ function renderWarehouseProducts() {
       <td><b>${esc(p.name)}</b><div class="muted" style="font-size:12px;">${esc(p.sku) || "—"}${p.barcode ? ` · ${esc(p.barcode)}` : ""}</div></td>
       <td>${esc(p.category) || "—"}</td>
       <td class="num mono">${p.box_spec ? fmtNum(p.box_spec) : "—"}</td>
-      <td class="num mono">${p.bag_weight ? `${fmtNum(p.bag_weight)} ${esc(p.stock_default_unit || "")}`.trim() : "—"}</td>
+      <td class="num mono">${wpNetText(p)}</td>
       <td class="num mono">${fmtMoney(p.purchase_price)}</td>
       <td class="num mono">${p.freight ? fmtMoney(p.freight) : "—"}</td>
       <td class="num mono">${p.bag_cost ? fmtMoney(p.bag_cost) : "—"}</td>
@@ -3806,7 +3826,19 @@ function wprodEdit(id) {
       <div class="field"><label>代发成本（元/袋）</label><input id="wpDropshipCost" type="number" step="any" min="0" value="${p.dropship_cost || ""}" placeholder="不关联库存商品时填" oninput="wprodCostHint()" />
         <div class="field-hint">不关联库存商品（代发，本仓不持有该商品库存）时，商品成本 = 数量 × 这个值；关联了库存商品则按「净重 × 库存单位成本」自动算，此值忽略。</div>
       </div>
-      <div class="field"><label>每袋净重（默认单位，如 公斤）</label><input id="wpBagWeight" type="number" step="any" min="0" value="${p.bag_weight || ""}" placeholder="如 1" oninput="wprodCostHint()" /></div>
+      <div class="field"><label>每袋数量（成本口径，按库存单位）</label><input id="wpBagWeight" type="number" step="any" min="0" value="${p.bag_weight || ""}" placeholder="如 1" oninput="wprodCostHint()" />
+        <div class="field-hint">每袋含几个「关联库存商品」的单位（如 1 瓶、1 公斤）；每袋成本 = 本值 × 库存单位成本。</div>
+      </div>
+      <div class="field"><label>每袋净重（重量统计用）</label>
+        <div class="toolbar" style="margin:0;gap:6px;">
+          <input id="wpNetWeight" type="number" step="any" min="0" value="${p.bag_net_weight || ""}" placeholder="如 228" oninput="wprodCostHint()" style="flex:1;min-width:0;" />
+          <select id="wpNetUnit" onchange="wprodCostHint()" style="width:92px;">
+            ${(p.net_weight_units || ["克", "两", "斤", "公斤"]).map((u) =>
+              `<option value="${u}"${(p.bag_net_unit || "克") === u ? " selected" : ""}>${u}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field-hint">报表「商品销售明细 → 重量(kg)」按 袋数 × 本值 计算。<b>库存单位是 瓶/个 这类非重量单位时必须填</b>（如花生按瓶入、每瓶 228g 就填 228 克）；留空则回退把「每袋数量」当净重折算。</div>
+      </div>
       <div class="field"><label>保质期</label><input id="wpShelf" value="${esc(p.shelf_life || "")}" placeholder="如 半年 / 一年" /></div>
       <div class="field" style="grid-column:1/-1;"><label>备注</label><input id="wpRemark" value="${esc(p.remark || "")}" /></div>
     </div>
@@ -3834,15 +3866,29 @@ function wprodCostHint() {
     dcInput.disabled = !!sp;
     dcInput.style.background = sp ? "#f3f4f6" : "";
   }
+  // 重量提示：优先用维护的「每袋净重 + 单位」；没填就看「每袋数量」能否按库存单位折算出重量
+  const nw = parseFloat($("wpNetWeight")?.value) || 0;
+  const nu = $("wpNetUnit")?.value || "克";
+  const netKg = nw ? wpToKg(nw, nu) : 0;
+  let weightLine;
+  if (netKg) {
+    weightLine = `<br>重量统计：每袋 <b>${fmtNum(netKg)} kg</b>（报表「重量(kg)」= 袋数 × 该值）`;
+  } else if (bw && du && !WP_WEIGHT_UNITS.includes(du)) {
+    weightLine = `<br><span style="color:var(--red);">库存单位「${esc(du)}」不是重量单位，报表里算不出重量 —— 请在上面填「每袋净重」（花生按瓶入就填 228 克）。</span>`;
+  } else if (bw) {
+    weightLine = `<br>重量统计（未填每袋净重，按库存单位折算）：每袋 <b>${fmtNum(bw)} ${esc(du)}</b>`;
+  } else {
+    weightLine = "";
+  }
   const hint = $("wpCostHint");
   if (!hint) return;
   if (!sp) {
     hint.innerHTML = dc
-      ? `未关联库存商品（代发）：商品成本 = 数量 × 代发成本 <b>${fmtMoney(dc)}/袋</b>`
-      : `未关联库存商品（代发）：请填「代发成本」，否则入仓时商品成本按 <b>0</b> 计（毛利会虚高）。`;
+      ? `未关联库存商品（代发）：商品成本 = 数量 × 代发成本 <b>${fmtMoney(dc)}/袋</b>${weightLine}`
+      : `未关联库存商品（代发）：请填「代发成本」，否则入仓时商品成本按 <b>0</b> 计（毛利会虚高）。${weightLine}`;
     return;
   }
-  hint.textContent = `库存单位成本 ${fmtMoney(uc)}/${du}（库存均价优先，无则用参考成本）；每袋成本 = ${fmtNum(bw)} × ${fmtMoney(uc)} = ${fmtMoney(bw * uc)}`;
+  hint.innerHTML = `库存单位成本 ${fmtMoney(uc)}/${esc(du)}（库存均价优先，无则用参考成本）；每袋成本 = ${fmtNum(bw)} × ${fmtMoney(uc)} = ${fmtMoney(bw * uc)}${weightLine}`;
 }
 async function wprodSave(id) {
   const name = ($("wpName").value || "").trim();
@@ -3861,6 +3907,8 @@ async function wprodSave(id) {
     freight: parseFloat($("wpFreight").value) || 0,
     stock_product_id: stockId,
     bag_weight: parseFloat($("wpBagWeight").value) || 0,
+    bag_net_weight: parseFloat($("wpNetWeight").value) || 0,
+    bag_net_unit: $("wpNetUnit").value || "克",
     dropship_cost: dropshipCost,
     shelf_life: $("wpShelf").value.trim(),
     remark: $("wpRemark").value.trim(),

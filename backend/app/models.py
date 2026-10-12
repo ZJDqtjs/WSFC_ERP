@@ -380,7 +380,16 @@ class WarehouseProduct(Base):
     stock_product_id: Mapped[int | None] = mapped_column(
         ForeignKey("products.id"), nullable=True, index=True
     )  # 关联的库存商品（成本按库存管理的均价/参考成本计算）
-    bag_weight: Mapped[float] = mapped_column(Float, default=0.0)  # 每袋净重（关联库存商品的基础单位，通常克）
+    # 每袋**数量**（按「关联库存商品」的默认单位计，成本口径）：每袋商品成本 = 本值 × 库存单位成本。
+    # 例：关联「冻干七彩花生（瓶，12.5 元/瓶）」时填 1 = 每袋 1 瓶 → 12.50 元/袋。
+    # 注意它同时被当作「净重」使用的前提是库存单位本身按重量计（公斤/斤/克），
+    # 瓶/个 这类计数单位不算重量 —— 那种情况用下面的 bag_net_weight 单独维护净重。
+    bag_weight: Mapped[float] = mapped_column(Float, default=0.0)
+    # 每袋净重（**重量统计口径**，与上面的「数量」是两回事）：报表「商品销售明细 → 重量(kg)」按
+    # 袋数 × 本值 计算。例：花生按瓶入、每瓶 228g → bag_net_weight=228、bag_net_unit="克"。
+    # 留空（0）时回退按 bag_weight × 库存默认单位折算（公斤/斤/克 才有意义）。
+    bag_net_weight: Mapped[float] = mapped_column(Float, default=0.0)
+    bag_net_unit: Mapped[str] = mapped_column(String(8), default="克")  # 每袋净重单位：克/两/斤/公斤
     # 代发成本（元/袋）：**不关联库存商品**时直接手填的每袋商品成本（本仓不持有该商品库存，
     # 成本无从按库存均价推算，只能手填）。关联了库存商品时忽略此值，成本按 净重 × 库存单位成本 算。
     dropship_cost: Mapped[float] = mapped_column(Float, default=0.0)

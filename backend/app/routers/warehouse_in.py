@@ -19,7 +19,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from openpyxl import load_workbook
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -149,6 +149,19 @@ _BASE_UNIT_GRAMS = {
     "公斤": 1000.0, "千克": 1000.0, "kg": 1000.0,
 }
 
+# 入仓品「每袋净重」可选单位 → 克（重量统计口径）。与 _BASE_UNIT_GRAMS 同源，前端下拉框也用这组值。
+# 成本口径的「每袋数量」按关联库存商品的默认单位，不在这个列表里（瓶/个 也能填）。
+NET_WEIGHT_UNITS = dict(_BASE_UNIT_GRAMS)
+NET_WEIGHT_UNIT_CHOICES = ("克", "两", "斤", "公斤")   # 给前端下拉框用（去掉 g/kg/千克 等别名）
+
+
+def net_weight_kg(value: float, unit: str) -> float:
+    """把「每袋净重」换算成 kg；单位不是重量单位（或没填）时返回 0。"""
+    grams = _BASE_UNIT_GRAMS.get((unit or "").strip(), 0.0)
+    if not grams:
+        return 0.0
+    return round(float(value or 0.0) * grams / 1000.0, 6)
+
 
 def _bag_weight_from_name(name: str, sp: Product | None, factor: float, fallback: float) -> float:
     """每袋净重（默认单位）：能安全换算就用商品名里的规格，否则用入仓品维护值。
@@ -268,7 +281,11 @@ def _product_dict(db: Session, p: WarehouseProduct) -> dict:
         "stock_base_unit": (sp.base_unit if sp else ""),
         "stock_default_unit": _stock_default_unit(sp),
         "stock_unit_cost": round(unit_cost, 6),  # 元/默认单位（如 元/公斤）
-        "bag_weight": p.bag_weight,  # 每袋净重（默认单位，如 公斤）
+        "bag_weight": p.bag_weight,  # 每袋数量（按库存默认单位，成本口径）
+        # 每袋净重（重量统计口径，选填）+ 单位：报表「商品销售明细 → 重量(kg)」用它，留空则回退按上面折算
+        "bag_net_weight": round(float(getattr(p, "bag_net_weight", 0.0) or 0.0), 4),
+        "bag_net_unit": (getattr(p, "bag_net_unit", "") or "克"),
+        "net_weight_units": list(NET_WEIGHT_UNIT_CHOICES),   # 前端下拉框选项
         # 代发成本（元/袋）：不关联库存商品时手填的每袋商品成本
         "dropship_cost": round(float(getattr(p, "dropship_cost", 0.0) or 0.0), 4),
         # 每袋商品成本：关联库存 = 净重×单位成本；未关联 = 代发成本
@@ -382,12 +399,23 @@ class ProductIn(BaseModel):
     freight: float = 0.0
     stock_product_id: int | None = None
     bag_weight: float = 0.0
+    # 每袋净重 + 单位（重量统计口径，选填）：报表「商品销售明细 → 重量(kg)」按 袋数 × 本值 算。
+    # 瓶/个 这类库存单位本身不是重量时（如花生按瓶入、每瓶 228g）必须填这里，否则算不出重量。
+    bag_net_weight: float = 0.0
+    bag_net_unit: str = "克"
     # 代发成本（元/袋）：不关联库存商品时的每袋商品成本（成本来源改为手填）
     dropship_cost: float = 0.0
     shelf_life: str = ""
     remark: str = ""
     is_active: bool = True
     pack_items: list[PackItemDef] = []  # 关联结算（随货包材）清单，每袋用量
+
+    @field_validator("bag_net_unit")
+    @classmethod
+    def _net_unit(cls, v: str) -> str:
+        """单位只认重量单位，其它（含空）一律按「克」，避免存进算不出重量的值。"""
+        u = (v or "").strip()
+        return u if u in NET_WEIGHT_UNITS else "克"
 
 
 def _clean_pack_items(db: Session, items: list[PackItemDef]) -> list[dict]:

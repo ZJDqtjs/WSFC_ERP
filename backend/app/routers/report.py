@@ -23,7 +23,9 @@ from ..models import (
     StockMovement,
     User,
     WarehouseIn,
+    WarehouseProduct,
 )
+from .warehouse_in import net_weight_kg
 from ..services import INBOUND_FEE_REF
 
 router = APIRouter(prefix="/api", tags=["report"])
@@ -327,11 +329,6 @@ def summary(
     if wh == ALL_WH:
         return _summary_all(date_from, date_to, bool(exclude_other))
     return _summary_of(db, date_from, date_to, resolve_key(wh), bool(exclude_other))
-
-
-# 重量单位 → kg（与 warehouse_in._BASE_UNIT_GRAMS 同源）。入仓的「每袋净重」以关联库存商品的
-# 默认单位计，只有这些重量单位才折算得出 kg；瓶/个/袋 这类计数单位下它不是重量。
-WI_UNIT_KG = {"克": 0.001, "g": 0.001, "两": 0.05, "斤": 0.5, "公斤": 1.0, "千克": 1.0, "kg": 1.0}
 
 
 def _inbound_landed(i) -> float:
@@ -679,20 +676,32 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         )
 
     # ---- 入仓品：按「入仓品名 + 分类」单独成行（出库方式=入仓），不与出库商品合并 ----
-    # 入仓的「每袋净重」bag_weight 是按「关联库存商品的默认单位」记的（如 公斤），因此要按该单位
-    # 折算成 kg；默认单位是 瓶/个 这类计数单位时 bag_weight 不代表重量，算不出净重就记 0（前端显示「—」）。
-    wi_unit_of: dict[int, str] = {}
+    # 重量口径两条路，优先第一条：
+    #   ① 入仓品资料里维护的「每袋净重 + 单位」（bag_net_weight / bag_net_unit）——
+    #      关联库存商品的单位是「瓶/个」这类计数单位时（如花生按瓶入、每瓶 228g），
+    #      成本口径的 bag_weight 是「每袋 1 瓶」而不是重量，只有这里能给出真实净重；
+    #   ② 没维护时回退：把「每袋数量」bag_weight 当作库存默认单位下的净重折算（公斤/斤/克 才有意义）。
+    # 两条都算不出（库存单位不是重量且没维护净重）就记 0，前端显示「—」，不凭空造数。
+    wi_net_of: dict[int, tuple[float, str]] = {}   # 入仓品 id → (每袋净重, 单位)
+    wi_unit_of: dict[int, str] = {}                # 关联库存商品 id → 默认单位
+    wi_pids = {w.product_id for w in warehouse_ins if w.product_id}
+    if wi_pids:
+        for _wp in db.execute(
+            select(WarehouseProduct).where(WarehouseProduct.id.in_(wi_pids))
+        ).scalars():
+            wi_net_of[_wp.id] = (float(_wp.bag_net_weight or 0.0), (_wp.bag_net_unit or "").strip())
     wi_sp_ids = {w.stock_product_id for w in warehouse_ins if w.stock_product_id}
     if wi_sp_ids:
         for _sp in db.execute(select(Product).where(Product.id.in_(wi_sp_ids))).scalars():
             wi_unit_of[_sp.id] = (_sp.default_unit or _sp.base_unit or "").strip()
 
     def _wi_weight(w) -> float:
-        """入仓一行的净重 kg = 袋数 × 每袋净重 × (默认单位→kg)。"""
-        factor = WI_UNIT_KG.get(wi_unit_of.get(w.stock_product_id, ""), 0.0)
-        if not factor:
-            return 0.0
-        return (w.quantity or 0.0) * (w.bag_weight or 0.0) * factor
+        """入仓一行的净重 kg。"""
+        qty = w.quantity or 0.0
+        net, unit = wi_net_of.get(w.product_id or 0, (0.0, ""))
+        if net > 0:
+            return qty * net_weight_kg(net, unit)
+        return qty * net_weight_kg(w.bag_weight or 0.0, wi_unit_of.get(w.stock_product_id, ""))
 
     wi_buckets: dict[tuple, dict] = {}
     for w in warehouse_ins:
