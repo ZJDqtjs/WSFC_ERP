@@ -143,6 +143,29 @@ def _parse_weight_grams(name: str) -> float:
     return 0.0
 
 
+# 基础单位 → 克：只有按重量计的基础单位，才能把商品名里的规格换算成默认单位
+_BASE_UNIT_GRAMS = {
+    "克": 1.0, "g": 1.0, "两": 50.0, "斤": 500.0,
+    "公斤": 1000.0, "千克": 1000.0, "kg": 1000.0,
+}
+
+
+def _bag_weight_from_name(name: str, sp: Product | None, factor: float, fallback: float) -> float:
+    """每袋净重（默认单位）：能安全换算就用商品名里的规格，否则用入仓品维护值。
+
+    换算链是「克 ÷ 基础单位克数 ÷ 换算系数」，因此**只在基础单位按重量计时才成立**。
+
+    反例（用户反馈的冻干花生）：入仓品「冻干花生228g」关联的库存商品是「冻干花生（瓶，
+    12.5 元/瓶）」，名称里的 228g 是瓶子规格、不是每袋净重；照旧按 228 ÷ 1 算成「228 瓶」，
+    每袋成本虚高 228 倍（12.5 → 2850 元）。这种基础单位不是重量的情况一律用入仓品维护值。
+    """
+    grams = _parse_weight_grams(name)
+    base_grams = _BASE_UNIT_GRAMS.get((getattr(sp, "base_unit", "") or "").strip().lower(), 0.0) if sp else 0.0
+    if grams and base_grams:
+        return round(grams / base_grams / (factor or 1), 6)
+    return round(float(fallback or 0), 6)
+
+
 def _detect_header(rows, aliases) -> tuple[dict, int]:
     """扫描前 20 行找表头行，返回 {字段: 列索引} 与数据起始行号。"""
     flat = {name for names in aliases.values() for name in names}
@@ -818,9 +841,11 @@ def import_preview(
         box_spec = _to_float(_cell(row, mapping.get("box_spec")), 0.0)
         product, score = _match_product(products, name)
         sp, _base_cost, factor, unit_cost = _stock_info(db, product.stock_product_id if product else None)
-        # 每袋净重（默认单位）：优先商品名内嵌规格(克) ÷ 换算系数，其次入仓品维护值
-        grams = _parse_weight_grams(name)
-        bag_weight = round(grams / factor, 6) if (grams and factor) else float((product.bag_weight if product else 0) or 0)
+        # 每袋净重（默认单位）：商品名内嵌规格只在「关联库存商品按重量计」时可用，
+        # 否则（瓶/单/袋…）用入仓品维护值——否则「冻干花生228g」会被算成 228 瓶，成本虚高百倍
+        bag_weight = _bag_weight_from_name(
+            name, sp, factor, float((product.bag_weight if product else 0) or 0)
+        )
         unit_price = product.purchase_price if product else 0.0
         freight = product.freight if product else 0.0
         revenue = round(qty * unit_price * (1 - deduction / 100), 2)
