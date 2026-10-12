@@ -4981,7 +4981,7 @@ function packRowsHtml(packItems) {
       </select>
       <select class="pack-unit searchable"><option>个</option></select>
       <input type="number" step="any" value="1" class="pack-qty" />
-      <button class="btn secondary sm" onclick="addPackRow()">＋</button>
+      <button class="btn secondary sm" onclick="addProductPackRow()">＋</button>
     </div>`;
 }
 function packProductChanged(sel) {
@@ -4990,7 +4990,10 @@ function packProductChanged(sel) {
   row.querySelector(".pack-unit").innerHTML = m ? unitOptions(m) : `<option>个</option>`;
 }
 function packUnitChanged(sel) {}
-function addPackRow() {
+/** 商品弹窗「出库关联结算清单」里点「＋」：把当前填写行转成只读展示，再追加一个空行。
+    注意函数名不能叫 addPackRow —— 出库页「关联结算」也有同名的 addPackRow(m, qty)，
+    同名会被后者覆盖，导致这里点＋（无参调用）走到那边直接 return、毫无反应。 */
+function addProductPackRow() {
   const box = $("packRows");
   const last = box.querySelector(".pack-row:last-child");
   const sel = last.querySelector(".pack-product");
@@ -5012,7 +5015,7 @@ function addPackRow() {
       </select>
       <select class="pack-unit searchable"><option>个</option></select>
       <input type="number" step="any" value="1" class="pack-qty" />
-      <button class="btn secondary sm" onclick="addPackRow()">＋</button>
+      <button class="btn secondary sm" onclick="addProductPackRow()">＋</button>
     </div>`);
   // 新追加的行同样要转成「点击选择 / 输入筛选」的下拉（原先漏了这台转换，导致只能下拉不能输入搜索）
   bindSearchable(box);
