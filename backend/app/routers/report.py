@@ -1,6 +1,9 @@
+import threading
+import time
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import and_, case, exists, false, func, literal, or_, select
+from sqlalchemy import and_, case, exists, func, literal, or_, select
 from sqlalchemy.orm import Session, aliased, selectinload
 
 from ..auth import get_current_user
@@ -29,6 +32,61 @@ from .warehouse_in import net_weight_kg
 from ..services import INBOUND_FEE_REF
 
 router = APIRouter(prefix="/api", tags=["report"])
+
+
+# ---------------- 重汇总的并发闸 + 短缓存 ----------------
+# 背景：/report/summary（尤其 wh=all）、/report/all-warehouses、/finance?wh=all 都会逐仓跑重查询。
+# 手机端打开「全仓合计」会一次发多个；若并发执行，CPU / 内存 / 数据库连接池会被同时打满，
+# 1.6G 小内存机器直接 OOM 崩溃（2026-10-13 事故）。这里做三层保护：
+#   ① 单飞：同一 key（接口+区间+分仓+口径）并发时只算一次，其余等待复用；
+#   ② 并发闸：全局同一时刻只跑一个重汇总，其余排队，绝不叠加；
+#   ③ 短缓存：结果缓存 _HEAVY_TTL 秒，反复刷新秒回。
+_HEAVY_GATE = threading.Semaphore(1)
+_HEAVY_LOCK = threading.Lock()
+_HEAVY_CACHE: dict = {}
+_HEAVY_INFLIGHT: dict = {}
+_HEAVY_TTL = 60.0
+_HEAVY_CACHE_MAX = 32
+
+
+def _heavy_cached(key, compute):
+    """带单飞 + 全局并发闸 + 短缓存的汇总计算。key 必须能唯一标识「同一次结果」。"""
+    hit = _HEAVY_CACHE.get(key)
+    if hit and time.time() - hit[0] < _HEAVY_TTL:
+        return hit[1]
+    with _HEAVY_LOCK:
+        hit = _HEAVY_CACHE.get(key)
+        if hit and time.time() - hit[0] < _HEAVY_TTL:
+            return hit[1]
+        ev = _HEAVY_INFLIGHT.get(key)
+        if ev is None:
+            ev = threading.Event()
+            _HEAVY_INFLIGHT[key] = ev
+            leader = True
+        else:
+            leader = False
+    if not leader:
+        # 已在算同一个 key：等它算完复用，绝不再算一遍
+        ev.wait(timeout=300)
+        hit = _HEAVY_CACHE.get(key)
+        if hit:
+            return hit[1]
+        # 领导者异常退出且无缓存：退回自己算一次兜底（放弃单飞，避免死等）
+        with _HEAVY_GATE:
+            return compute()
+    try:
+        with _HEAVY_GATE:
+            result = compute()
+        with _HEAVY_LOCK:
+            _HEAVY_CACHE[key] = (time.time(), result)
+            while len(_HEAVY_CACHE) > _HEAVY_CACHE_MAX:
+                oldest = min(_HEAVY_CACHE, key=lambda k: _HEAVY_CACHE[k][0])
+                _HEAVY_CACHE.pop(oldest, None)
+        return result
+    finally:
+        with _HEAVY_LOCK:
+            _HEAVY_INFLIGHT.pop(key, None)
+        ev.set()
 
 
 class FinanceIn(BaseModel):
@@ -326,9 +384,20 @@ def summary(
     user: User = Depends(get_current_user),
 ):
     """经营汇总：默认本登录会话的分仓；wh=all 时合并所有分仓（各自是独立账套）。"""
-    if wh == ALL_WH:
-        return _summary_all(date_from, date_to, bool(exclude_other))
-    return _summary_of(db, date_from, date_to, resolve_key(wh), bool(exclude_other))
+    key = (
+        "summary",
+        ALL_WH if wh == ALL_WH else resolve_key(wh),
+        date_from,
+        date_to,
+        int(exclude_other),
+    )
+
+    def _compute():
+        if wh == ALL_WH:
+            return _summary_all(date_from, date_to, bool(exclude_other))
+        return _summary_of(db, date_from, date_to, resolve_key(wh), bool(exclude_other))
+
+    return _heavy_cached(key, _compute)
 
 
 def _inbound_landed(i) -> float:
@@ -597,35 +666,69 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             .group_by(OutboundLine.outbound_id)
         ).all() if cnt == 1
     ]
-    move_match = or_(
-        StockMovement.line_id == OutboundLine.id,
-        and_(StockMovement.line_id.is_(None), StockMovement.ref_id == Outbound.id,
-             Outbound.id.in_(single_line_out)) if single_line_out else false(),
-    )
+    # ⚠️ 性能红线：不要把「按 line_id 归属」与「按 ref_id 归属」合并成一条带 OR 的 JOIN——
+    # SQLite 会退化成从 stock_movements 全表驱动、逐行回查（实测 13 天区间 104 秒，接口超时 499）。
+    # 拆成「各自单条件」的分段查询，每段都能走索引（line_id / (ref_type,ref_id)），秒级完成。
     kg_by_line: dict[tuple, float] = {}
-    for pid, spec, dr, kg in db.execute(   # ① 有扣减流水的行
+
+    def _add_kg(rows) -> None:
+        for pid, spec, dr, kg in rows:
+            k = (pid, spec, bool(dr))
+            kg_by_line[k] = round(kg_by_line.get(k, 0.0) + float(kg or 0.0), 4)
+
+    # ①-A 新流水：严格按 line_id 关联出库行（走 idx_stock_movements_line）
+    _add_kg(db.execute(
         select(OutboundLine.product_id, spec_expr, dr_expr,
                func.coalesce(func.sum(-StockMovement.quantity_base * _kg_per_base(sm)), 0.0))
         .select_from(OutboundLine)
         .join(Outbound, Outbound.id == OutboundLine.outbound_id)
-        .join(StockMovement, and_(StockMovement.ref_type == "outbound", move_match))
+        .join(StockMovement, and_(StockMovement.ref_type == "outbound",
+                                  StockMovement.line_id == OutboundLine.id))
         .join(sm, sm.id == StockMovement.product_id, isouter=True)
         .where(OutboundLine.line_type == "sale", *line_conds, paid_out)
         .group_by(OutboundLine.product_id, spec_expr, dr_expr)
-    ):
-        kg_by_line[(pid, spec, bool(dr))] = float(kg or 0.0)
-    for pid, spec, dr, kg in db.execute(   # ② 无流水的行（代发）：回退订单商品自身净重
+    ).all())
+
+    # ①-B 旧流水（line_id 为空）：仅「该单只有一条销售行」时按整单归属（走 ref 索引）
+    if single_line_out:
+        _add_kg(db.execute(
+            select(OutboundLine.product_id, spec_expr, dr_expr,
+                   func.coalesce(func.sum(-StockMovement.quantity_base * _kg_per_base(sm)), 0.0))
+            .select_from(OutboundLine)
+            .join(Outbound, Outbound.id == OutboundLine.outbound_id)
+            .join(StockMovement, and_(StockMovement.ref_type == "outbound",
+                                      StockMovement.line_id.is_(None),
+                                      StockMovement.ref_id == Outbound.id))
+            .join(sm, sm.id == StockMovement.product_id, isouter=True)
+            .where(OutboundLine.line_type == "sale", *line_conds, paid_out,
+                   Outbound.id.in_(single_line_out))
+            .group_by(OutboundLine.product_id, spec_expr, dr_expr)
+        ).all())
+
+    # ② 完全没有扣减流水的销售行（代发等）：回退用订单商品自身单件净重
+    #    等价于原「LEFT JOIN 流水 WHERE 流水为空」：不存在按 line_id 的流水，且（非单行单 或 不存在按单的旧流水）
+    _no_line_mv = ~exists().where(
+        StockMovement.ref_type == "outbound",
+        StockMovement.line_id == OutboundLine.id,
+    )
+    if single_line_out:
+        _no_ref_mv = ~exists().where(
+            StockMovement.ref_type == "outbound",
+            StockMovement.line_id.is_(None),
+            StockMovement.ref_id == Outbound.id,
+        )
+        _no_mv = and_(_no_line_mv, or_(~Outbound.id.in_(single_line_out), _no_ref_mv))
+    else:
+        _no_mv = _no_line_mv
+    _add_kg(db.execute(
         select(OutboundLine.product_id, spec_expr, dr_expr,
                func.coalesce(func.sum(OutboundLine.quantity_base * _kg_per_base(op)), 0.0))
         .select_from(OutboundLine)
         .join(Outbound, Outbound.id == OutboundLine.outbound_id)
         .join(op, op.id == OutboundLine.product_id, isouter=True)
-        .join(StockMovement, and_(StockMovement.ref_type == "outbound", move_match), isouter=True)
-        .where(OutboundLine.line_type == "sale", *line_conds, paid_out, StockMovement.id.is_(None))
+        .where(OutboundLine.line_type == "sale", *line_conds, paid_out, _no_mv)
         .group_by(OutboundLine.product_id, spec_expr, dr_expr)
-    ):
-        key = (pid, spec, bool(dr))
-        kg_by_line[key] = round(kg_by_line.get(key, 0.0) + float(kg or 0.0), 4)
+    ).all())
 
     product_rows = []
     for _key, d in sorted(by_product.items(), key=lambda kv: -kv[1]["amount"]):
@@ -1487,7 +1590,15 @@ def all_warehouses(
     exclude_other: int = 0,   # 1 = 排除「其他开支」（与 /report/summary 同口径）
     user: User = Depends(get_current_user),
 ):
-    """全仓总览：把所有分仓的收入 / 支出 / 利润汇总成一张表 + 合计。
+    """全仓总览：把所有分仓的收入 / 支出 / 利润汇总成一张表 + 合计。"""
+    return _heavy_cached(
+        ("all-warehouses", date_from, date_to, int(exclude_other)),
+        lambda: _all_warehouses_impl(date_from, date_to, bool(exclude_other)),
+    )
+
+
+def _all_warehouses_impl(date_from: str, date_to: str, exclude_other: bool) -> dict:
+    """全仓总览的实际计算（逐仓查询后累加）。
 
     每个分仓是**独立账套**（独立 db 文件），因此逐个分仓查询后累加；某个仓读不出来只标记该行，
     不影响其他仓（例如刚建仓、文件缺失）。
@@ -1561,8 +1672,14 @@ def list_finance(
     user: User = Depends(get_current_user),
 ):
     if wh == ALL_WH:
-        return _finance_all(date_from, date_to)
-    return _finance_of(db, date_from, date_to)
+        return _heavy_cached(
+            ("finance", "all", date_from, date_to),
+            lambda: _finance_all(date_from, date_to),
+        )
+    return _heavy_cached(
+        ("finance", resolve_key(wh), date_from, date_to),
+        lambda: _finance_of(db, date_from, date_to),
+    )
 
 
 def _finance_of(db: Session, date_from: str, date_to: str, wh_name: str = "") -> list[dict]:
