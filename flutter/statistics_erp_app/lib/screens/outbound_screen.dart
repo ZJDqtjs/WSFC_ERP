@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 
 import '../services/api_service.dart';
 import '../models/product.dart';
-import '../providers/product_provider.dart';
 
 class OutboundScreen extends StatefulWidget {
   const OutboundScreen({super.key});
@@ -19,6 +17,15 @@ class _OutboundScreenState extends State<OutboundScreen> {
   String _customer = '';
   final List<_OutboundRow> _rows = [_OutboundRow()];
   bool _isLoading = false;
+
+  // 结算口径与网页端一致：先「预览结算」拿 FIFO 成本 / 快递费 / 预警，再提交
+  String _payStatus = 'paid';
+  String _adjust = '';
+  String _remark = '';
+  bool _autoExpress = true;
+  List<String> _settleCats = [];
+  Map<String, dynamic>? _preview;
+  bool _previewing = false;
 
   final _currencyFormat = NumberFormat.currency(locale: 'zh_CN', symbol: '¥', decimalDigits: 2);
 
@@ -82,6 +89,13 @@ class _OutboundScreenState extends State<OutboundScreen> {
                             ),
                           ),
                         ],
+                      ),
+                      TextFormField(
+                        decoration: const InputDecoration(
+                          labelText: '备注 / 附件说明',
+                          prefixIcon: Icon(Icons.note_alt_outlined),
+                        ),
+                        onChanged: (v) => _remark = v,
                       ),
                       const SizedBox(height: 16),
                       ..._rows.asMap().entries.map((entry) {
@@ -161,6 +175,9 @@ class _OutboundScreenState extends State<OutboundScreen> {
                         ),
                       ),
                       const SizedBox(height: 16),
+                      _buildSettlePanel(),
+                      if (_preview != null) _buildPreviewCard(),
+                      const SizedBox(height: 16),
                       SizedBox(
                         height: 44,
                         child: ElevatedButton(
@@ -199,7 +216,7 @@ class _OutboundScreenState extends State<OutboundScreen> {
     final product = await Navigator.push<Product>(
       context,
       MaterialPageRoute(
-        builder: (context) => _ProductPickerScreen(),
+        builder: (context) => const _ProductPickerScreen(),
       ),
     );
 
@@ -221,56 +238,282 @@ class _OutboundScreenState extends State<OutboundScreen> {
     }
   }
 
-  Future<void> _submit() async {
-    if (_rows.every((r) => r.product == null)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请至少选择一条商品')),
-      );
+  // ---------------- 结算 ----------------
+
+  /// 实收口径（settle_cats）：客户随货款一起付回来的关联结算类别；
+  /// 后端把 物料/人工/快递 归一，勾上的类别算作实收、不摊进毛利。
+  static const List<MapEntry<String, String>> _settleOpts = [
+    MapEntry('material', '物料'),
+    MapEntry('labor', '人工'),
+    MapEntry('express', '快递'),
+  ];
+
+  Widget _buildSettlePanel() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('结算',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            const SizedBox(height: 12),
+            RadioGroup<String>(
+              groupValue: _payStatus,
+              onChanged: (v) => setState(() => _payStatus = v ?? 'paid'),
+              child: const Row(
+                children: [
+                  Text('付款状态'),
+                  SizedBox(width: 8),
+                  Radio<String>(value: 'paid'),
+                  Text('已付款'),
+                  Radio<String>(value: 'unpaid'),
+                  Text('待付款'),
+                ],
+              ),
+            ),
+            if (_payStatus == 'unpaid')
+              Text('待付款的整单先进「待付款」账单，标记已付后才计入财务报表',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+            TextField(
+              decoration: const InputDecoration(
+                labelText: '抹零 / 凑整（可负数）',
+                helperText: '差额会自动记一笔「金额调整」其他开支',
+              ),
+              keyboardType: const TextInputType.numberWithOptions(signed: true, decimal: true),
+              onChanged: (v) => setState(() => _preview = null),
+              onSubmitted: (v) => _adjust = v,
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('按整单毛重自动计快递费'),
+              value: _autoExpress,
+              onChanged: (v) => setState(() {
+                _autoExpress = v;
+                _preview = null;
+              }),
+            ),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _settleOpts.map((o) => FilterChip(
+                label: Text('实收含：${o.value}'),
+                selected: _settleCats.contains(o.key),
+                onSelected: (v) => setState(() {
+                  _preview = null;
+                  _settleCats = v
+                      ? [..._settleCats, o.key]
+                      : _settleCats.where((e) => e != o.key).toList();
+                }),
+              )).toList(),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _previewing || _isLoading ? null : _previewSettle,
+              icon: const Icon(Icons.calculate_outlined),
+              label: Text(_previewing ? '结算中…' : '预览结算'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPreviewCard() {
+    final p = _preview!;
+    final warnings = (p['warnings'] as List?) ?? const [];
+    final packLines = (p['pack_lines'] as List?) ?? const [];
+    final total = (p['total_amount'] as num?)?.toDouble() ?? 0;
+    final cogs = (p['total_cogs'] as num?)?.toDouble() ?? 0;
+    final fee = (p['total_fee'] as num?)?.toDouble() ?? 0;
+    final settle = (p['settle_income'] as num?)?.toDouble() ?? 0;
+    final gross = (p['gross_profit'] as num?)?.toDouble() ?? 0;
+    final net = (p['net_profit'] as num?)?.toDouble() ?? 0;
+    final adjust = double.tryParse(_adjust) ?? 0;
+    return Card(
+      color: const Color(0xFFF7FBFF),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Text('结算预览',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
+                const Spacer(),
+                TextButton(
+                  onPressed: () => setState(() => _preview = null),
+                  child: const Text('清除'),
+                ),
+              ],
+            ),
+            _line('销售额', total),
+            _line('销售成本（FIFO）', cogs),
+            if (fee > 0) _line('包材/人工等费用', fee),
+            if (settle > 0) _line('实收关联结算', settle),
+            if (adjust != 0) _line('抹零/凑整', adjust),
+            _line('毛利', gross, bold: true),
+            _line('净利', net, bold: true),
+            const Divider(),
+            _line('本单实收', total + adjust + settle, bold: true),
+            if (packLines.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text('关联物品 ${packLines.length} 行',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+              ...packLines.map((pl) => Text(
+                '  ${pl['product_name']} ${pl['quantity'] ?? ''}${pl['unit'] ?? ''}'
+                ' 成本 ${_currencyFormat.format((pl['cogs'] as num?)?.toDouble() ?? 0)}',
+                style: const TextStyle(fontSize: 12),
+              ))
+            ],
+            if (warnings.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              ...warnings.map((w) => Text('⚠ $w',
+                  style: const TextStyle(fontSize: 12, color: Colors.orange))),
+              Text('库存不足也可继续出库（出库后留负库存），可先补货或再盘点',
+                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _line(String label, double value, {bool bold = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(label,
+                style: TextStyle(fontSize: 13, fontWeight: bold ? FontWeight.bold : FontWeight.normal)),
+          ),
+          Text(_currencyFormat.format(value),
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+              )),
+        ],
+      ),
+    );
+  }
+
+  List<Map<String, dynamic>> _saleLines() {
+    return _rows.where((r) => r.product != null).map((r) {
+      return <String, dynamic>{
+        'product_id': r.product!.id,
+        'unit': r.unit ?? r.product!.defaultUnit ?? r.product!.baseUnit,
+        'quantity': double.tryParse(r.quantity ?? '0') ?? 0,
+        'price': double.tryParse(r.price ?? '0') ?? 0,
+      };
+    }).toList();
+  }
+
+  Future<void> _previewSettle() async {
+    final lines = _saleLines();
+    if (lines.isEmpty) {
+      _toast('请至少添加一行销售商品', error: true);
       return;
     }
-
-    setState(() => _isLoading = true);
-
+    setState(() => _previewing = true);
     try {
-      final lines = _rows
-          .where((r) => r.product != null)
-          .map((r) => {
-                'product_id': r.product!.id,
-                'unit': r.unit ?? '个',
-                'quantity': double.tryParse(r.quantity ?? '0') ?? 0,
-                'price': double.tryParse(r.price ?? '0') ?? 0,
-              })
-          .toList();
+      final data = await ApiService.previewOutbound(
+        lines: lines,
+        autoExpress: _autoExpress,
+        settleCats: _settleCats.isEmpty ? null : _settleCats,
+      );
+      if (mounted) setState(() => _preview = data);
+    } on ApiException catch (e) {
+      _toast(e.message, error: true);
+    } finally {
+      if (mounted) setState(() => _previewing = false);
+    }
+  }
 
-      await ApiService.post('/api/outbounds', data: {
+  void _toast(String msg, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: error ? Colors.red.shade600 : null,
+    ));
+  }
+
+  Future<void> _submit() async {
+    final lines = _saleLines();
+    if (lines.isEmpty) {
+      _toast('请至少添加一行销售商品', error: true);
+      return;
+    }
+    if (_preview == null) {
+      _toast('请先点「预览结算」，确认成本与快递费后再出库', error: true);
+      return;
+    }
+    setState(() => _isLoading = true);
+    try {
+      final adjust = double.tryParse(_adjust) ?? 0;
+      final result = await ApiService.createOutbound({
         'customer': _customer,
         'date': _date,
-        'remark': '',
+        'remark': _remark,
         'lines': lines,
-        'pack_lines': [],
+        'pack_lines': _submitPackLines(_preview!),
+        'auto_express': _autoExpress,
+        'pay_status': _payStatus,
+        'adjust_amount': adjust,
+        'settle_cats': _settleCats,
       });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('出库成功'), backgroundColor: Colors.green),
-        );
-        setState(() {
-          _rows.clear();
-          _rows.add(_OutboundRow());
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('出库失败：${e.toString()}'), backgroundColor: Colors.red),
-        );
-      }
+      final order = (result['order'] as Map?) ?? {};
+      final warns = (result['warnings'] as List?) ?? const [];
+      final finalAmount = (order['final_amount'] as num?)?.toDouble() ?? 0;
+      final settle = (order['settle_income'] as num?)?.toDouble() ?? 0;
+      _toast('出库成功：实收 ${_currencyFormat.format(finalAmount)}'
+          '${adjust != 0 ? '（调整 ${adjust > 0 ? '+' : ''}${adjust.toStringAsFixed(2)}，已记其他开支）' : ''}'
+          '${settle > 0 ? '（实收含关联结算 ${_currencyFormat.format(settle)}）' : ''}'
+          '${_payStatus == 'unpaid' ? '（待付款，已进待付款账单）' : ''}'
+          '${warns.isNotEmpty ? ' ⚠ ${warns.join('；')}' : ''}');
+      _resetForm();
+    } on ApiException catch (e) {
+      _toast('出库失败：${e.message}', error: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
-}
 
+  /// 自动算出来的快递费行不提交：后端会按整单毛重再算一次，交上去会重复计费。
+  List<Map<String, dynamic>> _submitPackLines(Map<String, dynamic> preview) {
+    final out = <Map<String, dynamic>>[];
+    for (final pl in (preview['pack_lines'] as List?) ?? const []) {
+      if (pl is! Map) continue;
+      final qty = (pl['quantity'] as num?)?.toDouble() ?? 0;
+      if (qty <= 0) continue;
+      final manual = pl['manual'] == true;
+      // 非手选的快递类行就是 auto_express 生成的，跳过
+      if (!manual && (pl['product_name'] ?? '').toString().contains('快递')) continue;
+      out.add({
+        'product_id': pl['product_id'],
+        'unit': pl['unit'],
+        'quantity': qty,
+      });
+    }
+    return out;
+  }
+
+  void _resetForm() {
+    setState(() {
+      _rows
+        ..clear()
+        ..add(_OutboundRow());
+      _customer = '';
+      _remark = '';
+      _adjust = '';
+      _payStatus = 'paid';
+      _autoExpress = true;
+      _settleCats = [];
+      _preview = null;
+    });
+  }
+}
 class _OutboundRow {
   Product? product;
   String? unit;
@@ -320,7 +563,7 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
     return _products.where((p) {
       if (_searchKeyword.isNotEmpty &&
           !p.name.toLowerCase().contains(_searchKeyword.toLowerCase()) &&
-          !(p.category ?? '').toLowerCase().contains(_searchKeyword.toLowerCase())) {
+          !p.category.toLowerCase().contains(_searchKeyword.toLowerCase())) {
         return false;
       }
       if (_filterType.isNotEmpty && p.productType != _filterType) return false;
@@ -330,7 +573,7 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
   }
 
   Set<String> get _categories {
-    return _products.map((p) => p.category ?? '').where((c) => c.isNotEmpty).toSet();
+    return _products.map((p) => p.category).where((c) => c.isNotEmpty).toSet();
   }
 
   @override
@@ -358,9 +601,9 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Row(
               children: [
-                _FilterChip('全部', ''),
-                _FilterChip('订单', 'order'),
-                _FilterChip('库存', 'stock'),
+                _filterChip('全部', ''),
+                _filterChip('订单', 'order'),
+                _filterChip('库存', 'stock'),
                 const SizedBox(width: 8),
                 ..._categories.map((c) => Padding(
                       padding: const EdgeInsets.only(right: 8),
@@ -390,7 +633,7 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
                               '[${p.productType == 'order' ? '订单' : '库存'}] ${p.name}',
                             ),
                             subtitle: Text(
-                              '${p.category ?? '—'} · 单位 ${p.defaultUnit ?? p.baseUnit} · 库存 ${p.stock}',
+                              '${p.category.isEmpty ? '—' : p.category} · 单位 ${p.defaultUnit ?? p.baseUnit} · 库存 ${p.stock}',
                             ),
                             trailing: const Icon(Icons.chevron_right),
                             onTap: () => Navigator.pop(context, p),
@@ -403,7 +646,7 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
     );
   }
 
-  Widget _FilterChip(String label, String value) {
+  Widget _filterChip(String label, String value) {
     return Padding(
       padding: const EdgeInsets.only(right: 8),
       child: FilterChip(

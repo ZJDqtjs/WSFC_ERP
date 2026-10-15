@@ -11,19 +11,93 @@ import 'screens/outbound_screen.dart';
 import 'screens/inbound_screen.dart';
 import 'screens/stock_screen.dart';
 import 'screens/mine_screen.dart';
+import 'screens/payables_screen.dart';
+import 'screens/expenses_screen.dart';
+import 'screens/finance_screen.dart';
+import 'screens/products_screen.dart';
+import 'screens/rules_screen.dart';
 
 void main() {
   runApp(const StatisticsErpApp());
 }
 
-class StatisticsErpApp extends StatelessWidget {
+/// 应用根：AuthProvider 同时作为 GoRouter 的 refreshListenable，
+/// 401（cookie 过期 / 被踢）时由 ApiService 清会话 → notifyListeners → redirect 自动回登录页。
+class StatisticsErpApp extends StatefulWidget {
   const StatisticsErpApp({super.key});
+
+  @override
+  State<StatisticsErpApp> createState() => _StatisticsErpAppState();
+}
+
+class _StatisticsErpAppState extends State<StatisticsErpApp> {
+  final AuthProvider _auth = AuthProvider();
+
+  late final GoRouter _router = GoRouter(
+    initialLocation: '/login',
+    refreshListenable: _auth,
+    redirect: (context, state) {
+      final loggingIn = state.uri.path == '/login';
+      if (!_auth.isLoggedIn) {
+        return loggingIn ? null : '/login';
+      }
+      // 已登录还停在登录页（含冷启动读本地会话成功）就直接进工作台
+      return loggingIn ? '/home' : null;
+    },
+    routes: [
+      GoRoute(
+        path: '/login',
+        name: 'login',
+        builder: (context, state) => const LoginScreen(),
+      ),
+      ShellRoute(
+        builder: (context, state, child) => MainLayout(child: child),
+        routes: [
+          GoRoute(path: '/home', name: 'home', builder: (c, s) => const HomeScreen()),
+          GoRoute(path: '/fresh', name: 'fresh', builder: (c, s) => const FreshScreen()),
+          GoRoute(
+              path: '/outbound',
+              name: 'outbound',
+              builder: (c, s) => const OutboundScreen()),
+          GoRoute(
+              path: '/inbound',
+              name: 'inbound',
+              builder: (c, s) => const InboundScreen()),
+          GoRoute(path: '/stock', name: 'stock', builder: (c, s) => const StockScreen()),
+          GoRoute(path: '/mine', name: 'mine', builder: (c, s) => const MineScreen()),
+          GoRoute(
+              path: '/products',
+              name: 'products',
+              builder: (c, s) => const ProductsScreen()),
+          GoRoute(
+              path: '/payables',
+              name: 'payables',
+              builder: (c, s) => const PayablesScreen()),
+          GoRoute(
+              path: '/expenses',
+              name: 'expenses',
+              builder: (c, s) => const ExpensesScreen()),
+          GoRoute(
+              path: '/finance',
+              name: 'finance',
+              builder: (c, s) => const FinanceScreen()),
+          GoRoute(path: '/rules', name: 'rules', builder: (c, s) => const RulesScreen()),
+        ],
+      ),
+    ],
+  );
+
+  @override
+  void dispose() {
+    _auth.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => AuthProvider()),
+        ChangeNotifierProvider<AuthProvider>.value(value: _auth),
         ChangeNotifierProvider(create: (_) => ProductProvider()),
       ],
       child: MaterialApp.router(
@@ -59,53 +133,6 @@ class StatisticsErpApp extends StatelessWidget {
   }
 }
 
-final GoRouter _router = GoRouter(
-  initialLocation: '/login',
-  routes: [
-    GoRoute(
-      path: '/login',
-      name: 'login',
-      builder: (context, state) => const LoginScreen(),
-    ),
-    ShellRoute(
-      builder: (context, state, child) {
-        return MainLayout(child: child);
-      },
-      routes: [
-        GoRoute(
-          path: '/home',
-          name: 'home',
-          builder: (context, state) => const HomeScreen(),
-        ),
-        GoRoute(
-          path: '/fresh',
-          name: 'fresh',
-          builder: (context, state) => const FreshScreen(),
-        ),
-        GoRoute(
-          path: '/outbound',
-          name: 'outbound',
-          builder: (context, state) => const OutboundScreen(),
-        ),
-        GoRoute(
-          path: '/inbound',
-          name: 'inbound',
-          builder: (context, state) => const InboundScreen(),
-        ),
-        GoRoute(
-          path: '/stock',
-          name: 'stock',
-          builder: (context, state) => const StockScreen(),
-        ),
-        GoRoute(
-          path: '/mine',
-          name: 'mine',
-          builder: (context, state) => const MineScreen(),
-        ),
-      ],
-    ),
-  ],
-);
 
 class MainLayout extends StatelessWidget {
   final Widget child;
