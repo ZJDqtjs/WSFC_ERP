@@ -5103,6 +5103,11 @@ async function openProductModal(pid = 0, prefillName = "") {
       <div class="field"><label>单位（默认单位）</label><select id="pUnit" class="searchable"></select><div class="field-hint">重量类按克记账（1斤=500克），计数类按个记账；订单商品固定为「单」。<b>下面的售价与成本都按这个单位填</b></div></div>
       <div class="field"><label id="pSalePriceLabel">默认售价（元/${esc(du0)}）</label><input id="pSalePrice" type="number" step="any" value="${saleDisp}" /><div class="field-hint" id="pSalePriceHint"></div></div>
       <div class="field"><label id="pUnitCostLabel">参考成本（元/${esc(du0)}）</label><input id="pUnitCost" type="number" step="any" value="${costDisp}" /><div class="field-hint" id="pUnitCostHint"></div></div>
+      <div class="field" id="pUnitChangeBox" style="display:none;grid-column:1/-1;">
+        <label id="pUnitChangeLabel">换计量单位的换算关系</label>
+        <input id="pUnitRatio" type="number" step="any" min="0" placeholder="如 300" style="max-width:200px;" />
+        <div class="field-hint" id="pUnitChangeHint"></div>
+      </div>
       <div class="field" id="pWeightBox"><label>单件净重（kg）</label><input id="pWeightKg" type="number" step="any" value="${p?.weight_kg || 0}" /><div class="field-hint">用于计算快递费。重量类库存自动按「扣减库存量」推导；按袋/按件等计数库存推不出重量时，就用这里手填的净重兜底（如 四神汤200g 填 0.2）。<b>代发商品填了净重也会按净重结算快递费</b>（不填=代发方包邮，不计快递费）</div></div>
     </div>
     <div id="pStockBox" class="form-grid" style="margin-top:10px;display:${ptype === "order" ? "grid" : "none"};">
@@ -5130,6 +5135,7 @@ async function openProductModal(pid = 0, prefillName = "") {
     </div>`);
   initProductUnitSelect(ptype, curUnit);
   updateProductPriceLabels(du0, f0, up0.base_unit);   // 价格字段标签/提示按默认单位显示
+  updateUnitChangeBox(up0);                            // 跨类别换单位时显示「换算关系」输入框（初始=没换，隐藏）
   // 加载库存商品（大类）列表，并渲染「扣减库存商品」多行（支持 + 号新增）
   if (ptype === "order") {
     api("/api/stocks").then((stocks) => {
@@ -5191,7 +5197,37 @@ function updateProductPriceLabels(du, f, bu) {
   if ($("pSalePriceLabel")) $("pSalePriceLabel").textContent = `默认售价（元/${du}）`;
   if ($("pUnitCostLabel")) $("pUnitCostLabel").textContent = `参考成本（元/${du}）`;
   if ($("pSalePriceHint")) $("pSalePriceHint").textContent = `按默认单位填${conv}；出库时按这个价带出`;
-  if ($("pUnitCostHint")) $("pUnitCostHint").textContent = `按默认单位填${conv}；包材/人工等无入库时按此成本结算（如纸箱 0.9 元/个）`;
+  if ($("pUnitCostHint")) {
+    let t = `按默认单位填${conv}；包材/人工等无入库时按此成本结算（如纸箱 0.9 元/个）`;
+    // 商品列表的「参考成本」格有库存均价时优先显示均价（不是这里填的参考成本），
+    // 不说清楚就会出现「编辑页 16.5、列表 5000」这种对不上的观感
+    const avg = PM_EDIT_P ? (Number(PM_EDIT_P.avg_cost) || 0) : 0;
+    if (avg > 0) t += `。<b>注意</b>：该商品已有库存均价 ${fmtMoney(avg * f)}/${esc(du)}（由出入库自动形成），列表「参考成本」格优先显示它、出库成本也按它算，改这里不会立刻改变均价`;
+    $("pUnitCostHint").innerHTML = t;
+  }
+}
+/* 换「计量单位」若跨了类别（计数「个」↔ 重量「克」），基础单位会跟着换（重量→克、计数→个），
+   历史数量与成本必须按换算关系折算，否则均价会被放大成倍数（个→公斤 就是 ×1000）。
+   这里在编辑已有商品时显示换算关系输入框；没有历史数据时留空即可（后端会忽略）。 */
+function pUnitCat(base) {
+  return (base === "克" || base === "g") ? "weight" : "count";
+}
+function updateUnitChangeBox(up) {
+  const box = $("pUnitChangeBox");
+  if (!box) return;
+  const oldBase = PM_EDIT_P ? (PM_EDIT_P.base_unit || "") : "";
+  const newBase = (up && up.base_unit) || "";
+  const changed = !!(PM_EDIT_P && oldBase && newBase && pUnitCat(oldBase) !== pUnitCat(newBase));
+  box.style.display = changed ? "" : "none";
+  if (!changed) return;
+  const label = $("pUnitChangeLabel");
+  const hint = $("pUnitChangeHint");
+  if (label) label.textContent = `换计量单位的换算关系：1 ${oldBase} = ? ${newBase}`;
+  if (hint) {
+    hint.innerHTML = `从「${esc(oldBase)}」换到「${esc(newBase)}」不是一个类别，历史数量与成本要按这个关系折算`
+      + `（如 1 个 = 300 克）。<b>该商品已有单据时必填</b>，否则会被按新单位重新解读、均价被放大成倍数；`
+      + `如果它还没有入库/出库记录，留空即可。`;
+  }
 }
 /* 切换默认单位：先把手填的值折回基础单位，再按新单位显示，避免价格被单位搞乱 */
 function pUnitChanged() {
@@ -5209,6 +5245,7 @@ function pUnitChanged() {
   if ($("pSalePrice")) $("pSalePrice").value = +(PM_SALE_BASE * f).toFixed(6);
   if ($("pUnitCost")) $("pUnitCost").value = +(PM_COST_BASE * f).toFixed(6);
   updateProductPriceLabels(du, f, up.base_unit);
+  updateUnitChangeBox(up);
 }
 /* 由「默认单位」推出基础单位与换算表：重量类归「克」、计数类归「个」，
    换算系数取自单位表（新增的重量类单位按它填的每单位克数参与换算）。 */
@@ -5318,6 +5355,8 @@ async function saveProduct(pid) {
     // PM_UNIT_F 就是当前显示单位对应的换算系数（打开弹窗时设置，切换单位时同步更新）
     sale_price: +((+$("pSalePrice").value || 0) / (PM_UNIT_F || 1)).toFixed(8),
     unit_cost: +((+$("pUnitCost").value || 0) / (PM_UNIT_F || 1)).toFixed(8),
+    // 跨类别换单位（个↔克）时的换算关系：1 旧基础单位 = N 新基础单位；没换/无历史数据时留空
+    unit_change_ratio: parseFloat($("pUnitRatio") ? $("pUnitRatio").value : "") || null,
     weight_kg: +($("pWeightKg").value || 0),
     conversions: unitPayload.conversions,
     pack_items: collectPacks(),
@@ -5340,7 +5379,11 @@ async function saveProduct(pid) {
     closeModal(); toast("商品已保存");
     PRODUCTS = await api("/api/products");
     renderProducts();
-  } catch (e) { toast("保存失败：" + e.message); }
+  } catch (e) {
+    // 换单位的换算关系没填：后端消息是分行的说明，toast 看不全，用弹窗
+    if (/换算关系/.test(e.message || "")) alert(e.message);
+    else toast("保存失败：" + e.message);
+  }
 }
 async function deleteProduct(pid) {
   if (!confirm("确认删除该商品？其历史单据会一并删除，请谨慎。")) return;
