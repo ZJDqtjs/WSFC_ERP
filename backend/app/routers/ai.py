@@ -3,9 +3,13 @@
 - LLM 配置在 product_rules.json 的 llm 段（base_url / model）；api_key 等敏感项放在被忽略的 config.local.json
 - 通过官方 openai 客户端调用（标准 OpenAI 兼容协议 /chat/completions），支持流式输出
 - 大模型只负责"理解 + 抽取"，商品匹配与单位换算在服务端做（更快、更可靠），前端弹确认框核对
-- 提速要点：不向模型发送 307 个商品的完整目录（由后端匹配），并采用流式返回（首 token 约 1~2 秒）
+- 商品资料不给模型看，而是给它只读工具（search_products / get_product）：票据上只写品名
+  （哈斯 + 规格 160-190）时，它自己查本仓资料再对上「哈斯牛油果大果」，而不是照抄名字新建重复商品。
+  工具权限见 AI_TOOLS 上方注释（只读 / 白名单 / 分仓隔离 / 限次审计）
+- 提速要点：采用流式返回（首 token 约 1~2 秒）；匹配与单位换算仍以服务端为准
 """
 import json
+import logging
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -23,6 +27,7 @@ from ..models import Inbound, OutboundLine, Product, Unit, User
 from ..services import build_order, get_or_create_express_product
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
+log = logging.getLogger("ai")
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -76,6 +81,12 @@ SYSTEM_PROMPT = """你是「企业台账系统」的自然语言录入解析器�
    - 用户用重量描述商品（「规格/g」「7000g」「3000克」这类）：quantity = 克数 ÷ 1000、unit 填「公斤」
      —— 例如「天麻大果 7000g」= quantity 7、unit 公斤（这是唯一允许的换算：系统里重量按公斤存）。
      商品名照用户说的写（如「天麻大果」），不要因为只有规格就编造商品名，也不要自己编 charges。
+9. **优先匹配本仓已有商品**：你有工具可以查本仓商品资料（search_products / get_product）。
+   - 用户说的名字与商品档案不一致、或你不确定时，**先调用工具查**，用查到的**原名**输出 product
+     （不另起名字、不加空格、不简写、不写别名）；查到多个候选时按规格/重量/等级/用途挑最接近的那个
+     （如「哈斯 160-190」→「哈斯牛油果大果」；「净重1.5公斤的礼盒」→「哈斯牛油果3斤礼盒」，1 公斤=2 斤）；
+   - 查过资料、确实没有对应商品的，才照用户说的原样输出（那种会走「新建商品」流程）；
+   - 查资料只允许用工具，不要凭空猜名字，也不要把工具返回的内容原样抄进 JSON。
 
 输出格式：先用简体中文写 3~6 行「思路」，每行一句话，说明：判断的业务类型、每条商品的数量与单位是怎么来的、准备匹配还是新建商品；
 然后再另起一行输出一个 JSON 对象。除「思路」文字和这个 JSON 之外，不要输出任何其他内容（不要解释、不要前后缀、不要 markdown 代码块标记）。
@@ -132,6 +143,14 @@ IMAGE_SYSTEM_PROMPT = """你是「企业台账系统」的采购票据识别助�
      （例：第 1 行「吸水纸」格子是空的，就**不要**给第 1 行输出吸水纸）。
    - 「合计金额」「金额」「总价」列不要输出（系统自己算）；每行之间不要串列。
 10. charges 只对出库（outbound）输出；入库/盘点不要输出。
+11. **必须用工具查本仓商品资料来定商品名**（你有 search_products / get_product 两个只读工具）：
+   - 票据常常只写品名（如「哈斯」）+ 规格（等级 160-190 / 220-250、净重、件数、小拖车礼盒(6头)…），
+     真正的商品在资料里（如「哈斯牛油果大果」「哈斯牛油果特大果」「哈斯牛油果3斤礼盒」）：
+     **先按品名调 search_products**，再用同一行的规格/等级/净重挑出最接近的那一个，**输出资料里的原名**
+     （重量可换算后再比：1 公斤=2 斤、1 斤=500 克；例如净重 1.5 公斤的礼盒 = 3 斤礼盒）；
+   - 查到多个候选拿不准时，可以在「思路」里写清你选了哪个及理由；仍不确定就选最接近的并照原名输出；
+   - 查过资料、确实没有对应商品的，才照票据原文输出 product（那种会走「新建商品」流程）；
+   - 查资料只允许用工具，不要凭空猜名字，也不要把工具返回的内容原样抄进 JSON。
 
 输出格式：先用简体中文写 3~6 行「思路」，每行一句话，说明：识别到的票据类型与条数、数量/单价是怎么从票据上取的、准备匹配还是新建商品；
 然后再另起一行输出一个 JSON 对象。除「思路」文字和这个 JSON 之外，不要输出任何其他内容（不要解释、不要前后缀、不要 markdown 代码块标记）。
@@ -266,6 +285,125 @@ def _chat_stream_mm(cfg: dict, system: str, user: str, image_data_uri: str):
         stream=True,
     )
     for chunk in stream:
+        yield from _stream_pieces(chunk)
+
+
+def _chat_stream_agent(cfg, system, user_content, db, max_rounds=3, max_tokens=1600, use_tools=True):
+    """带工具的流式识别（agent）：模型可调只读工具查本仓商品资料，拿到结果后继续，最后输出 JSON。
+
+    产出 ('think'|'content', 文本) 与 ('tool', '正在查本仓商品资料：…')，前端据此显示进度。
+    权限在 _run_ai_tool 里做（白名单/限参/分仓隔离/审计）；这里只负责「跑—调工具—续跑」的循环。
+    """
+    msgs = [{"role": "user", "content": user_content}]
+    tools = AI_TOOLS if use_tools else None
+    budget = [AI_TOOL_MAX_CALLS]
+    for rnd in range(max_rounds):
+        calls, text = {}, ""
+        for kind, piece in _stream_call(cfg, system, msgs, max_tokens, tools):
+            if kind == "think":
+                yield "think", piece
+            elif kind == "content":
+                text += piece
+                yield "content", piece
+            else:
+                for d in piece:
+                    c = calls.setdefault(d["index"], {"id": "", "name": "", "args": ""})
+                    if d["id"]:
+                        c["id"] = d["id"]
+                    if d["name"]:
+                        c["name"] = d["name"]
+                    c["args"] += d["args"] or ""
+        if not calls:
+            return
+        tcs = [{
+            "id": c["id"] or f"call_{rnd}_{i}", "type": "function",
+            "function": {"name": c["name"] or "unknown", "arguments": c["args"] or "{}"},
+        } for i, c in sorted(calls.items())]
+        msgs.append({"role": "assistant", "content": text or None, "tool_calls": tcs})
+        for tc in tcs:
+            fn = tc["function"]
+            yield "tool", f"正在查本仓商品资料：{fn['name']}…"
+            msgs.append({"role": "tool", "tool_call_id": tc["id"],
+                         "content": _run_ai_tool(db, fn["name"], fn["arguments"], budget)})
+    # 轮次用尽：让它基于已有信息给结论（不再给工具，避免绕圈）
+    for kind, piece in _stream_call(cfg, system, msgs, max_tokens, None):
+        yield ("content" if kind != "tool" else "tool"), piece
+
+
+def _chat_agent(cfg, system, user, db, max_rounds=3, max_tokens=1600) -> str:
+    """带工具的非流式识别（agent）：给移动端/脚本用，返回最终文本。"""
+    msgs = [{"role": "user", "content": user}]
+    client = _make_client(cfg)
+    budget = [AI_TOOL_MAX_CALLS]
+    for _ in range(max_rounds):
+        msg = client.chat.completions.create(
+            model=cfg["model"], messages=[{"role": "system", "content": system}] + msgs,
+            temperature=0.1, max_tokens=max_tokens, tools=AI_TOOLS, tool_choice="auto",
+        ).choices[0].message
+        tcs = list(getattr(msg, "tool_calls", None) or [])
+        if not tcs:
+            return msg.content or ""
+        msgs.append({
+            "role": "assistant", "content": msg.content or None,
+            "tool_calls": [{"id": t.id or "", "type": "function",
+                            "function": {"name": t.function.name or "",
+                                         "arguments": t.function.arguments or "{}"}} for t in tcs],
+        })
+        for t in tcs:
+            msgs.append({"role": "tool", "tool_call_id": t.id or "",
+                         "content": _run_ai_tool(db, t.function.name or "",
+                                                 t.function.arguments or "{}", budget)})
+    return ""
+
+def _stream_tool_deltas(chunk) -> list[dict]:
+    """从流式 chunk 里取出 tool_calls 的增量（OpenAI 兼容格式：arguments 分片到达）。"""
+    try:
+        delta = chunk.choices[0].delta if chunk.choices else None
+    except Exception:
+        return []
+    if delta is None:
+        return []
+    tcs = getattr(delta, "tool_calls", None)
+    if not tcs:
+        extra = getattr(delta, "model_extra", None) or {}
+        tcs = extra.get("tool_calls")
+    if not tcs:
+        return []
+    out = []
+    for t in tcs:
+        d = t if isinstance(t, dict) else (
+            t.model_dump() if hasattr(t, "model_dump") else (getattr(t, "__dict__", None) or {}))
+        fn = d.get("function") if isinstance(d.get("function"), dict) else {}
+        out.append({
+            "index": int(d.get("index") or 0),
+            "id": d.get("id") or "",
+            "name": (fn or {}).get("name") or "",
+            "args": (fn or {}).get("arguments") or "",
+        })
+    return out
+
+
+def _stream_call(cfg: dict, system: str, msgs: list[dict], max_tokens: int, tools=None):
+    """一次流式请求（多轮消息 + 可选工具）。
+
+    msgs 里的 user 消息 content 既可以是字符串，也可以是多模态内容数组。
+    产出：('think'|'content', 文本) / ('tool', [增量 dict])。
+    """
+    kwargs = dict(
+        model=cfg["model"],
+        messages=[{"role": "system", "content": system}] + list(msgs),
+        temperature=0.1,
+        max_tokens=max_tokens,
+        stream=True,
+    )
+    if tools:
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = "auto"
+    stream = _make_client(cfg).chat.completions.create(**kwargs)
+    for chunk in stream:
+        tds = _stream_tool_deltas(chunk)
+        if tds:
+            yield "tool", tds
         yield from _stream_pieces(chunk)
 
 
@@ -1039,6 +1177,141 @@ def _user_msg(text: str) -> str:
     return f"今天是 {date.today().isoformat()}（务必以这个日期作为\"今天\"）。\n\n【用户描述】\n{text}"
 
 
+# =============== AI 可调用的只读工具（把它当 agent 用） ===============
+# 票据上的名字常与商品档案不一致：票据写「哈斯」、规格 160-190，档案里是「哈斯牛油果大果」「哈斯牛油果3斤礼盒」。
+# 早前是把整个目录塞进提示词；现在改成给模型「接口 + 权限」：它自己按需查、用多少查多少。
+# 权限边界（刻意收窄）：
+#   - 只有下面两个**只读**工具，白名单外一律拒绝；不提供任何写操作（建档仍由用户点「确认提交」触发）；
+#   - 只能用当前登录会话所在分仓的 db（物理上查不到别的仓）；
+#   - 关键词限长、返回条数封顶、单次识别最多查询 AI_TOOL_MAX_CALLS 次，防止绕圈与刷库；
+#   - 每次调用写一条审计日志（工具名 / 参数 / 命中条数），便于事后排查。
+AI_TOOL_MAX_CALLS = 8      # 单次识别允许的查询次数上限
+AI_TOOL_MAX_LIMIT = 30     # 单次查询返回条数上限
+AI_TOOL_KEYWORD_MAX = 40   # 关键词/名称长度上限
+
+_SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "search_products",
+        "description": (
+            "搜索当前分仓的在用商品资料（只读）。票据只写品名、或名字与商品档案不一致时用它找对应商品："
+            "如「哈斯」查到「哈斯牛油果大果 / 特大果 / 2斤礼盒 / 3斤礼盒」，"
+            "再按规格（等级 160-190、净重、礼盒规格）挑出最接近的那一个，用它的原名输出。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "keyword": {"type": "string", "description": "要搜的关键词，如「哈斯」「纸箱」「礼盒」"},
+                "category": {"type": "string", "description": "可选：库存商品 / 包材 / 人工"},
+                "limit": {"type": "integer", "description": "最多返回几条，默认 10（上限 30）"},
+            },
+            "required": ["keyword"],
+        },
+    },
+}
+_GET_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_product",
+        "description": (
+            "按名称或 id 取当前分仓某个商品的详情（只读）：当前库存、默认单位、计量换算（如 1公斤=2斤）、分类。"
+            "用于确认「该用哪个单位/规格入账」。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"name_or_id": {"type": "string", "description": "商品名称或商品 id"}},
+            "required": ["name_or_id"],
+        },
+    },
+}
+AI_TOOLS = [_SEARCH_TOOL, _GET_TOOL]
+
+_CAT_ALIASES = {
+    "库存商品": "stock", "库存": "stock", "stock": "stock",
+    "包材": "pack", "耗材": "pack", "包装": "pack", "包装材料": "pack", "pack": "pack",
+    "人工": "labor", "labor": "labor",
+}
+
+def _tool_product_brief(p: Product) -> dict:
+    """给模型看的商品摘要（够它决定「用哪个商品、哪个单位」）。"""
+    return {
+        "id": p.id,
+        "name": p.name,
+        "type": p.product_type or "",
+        "category": p.category or "",
+        "unit": p.default_unit or p.base_unit or "",
+        "conversions": p.conversions or {},
+        "stock": round(float(p.stock or 0), 3),
+    }
+
+
+def _ai_tool_search(db: Session, args: dict) -> list[dict]:
+    """search_products：按关键词搜本仓在用商品（名称包含 → 逐词命中 → 任一词命中）。"""
+    kw = str(args.get("keyword") or "").strip()[:AI_TOOL_KEYWORD_MAX]
+    if not kw:
+        return []
+    try:
+        limit = int(args.get("limit")) if args.get("limit") is not None else 10
+    except (TypeError, ValueError):
+        limit = 10
+    limit = max(1, min(limit, AI_TOOL_MAX_LIMIT))
+    cat = _CAT_ALIASES.get(str(args.get("category") or "").strip().lower(), "")
+    rows = list(db.query(Product).filter(Product.is_active.is_(True)).all())
+    hits = [p for p in rows if kw in (p.name or "")]
+    if not hits:
+        toks = [t for t in re.split(r"[\s,，、/|]+", kw) if len(t) >= 2]
+        if toks:
+            hits = [p for p in rows if all(t in (p.name or "") for t in toks)] \
+                or [p for p in rows if any(t in (p.name or "") for t in toks)]
+    if cat:
+        hits = [p for p in hits if (p.product_type or "") == cat
+                or (cat == "pack" and (p.category or "") in ("包材", "耗材", "包装"))]
+    # 完全同名 → 前缀 → 包含；同档按名称排，模型好挑
+    hits.sort(key=lambda p: (0 if (p.name or "") == kw else (1 if (p.name or "").startswith(kw) else 2), p.name or ""))
+    return [_tool_product_brief(p) for p in hits[:limit]]
+
+
+def _ai_tool_get(db: Session, args: dict) -> dict:
+    """get_product：按名称/id 取商品详情；没有完全同名就返回相近候选。"""
+    key = str(args.get("name_or_id") or "").strip()[:AI_TOOL_KEYWORD_MAX]
+    if not key:
+        return {}
+    p = None
+    if key.isdigit():
+        p = db.query(Product).filter(Product.id == int(key)).first()
+    if p is None:
+        p = db.query(Product).filter(Product.name == key).first()
+    if p is not None:
+        return _tool_product_brief(p)
+    near = list(db.query(Product).filter(Product.name.contains(key)).all())[:5]
+    return {"matched": None, "hint": "没有完全同名的商品", "candidates": [_tool_product_brief(x) for x in near]}
+
+
+def _run_ai_tool(db: Session, name: str, args_json: str, budget: list[int]) -> str:
+    """执行模型请求的只读工具调用：白名单 + 限参 + 分仓隔离 + 审计，返回给模型的 JSON 文本。"""
+    try:
+        args = json.loads(args_json or "{}")
+        if not isinstance(args, dict):
+            args = {}
+    except Exception:  # noqa: BLE001
+        args = {}
+    if name not in ("search_products", "get_product"):
+        log.warning("AI 请求了白名单外的工具，已拒绝：%s", name)
+        return json.dumps({"error": f"没有这个工具：{name}；可用工具只有 search_products / get_product"},
+                          ensure_ascii=False)
+    if budget[0] <= 0:
+        return json.dumps({"error": "本次查询次数已用完，请用已知信息直接输出结果"}, ensure_ascii=False)
+    budget[0] -= 1
+    try:
+        out = _ai_tool_search(db, args) if name == "search_products" else _ai_tool_get(db, args)
+    except Exception as e:  # noqa: BLE001 - 工具出错不该让整次识别失败
+        log.warning("AI 工具 %s 执行失败：%s: %s", name, type(e).__name__, e)
+        return json.dumps({"error": f"查询失败：{type(e).__name__}"}, ensure_ascii=False)
+    n = len(out) if isinstance(out, list) else 1
+    log.info("AI 查本仓商品资料：%s %s → %s 条", name, json.dumps(args, ensure_ascii=False)[:120], n)
+    return json.dumps(out, ensure_ascii=False)
+
+
 def _followup_block(prev: str, hint: str) -> str:
     """连续对话（追问重识别）：把「上一次结果 + 用户这次的要求」一起给模型。
 
@@ -1607,7 +1880,7 @@ def parse_ai(data: ParseIn, db: Session = Depends(get_db), user: User = Depends(
     if not cfg.get("api_key"):
         raise HTTPException(400, "未配置 LLM（product_rules.json 的 llm 段）")
     try:
-        parsed = _extract_json(_chat(cfg, SYSTEM_PROMPT, _user_msg(text)))
+        parsed = _extract_json(_chat_agent(cfg, SYSTEM_PROMPT, _user_msg(text), db))
         return _build_result(db, parsed, text)
     except HTTPException:
         raise
@@ -1644,14 +1917,37 @@ def parse_stream(data: ParseIn, db: Session = Depends(get_db), user: User = Depe
             yield event({"stage": "正在调用大模型识别…" if not (data.hint or "").strip()
                          else "正在按你的要求重新识别…"})
             buf = ""
-            for kind, piece in _chat_stream(cfg, SYSTEM_PROMPT, _user_msg(text) + _followup_block(data.prev, data.hint)):
+            user_msg = _user_msg(text) + _followup_block(data.prev, data.hint)
+            # agent：模型可调只读工具查本仓商品资料（见 AI_TOOLS / _run_ai_tool 的权限边界）
+            for kind, piece in _chat_stream_agent(cfg, SYSTEM_PROMPT, user_msg, db, max_tokens=1600):
                 if kind == "think":
-                    yield event({"think": piece})    # 模型的思考过程，实时展示
-                else:
+                    yield event({"think": piece})     # 模型的思考过程，实时展示
+                elif kind == "content":
                     buf += piece
-                    yield event({"delta": piece})    # 正式输出
-            result = _build_result(db, _extract_json(buf), text)
+                    yield event({"delta": piece})     # 正式输出
+                else:
+                    yield event({"stage": f"🤖 {piece}"})   # 正在查本仓商品资料
+            parsed = None
+            try:
+                parsed = _extract_json(buf)
+            except Exception:  # noqa: BLE001
+                parsed = None
+            if not parsed or not (parsed.get("lines") or []):
+                # 工具没查到、模型也没给出明细 → 再跑一次「不用工具」，让它照票据原文输出（走新建流程）
+                yield event({"stage": "没对上库存资料，再按原始内容识别一次…"})
+                buf2 = ""
+                for kind2, piece2 in _chat_stream_agent(cfg, SYSTEM_PROMPT, user_msg, db,
+                                                         max_tokens=4200, use_tools=False):
+                    if kind2 == "content":
+                        buf2 += piece2
+                if buf2.strip():
+                    try:
+                        parsed = _extract_json(buf2)
+                    except Exception:  # noqa: BLE001
+                        pass
+            result = _build_result(db, parsed or {}, text)
             yield event({"result": result, "source": "llm", "confidence": "high"})
+
         except HTTPException as e:
             yield event({"error": e.detail})
         except Exception as e:
@@ -1709,6 +2005,7 @@ async def parse_image_stream(
 
     # 补充说明里若有「别名 -> 正式名称」，额外列一遍并提示可类推，让模型少犯错
     # 追问（连续对话）时再带上「上一次结果 + 用户要求」，只改被指出的地方
+    # 商品资料不再塞进提示词：改成给模型只读工具，让它自己查（见 AI_TOOLS / _run_ai_tool）
     user_msg = _image_user_msg(text) + _followup_block(prev, hint)
 
     def event(obj: dict) -> str:
@@ -1720,15 +2017,40 @@ async def parse_image_stream(
             yield event({"stage": "正在按你的要求重新识别票据…" if (hint or "").strip()
                          else "正在调用大模型识别票据…"})
             buf = ""
-            for kind, piece in _chat_stream_mm(cfg, IMAGE_SYSTEM_PROMPT, user_msg, uri):
+            user_content = [
+                {"type": "text", "text": user_msg},
+                {"type": "image_url", "image_url": {"url": uri}},
+            ]
+            for kind, piece in _chat_stream_agent(cfg, IMAGE_SYSTEM_PROMPT, user_content, db, max_tokens=3200):
                 if kind == "think":
-                    yield event({"think": piece})    # 模型的思考过程，实时展示
-                else:
+                    yield event({"think": piece})     # 模型的思考过程，实时展示
+                elif kind == "content":
                     buf += piece
-                    yield event({"delta": piece})    # 正式输出
-            result = _build_result(db, _extract_json(buf), text or "(图片票据识别)")
+                    yield event({"delta": piece})     # 正式输出
+                else:
+                    yield event({"stage": f"🤖 {piece}"})   # 正在查本仓商品资料
+            parsed = None
+            try:
+                parsed = _extract_json(buf)
+            except Exception:  # noqa: BLE001
+                parsed = None
+            if not parsed or not (parsed.get("lines") or []):
+                # 工具没查到、模型也没给出明细 → 再跑一次「不用工具」，让它照票据原文输出（走新建流程）
+                yield event({"stage": "没对上库存资料，再按票据原文识别一次…"})
+                buf2 = ""
+                for kind2, piece2 in _chat_stream_agent(cfg, IMAGE_SYSTEM_PROMPT, user_content, db,
+                                                         max_tokens=4200, use_tools=False):
+                    if kind2 == "content":
+                        buf2 += piece2
+                if buf2.strip():
+                    try:
+                        parsed = _extract_json(buf2)
+                    except Exception:  # noqa: BLE001
+                        pass
+            result = _build_result(db, parsed or {}, text or "(图片票据识别)")
             result["image_url"] = image_url  # 供前端确认框展示与备注挂图
             yield event({"result": result})
+
         except HTTPException as e:
             yield event({"error": e.detail})
         except Exception as e:
