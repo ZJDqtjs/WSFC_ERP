@@ -478,7 +478,12 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     by_product: dict = {}
 
     def _bucket(pid, spec, dropship, name=""):
-        """按「商品 + 规格 + 是否代发」分桶：出库明细里代发与库存商品不混在一起，也按规格区分。"""
+        """按「商品 + 规格 + 是否代发」分桶：出库明细里代发与库存商品不混在一起，也按规格区分。
+
+        注意：这里**不能**把空规格就地归一成商品名——结算行（owned_rows/_spread）调用时
+        拿不到商品名（name 传空），就地归一会让结算行找不到销售行那个桶、关联成本丢失。
+        规格归一统一放在输出阶段做（见下方 _merge_by_name）。
+        """
         return by_product.setdefault(
             (pid, spec, dropship),
             {
@@ -777,6 +782,44 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "gp_rate": round(gp / denom * 100, 2) if denom else 0.0,
             }
         )
+
+    # ---- 规格归一：空规格并入「同名规格」，消掉看起来重复的行 ----------------
+    # 聚水潭同一个订单商品在不同批次导入时，规格可能写成不同值（多为空）。
+    # 例：wh01「云南大香芋头4.5斤3-5个」(id=366) 的出库行里，15 单规格为空、
+    # 14 单规格="云南大香芋头4.5斤3-5个"，报表按「商品+规格」分桶后就是两行，
+    # 而两行的销量/收入都只反映各自那一半 → 用户看到「同一个商品出现两次」。
+    #
+    # 这里在**输出阶段**做归一（不能改 _bucket：结算行走 owned_rows/_spread 时拿不到商品名，
+    # 就地归一会让关联结算找不到销售行那个桶，成本会丢）：
+    #   某商品只有一个非空规格 + 若干空规格 → 把空规格并进去，规格取那个非空值；
+    #   多个非空规格（真有规格差异）→ 空规格单独成行，规格标为「未标注规格」，不丢数据。
+    _by_pid: dict[tuple, list[dict]] = {}
+    for r in product_rows:
+        _by_pid.setdefault((r["product_id"], bool(r["is_dropship"])), []).append(r)
+    _merged: list[dict] = []
+    for _rows in _by_pid.values():
+        _named = [r for r in _rows if (r["spec"] or "").strip()]
+        _blank = [r for r in _rows if not (r["spec"] or "").strip()]
+        if _blank and len(_named) == 1:
+            _t = _named[0]
+            for r in _blank:
+                _t["qty"] += r["qty"]
+                _t["weight_kg"] = round(_t["weight_kg"] + r["weight_kg"], 4)
+                _t["amount"] += r["amount"]
+                _t["gross_sales"] += r["gross_sales"]
+                for _f in ("cogs", "goods_cogs", "pack_cogs", "labor_cogs",
+                           "material_cogs", "other_cogs", "express_cogs",
+                           "brush_cogs", "settle_income", "total_cogs"):
+                    _t[_f] = round(_t[_f] + r[_f], 2)
+                _t["gross_profit"] = round(_t["amount"] + _t["settle_income"] - _t["total_cogs"], 2)
+                _den = (_t["gross_sales"] or _t["amount"]) + _t["settle_income"]
+                _t["gp_rate"] = round(_t["gross_profit"] / _den * 100, 2) if _den else 0.0
+        elif _blank:
+            for r in _blank:
+                r["spec"] = "未标注规格"
+        _merged.extend(_named or _blank)
+    product_rows = _merged
+    product_rows.sort(key=lambda r: -r["amount"])
 
     # ---- 入仓品：按「入仓品名 + 分类」单独成行（出库方式=入仓），不与出库商品合并 ----
     # 重量口径两条路，优先第一条：

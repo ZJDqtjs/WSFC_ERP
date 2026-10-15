@@ -7504,8 +7504,12 @@ function renderReportGoods() {
       const split = splitText ? `<div class="muted" style="font-size:11px;">${splitText}</div>` : "";
       // 出库方式：入仓 / 代发（别人发货，不扣本仓库存）/ 库存出库
       const way = wayBadgeOf(p);
+      // 规格：同一商品可能按不同规格分行（如「大香芋头4.5斤3-5个」与「4.5斤2-3个」），
+      // 不显示规格时两行看起来就是重复，必须显式标出来
+      const specText = (p.spec || "").trim()
+        ? `<div class="muted" style="font-size:12px;">规格 ${esc(p.spec)}</div>` : "";
       return `<tr>
-      <td>${esc(p.name)}${split}</td>
+      <td>${esc(p.name)}${specText}${split}</td>
       <td>${way}</td>
       <td class="num mono">${fmtNum(p.qty)}${p.unit ? esc(p.unit) : ""}</td>
       <td class="num mono">${fmtKg(p.weight_kg)}</td>
