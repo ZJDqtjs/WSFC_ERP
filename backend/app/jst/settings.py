@@ -228,15 +228,20 @@ def set_cookie(cookie: str) -> None:
         save(d)
 
 
-def record_run(key: str, entry: dict[str, Any]) -> None:
-    """追加一条执行记录（最新的在前，最多保留 MAX_RUNS 条）。"""
+def record_run(key: str, entry: dict[str, Any], update_last: bool = True) -> None:
+    """追加一条执行记录（最新的在前，最多保留 MAX_RUNS 条）。
+
+    update_last=False：只进记录列表，不覆盖「上次执行」展示位（手动/古法导入用——
+    那个位置讲的是自动出库跑到哪了，别被手动导入改写）。
+    """
     with LOCK:
         d = load()
         wh = d.setdefault("warehouses", {}).setdefault(key, {})
         runs = wh.get("runs") if isinstance(wh.get("runs"), list) else []
         runs.insert(0, entry)
         wh["runs"] = runs[:MAX_RUNS]
-        wh["last_run"] = entry
+        if update_last:
+            wh["last_run"] = entry
         save(d)
 
 

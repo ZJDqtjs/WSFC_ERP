@@ -10309,7 +10309,11 @@ async function submitDraftOrders(kind, orders) {
       <div class="muted" style="font-size:13px;">共 ${orders.length} 单，一般数秒内完成；请勿关闭窗口或重复点击。完成后将自动展示结果。</div>
     </div>`;
   try {
-    const r = await api(BATCH_MODAL[kind].confirm, "POST", { orders });
+    const payload = { orders };
+    // 聚水潭（古法/手动导入）：带上来源文件名，后端会往「自动出库设置 → 执行记录」记一条
+    // 「古法导入」记录（见 imports._log_manual_jst_import）
+    if (kind === "jushuitan") payload.source = (window.__BM_FILE__ && window.__BM_FILE__.name) || "";
+    const r = await api(BATCH_MODAL[kind].confirm, "POST", payload);
     let html = `<div class="alert ok">✓ 已创建 <b>${r.created}</b> 个出库单`;
     if (r.failed_count) html += `，失败 <b>${r.failed_count}</b>`;
     html += `</div>`;

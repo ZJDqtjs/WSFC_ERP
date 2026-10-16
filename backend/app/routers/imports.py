@@ -16,7 +16,8 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..brush import BRUSH_WAREHOUSES, is_brush_warehouse
-from ..database import get_db
+from ..database import get_current_key, get_db, get_warehouses
+from ..jst import settings as jst_settings
 from ..models import CodeMapping, Deduction, Outbound, PackRule, Product, User
 from .ai import _chat, _extract_json, _llm_config
 from ..services import (
@@ -536,6 +537,47 @@ class DraftOrder(BaseModel):
 
 class ConfirmOutIn(BaseModel):
     orders: list[DraftOrder] = []
+    # 「古法导入」来源说明（一般是上传的文件名），只用于执行记录里的「文件/说明」
+    source: str = ""
+
+
+def _log_manual_jst_import(source: str, res: dict, orders=None, note: str = "") -> None:
+    """把「古法导入」（手动上传聚水潭导出文件出库）也记进「自动出库设置 → 执行记录」。
+
+    记录触发写「古法导入」，只追加到记录列表，**不覆盖「上次执行」** —— 那个位置讲的是
+    自动出库跑到哪了（见 jst.settings.record_run 的 update_last）。记录失败不影响导入结果。
+    """
+    try:
+        key = get_current_key()
+        name = next((w.get("name") or key for w in get_warehouses() if w.get("key") == key), key)
+        dates = sorted(
+            d for d in (
+                (o.get("date") if isinstance(o, dict) else getattr(o, "date", "")) or ""
+                for o in (orders or [])
+            ) if d
+        )
+        created = int(res.get("created") or 0)
+        failed = int(res.get("failed_count") or 0)
+        msg = f"古法导入：{('「' + source + '」') if source else '手动上传聚水潭导出文件'}"
+        msg += f"，新建出库单 {created} 张"
+        if failed:
+            msg += f"，失败 {failed} 张"
+        if note:
+            msg += f"，{note}"
+        jst_settings.record_run(key, {
+            "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "trigger": "古法导入",
+            "ok": not failed,
+            "warehouse": key,
+            "warehouse_name": name,
+            "targets": [],
+            "files": [source] if source else [],
+            "window": f"{dates[0]} ~ {dates[-1]}" if dates else "",
+            "stats": {"created": created, "failed": failed},
+            "message": msg,
+        }, update_last=False)
+    except Exception:  # noqa: BLE001 - 记执行记录失败不能影响导入本身
+        pass
 
 
 def _confirm_orders(db: Session, user: User, orders: list[DraftOrder]) -> dict:
@@ -1048,7 +1090,11 @@ def confirm_import_outbounds(data: ConfirmOutIn, db: Session = Depends(get_db), 
 
 @router.post("/jushuitan/import/confirm")
 def confirm_import_jushuitan(data: ConfirmOutIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    return _confirm_orders(db, user, data.orders)
+    res = _confirm_orders(db, user, data.orders)
+    # 手动（古法）导入也要在「自动出库设置 → 执行记录」里留痕，触发=古法导入
+    _log_manual_jst_import((data.source or "").strip(), res, orders=data.orders,
+                           note="由「出库/销售 → 导入聚水潭出库单」逐单确认")
+    return res
 
 
 @router.post("/import/outbounds")
@@ -2048,7 +2094,13 @@ def import_jushuitan(file: UploadFile, db: Session = Depends(get_db), user: User
     现在直接复用「出库页 → 导入聚水潭出库单」的同一套解析 + 落库，口径完全一致。
     """
     drafts, failed, skip, unmapped, unmapped_list, unmatched_multi = parse_jushuitan_draft(file, db, user)
-    res = _confirm_orders(db, user, [d.model_dump() for d in drafts])
+    # 注意：_confirm_orders 按对象属性取字段（o.lines / o.customer…），必须传 DraftOrder 本身，
+    # 传 model_dump() 出来的 dict 会在 o.lines 处 AttributeError（这条旧入口以前就是这么挂的）
+    res = _confirm_orders(db, user, drafts)
+    # 手动（古法）导入也进「自动出库设置 → 执行记录」，触发=古法导入（跳过按状态统计附在说明里）
+    skip_note = "、".join(f"{k} {v}单" for k, v in (skip or {}).items() if v) if isinstance(skip, dict) else ""
+    _log_manual_jst_import((file.filename or "").strip(), res, orders=drafts,
+                           note=f"跳过（{skip_note}）" if skip_note else "由「导入与关联 → 一键导入」确认")
     return {
         **res,
         "skip": skip,
