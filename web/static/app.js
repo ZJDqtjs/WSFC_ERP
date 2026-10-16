@@ -6691,8 +6691,17 @@ function costSplitText(r) {
   const material = split ? (Number(r.material_cogs) || 0) : 0;
   const other = split ? (Number(r.other_cogs) || 0) : 0;
   const brush = Number(r.brush_cogs) || 0;   // 芳谊放单仓刷单结算（分摊到该商品的部分）
+  const brushFee = Number(r.brush_fee_cogs) || 0;    // 刷单单手填的「快递+包装固定费」
+  const brushCost = Number(r.brush_cost_cogs) || 0;  // 刷单单手填的「刷单成本」
   const isWi = !!r.is_warehouse_in;   // 入仓行：material/express 字段装的是「包材/运费」，标签要换
-  if (!(r.is_dropship || oldPack || express || labor || material || other || brush)) return "";
+  if (brush) {
+    // 刷单单：本仓不出货、不结转商品/包材/人工/快递，成本就是这两项手填值（口径见 app/brush.py）
+    const items = [];
+    if (brushFee) items.push(`快递+包装 ${fmtMoney(brushFee)}`);
+    if (brushCost) items.push(`刷单成本 ${fmtMoney(brushCost)}`);
+    return items.join(" ＋ ");
+  }
+  if (!(r.is_dropship || oldPack || express || labor || material || other)) return "";
   const parts = [`${r.is_dropship ? "代发成本" : "商品成本"} ${fmtMoney(goods)}`];
   if (split) {
     if (labor) parts.push(`打包人工 ${fmtMoney(labor)}`);
@@ -6702,7 +6711,6 @@ function costSplitText(r) {
     parts.push(`打包人工+耗材 ${fmtMoney(oldPack)}`);
   }
   if (express) parts.push(`${isWi ? "运费" : "快递费"} ${fmtMoney(express)}`);
-  if (brush) parts.push(`刷单成本 ${fmtMoney(brush)}`);
   return parts.join(" ＋ ");
 }
 function outAggBy(rows, pool) {
@@ -6789,7 +6797,9 @@ function renderOutGroup() {
       a.material_cogs = a.material_cogs || 0; // 包材/耗材
       a.other_cogs = a.other_cogs || 0;      // 其他关联结算
       a.express_cogs = a.express_cogs || 0;  // 快递费
-      a.brush_cogs = a.brush_cogs || 0;      // 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差）
+      a.brush_cogs = a.brush_cogs || 0;      // 芳谊放单仓刷单结算（刷单成本 + 快递+包装固定费）
+      a.brush_fee_cogs = a.brush_fee_cogs || 0;   // 其中：手填的「快递+包装固定费」
+      a.brush_cost_cogs = a.brush_cost_cogs || 0; // 其中：手填的「刷单成本」
       a.settle_income = a.settle_income || 0; // 客户代收的关联结算（包材/人工/快递费，按销售金额占比分摊）
 
       let arr = byPid.get(a.pid);
@@ -6827,10 +6837,13 @@ function renderOutGroup() {
         }
       }
       // 芳谊放单仓刷单结算：整单金额按该单销售金额占比分摊到商品上（与后端 report.py 同口径）
+      // 同时把「快递+包装固定费」和「刷单成本」分别摊出去，批次明细里能分开看到这两项
       if (o.brush_adjust && saleLines.length) {
         for (const sl of saleLines) {
           const share = totalAmt ? (sl.amount || 0) / totalAmt : 1 / saleLines.length;
           spread(sl.product_id, (o.brush_adjust || 0) * share, "brush_cogs");
+          spread(sl.product_id, (o.brush_fee || 0) * share, "brush_fee_cogs");
+          spread(sl.product_id, (o.brush_cost || 0) * share, "brush_cost_cogs");
         }
       }
       // 客户代收的关联结算（包材/人工/快递费）：同样按销售金额占比分摊，商品毛利算上它（与后端同口径）
@@ -6852,8 +6865,10 @@ function renderOutGroup() {
     amt: rows.reduce((s, o) => s + (o.total_amount || 0) + (o.settle_income || 0), 0),
     cogs: rows.reduce((s, o) => s + (o.total_cogs || 0), 0),
     fee: rows.reduce((s, o) => s + (o.total_fee || 0), 0),
-    // 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差）：净利里已扣掉，单独列出便于核对
+    // 芳谊放单仓刷单结算：净利里已扣掉，拆成「快递+包装固定费」与「刷单成本」两项便于核对
     brush: rows.reduce((s, o) => s + (o.brush_adjust || 0), 0),
+    brushFee: rows.reduce((s, o) => s + (o.brush_fee || 0), 0),
+    brushCost: rows.reduce((s, o) => s + (o.brush_cost || 0), 0),
   };
   const net = total.amt - total.cogs - total.fee - total.brush;
   $("ogTitle").textContent = `出库批次明细（${rows.length} 单）`;
@@ -6866,7 +6881,8 @@ function renderOutGroup() {
      <div class="stat"><div class="label">人工种数</div><div class="value">${outAggBy(rows, "labor").length}</div></div>
      <div class="stat"><div class="label">销售收入</div><div class="value">${fmtMoney(total.amt)}</div></div>
      <div class="stat"><div class="label">结转成本</div><div class="value">${fmtMoney(total.cogs)}</div></div>
-     ${total.brush ? `<div class="stat"><div class="label">刷单成本</div><div class="value" style="color:var(--red)">${fmtMoney(total.brush)}</div></div>` : ""}
+     ${total.brushFee ? `<div class="stat"><div class="label">快递+包装</div><div class="value" style="color:var(--red)">${fmtMoney(total.brushFee)}</div></div>` : ""}
+     ${total.brushCost ? `<div class="stat"><div class="label">刷单成本</div><div class="value" style="color:var(--red)">${fmtMoney(total.brushCost)}</div></div>` : ""}
      <div class="stat success"><div class="label">净利</div><div class="value" style="color:${net >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(net)}</div></div>`;
   const seg = segActive("ogSeg");
   let isSale = false, isLaborPack = false, emptyText = "无记录";

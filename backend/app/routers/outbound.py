@@ -124,12 +124,16 @@ def _to_dict(o: Outbound) -> dict:
         "gross_profit": round(brush_final - o.total_cogs - adj, 2),
         "net_profit": round(brush_final - o.total_cogs - o.total_fee - adj, 2),
         # 刷单结算（非放单仓订单三列都是 0）：brush_cost=我刷这单的成本，
-        # brush_fee=本单结算用的「快递+包装固定费」（= brush_auto_fee 时表示没覆盖），
+        # brush_fee=本单结算用的「快递+包装固定费」（手填；没填取系统值，刷单单系统值为 0），
+        # 这两项就是刷单单的全部成本（刷单单不结转商品/包材/快递，见 services.build_order(brush=True)）；
         # settle_amount=这单结算给我多少（收入 − 固定费），brush_profit=结算 − 刷单成本
         "brush_cost": round(float(getattr(o, "brush_cost", 0.0) or 0.0), 2),
         "brush_fee": round(brush_fee_of(o), 2),
         "brush_auto_fee": round(float(getattr(o, "brush_auto_fee", 0.0) or 0.0), 2),
-        "is_brush_order": bool(getattr(o, "brush_auto_fee", 0.0)),
+        # 刷单单标记：看它有没有填「刷单成本 / 快递+包装固定费」（不看 auto 值，刷单系统值为 0）
+        "is_brush_order": bool(
+            float(getattr(o, "brush_cost", 0.0) or 0.0) or float(getattr(o, "brush_fee", 0.0) or 0.0)
+        ),
         "brush_adjust": adj,
         "settle_amount": round(brush_final - brush_fee_of(o), 2),
         "brush_profit": round(brush_final - brush_fee_of(o) - float(getattr(o, "brush_cost", 0.0) or 0.0), 2),
