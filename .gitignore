@@ -328,3 +328,5 @@ google-services.json
 
 # Go 版试验实现（测试目录，非生产代码；生产是 backend 的 Python 后端，勿提交、勿在此基础上改）
 /go/
+# Go 试验实现相关文档（同为试验产物，不入库）
+/docs/go_*.md
