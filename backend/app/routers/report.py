@@ -494,6 +494,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "is_dropship": dropship,
                 "name": name,
                 "code": "",  # 商品编码：订单商品上一般填的是平台 SKU（京东 skuId），对外成本表按它对账
+                "unit": "",  # 销量单位（商品的默认单位，如 单 / 袋 / 公斤）
+                "srcs": set(),  # 该行的来源集合：手动出库 / 聚水潭出库 / 导入出库 / 入仓
                 "qty": 0.0,
                 "amount": 0.0,
                 "gross_sales": 0.0,
@@ -543,6 +545,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             func.coalesce(func.sum(OutboundLine.cogs), 0).label("goods"),
             func.max(Product.name).label("pname"),
             func.max(Product.code).label("pcode"),
+            # 来源：手动建单（无导入分组）/ 聚水潭导入（备注带「聚水潭」）/ 其他批量导入
+            func.max(func.coalesce(Outbound.import_group, "")).label("ig"),
+            func.max(case((Outbound.remark.like("%聚水潭%"), 1), else_=0)).label("jst"),
         )
         .select_from(OutboundLine)
         .join(Outbound, Outbound.id == OutboundLine.outbound_id)
@@ -603,13 +608,29 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         .group_by(OutboundLine.outbound_id, field_expr)
     ).all()
 
+    # 销量口径：quantity_base 是「基础单位」数量（如 克），而各商品的基础单位不一样
+    # （订单小类是「单/袋」，按公斤卖的库存大类是「克」）。直接拿基础数量当销量，
+    # 「20 公斤拇指小玉米」就会显示成 20000，看着像 20000 单 —— 这里统一折成「默认单位」并带上单位。
+    du_of: dict[int, tuple[str, float]] = {}
+    _pids = {r.pid for r in sale_rows if r.pid}
+    if _pids:
+        for _p in db.execute(select(Product).where(Product.id.in_(_pids))).scalars():
+            _du = (_p.default_unit or _p.base_unit or "").strip()
+            _f = float((_p.conversions or {}).get(_du) or 1) or 1.0
+            du_of[_p.id] = (_du, _f)
+
     for r in sale_rows:
         d = _bucket(r.pid, r.spec, bool(r.dr), r.pname or "")
         if r.pname:  # 名称以销售行自身的商品为准（结算行只累加金额，不参与命名）
             d["name"] = r.pname
         if r.pcode:  # 同理带上商品编码（对外成本表按平台 SKU 对账用）
             d["code"] = r.pcode
-        d["qty"] += float(r.qb or 0.0)
+        du, factor = du_of.get(r.pid or 0, ("", 1.0))
+        d["qty"] += float(r.qb or 0.0) / (factor or 1.0)
+        if du and not d.get("unit"):
+            d["unit"] = du
+        # 来源：手动建单没有导入分组；聚水潭导入的备注里带「聚水潭导入 …」
+        d["srcs"].add("手动出库" if not (r.ig or "") else ("聚水潭出库" if r.jst else "导入出库"))
         d["amount"] += float(r.amt or 0.0)
         d["gross_sales"] += float(r.gross or 0.0)
         d["goods_cogs"] += float(r.goods or 0.0)
@@ -763,7 +784,12 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "name": d["name"],
                 # 商品编码：订单商品上一般填的是平台 SKU（京东为数字 skuId）
                 "code": d.get("code") or "",
+                # 销量（已折算成商品默认单位）与单位：前端「销量」列直接拼成「20公斤」
                 "qty": round(d["qty"], 4),
+                "unit": d.get("unit") or "",
+                # 来源：手动出库 / 聚水潭出库 / 导入出库（同一商品混了多种来源时用「＋」连接）
+                "source": " ＋ ".join(sorted(d.get("srcs") or [])),
+
                 # 净重（kg）：口径见上面「重量」那一段（与出库结算快递费一致）
                 "weight_kg": round(kg_by_line.get(
                     (d["product_id"], d["spec"], bool(d["is_dropship"])), 0.0), 4),
@@ -881,6 +907,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             "spec": b["spec"],
             "is_dropship": False,
             "is_warehouse_in": True,   # 前端据此把「出库方式」标成「入仓」
+            "source": "入仓",          # 来源列：入仓台账（对面是 手动出库 / 聚水潭出库 / 导入出库）
             "name": b["name"] or "（未命名入仓品）",
             "code": "",
             "unit": b["unit"],         # 入仓按「袋」计；出库行没有这个字段
@@ -1186,9 +1213,12 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
                 d = {**r}
                 for f in num_fields:
                     d[f] = 0.0
+                d["_srcs"] = set()
                 buckets[k] = d
             for f in num_fields:
                 d[f] = float(d.get(f) or 0) + float(r.get(f) or 0)
+            # 来源跨分仓取并集（同一商品在不同分仓可能是手动建单或聚水潭导入）
+            d["_srcs"].update(x.strip() for x in str(r.get("source") or "").split("＋") if x.strip())
     product_rows: list[dict] = []
     for d in buckets.values():
         goods = round(d["goods_cogs"], 2)
@@ -1202,8 +1232,11 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
         gp = round(amount + settle - total_cogs, 2)
         denom = round((gross_sales or amount) + settle, 2)
         product_rows.append({
-            **d,
+            # 去掉内部字段（_srcs 是集合，不能进 JSON）
+            **{k: v for k, v in d.items() if not k.startswith("_")},
             "qty": round(d["qty"], 4),
+            # 来源：合并各分仓后取并集
+            "source": " ＋ ".join(sorted(d.get("_srcs") or [])) or (d.get("source") or ""),
             "amount": amount,
             "gross_sales": gross_sales,
             "settle_income": settle,

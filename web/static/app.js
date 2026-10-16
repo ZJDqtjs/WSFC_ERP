@@ -7451,7 +7451,9 @@ function renderCostBreakdown(rep) {
 let REP_PROD_ROWS = null;   // 最近一次报表的商品明细原始行（未筛选、未排序）
 
 /* 出库方式：入仓（入仓品卖到京东）/ 代发（别人发货，不扣本仓库存）/ 库存出库。
-   搜索栏输入「入仓」「代发」「库存」都能筛出对应类型的行。 */
+   来源（后端 by_product.source）：手动出库 / 聚水潭出库 / 导入出库 / 入仓
+   —— 手动建单没有导入分组；聚水潭导入的备注里带「聚水潭导入」。
+   搜索栏输入「入仓」「代发」「库存」「手动」「聚水潭」都能筛出对应行。 */
 const isWarehouseIn = (p) => !!p.is_warehouse_in;
 const wayTextOf = (p) => (isWarehouseIn(p) ? "入仓" : (p.is_dropship ? "代发" : "库存出库"));
 const wayBadgeOf = (p) => (isWarehouseIn(p)
@@ -7465,8 +7467,9 @@ function renderReportGoods() {
   const kwEl = $("repGoodsKw");
   const kw = ((kwEl && kwEl.value) || "").trim();
   const k = kw.toLowerCase();
-  // 关键词命中：商品名 / 规格 / 出库方式（输入「入仓」筛出入仓品，输入「代发」筛出代发商品）
-  const hit = k ? all.filter((p) => `${p.name || ""} ${p.spec || ""} ${wayTextOf(p)}`.toLowerCase().includes(k)) : all;
+  // 关键词命中：商品名 / 规格 / 出库方式 / 来源（输入「入仓」「代发」「手动」「聚水潭」都能筛）
+  const hit = k ? all.filter((p) =>
+    `${p.name || ""} ${p.spec || ""} ${wayTextOf(p)} ${p.source || ""}`.toLowerCase().includes(k)) : all;
   const prodRows = applyTableSort(pt, hit);
   const hint = $("repGoodsHint");
   if (hint) hint.textContent = all.length ? (k ? `匹配 ${prodRows.length} / ${all.length} 个商品` : `共 ${all.length} 个商品`) : "";
@@ -7518,15 +7521,18 @@ function renderReportGoods() {
       // 成本构成：代发行也要列出来（代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 其他关联结算 ＋ 快递费）
       const splitText = costSplitText(p);
       const split = splitText ? `<div class="muted" style="font-size:11px;">${splitText}</div>` : "";
-      // 出库方式：入仓 / 代发（别人发货，不扣本仓库存）/ 库存出库
+      // 出库方式：入仓 / 代发（别人发货，不扣本仓库存）/ 库存出库；
+      // 下面再标一行「来源」：手动出库 / 聚水潭出库 / 导入出库（一眼看出这行是哪来的）
       const way = wayBadgeOf(p);
+      const srcText = (p.source || "").trim();
+      const wayCell = way + (srcText ? `<div class="muted" style="font-size:11px;">${esc(srcText)}</div>` : "");
       // 规格：同一商品可能按不同规格分行（如「大香芋头4.5斤3-5个」与「4.5斤2-3个」），
       // 不显示规格时两行看起来就是重复，必须显式标出来
       const specText = (p.spec || "").trim()
         ? `<div class="muted" style="font-size:12px;">规格 ${esc(p.spec)}</div>` : "";
       return `<tr>
       <td>${esc(p.name)}${specText}${split}</td>
-      <td>${way}</td>
+      <td>${wayCell}</td>
       <td class="num mono">${fmtNum(p.qty)}${p.unit ? esc(p.unit) : ""}</td>
       <td class="num mono">${fmtKg(p.weight_kg)}</td>
       <td class="num mono">${fmtMoney((Number(p.amount) || 0) + settle)}${settle ? `<div class="muted" style="font-size:11px;" title="客户随货款一起付的包材/人工/快递费（成本里已含，收入侧也计一笔）">含代收 ${fmtMoney(settle)}</div>` : ""}</td>
