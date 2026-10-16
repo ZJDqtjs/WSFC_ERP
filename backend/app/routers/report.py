@@ -1,6 +1,9 @@
+import threading
+import time
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import and_, case, exists, false, func, literal, or_, select
+from sqlalchemy import and_, case, exists, func, literal, or_, select
 from sqlalchemy.orm import Session, aliased, selectinload
 
 from ..auth import get_current_user
@@ -29,6 +32,61 @@ from .warehouse_in import net_weight_kg
 from ..services import INBOUND_FEE_REF
 
 router = APIRouter(prefix="/api", tags=["report"])
+
+
+# ---------------- 重汇总的并发闸 + 短缓存 ----------------
+# 背景：/report/summary（尤其 wh=all）、/report/all-warehouses、/finance?wh=all 都会逐仓跑重查询。
+# 手机端打开「全仓合计」会一次发多个；若并发执行，CPU / 内存 / 数据库连接池会被同时打满，
+# 1.6G 小内存机器直接 OOM 崩溃（2026-10-13 事故）。这里做三层保护：
+#   ① 单飞：同一 key（接口+区间+分仓+口径）并发时只算一次，其余等待复用；
+#   ② 并发闸：全局同一时刻只跑一个重汇总，其余排队，绝不叠加；
+#   ③ 短缓存：结果缓存 _HEAVY_TTL 秒，反复刷新秒回。
+_HEAVY_GATE = threading.Semaphore(1)
+_HEAVY_LOCK = threading.Lock()
+_HEAVY_CACHE: dict = {}
+_HEAVY_INFLIGHT: dict = {}
+_HEAVY_TTL = 60.0
+_HEAVY_CACHE_MAX = 32
+
+
+def _heavy_cached(key, compute):
+    """带单飞 + 全局并发闸 + 短缓存的汇总计算。key 必须能唯一标识「同一次结果」。"""
+    hit = _HEAVY_CACHE.get(key)
+    if hit and time.time() - hit[0] < _HEAVY_TTL:
+        return hit[1]
+    with _HEAVY_LOCK:
+        hit = _HEAVY_CACHE.get(key)
+        if hit and time.time() - hit[0] < _HEAVY_TTL:
+            return hit[1]
+        ev = _HEAVY_INFLIGHT.get(key)
+        if ev is None:
+            ev = threading.Event()
+            _HEAVY_INFLIGHT[key] = ev
+            leader = True
+        else:
+            leader = False
+    if not leader:
+        # 已在算同一个 key：等它算完复用，绝不再算一遍
+        ev.wait(timeout=300)
+        hit = _HEAVY_CACHE.get(key)
+        if hit:
+            return hit[1]
+        # 领导者异常退出且无缓存：退回自己算一次兜底（放弃单飞，避免死等）
+        with _HEAVY_GATE:
+            return compute()
+    try:
+        with _HEAVY_GATE:
+            result = compute()
+        with _HEAVY_LOCK:
+            _HEAVY_CACHE[key] = (time.time(), result)
+            while len(_HEAVY_CACHE) > _HEAVY_CACHE_MAX:
+                oldest = min(_HEAVY_CACHE, key=lambda k: _HEAVY_CACHE[k][0])
+                _HEAVY_CACHE.pop(oldest, None)
+        return result
+    finally:
+        with _HEAVY_LOCK:
+            _HEAVY_INFLIGHT.pop(key, None)
+        ev.set()
 
 
 class FinanceIn(BaseModel):
@@ -326,9 +384,20 @@ def summary(
     user: User = Depends(get_current_user),
 ):
     """经营汇总：默认本登录会话的分仓；wh=all 时合并所有分仓（各自是独立账套）。"""
-    if wh == ALL_WH:
-        return _summary_all(date_from, date_to, bool(exclude_other))
-    return _summary_of(db, date_from, date_to, resolve_key(wh), bool(exclude_other))
+    key = (
+        "summary",
+        ALL_WH if wh == ALL_WH else resolve_key(wh),
+        date_from,
+        date_to,
+        int(exclude_other),
+    )
+
+    def _compute():
+        if wh == ALL_WH:
+            return _summary_all(date_from, date_to, bool(exclude_other))
+        return _summary_of(db, date_from, date_to, resolve_key(wh), bool(exclude_other))
+
+    return _heavy_cached(key, _compute)
 
 
 def _inbound_landed(i) -> float:
@@ -384,6 +453,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     # 这样「商品成本 goods_cogs」不会被刷单成本污染。
     brush_cost = round(sum(float(getattr(o, "brush_cost", 0.0) or 0.0) for o in outbounds), 2)
     brush_total = round(sum(brush_adjust(o) for o in outbounds), 2)
+    # 其中「快递+包装固定费」：逐单手填（默认 3.6），与刷单成本一起构成刷单单的全部成本
+    brush_fee_total = round(sum(brush_fee_of(o) for o in outbounds), 2)
     gross = round(revenue - cogs - brush_total, 2)
     # 期间费用 = 财务流水里手工登记的支出（不含采购支出，采购已计入库存成本）+ 其他开支
     manual_expense = sum(f.amount for f in finances if f.type == "expense" and f.category != "采购支出")
@@ -409,7 +480,12 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     by_product: dict = {}
 
     def _bucket(pid, spec, dropship, name=""):
-        """按「商品 + 规格 + 是否代发」分桶：出库明细里代发与库存商品不混在一起，也按规格区分。"""
+        """按「商品 + 规格 + 是否代发」分桶：出库明细里代发与库存商品不混在一起，也按规格区分。
+
+        注意：这里**不能**把空规格就地归一成商品名——结算行（owned_rows/_spread）调用时
+        拿不到商品名（name 传空），就地归一会让结算行找不到销售行那个桶、关联成本丢失。
+        规格归一统一放在输出阶段做（见下方 _merge_by_name）。
+        """
         return by_product.setdefault(
             (pid, spec, dropship),
             {
@@ -418,6 +494,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "is_dropship": dropship,
                 "name": name,
                 "code": "",  # 商品编码：订单商品上一般填的是平台 SKU（京东 skuId），对外成本表按它对账
+                "unit": "",  # 销量单位（商品的默认单位，如 单 / 袋 / 公斤）
+                "srcs": set(),  # 该行的来源集合：手动出库 / 聚水潭出库 / 导入出库 / 入仓
                 "qty": 0.0,
                 "amount": 0.0,
                 "gross_sales": 0.0,
@@ -467,6 +545,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             func.coalesce(func.sum(OutboundLine.cogs), 0).label("goods"),
             func.max(Product.name).label("pname"),
             func.max(Product.code).label("pcode"),
+            # 来源：手动建单（无导入分组）/ 聚水潭导入（备注带「聚水潭」）/ 其他批量导入
+            func.max(func.coalesce(Outbound.import_group, "")).label("ig"),
+            func.max(case((Outbound.remark.like("%聚水潭%"), 1), else_=0)).label("jst"),
         )
         .select_from(OutboundLine)
         .join(Outbound, Outbound.id == OutboundLine.outbound_id)
@@ -527,13 +608,29 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         .group_by(OutboundLine.outbound_id, field_expr)
     ).all()
 
+    # 销量口径：quantity_base 是「基础单位」数量（如 克），而各商品的基础单位不一样
+    # （订单小类是「单/袋」，按公斤卖的库存大类是「克」）。直接拿基础数量当销量，
+    # 「20 公斤拇指小玉米」就会显示成 20000，看着像 20000 单 —— 这里统一折成「默认单位」并带上单位。
+    du_of: dict[int, tuple[str, float]] = {}
+    _pids = {r.pid for r in sale_rows if r.pid}
+    if _pids:
+        for _p in db.execute(select(Product).where(Product.id.in_(_pids))).scalars():
+            _du = (_p.default_unit or _p.base_unit or "").strip()
+            _f = float((_p.conversions or {}).get(_du) or 1) or 1.0
+            du_of[_p.id] = (_du, _f)
+
     for r in sale_rows:
         d = _bucket(r.pid, r.spec, bool(r.dr), r.pname or "")
         if r.pname:  # 名称以销售行自身的商品为准（结算行只累加金额，不参与命名）
             d["name"] = r.pname
         if r.pcode:  # 同理带上商品编码（对外成本表按平台 SKU 对账用）
             d["code"] = r.pcode
-        d["qty"] += float(r.qb or 0.0)
+        du, factor = du_of.get(r.pid or 0, ("", 1.0))
+        d["qty"] += float(r.qb or 0.0) / (factor or 1.0)
+        if du and not d.get("unit"):
+            d["unit"] = du
+        # 来源：手动建单没有导入分组；聚水潭导入的备注里带「聚水潭导入 …」
+        d["srcs"].add("手动出库" if not (r.ig or "") else ("聚水潭出库" if r.jst else "导入出库"))
         d["amount"] += float(r.amt or 0.0)
         d["gross_sales"] += float(r.gross or 0.0)
         d["goods_cogs"] += float(r.goods or 0.0)
@@ -597,35 +694,69 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             .group_by(OutboundLine.outbound_id)
         ).all() if cnt == 1
     ]
-    move_match = or_(
-        StockMovement.line_id == OutboundLine.id,
-        and_(StockMovement.line_id.is_(None), StockMovement.ref_id == Outbound.id,
-             Outbound.id.in_(single_line_out)) if single_line_out else false(),
-    )
+    # ⚠️ 性能红线：不要把「按 line_id 归属」与「按 ref_id 归属」合并成一条带 OR 的 JOIN——
+    # SQLite 会退化成从 stock_movements 全表驱动、逐行回查（实测 13 天区间 104 秒，接口超时 499）。
+    # 拆成「各自单条件」的分段查询，每段都能走索引（line_id / (ref_type,ref_id)），秒级完成。
     kg_by_line: dict[tuple, float] = {}
-    for pid, spec, dr, kg in db.execute(   # ① 有扣减流水的行
+
+    def _add_kg(rows) -> None:
+        for pid, spec, dr, kg in rows:
+            k = (pid, spec, bool(dr))
+            kg_by_line[k] = round(kg_by_line.get(k, 0.0) + float(kg or 0.0), 4)
+
+    # ①-A 新流水：严格按 line_id 关联出库行（走 idx_stock_movements_line）
+    _add_kg(db.execute(
         select(OutboundLine.product_id, spec_expr, dr_expr,
                func.coalesce(func.sum(-StockMovement.quantity_base * _kg_per_base(sm)), 0.0))
         .select_from(OutboundLine)
         .join(Outbound, Outbound.id == OutboundLine.outbound_id)
-        .join(StockMovement, and_(StockMovement.ref_type == "outbound", move_match))
+        .join(StockMovement, and_(StockMovement.ref_type == "outbound",
+                                  StockMovement.line_id == OutboundLine.id))
         .join(sm, sm.id == StockMovement.product_id, isouter=True)
         .where(OutboundLine.line_type == "sale", *line_conds, paid_out)
         .group_by(OutboundLine.product_id, spec_expr, dr_expr)
-    ):
-        kg_by_line[(pid, spec, bool(dr))] = float(kg or 0.0)
-    for pid, spec, dr, kg in db.execute(   # ② 无流水的行（代发）：回退订单商品自身净重
+    ).all())
+
+    # ①-B 旧流水（line_id 为空）：仅「该单只有一条销售行」时按整单归属（走 ref 索引）
+    if single_line_out:
+        _add_kg(db.execute(
+            select(OutboundLine.product_id, spec_expr, dr_expr,
+                   func.coalesce(func.sum(-StockMovement.quantity_base * _kg_per_base(sm)), 0.0))
+            .select_from(OutboundLine)
+            .join(Outbound, Outbound.id == OutboundLine.outbound_id)
+            .join(StockMovement, and_(StockMovement.ref_type == "outbound",
+                                      StockMovement.line_id.is_(None),
+                                      StockMovement.ref_id == Outbound.id))
+            .join(sm, sm.id == StockMovement.product_id, isouter=True)
+            .where(OutboundLine.line_type == "sale", *line_conds, paid_out,
+                   Outbound.id.in_(single_line_out))
+            .group_by(OutboundLine.product_id, spec_expr, dr_expr)
+        ).all())
+
+    # ② 完全没有扣减流水的销售行（代发等）：回退用订单商品自身单件净重
+    #    等价于原「LEFT JOIN 流水 WHERE 流水为空」：不存在按 line_id 的流水，且（非单行单 或 不存在按单的旧流水）
+    _no_line_mv = ~exists().where(
+        StockMovement.ref_type == "outbound",
+        StockMovement.line_id == OutboundLine.id,
+    )
+    if single_line_out:
+        _no_ref_mv = ~exists().where(
+            StockMovement.ref_type == "outbound",
+            StockMovement.line_id.is_(None),
+            StockMovement.ref_id == Outbound.id,
+        )
+        _no_mv = and_(_no_line_mv, or_(~Outbound.id.in_(single_line_out), _no_ref_mv))
+    else:
+        _no_mv = _no_line_mv
+    _add_kg(db.execute(
         select(OutboundLine.product_id, spec_expr, dr_expr,
                func.coalesce(func.sum(OutboundLine.quantity_base * _kg_per_base(op)), 0.0))
         .select_from(OutboundLine)
         .join(Outbound, Outbound.id == OutboundLine.outbound_id)
         .join(op, op.id == OutboundLine.product_id, isouter=True)
-        .join(StockMovement, and_(StockMovement.ref_type == "outbound", move_match), isouter=True)
-        .where(OutboundLine.line_type == "sale", *line_conds, paid_out, StockMovement.id.is_(None))
+        .where(OutboundLine.line_type == "sale", *line_conds, paid_out, _no_mv)
         .group_by(OutboundLine.product_id, spec_expr, dr_expr)
-    ):
-        key = (pid, spec, bool(dr))
-        kg_by_line[key] = round(kg_by_line.get(key, 0.0) + float(kg or 0.0), 4)
+    ).all())
 
     product_rows = []
     for _key, d in sorted(by_product.items(), key=lambda kv: -kv[1]["amount"]):
@@ -653,7 +784,12 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "name": d["name"],
                 # 商品编码：订单商品上一般填的是平台 SKU（京东为数字 skuId）
                 "code": d.get("code") or "",
+                # 销量（已折算成商品默认单位）与单位：前端「销量」列直接拼成「20公斤」
                 "qty": round(d["qty"], 4),
+                "unit": d.get("unit") or "",
+                # 来源：手动出库 / 聚水潭出库 / 导入出库（同一商品混了多种来源时用「＋」连接）
+                "source": " ＋ ".join(sorted(d.get("srcs") or [])),
+
                 # 净重（kg）：口径见上面「重量」那一段（与出库结算快递费一致）
                 "weight_kg": round(kg_by_line.get(
                     (d["product_id"], d["spec"], bool(d["is_dropship"])), 0.0), 4),
@@ -674,6 +810,51 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "gp_rate": round(gp / denom * 100, 2) if denom else 0.0,
             }
         )
+
+    # ---- 规格归一：空规格并入「同名规格」，消掉看起来重复的行 ----------------
+    # 聚水潭同一个订单商品在不同批次导入时，规格可能写成不同值（多为空）。
+    # 例：wh01「云南大香芋头4.5斤3-5个」(id=366) 的出库行里，15 单规格为空、
+    # 14 单规格="云南大香芋头4.5斤3-5个"，报表按「商品+规格」分桶后就是两行，
+    # 而两行的销量/收入都只反映各自那一半 → 用户看到「同一个商品出现两次」。
+    #
+    # 这里在**输出阶段**做归一（不能改 _bucket：结算行走 owned_rows/_spread 时拿不到商品名，
+    # 就地归一会让关联结算找不到销售行那个桶，成本会丢）：
+    #   某商品只有一个非空规格 + 若干空规格 → 把空规格并进去，规格取那个非空值；
+    #   多个非空规格（真有规格差异）→ 空规格单独成行，规格标为「未标注规格」，不丢数据。
+    _by_pid: dict[tuple, list[dict]] = {}
+    for r in product_rows:
+        _by_pid.setdefault((r["product_id"], bool(r["is_dropship"])), []).append(r)
+    _merged: list[dict] = []
+    for _rows in _by_pid.values():
+        _named = [r for r in _rows if (r["spec"] or "").strip()]
+        _blank = [r for r in _rows if not (r["spec"] or "").strip()]
+        if _blank and len(_named) == 1:
+            _t = _named[0]
+            for r in _blank:
+                _t["qty"] += r["qty"]
+                _t["weight_kg"] = round(_t["weight_kg"] + r["weight_kg"], 4)
+                _t["amount"] += r["amount"]
+                _t["gross_sales"] += r["gross_sales"]
+                for _f in ("cogs", "goods_cogs", "pack_cogs", "labor_cogs",
+                           "material_cogs", "other_cogs", "express_cogs",
+                           "brush_cogs", "settle_income", "total_cogs"):
+                    _t[_f] = round(_t[_f] + r[_f], 2)
+                _t["gross_profit"] = round(_t["amount"] + _t["settle_income"] - _t["total_cogs"], 2)
+                _den = (_t["gross_sales"] or _t["amount"]) + _t["settle_income"]
+                _t["gp_rate"] = round(_t["gross_profit"] / _den * 100, 2) if _den else 0.0
+            _merged.extend(_named)
+        elif _blank:
+            # 有多个非空规格（规格真有差异）→ 空规格单独成行标「未标注规格」。
+            # ⚠️ 这里必须把 _named 和 _blank 都带上：以前只 extend(_named)，
+            # 空规格那几行被改了名字却没进结果，整行（销量/收入/成本）直接丢掉 —— 用户反馈
+            # 「财务报表商品明细比出库明细少了 1000 多」就是这么来的（如 wh01「紫皮独头蒜中果3斤」）。
+            for r in _blank:
+                r["spec"] = "未标注规格"
+            _merged.extend(_named + _blank)
+        else:
+            _merged.extend(_named)
+    product_rows = _merged
+    product_rows.sort(key=lambda r: -r["amount"])
 
     # ---- 入仓品：按「入仓品名 + 分类」单独成行（出库方式=入仓），不与出库商品合并 ----
     # 重量口径两条路，优先第一条：
@@ -733,6 +914,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             "spec": b["spec"],
             "is_dropship": False,
             "is_warehouse_in": True,   # 前端据此把「出库方式」标成「入仓」
+            "source": "入仓",          # 来源列：入仓台账（对面是 手动出库 / 聚水潭出库 / 导入出库）
             "name": b["name"] or "（未命名入仓品）",
             "code": "",
             "unit": b["unit"],         # 入仓按「袋」计；出库行没有这个字段
@@ -787,16 +969,16 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     for e in others_in:
         other_fees[e.category] = round(other_fees.get(e.category, 0.0) + (e.amount or 0.0), 2)
 
-    # 逐日 / 逐月支出：三类合计——采购进货 + 其他开支 + 手工记账。
-    # 注意口径：total 是"全部支出"（含采购），period_expense 才是从毛利中扣减的「期间费用」；
-    # 采购已计入结转成本（COGS），不重复扣减，因此净利仍按期间费用计算。
+    # 逐日 / 逐月支出：四类合计——采购进货 + 其他开支 + 手工记账 + 刷单成本。
+    # 注意口径：total 是"全部支出"（含采购与刷单成本），period_expense 才是从毛利中扣减的「期间费用」；
+    # 采购已计入结转成本（COGS）、刷单成本已在毛利里扣过，两者都不进期间费用，净利仍按期间费用计算。
     exp_day: dict[str, dict] = {}
     exp_month: dict[str, dict] = {}
 
     def _add_expense(bucket: dict, key: str, kind: str, amount: float) -> None:
         if not key:
             return
-        b = bucket.setdefault(key, {"purchase": 0.0, "other": 0.0, "manual": 0.0, "count": 0})
+        b = bucket.setdefault(key, {"purchase": 0.0, "other": 0.0, "manual": 0.0, "brush": 0.0, "count": 0})
         b[kind] += amount or 0.0
         b["count"] += 1
 
@@ -811,19 +993,28 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             continue
         _add_expense(exp_day, f.date, "manual", f.amount)
         _add_expense(exp_month, (f.date or "")[:7], "manual", f.amount)
+    # 刷单成本（放单仓刷单单 = 快递+包装固定费 + 刷单成本）：一笔=一张刷单单
+    for o in outbounds:
+        adj = brush_adjust(o)
+        if not adj and not float(getattr(o, "brush_fee", 0) or 0):
+            continue
+        _add_expense(exp_day, o.date, "brush", adj)
+        _add_expense(exp_month, (o.date or "")[:7], "brush", adj)
 
     def _expense_rows(bucket: dict, label: str) -> list[dict]:
-        """按日期/月份倒序的支出明细：采购 / 其他开支 / 手工记账 / 合计 / 笔数。"""
+        """按日期/月份倒序的支出明细：采购 / 其他开支 / 手工记账 / 刷单成本 / 合计 / 笔数。"""
         return [
             {
                 label: k,
                 "purchase": round(v["purchase"], 2),
                 "other_expense": round(v["other"], 2),
                 "manual_expense": round(v["manual"], 2),
+                # 刷单成本＝快递+包装固定费＋刷单成本（已从毛利扣减，不重复计入期间费用）
+                "brush_expense": round(v["brush"], 2),
                 # 期间费用＝其他开支＋手工记账（真正从毛利中扣减的部分）
                 "period_expense": round(v["other"] + v["manual"], 2),
-                # 全部支出＝采购＋其他开支＋手工记账
-                "total": round(v["purchase"] + v["other"] + v["manual"], 2),
+                # 全部支出＝采购＋其他开支＋手工记账＋刷单成本
+                "total": round(v["purchase"] + v["other"] + v["manual"] + v["brush"], 2),
                 "count": v["count"],
             }
             for k, v in sorted(bucket.items(), reverse=True)
@@ -875,6 +1066,24 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             "operator": f.operator or "", "remark": f.remark or "",
             "ref": "", "auto": f.ref_type not in ("", "manual"),
         })
+    # 刷单成本（放单仓刷单单）：逐单列出来，金额 = 快递+包装固定费 + 刷单成本，
+    # 与「支出合计」同口径（已从毛利扣减，不重复计入期间费用）
+    for o in outbounds:
+        adj = brush_adjust(o)
+        if not adj and not float(getattr(o, "brush_fee", 0) or 0):
+            continue
+        fee = round(brush_fee_of(o), 2)
+        cost = round(float(getattr(o, "brush_cost", 0) or 0), 2)
+        detail = " ＋ ".join(x for x in (
+            f"快递+包装 ¥{fee}" if fee else "",
+            f"刷单成本 ¥{cost}" if cost else "",
+        ) if x) or "刷单结算"
+        expense_items.append({
+            "date": o.date, "source": "刷单成本", "category": "刷单成本",
+            "item": detail, "amount": adj,
+            "operator": o.operator or "", "remark": o.remark or "",
+            "ref": o.code or "", "auto": False,
+        })
     # 日期倒序；同一天保持「采购 → 其他开支 → 手工记账」顺序（稳定排序）
     expense_items.sort(key=lambda r: r["date"], reverse=True)
 
@@ -903,6 +1112,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         # 刷单结算（芳谊放单仓）：刷单成本 + 固定费覆盖差，已从下面的毛利/净利里扣掉
         "brush_cost": brush_total,
         "brush_input_cost": brush_cost,   # 其中「我填的刷单成本」原值合计（展示用）
+        "brush_fee_cost": brush_fee_total,  # 其中「快递+包装固定费」合计（逐单手填，默认 3.6）
         "gross_profit": gross,
         # 期间费用 = 手工记账支出 + 其他开支，从毛利中扣减得到净利
         "expense": expense,
@@ -913,8 +1123,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         "excluded_other_expense": other_raw,   # 被排除掉的其他开支金额（仅供提示）
         "net_profit": net,
         "purchase": round(purchase_db, 2),
-        # 全部支出 = 采购（进货）+ 其他开支 + 手工记账；仅用于"支出"展示口径
-        "total_expense": round(purchase_db + expense, 2),
+        # 全部支出 = 采购（进货）+ 其他开支 + 手工记账 + 刷单成本；仅用于"支出"展示口径
+        # （采购已进结转成本、刷单成本已在毛利里扣过，都不进期间费用，净利不受影响）
+        "total_expense": round(purchase_db + expense + brush_total, 2),
         "stock_value": stock_value,
         "order_count": len(outbounds),
         "inbound_count": len(inbounds),
@@ -1009,9 +1220,12 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
                 d = {**r}
                 for f in num_fields:
                     d[f] = 0.0
+                d["_srcs"] = set()
                 buckets[k] = d
             for f in num_fields:
                 d[f] = float(d.get(f) or 0) + float(r.get(f) or 0)
+            # 来源跨分仓取并集（同一商品在不同分仓可能是手动建单或聚水潭导入）
+            d["_srcs"].update(x.strip() for x in str(r.get("source") or "").split("＋") if x.strip())
     product_rows: list[dict] = []
     for d in buckets.values():
         goods = round(d["goods_cogs"], 2)
@@ -1025,8 +1239,11 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
         gp = round(amount + settle - total_cogs, 2)
         denom = round((gross_sales or amount) + settle, 2)
         product_rows.append({
-            **d,
+            # 去掉内部字段（_srcs 是集合，不能进 JSON）
+            **{k: v for k, v in d.items() if not k.startswith("_")},
             "qty": round(d["qty"], 4),
+            # 来源：合并各分仓后取并集
+            "source": " ＋ ".join(sorted(d.get("_srcs") or [])) or (d.get("source") or ""),
             "amount": amount,
             "gross_sales": gross_sales,
             "settle_income": settle,
@@ -1046,10 +1263,11 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
                 k = r.get(label) or ""
                 if not k:
                     continue
-                b = acc.setdefault(k, {"purchase": 0.0, "other": 0.0, "manual": 0.0, "count": 0})
+                b = acc.setdefault(k, {"purchase": 0.0, "other": 0.0, "manual": 0.0, "brush": 0.0, "count": 0})
                 b["purchase"] += float(r.get("purchase") or 0)
                 b["other"] += float(r.get("other_expense") or 0)
                 b["manual"] += float(r.get("manual_expense") or 0)
+                b["brush"] += float(r.get("brush_expense") or 0)
                 b["count"] += int(r.get("count") or 0)
         return [
             {
@@ -1057,8 +1275,9 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
                 "purchase": round(v["purchase"], 2),
                 "other_expense": round(v["other"], 2),
                 "manual_expense": round(v["manual"], 2),
+                "brush_expense": round(v["brush"], 2),
                 "period_expense": round(v["other"] + v["manual"], 2),
-                "total": round(v["purchase"] + v["other"] + v["manual"], 2),
+                "total": round(v["purchase"] + v["other"] + v["manual"] + v["brush"], 2),
                 "count": v["count"],
             }
             for k, v in sorted(acc.items(), reverse=True)
@@ -1103,6 +1322,7 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
         # 刷单结算（芳谊放单仓）合计：各分仓已按同口径扣减，这里只相加
         "brush_cost": s("brush_cost"),
         "brush_input_cost": s("brush_input_cost"),
+        "brush_fee_cost": s("brush_fee_cost"),
         "gross_profit": s("gross_profit"),
         "expense": s("expense"),
         "manual_expense": s("manual_expense"),
@@ -1465,7 +1685,8 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
         "exclude_other_expense": bool(exclude_other),
         "excluded_other_expense": other_raw,
         "purchase": round(purchase, 2),
-        "total_expense": round(purchase + expense, 2),
+        # 全部支出 = 采购 + 其他开支 + 手工记账 + 刷单成本（与单仓 /report/summary 同口径）
+        "total_expense": round(purchase + expense + brush, 2),
         "net_profit": round(revenue - cogs - brush - expense, 2),
         "orders": int(orders),
         "inbounds": int(inb_cnt),
@@ -1487,7 +1708,15 @@ def all_warehouses(
     exclude_other: int = 0,   # 1 = 排除「其他开支」（与 /report/summary 同口径）
     user: User = Depends(get_current_user),
 ):
-    """全仓总览：把所有分仓的收入 / 支出 / 利润汇总成一张表 + 合计。
+    """全仓总览：把所有分仓的收入 / 支出 / 利润汇总成一张表 + 合计。"""
+    return _heavy_cached(
+        ("all-warehouses", date_from, date_to, int(exclude_other)),
+        lambda: _all_warehouses_impl(date_from, date_to, bool(exclude_other)),
+    )
+
+
+def _all_warehouses_impl(date_from: str, date_to: str, exclude_other: bool) -> dict:
+    """全仓总览的实际计算（逐仓查询后累加）。
 
     每个分仓是**独立账套**（独立 db 文件），因此逐个分仓查询后累加；某个仓读不出来只标记该行，
     不影响其他仓（例如刚建仓、文件缺失）。
@@ -1561,8 +1790,14 @@ def list_finance(
     user: User = Depends(get_current_user),
 ):
     if wh == ALL_WH:
-        return _finance_all(date_from, date_to)
-    return _finance_of(db, date_from, date_to)
+        return _heavy_cached(
+            ("finance", "all", date_from, date_to),
+            lambda: _finance_all(date_from, date_to),
+        )
+    return _heavy_cached(
+        ("finance", resolve_key(wh), date_from, date_to),
+        lambda: _finance_of(db, date_from, date_to),
+    )
 
 
 def _finance_of(db: Session, date_from: str, date_to: str, wh_name: str = "") -> list[dict]:

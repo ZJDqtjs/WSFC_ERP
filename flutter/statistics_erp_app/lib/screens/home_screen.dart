@@ -48,6 +48,12 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  String _warehouseLabel(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    if (auth.warehouseName.isEmpty && auth.warehouseKey.isEmpty) return auth.displayName;
+    return '${auth.warehouseName.isEmpty ? auth.warehouseKey : auth.warehouseName} · ${auth.displayName}';
+  }
+
   String _fmtStock(dynamic p) {
     final stock = (p['stock'] ?? 0).toDouble();
     final unit = p['default_unit'] ?? p['base_unit'] ?? '';
@@ -58,8 +64,35 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('工作台'),
+        // 顶部直接表明身份与当前分仓：切仓后所有数字都换成新仓的
+        title: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('工作台'),
+            Text(
+              _warehouseLabel(context),
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.normal),
+            ),
+          ],
+        ),
         centerTitle: true,
+        actions: [
+          if (_isLoading)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else
+            IconButton(
+              onPressed: _loadDashboard,
+              icon: const Icon(Icons.refresh),
+              tooltip: '刷新',
+            ),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: _loadDashboard,
@@ -91,6 +124,30 @@ class _HomeScreenState extends State<HomeScreen> {
                     '$_productCount 种商品',
                   ),
                 ],
+              ),
+              const SizedBox(height: 12),
+
+              // 业务入口：其余功能都从这里进（底部导航只保留高频五项）
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                  child: GridView.count(
+                    crossAxisCount: 4,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    childAspectRatio: 0.82,
+                    children: const [
+                      _QuickEntry('商品', Icons.category_outlined, '/products'),
+                      _QuickEntry('待付款', Icons.account_balance_wallet_outlined, '/payables'),
+                      _QuickEntry('其他开支', Icons.receipt_long_outlined, '/expenses'),
+                      _QuickEntry('财务流水', Icons.show_chart, '/finance'),
+                      _QuickEntry('规则设置', Icons.tune, '/rules'),
+                      _QuickEntry('库存盘点', Icons.inventory_2_outlined, '/stock'),
+                      _QuickEntry('入库', Icons.arrow_downward, '/inbound'),
+                      _QuickEntry('出库', Icons.local_shipping, '/outbound'),
+                    ],
+                  ),
+                ),
               ),
               const SizedBox(height: 12),
 
@@ -127,9 +184,9 @@ class _HomeScreenState extends State<HomeScreen> {
                             fontWeight: FontWeight.bold, fontSize: 16),
                       ),
                       const SizedBox(height: 10),
-                      TextField(
+                      const TextField(
                         maxLines: 2,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           hintText:
                               '例如：今天入库了 100 斤木耳，25 一斤；或 出库 2 单七彩土豆 3 斤，每单 15 元',
                           border: OutlineInputBorder(),
@@ -253,6 +310,32 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: TextStyle(fontSize: 11, color: Colors.grey[600])),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+class _QuickEntry extends StatelessWidget {
+  const _QuickEntry(this.label, this.icon, this.route);
+
+  final String label;
+  final IconData icon;
+  final String route;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: () => context.push(route),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 26, color: const Color(0xFF1989FA)),
+            const SizedBox(height: 6),
+            Text(label, style: const TextStyle(fontSize: 12)),
+          ],
         ),
       ),
     );

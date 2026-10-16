@@ -900,7 +900,7 @@ def settle_cats_label(cats) -> str:
 
 def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_express: bool = True,
                 allow_self_stock: bool = False, extra_pack_lines=None,
-                settle_cats=None) -> dict:
+                settle_cats=None, brush: bool = False) -> dict:
     """构建出库单明细：销售行 + 关联结算行(包装材料) + 费用，并校验库存。不落库。
 
     成本结转按「先进先出(FIFO)」：从商品最早的入库批次依次扣减，成本 = Σ(批次单位成本 × 扣减数量)。
@@ -917,7 +917,16 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
 
     settle_cats：客户承担的关联结算类别（material 包材 / labor 人工 / express 快递费）；
     勾选类别的金额合计 = settle_income，计入「实收金额」与报表收入（成本不变）。
+
+    brush=True（放单仓刷单，见 app/brush.py）：本仓不出货、不结转任何成本，只留销售行 ——
+    不算商品成本(FIFO)、不生成包材/人工/快递这些关联结算行、不产生库存流水、不算打包费。
+    该单成本另算：快递+包装固定费(手填) + 刷单成本，落在出库单的 brush_fee / brush_cost 上。
     """
+    if brush:
+        pack_lines = []
+        extra_pack_lines = []
+        fee_total = 0.0
+        auto_express = False
     pack_lines = pack_lines or []
     sale_rows, pack_rows, warnings = [], [], []
     total_amount = total_cogs = 0.0
@@ -961,6 +970,20 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
         amount = round(quantity * price, 2)
         # 扣点前销售金额（原始金额）：导入扣点单传入；否则等于实际销售金额
         gross_sales = round(float(gross), 2) if gross and float(gross) > 0 else amount
+        if brush:
+            # 刷单（放单仓）：本仓不出货、不计商品成本 —— 只留一条销售行，
+            # 不解析扣减目标（不扣库存、不做库存大类关联校验），成本口径见 app/brush.py
+            sale_rows.append({
+                "product_id": p.id, "product_name": p.name, "base_unit": p.base_unit,
+                "unit": unit, "quantity": quantity, "quantity_base": qty_base,
+                "stock_product_id": p.id, "stock_product_name": p.name,
+                "deduction_base": 0.0, "deductions": [], "is_dropship": False,
+                "free_shipping": True, "no_stock": True,
+                "unit_price": price, "amount": amount, "cogs": 0.0, "pack_fee": 0.0,
+                "gross_sales": gross_sales, "line_type": "sale", "spec": spec,
+            })
+            total_amount += amount
+            continue
         # 扣减目标：一单多货规则如指定库存大类则按其扣减；否则按订单商品关联的库存商品（大类）；
         # 订单商品未关联库存大类 = 代发：不扣任何库存，只记代发数量与代发成本。
         deds = _deductions_with_override(db, p, qty_base, ov_sp, ov_mult)
@@ -1033,7 +1056,7 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
         total_cogs += cogs
 
     pack_specs = list(pack_lines)
-    if not pack_specs:
+    if not pack_specs and not brush:   # 刷单不生成任何关联结算行（包材/人工/快递）
         agg: dict[tuple[int, int], dict] = {}
         for ln in lines:
             if hasattr(ln, "product_id"):  # Pydantic 对象
@@ -1149,6 +1172,7 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
     return {
         "sale_lines": sale_rows,
         "pack_lines": pack_rows,
+        "is_brush": brush,   # 刷单单：成本=快递+包装固定费+刷单成本（不走本函数）
         "total_amount": round(total_amount, 2),
         "total_cogs": round(total_cogs, 2),
         "total_fee": round(total_fee, 2),
@@ -1210,6 +1234,9 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
     allow_self_stock：手动出库直接选了库存大类时扣它自己的库存（导入路径保持 False，见 build_order）。
     """
     lines = payload["lines"]
+    # 芳谊放单仓刷单结算（口径见 app/brush.py）：刷单单不出货、不计任何库存/成本，
+    # 成本 = 快递+包装固定费(手填) + 刷单成本 —— 见下方 brush_fee / brush_cost 两列。
+    brush = is_brush_warehouse(payload.get("warehouse"))
     order = build_order(
         db, lines, payload.get("pack_lines"), payload.get("pack_fee_total"),
         payload.get("auto_express", True),   # 手动出库可关掉自动快递费；批量导入等默认开
@@ -1217,15 +1244,15 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
         # 客户承担的关联结算类别（包材/人工/快递费）：手动单由表单开关传，
         # 导入路径不传 → 默认「客户不承担」（见 normalize_settle_cats）
         settle_cats=payload.get("settle_cats"),
+        brush=brush,
     )
     op = (payload.get("operator") or "").strip() or operator
     date = payload["date"]
     adjust = round(float(payload.get("adjust_amount") or 0), 2)   # 抹零/凑整：正=加收，负=抹零
     pay = pay_fields(payload, date)
-    # 芳谊放单仓刷单结算（口径见 app/brush.py）：只有放单仓的单子才记这三列，其余单据口径不变。
-    # brush_auto_fee 由服务端自己按出库口径算（= 关联结算快递/包材/人工 + 打包费），不信任前端传值。
-    brush = is_brush_warehouse(payload.get("warehouse"))
-    brush_auto_fee = round(float(order.get("pack_cogs", 0) or 0) + float(order["total_fee"] or 0), 2) if brush else 0.0
+    # 刷单单没有系统自动的固定费（既不出货也没什么自动成本）→ brush_auto_fee 恒为 0，
+    # 于是 brush_adjust = 快递+包装固定费(手填) + 刷单成本，正好是该单全部成本。
+    brush_auto_fee = 0.0
     rec = Outbound(
         code=gen_outbound_code(db, date),
         import_group=import_group,
@@ -1254,6 +1281,8 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
     for r in order["sale_lines"] + order["pack_lines"]:
         is_sale = r["line_type"] == "sale"
         dropship = bool(is_sale and r.get("is_dropship"))
+        # no_stock：刷单单（本仓不出货也不耗包材，只进台账）→ 不产生任何库存流水
+        no_stock = bool(r.get("no_stock"))
         line = OutboundLine(
             outbound_id=rec.id,
             product_id=r["product_id"],
@@ -1272,7 +1301,7 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
         )
         db.add(line)
         db.flush()   # 取行 id：订单商品关联多个库存商品时，一行明细对应多条库存流水
-        if not dropship:   # 代发：本仓不出货，不产生库存流水（否则会把库存扣成负数）
+        if not dropship and not no_stock:   # 代发/刷单：本仓不出货，不产生库存流水（否则会把库存扣成负数）
             if is_sale:
                 # 库存流水扣在库存商品（大类）上：订单商品关联多个则逐个扣减，每条流水回指本行
                 deds = r.get("deductions") or []

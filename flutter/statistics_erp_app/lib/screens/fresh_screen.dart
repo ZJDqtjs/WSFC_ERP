@@ -13,7 +13,7 @@ class FreshScreen extends StatefulWidget {
 class _FreshScreenState extends State<FreshScreen> {
   List<dynamic> _items = [];
   bool _loading = false;
-  int? _draggingId;
+
 
   @override
   void initState() {
@@ -98,9 +98,7 @@ class _FreshScreenState extends State<FreshScreen> {
                       opacity: 0.4,
                       child: _buildCard(item, index),
                     ),
-                    onDragStarted: () => setState(() => _draggingId = item['id'] as int?),
-                    onDraggableCanceled: (_, __) => setState(() => _draggingId = null),
-                    onDragCompleted: () => setState(() => _draggingId = null),
+
                     child: DragTarget<int>(
                       onAcceptWithDetails: (details) {
                         final fromId = details.data;

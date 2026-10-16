@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+
 import 'package:intl/intl.dart';
 
 import '../services/api_service.dart';
@@ -196,7 +196,7 @@ class _InboundScreenState extends State<InboundScreen> {
     final product = await Navigator.push<Product>(
       context,
       MaterialPageRoute(
-        builder: (context) => _ProductPickerScreen(),
+        builder: (context) => const _ProductPickerScreen(),
       ),
     );
 
@@ -300,7 +300,7 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
     return _products.where((p) {
       if (_searchKeyword.isNotEmpty &&
           !p.name.toLowerCase().contains(_searchKeyword.toLowerCase()) &&
-          !(p.category ?? '').toLowerCase().contains(_searchKeyword.toLowerCase())) {
+          !p.category.toLowerCase().contains(_searchKeyword.toLowerCase())) {
         return false;
       }
       if (_filterCategory.isNotEmpty && p.category != _filterCategory) return false;
@@ -309,7 +309,7 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
   }
 
   Set<String> get _categories {
-    return _products.map((p) => p.category ?? '').where((c) => c.isNotEmpty).toSet();
+    return _products.map((p) => p.category).where((c) => c.isNotEmpty).toSet();
   }
 
   @override
@@ -367,7 +367,7 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
                           return ListTile(
                             title: Text('[库存] ${p.name}'),
                             subtitle: Text(
-                              '${p.category ?? '—'} · 单位 ${p.defaultUnit ?? p.baseUnit} · 库存 ${p.stock}',
+                              '${p.category.isEmpty ? '—' : p.category} · 单位 ${p.defaultUnit ?? p.baseUnit} · 库存 ${p.stock}',
                             ),
                             trailing: const Icon(Icons.chevron_right),
                             onTap: () => Navigator.pop(context, p),

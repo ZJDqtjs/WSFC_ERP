@@ -486,6 +486,11 @@ _EXTRA_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_finance_records_ref ON finance_records(ref_type, ref_id)",
     "CREATE INDEX IF NOT EXISTS idx_outbound_lines_outbound ON outbound_lines(outbound_id)",
     "CREATE INDEX IF NOT EXISTS idx_other_expenses_ref ON other_expenses(ref_type, ref_id)",
+    # 报表「重量(kg)」按出库行的库存流水反推扣减量：line_id 是 ALTER 补加的列，模型里的
+    # index=True 对老库不生效 → 缺这个索引时重量查询会退化成全表扫描（实测 13 天区间 104 秒）。
+    "CREATE INDEX IF NOT EXISTS idx_stock_movements_line ON stock_movements(line_id)",
+    # 旧流水（line_id 为空）按「单」归属时用：ref_id 局部索引
+    "CREATE INDEX IF NOT EXISTS idx_stock_movements_ref_null ON stock_movements(ref_id) WHERE line_id IS NULL",
 )
 
 

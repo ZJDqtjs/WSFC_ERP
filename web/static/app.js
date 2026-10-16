@@ -5103,6 +5103,11 @@ async function openProductModal(pid = 0, prefillName = "") {
       <div class="field"><label>单位（默认单位）</label><select id="pUnit" class="searchable"></select><div class="field-hint">重量类按克记账（1斤=500克），计数类按个记账；订单商品固定为「单」。<b>下面的售价与成本都按这个单位填</b></div></div>
       <div class="field"><label id="pSalePriceLabel">默认售价（元/${esc(du0)}）</label><input id="pSalePrice" type="number" step="any" value="${saleDisp}" /><div class="field-hint" id="pSalePriceHint"></div></div>
       <div class="field"><label id="pUnitCostLabel">参考成本（元/${esc(du0)}）</label><input id="pUnitCost" type="number" step="any" value="${costDisp}" /><div class="field-hint" id="pUnitCostHint"></div></div>
+      <div class="field" id="pUnitChangeBox" style="display:none;grid-column:1/-1;">
+        <label id="pUnitChangeLabel">换计量单位的换算关系</label>
+        <input id="pUnitRatio" type="number" step="any" min="0" placeholder="如 300" style="max-width:200px;" />
+        <div class="field-hint" id="pUnitChangeHint"></div>
+      </div>
       <div class="field" id="pWeightBox"><label>单件净重（kg）</label><input id="pWeightKg" type="number" step="any" value="${p?.weight_kg || 0}" /><div class="field-hint">用于计算快递费。重量类库存自动按「扣减库存量」推导；按袋/按件等计数库存推不出重量时，就用这里手填的净重兜底（如 四神汤200g 填 0.2）。<b>代发商品填了净重也会按净重结算快递费</b>（不填=代发方包邮，不计快递费）</div></div>
     </div>
     <div id="pStockBox" class="form-grid" style="margin-top:10px;display:${ptype === "order" ? "grid" : "none"};">
@@ -5130,6 +5135,7 @@ async function openProductModal(pid = 0, prefillName = "") {
     </div>`);
   initProductUnitSelect(ptype, curUnit);
   updateProductPriceLabels(du0, f0, up0.base_unit);   // 价格字段标签/提示按默认单位显示
+  updateUnitChangeBox(up0);                            // 跨类别换单位时显示「换算关系」输入框（初始=没换，隐藏）
   // 加载库存商品（大类）列表，并渲染「扣减库存商品」多行（支持 + 号新增）
   if (ptype === "order") {
     api("/api/stocks").then((stocks) => {
@@ -5191,7 +5197,37 @@ function updateProductPriceLabels(du, f, bu) {
   if ($("pSalePriceLabel")) $("pSalePriceLabel").textContent = `默认售价（元/${du}）`;
   if ($("pUnitCostLabel")) $("pUnitCostLabel").textContent = `参考成本（元/${du}）`;
   if ($("pSalePriceHint")) $("pSalePriceHint").textContent = `按默认单位填${conv}；出库时按这个价带出`;
-  if ($("pUnitCostHint")) $("pUnitCostHint").textContent = `按默认单位填${conv}；包材/人工等无入库时按此成本结算（如纸箱 0.9 元/个）`;
+  if ($("pUnitCostHint")) {
+    let t = `按默认单位填${conv}；包材/人工等无入库时按此成本结算（如纸箱 0.9 元/个）`;
+    // 商品列表的「参考成本」格有库存均价时优先显示均价（不是这里填的参考成本），
+    // 不说清楚就会出现「编辑页 16.5、列表 5000」这种对不上的观感
+    const avg = PM_EDIT_P ? (Number(PM_EDIT_P.avg_cost) || 0) : 0;
+    if (avg > 0) t += `。<b>注意</b>：该商品已有库存均价 ${fmtMoney(avg * f)}/${esc(du)}（由出入库自动形成），列表「参考成本」格优先显示它、出库成本也按它算，改这里不会立刻改变均价`;
+    $("pUnitCostHint").innerHTML = t;
+  }
+}
+/* 换「计量单位」若跨了类别（计数「个」↔ 重量「克」），基础单位会跟着换（重量→克、计数→个），
+   历史数量与成本必须按换算关系折算，否则均价会被放大成倍数（个→公斤 就是 ×1000）。
+   这里在编辑已有商品时显示换算关系输入框；没有历史数据时留空即可（后端会忽略）。 */
+function pUnitCat(base) {
+  return (base === "克" || base === "g") ? "weight" : "count";
+}
+function updateUnitChangeBox(up) {
+  const box = $("pUnitChangeBox");
+  if (!box) return;
+  const oldBase = PM_EDIT_P ? (PM_EDIT_P.base_unit || "") : "";
+  const newBase = (up && up.base_unit) || "";
+  const changed = !!(PM_EDIT_P && oldBase && newBase && pUnitCat(oldBase) !== pUnitCat(newBase));
+  box.style.display = changed ? "" : "none";
+  if (!changed) return;
+  const label = $("pUnitChangeLabel");
+  const hint = $("pUnitChangeHint");
+  if (label) label.textContent = `换计量单位的换算关系：1 ${oldBase} = ? ${newBase}`;
+  if (hint) {
+    hint.innerHTML = `从「${esc(oldBase)}」换到「${esc(newBase)}」不是一个类别，历史数量与成本要按这个关系折算`
+      + `（如 1 个 = 300 克）。<b>该商品已有单据时必填</b>，否则会被按新单位重新解读、均价被放大成倍数；`
+      + `如果它还没有入库/出库记录，留空即可。`;
+  }
 }
 /* 切换默认单位：先把手填的值折回基础单位，再按新单位显示，避免价格被单位搞乱 */
 function pUnitChanged() {
@@ -5209,6 +5245,7 @@ function pUnitChanged() {
   if ($("pSalePrice")) $("pSalePrice").value = +(PM_SALE_BASE * f).toFixed(6);
   if ($("pUnitCost")) $("pUnitCost").value = +(PM_COST_BASE * f).toFixed(6);
   updateProductPriceLabels(du, f, up.base_unit);
+  updateUnitChangeBox(up);
 }
 /* 由「默认单位」推出基础单位与换算表：重量类归「克」、计数类归「个」，
    换算系数取自单位表（新增的重量类单位按它填的每单位克数参与换算）。 */
@@ -5318,6 +5355,8 @@ async function saveProduct(pid) {
     // PM_UNIT_F 就是当前显示单位对应的换算系数（打开弹窗时设置，切换单位时同步更新）
     sale_price: +((+$("pSalePrice").value || 0) / (PM_UNIT_F || 1)).toFixed(8),
     unit_cost: +((+$("pUnitCost").value || 0) / (PM_UNIT_F || 1)).toFixed(8),
+    // 跨类别换单位（个↔克）时的换算关系：1 旧基础单位 = N 新基础单位；没换/无历史数据时留空
+    unit_change_ratio: parseFloat($("pUnitRatio") ? $("pUnitRatio").value : "") || null,
     weight_kg: +($("pWeightKg").value || 0),
     conversions: unitPayload.conversions,
     pack_items: collectPacks(),
@@ -5340,7 +5379,11 @@ async function saveProduct(pid) {
     closeModal(); toast("商品已保存");
     PRODUCTS = await api("/api/products");
     renderProducts();
-  } catch (e) { toast("保存失败：" + e.message); }
+  } catch (e) {
+    // 换单位的换算关系没填：后端消息是分行的说明，toast 看不全，用弹窗
+    if (/换算关系/.test(e.message || "")) alert(e.message);
+    else toast("保存失败：" + e.message);
+  }
 }
 async function deleteProduct(pid) {
   if (!confirm("确认删除该商品？其历史单据会一并删除，请谨慎。")) return;
@@ -6648,8 +6691,17 @@ function costSplitText(r) {
   const material = split ? (Number(r.material_cogs) || 0) : 0;
   const other = split ? (Number(r.other_cogs) || 0) : 0;
   const brush = Number(r.brush_cogs) || 0;   // 芳谊放单仓刷单结算（分摊到该商品的部分）
+  const brushFee = Number(r.brush_fee_cogs) || 0;    // 刷单单手填的「快递+包装固定费」
+  const brushCost = Number(r.brush_cost_cogs) || 0;  // 刷单单手填的「刷单成本」
   const isWi = !!r.is_warehouse_in;   // 入仓行：material/express 字段装的是「包材/运费」，标签要换
-  if (!(r.is_dropship || oldPack || express || labor || material || other || brush)) return "";
+  if (brush) {
+    // 刷单单：本仓不出货、不结转商品/包材/人工/快递，成本就是这两项手填值（口径见 app/brush.py）
+    const items = [];
+    if (brushFee) items.push(`快递+包装 ${fmtMoney(brushFee)}`);
+    if (brushCost) items.push(`刷单成本 ${fmtMoney(brushCost)}`);
+    return items.join(" ＋ ");
+  }
+  if (!(r.is_dropship || oldPack || express || labor || material || other)) return "";
   const parts = [`${r.is_dropship ? "代发成本" : "商品成本"} ${fmtMoney(goods)}`];
   if (split) {
     if (labor) parts.push(`打包人工 ${fmtMoney(labor)}`);
@@ -6659,7 +6711,6 @@ function costSplitText(r) {
     parts.push(`打包人工+耗材 ${fmtMoney(oldPack)}`);
   }
   if (express) parts.push(`${isWi ? "运费" : "快递费"} ${fmtMoney(express)}`);
-  if (brush) parts.push(`刷单成本 ${fmtMoney(brush)}`);
   return parts.join(" ＋ ");
 }
 function outAggBy(rows, pool) {
@@ -6746,7 +6797,9 @@ function renderOutGroup() {
       a.material_cogs = a.material_cogs || 0; // 包材/耗材
       a.other_cogs = a.other_cogs || 0;      // 其他关联结算
       a.express_cogs = a.express_cogs || 0;  // 快递费
-      a.brush_cogs = a.brush_cogs || 0;      // 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差）
+      a.brush_cogs = a.brush_cogs || 0;      // 芳谊放单仓刷单结算（刷单成本 + 快递+包装固定费）
+      a.brush_fee_cogs = a.brush_fee_cogs || 0;   // 其中：手填的「快递+包装固定费」
+      a.brush_cost_cogs = a.brush_cost_cogs || 0; // 其中：手填的「刷单成本」
       a.settle_income = a.settle_income || 0; // 客户代收的关联结算（包材/人工/快递费，按销售金额占比分摊）
 
       let arr = byPid.get(a.pid);
@@ -6784,10 +6837,13 @@ function renderOutGroup() {
         }
       }
       // 芳谊放单仓刷单结算：整单金额按该单销售金额占比分摊到商品上（与后端 report.py 同口径）
+      // 同时把「快递+包装固定费」和「刷单成本」分别摊出去，批次明细里能分开看到这两项
       if (o.brush_adjust && saleLines.length) {
         for (const sl of saleLines) {
           const share = totalAmt ? (sl.amount || 0) / totalAmt : 1 / saleLines.length;
           spread(sl.product_id, (o.brush_adjust || 0) * share, "brush_cogs");
+          spread(sl.product_id, (o.brush_fee || 0) * share, "brush_fee_cogs");
+          spread(sl.product_id, (o.brush_cost || 0) * share, "brush_cost_cogs");
         }
       }
       // 客户代收的关联结算（包材/人工/快递费）：同样按销售金额占比分摊，商品毛利算上它（与后端同口径）
@@ -6809,8 +6865,10 @@ function renderOutGroup() {
     amt: rows.reduce((s, o) => s + (o.total_amount || 0) + (o.settle_income || 0), 0),
     cogs: rows.reduce((s, o) => s + (o.total_cogs || 0), 0),
     fee: rows.reduce((s, o) => s + (o.total_fee || 0), 0),
-    // 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差）：净利里已扣掉，单独列出便于核对
+    // 芳谊放单仓刷单结算：净利里已扣掉，拆成「快递+包装固定费」与「刷单成本」两项便于核对
     brush: rows.reduce((s, o) => s + (o.brush_adjust || 0), 0),
+    brushFee: rows.reduce((s, o) => s + (o.brush_fee || 0), 0),
+    brushCost: rows.reduce((s, o) => s + (o.brush_cost || 0), 0),
   };
   const net = total.amt - total.cogs - total.fee - total.brush;
   $("ogTitle").textContent = `出库批次明细（${rows.length} 单）`;
@@ -6823,7 +6881,8 @@ function renderOutGroup() {
      <div class="stat"><div class="label">人工种数</div><div class="value">${outAggBy(rows, "labor").length}</div></div>
      <div class="stat"><div class="label">销售收入</div><div class="value">${fmtMoney(total.amt)}</div></div>
      <div class="stat"><div class="label">结转成本</div><div class="value">${fmtMoney(total.cogs)}</div></div>
-     ${total.brush ? `<div class="stat"><div class="label">刷单成本</div><div class="value" style="color:var(--red)">${fmtMoney(total.brush)}</div></div>` : ""}
+     ${total.brushFee ? `<div class="stat"><div class="label">快递+包装</div><div class="value" style="color:var(--red)">${fmtMoney(total.brushFee)}</div></div>` : ""}
+     ${total.brushCost ? `<div class="stat"><div class="label">刷单成本</div><div class="value" style="color:var(--red)">${fmtMoney(total.brushCost)}</div></div>` : ""}
      <div class="stat success"><div class="label">净利</div><div class="value" style="color:${net >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(net)}</div></div>`;
   const seg = segActive("ogSeg");
   let isSale = false, isLaborPack = false, emptyText = "无记录";
@@ -7392,7 +7451,9 @@ function renderCostBreakdown(rep) {
 let REP_PROD_ROWS = null;   // 最近一次报表的商品明细原始行（未筛选、未排序）
 
 /* 出库方式：入仓（入仓品卖到京东）/ 代发（别人发货，不扣本仓库存）/ 库存出库。
-   搜索栏输入「入仓」「代发」「库存」都能筛出对应类型的行。 */
+   来源（后端 by_product.source）：手动出库 / 聚水潭出库 / 导入出库 / 入仓
+   —— 手动建单没有导入分组；聚水潭导入的备注里带「聚水潭导入」。
+   搜索栏输入「入仓」「代发」「库存」「手动」「聚水潭」都能筛出对应行。 */
 const isWarehouseIn = (p) => !!p.is_warehouse_in;
 const wayTextOf = (p) => (isWarehouseIn(p) ? "入仓" : (p.is_dropship ? "代发" : "库存出库"));
 const wayBadgeOf = (p) => (isWarehouseIn(p)
@@ -7406,8 +7467,9 @@ function renderReportGoods() {
   const kwEl = $("repGoodsKw");
   const kw = ((kwEl && kwEl.value) || "").trim();
   const k = kw.toLowerCase();
-  // 关键词命中：商品名 / 规格 / 出库方式（输入「入仓」筛出入仓品，输入「代发」筛出代发商品）
-  const hit = k ? all.filter((p) => `${p.name || ""} ${p.spec || ""} ${wayTextOf(p)}`.toLowerCase().includes(k)) : all;
+  // 关键词命中：商品名 / 规格 / 出库方式 / 来源（输入「入仓」「代发」「手动」「聚水潭」都能筛）
+  const hit = k ? all.filter((p) =>
+    `${p.name || ""} ${p.spec || ""} ${wayTextOf(p)} ${p.source || ""}`.toLowerCase().includes(k)) : all;
   const prodRows = applyTableSort(pt, hit);
   const hint = $("repGoodsHint");
   if (hint) hint.textContent = all.length ? (k ? `匹配 ${prodRows.length} / ${all.length} 个商品` : `共 ${all.length} 个商品`) : "";
@@ -7459,11 +7521,18 @@ function renderReportGoods() {
       // 成本构成：代发行也要列出来（代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 其他关联结算 ＋ 快递费）
       const splitText = costSplitText(p);
       const split = splitText ? `<div class="muted" style="font-size:11px;">${splitText}</div>` : "";
-      // 出库方式：入仓 / 代发（别人发货，不扣本仓库存）/ 库存出库
+      // 出库方式：入仓 / 代发（别人发货，不扣本仓库存）/ 库存出库；
+      // 下面再标一行「来源」：手动出库 / 聚水潭出库 / 导入出库（一眼看出这行是哪来的）
       const way = wayBadgeOf(p);
+      const srcText = (p.source || "").trim();
+      const wayCell = way + (srcText ? `<div class="muted" style="font-size:11px;">${esc(srcText)}</div>` : "");
+      // 规格：同一商品可能按不同规格分行（如「大香芋头4.5斤3-5个」与「4.5斤2-3个」），
+      // 不显示规格时两行看起来就是重复，必须显式标出来
+      const specText = (p.spec || "").trim()
+        ? `<div class="muted" style="font-size:12px;">规格 ${esc(p.spec)}</div>` : "";
       return `<tr>
-      <td>${esc(p.name)}${split}</td>
-      <td>${way}</td>
+      <td>${esc(p.name)}${specText}${split}</td>
+      <td>${wayCell}</td>
       <td class="num mono">${fmtNum(p.qty)}${p.unit ? esc(p.unit) : ""}</td>
       <td class="num mono">${fmtKg(p.weight_kg)}</td>
       <td class="num mono">${fmtMoney((Number(p.amount) || 0) + settle)}${settle ? `<div class="muted" style="font-size:11px;" title="客户随货款一起付的包材/人工/快递费（成本里已含，收入侧也计一笔）">含代收 ${fmtMoney(settle)}</div>` : ""}</td>
@@ -7542,8 +7611,9 @@ function repTab(btn) {
 }
 /* 支出下钻（二级页面）：点「按日/按月」表里的日期或金额，展开该时段该来源的逐笔构成。
    数据直接用当前区间已加载的 REP_EXP_ITEMS，不再请求接口；key 为空表示整个查询区间（合计行）。 */
-const REP_DRILL_SRC = { purchase: "采购", other: "其他开支", manual: "手工记账" };
-const REP_SRC_TABS = [["", "全部来源"], ["采购", "采购（进货）"], ["其他开支", "其他开支"], ["手工记账", "手工记账"]];
+const REP_DRILL_SRC = { purchase: "采购", other: "其他开支", manual: "手工记账", brush: "刷单成本" };
+const REP_SRC_TABS = [["", "全部来源"], ["采购", "采购（进货）"], ["其他开支", "其他开支"],
+                      ["手工记账", "手工记账"], ["刷单成本", "刷单成本"]];
 let REP_DRILL = null;
 
 function openExpDrill(key, kind) {
@@ -7635,14 +7705,15 @@ function renderExpenseTables(rep) {
   const other = rep.other_expense || 0;                                // 其他开支
   const manual = rep.manual_expense || 0;                              // 手工记账
   const period = rep.expense || 0;                                     // 期间费用（从毛利中扣减）
-  const total = rep.total_expense != null ? rep.total_expense : purchase + period;  // 全部支出（含采购）
+  const brush = rep.brush_cost || 0;                                   // 刷单成本（放单仓刷单单）
+  const total = rep.total_expense != null ? rep.total_expense : purchase + period + brush;  // 全部支出（含采购与刷单）
   const MAX_DAYS = 90;
   const sumCount = (rows) => rows.reduce((a, r) => a + (r.count || 0), 0);
 
   const hint = $("repExpHint");
   if (hint) {
     hint.textContent = total
-      ? `按日 / 按月列出各项支出，合计 ${fmtMoney(total)} ＝ 采购 ＋ 其他开支 ＋ 手工记账`
+      ? `按日 / 按月列出各项支出，合计 ${fmtMoney(total)} ＝ 采购 ＋ 其他开支 ＋ 手工记账 ＋ 刷单成本`
         + " · 点日期或金额可展开该日/该月的构成明细"
       : "本期无支出";
     if (days.length > MAX_DAYS) hint.textContent += ` · 按日仅列最近 ${MAX_DAYS} 天`;
@@ -7687,6 +7758,7 @@ function renderExpenseTables(rep) {
     cell(r.purchase, "#1989fa", keyOf(r), "purchase", "展开采购支出构成") +
     cell(r.other_expense, "#f97316", keyOf(r), "other", "展开其他开支构成") +
     cell(r.manual_expense, "#6366f1", keyOf(r), "manual", "展开手工记账构成") +
+    cell(r.brush_expense, "#e11d48", keyOf(r), "brush", "展开刷单成本构成（放单仓刷单单）") +
     `<td class="num mono"><b>${r.total ? drill(keyOf(r), "", fmtMoney(r.total), "展开全部支出明细") : "—"}</b></td>`;
   // 合计行：key 为空 = 整个查询区间
   const totalCells = (label, rows) =>
@@ -7694,6 +7766,7 @@ function renderExpenseTables(rep) {
     `<td class="num mono" style="color:#1989fa"><b>${drill("", "purchase", fmtMoney(purchase), "展开本期采购构成")}</b></td>` +
     `<td class="num mono" style="color:#f97316"><b>${drill("", "other", fmtMoney(other), "展开本期其他开支构成")}</b></td>` +
     `<td class="num mono" style="color:#6366f1"><b>${drill("", "manual", fmtMoney(manual), "展开本期手工记账构成")}</b></td>` +
+    `<td class="num mono" style="color:#e11d48"><b>${drill("", "brush", fmtMoney(brush), "展开本期刷单成本明细")}</b></td>` +
     `<td class="num mono"><b>${drill("", "", fmtMoney(total), "展开本期全部支出明细")}</b></td>` +
     `<td></td><td class="num mono"><b>${sumCount(rows)}</b></td></tr>`;
 
@@ -7702,13 +7775,14 @@ function renderExpenseTables(rep) {
   const dayRows = days.slice(0, MAX_DAYS);
   dt.innerHTML = `<thead><tr>
     <th>日期</th><th class="num">采购支出</th><th class="num">其他开支</th><th class="num">手工记账</th>
+    <th class="num">刷单成本</th>
     <th class="num">支出合计</th><th class="num">占比</th><th class="num">笔数</th></tr></thead><tbody>` +
     (dayRows.length
       ? dayRows.map((r) => `<tr>
           <td class="mono">${drill(jsKey(r.date), "", esc(r.date), "展开当天全部支出明细")}</td>${amountCells(r)}
           <td class="num">${bar(r.total)}<span class="muted">${pctOf(r.total).toFixed(1)}%</span></td>
           <td class="num mono">${r.count}</td></tr>`).join("")
-      : `<tr><td colspan="7" class="empty">${emptyText}</td></tr>`) +
+      : `<tr><td colspan="8" class="empty">${emptyText}</td></tr>`) +
     `</tbody>` +
     (days.length ? `<tfoot>${totalCells(`合计（${days.length} 天 · ${sumCount(days)} 笔）`, days)}</tfoot>` : "");
 
@@ -7716,6 +7790,7 @@ function renderExpenseTables(rep) {
   const mt = $("repExpMonthTable");
   mt.innerHTML = `<thead><tr>
     <th>月份</th><th class="num">采购支出</th><th class="num">其他开支</th><th class="num">手工记账</th>
+    <th class="num">刷单成本</th>
     <th class="num">支出合计</th><th class="num">环比</th><th class="num">笔数</th></tr></thead><tbody>` +
     (months.length
       ? months.map((m, i) => {
@@ -7728,13 +7803,13 @@ function renderExpenseTables(rep) {
           <td class="num mono" style="color:${color}">${txt}</td>
           <td class="num mono">${m.count}</td></tr>`;
       }).join("")
-      : `<tr><td colspan="7" class="empty">${emptyText}</td></tr>`) +
+      : `<tr><td colspan="8" class="empty">${emptyText}</td></tr>`) +
     `</tbody>` +
     (months.length ? `<tfoot>${totalCells(`合计（${months.length} 个月 · ${sumCount(months)} 笔）`, months)}</tfoot>` : "");
 }
 
-/* 支出逐笔明细：采购 / 其他开支 / 手工记账，逐条列出（与「支出合计」同口径） */
-const REP_EXP_SRC_COLORS = { "采购": "#1989fa", "其他开支": "#f97316", "手工记账": "#6366f1" };
+/* 支出逐笔明细：采购 / 其他开支 / 手工记账 / 刷单成本，逐条列出（与「支出合计」同口径） */
+const REP_EXP_SRC_COLORS = { "采购": "#1989fa", "其他开支": "#f97316", "手工记账": "#6366f1", "刷单成本": "#e11d48" };
 let REP_EXP_ITEMS = [];
 let REP_EXP_API_OK = true;
 let REP_EXP_WITH_WH = false;   // 全仓总览：逐笔明细来自多个分仓，需要显示来源分仓列
@@ -7818,10 +7893,14 @@ function renderExpenseSummary(rep) {
   const hint = $("repFeeHint");
   if (hint) hint.textContent = `统计区间 ${rep.date_from || "最早"} ~ ${rep.date_to || "最新"} · 支出合计 ${fmtMoney(total)}`;
 
+  const brush = rep.brush_cost || 0;           // 刷单成本：快递+包装固定费 + 刷单成本（已在毛利里扣过）
+  const brushFee = rep.brush_fee_cost || 0;    // 其中「快递+包装固定费」（逐单手填，默认 3.6）
+  const brushInput = rep.brush_input_cost || 0; // 其中「我填的刷单成本」原值
   const rows = [
     { name: "采购支出（进货）", value: purchase, color: "#1989fa", desc: "入库 / 进货金额（与「本期进货」同源，含入库运费/装卸费），已计入结转成本" },
     { name: "其他开支", value: other, color: "#f97316", desc: "网线费 / 安装费 / 机器费 / 样品费等（构成见下表）" },
     { name: "手工记账", value: manual, color: "#6366f1", desc: "财务流水里登记的支出（构成见下表）" },
+    { name: "刷单成本", value: brush, color: "#e11d48", desc: "芳谊放单仓刷单单：快递+包装固定费 ＋ 刷单成本（逐单见「支出明细 / 来源=刷单成本」），已从毛利扣减，不重复计入期间费用" },
   ];
   box.innerHTML = `<thead><tr>
       <th>支出项</th><th class="num">金额</th><th class="num">占全部支出</th><th>说明</th></tr></thead><tbody>` +
@@ -7835,12 +7914,17 @@ function renderExpenseSummary(rep) {
         <td><b>支出合计</b></td>
         <td class="num mono"><b>${fmtMoney(total)}</b></td>
         <td class="num mono"><b>100.0%</b></td>
-        <td class="muted">＝ 采购 ＋ 其他开支 ＋ 手工记账</td></tr>
+        <td class="muted">＝ 采购 ＋ 其他开支 ＋ 手工记账 ＋ 刷单成本</td></tr>
       <tr>
         <td>其中：期间费用</td>
         <td class="num mono">${fmtMoney(period)}</td>
         <td class="num mono">${pctOf(period).toFixed(1)}%</td>
-        <td class="muted">其他开支 ＋ 手工记账；<b>毛利 − 期间费用 = 净利</b>（采购已计入结转成本，不重复扣）</td></tr>
+        <td class="muted">其他开支 ＋ 手工记账；<b>毛利 − 期间费用 = 净利</b>（采购已计入结转成本、刷单成本已在毛利里扣过，都不重复扣）</td></tr>
+      ${brush ? `<tr>
+        <td>其中：刷单成本</td>
+        <td class="num mono">${fmtMoney(brush)}</td>
+        <td class="num mono">${pctOf(brush).toFixed(1)}%</td>
+        <td class="muted">快递+包装固定费 ${fmtMoney(brushFee)} ＋ 刷单成本 ${fmtMoney(brushInput)}（放单仓刷单单，逐单可在「支出明细」按来源筛出）</td></tr>` : ""}
     </tfoot>`;
 }
 
@@ -9713,6 +9797,8 @@ async function runBatchModal(kind) {
 }
 function renderDraftReview(kind, r) {
   const orders = r.orders || [];
+  // 放单仓「快递+包装」默认值（后端给，见 brush.DEFAULT_BRUSH_FEE）：逐单预填，用户可改
+  window.__BRUSH_DEFAULT_FEE__ = +(r.brush_default_fee || 0);
   // 一单多货规则带出的包材/人工行：按 doc_no 记录，确认出库时一并回传
   window.__DRAFT_PACK__ = {};
   orders.forEach((o) => { if (o.pack_lines && o.pack_lines.length) window.__DRAFT_PACK__[o.doc_no] = o.pack_lines; });
@@ -9820,7 +9906,8 @@ function brushRowsHtml(orders) {
     const lines = o.lines || [];
     const income = lines.reduce((s, l) => s + (+l.amount || 0), 0);
     const goods = lines.map((l) => `${l.product_name || ""} × ${fmtNum(l.quantity)}${esc(l.unit || "")}`).join(" ／ ");
-    const fee = +(o.brush_fee_auto || 0);
+    // 「快递+包装」默认预填（后端 brush_fee_auto = brush.DEFAULT_BRUSH_FEE，通常 3.6），可逐单改
+    const fee = +(o.brush_fee_auto || 0) || +(window.__BRUSH_DEFAULT_FEE__ || 0);
     return `<tr class="brush-row" data-doc="${esc(o.doc_no || "")}" data-income="${income.toFixed(2)}">
       <td class="mono">${esc(o.doc_no || "（无单号）")}</td>
       <td class="muted" style="white-space:nowrap;">${esc(o.date || "")}</td>
@@ -9937,7 +10024,7 @@ function renderAggregateReview(kind, orders, warn) {
       </div>
       <div class="muted" style="font-size:12px;margin:6px 0;">
         下面每一单都要填「刷单成本」（也可以只填本次总成本、用下面的「按总额分摊」自动摊到各单）；
-        「快递+包装」默认按系统出库时自动结算的快递费+包材+人工（可改），改了只影响这一单的结算口径。
+        「快递+包装」已按默认值 <b>${fmtMoney(window.__BRUSH_DEFAULT_FEE__ || 0)}</b>/单预填（可逐单改），只影响这一单的结算口径。
         已填 <b id="brushFilled">0</b> / ${brushOrders.length} 单。这些金额会写进出库单，报表里一并从利润扣掉。
       </div>
       <!-- 一键批量：① 每单同一个成本；② 只填「本次刷单总成本」自动分摊，都不用逐单输 -->
@@ -10246,7 +10333,11 @@ async function submitDraftOrders(kind, orders) {
       <div class="muted" style="font-size:13px;">共 ${orders.length} 单，一般数秒内完成；请勿关闭窗口或重复点击。完成后将自动展示结果。</div>
     </div>`;
   try {
-    const r = await api(BATCH_MODAL[kind].confirm, "POST", { orders });
+    const payload = { orders };
+    // 聚水潭（古法/手动导入）：带上来源文件名，后端会往「自动出库设置 → 执行记录」记一条
+    // 「古法导入」记录（见 imports._log_manual_jst_import）
+    if (kind === "jushuitan") payload.source = (window.__BM_FILE__ && window.__BM_FILE__.name) || "";
+    const r = await api(BATCH_MODAL[kind].confirm, "POST", payload);
     let html = `<div class="alert ok">✓ 已创建 <b>${r.created}</b> 个出库单`;
     if (r.failed_count) html += `，失败 <b>${r.failed_count}</b>`;
     html += `</div>`;

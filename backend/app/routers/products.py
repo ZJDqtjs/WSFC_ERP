@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
@@ -17,7 +17,7 @@ from ..models import (
     User,
     WarehouseProduct,
 )
-from ..services import default_conversions, seed_units
+from ..services import default_conversions, recompute_product, seed_units
 
 router = APIRouter(prefix="/api", tags=["products"])
 
@@ -53,6 +53,9 @@ class ProductIn(BaseModel):
     multiplier: float = 1.0  # 1单订单商品 = multiplier × 库存商品默认单位
     # 订单商品可关联多个扣减库存商品：[{product_id, multiplier}]；None = 未提供（回退单关联字段）
     stock_links: list[StockLinkIn] | None = None
+    # 改基础单位（计数「个」↔ 重量「克」）时的换算关系：1（旧）基础单位 = unit_change_ratio（新）基础单位。
+    # 商品已有库存流水/入库记录/库存时必须给（见 _rescale_base_unit_change）；没有历史数据时可省。
+    unit_change_ratio: float | None = None
     is_active: bool = True
 
 
@@ -279,6 +282,64 @@ def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = 
     return _to_dict(p, db)
 
 
+def _base_unit_category(base_unit: str) -> str:
+    """基础单位归属的类别：重量类记「克」、计数类记「个」（见前端 deriveUnitPayload）。"""
+    return "weight" if (base_unit or "").strip().lower() in ("克", "g") else "count"
+
+
+def _rescale_base_unit_change(db: Session, p: Product, new_base: str, ratio: float | None) -> float:
+    """改「基础单位」时把已有历史数据按换算关系换过来，返回实际用到的系数（没改/无需换算=0）。
+
+    **为什么必须换**：商品的基础单位就是库存与成本的记账单位——库存流水 `quantity_base`、
+    入库行 `quantity_base`、库存、库存均价（元/基础单位）都按它记。
+    前端把「默认单位」映射成基础单位：重量类→克、计数类→个。于是把默认单位从「个」改成「公斤」
+    其实是把基础单位从「个」换成「克」：如果只改字段不改数据，同一个数字的含义就悄悄变了——
+    4 个 变成 4 克、均价 5 元/个 变成 5 元/克，列表按默认单位换算后显示成 **5000 元/公斤**
+    （用户反馈的症状：编辑页 16.5 元/公斤、列表 5000 元/公斤）。
+
+    跨类别（计数↔重量）之间没有能自动推导的换算关系，所以要么由用户给出
+    「1 旧基础单位 = N 新基础单位」，要么在**没有任何历史数据**时才允许直接改。
+
+    只换数量、不动金额：批次的绝对成本（元）不变，单位成本（元/单位）自然跟着数量一起换，
+    换完由 FIFO 重算库存与均价（成本总额守恒，不会凭空多个 0）。
+    """
+    old_base = (p.base_unit or "").strip()
+    new_base = (new_base or "").strip()
+    if not new_base or new_base == old_base:
+        return 0.0
+    if _base_unit_category(old_base) == _base_unit_category(new_base):
+        return 0.0   # 同类单位（基础单位都按同一规则记），不涉及跨类换算
+    moves = db.scalar(
+        select(func.count()).select_from(StockMovement).where(StockMovement.product_id == p.id)
+    ) or 0
+    inbs = db.scalar(
+        select(func.count()).select_from(Inbound).where(Inbound.product_id == p.id)
+    ) or 0
+    stock = float(p.stock or 0.0)
+    if not moves and not inbs and abs(stock) < 1e-9:
+        return 0.0   # 没有任何历史数据：改单位不会误解任何数字，直接改
+    if not ratio or float(ratio) <= 0:
+        raise HTTPException(400, (
+            f"商品「{p.name}」已有 {moves} 条库存流水、{inbs} 条入库记录"
+            f"（当前库存 {stock:g} {old_base}），从「{old_base}」改成「{new_base}」不是一个类别，"
+            f"历史数量与成本会被按新单位重新解读（均价会被放大 {old_base}→{new_base} 的倍数）。\n"
+            f"请填写换算关系：1 {old_base} = ? {new_base}；或先清理该商品的入库/出库单据后再改单位。"
+        ))
+    k = float(ratio)
+    db.execute(
+        update(StockMovement).where(StockMovement.product_id == p.id)
+        .values(quantity_base=StockMovement.quantity_base * k)
+        .execution_options(synchronize_session=False)
+    )
+    if inbs:
+        db.execute(
+            update(Inbound).where(Inbound.product_id == p.id)
+            .values(quantity_base=Inbound.quantity_base * k)
+            .execution_options(synchronize_session=False)
+        )
+    return k
+
+
 @router.put("/products/{pid}")
 def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     p = db.get(Product, pid)
@@ -299,6 +360,8 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
     else:
         stock_links = _validate_stock_links(db, data)
     first = stock_links[0] if stock_links else None
+    # 换基础单位（计数↔重量）先校验并取换算关系：不合格就整体报错，什么都不写
+    unit_k = _rescale_base_unit_change(db, p, data.base_unit, data.unit_change_ratio)
     p.code = data.code.strip()
     p.name = data.name.strip()
     p.category = data.category.strip()
@@ -317,6 +380,10 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
     p.multiplier = first["multiplier"] if first else 1.0
     p.stock_links = stock_links
     p.is_active = data.is_active
+    db.flush()
+    if unit_k:
+        # 历史数量已按换算关系折算成新基础单位 → 库存/均价按新单位重算（FIFO，成本总额守恒）
+        recompute_product(db, p.id)
     db.commit()
     db.refresh(p)
     return _to_dict(p, db, _last_in_map(db))
