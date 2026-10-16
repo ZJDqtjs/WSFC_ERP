@@ -842,10 +842,17 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 _t["gross_profit"] = round(_t["amount"] + _t["settle_income"] - _t["total_cogs"], 2)
                 _den = (_t["gross_sales"] or _t["amount"]) + _t["settle_income"]
                 _t["gp_rate"] = round(_t["gross_profit"] / _den * 100, 2) if _den else 0.0
+            _merged.extend(_named)
         elif _blank:
+            # 有多个非空规格（规格真有差异）→ 空规格单独成行标「未标注规格」。
+            # ⚠️ 这里必须把 _named 和 _blank 都带上：以前只 extend(_named)，
+            # 空规格那几行被改了名字却没进结果，整行（销量/收入/成本）直接丢掉 —— 用户反馈
+            # 「财务报表商品明细比出库明细少了 1000 多」就是这么来的（如 wh01「紫皮独头蒜中果3斤」）。
             for r in _blank:
                 r["spec"] = "未标注规格"
-        _merged.extend(_named or _blank)
+            _merged.extend(_named + _blank)
+        else:
+            _merged.extend(_named)
     product_rows = _merged
     product_rows.sort(key=lambda r: -r["amount"])
 
