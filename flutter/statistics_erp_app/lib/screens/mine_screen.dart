@@ -213,7 +213,7 @@ class _MineScreenState extends State<MineScreen> {
     );
   }
 
-  /// 后端维护状态（Go 直供）：正在执行备份/同步时给出提示
+  /// 后端维护状态（GET /api/maintenance/status）：正在执行备份/同步时给出提示
   Widget _buildServiceCard() {
     final running = _maintenance['running'] == true;
     final label = _maintenance['task'] ?? _maintenance['stage'] ?? '';
@@ -223,7 +223,7 @@ class _MineScreenState extends State<MineScreen> {
             color: running ? Colors.orange : Colors.green),
         title: Text(running ? '服务端正在执行：$label' : '服务正常'),
         subtitle: Text(
-          '接口地址：${ApiService.resolveUrl('/health').replaceFirst('/health', '')}'
+          '接口地址：${ApiService.baseUrl}'
           '${_maintenance['message'] is String && (_maintenance['message'] as String).isNotEmpty ? ' · ${_maintenance['message']}' : ''}',
           style: const TextStyle(fontSize: 12),
         ),

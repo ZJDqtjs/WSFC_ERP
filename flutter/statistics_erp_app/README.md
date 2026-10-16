@@ -42,6 +42,16 @@ lib/
 - **本地存储**: SharedPreferences
 - **UI 组件**: Material Design
 
+## 登录方式（重要）
+
+生产后端是 `backend/` 下的 **FastAPI**（不是 `go/` 里的试验实现）。
+它的 `POST /api/auth/login` **只接受 `username` + `private_key`**（管理员分发的 Ed25519
+私钥文件全文），所以登录页默认是「私钥登录」：把 `id_ed25519` / `.pem` 文件内容整段粘贴进
+输入框即可（后端只认 `ssh-ed25519`，其它类型会回 400）。
+
+登录页还留了一个「密码登录」切换项，那是 Go 试验后端的独有通道；
+打 FastAPI 会返回 422「缺少必填参数：私钥」，正常场景用不到。
+
 ## 后端 API
 
 参考仓库根目录的 `docs/API.md`。
@@ -82,6 +92,12 @@ static const String _defaultApiBaseUrl = String.fromEnvironment(
 ```json
 { "API_BASE_URL": "http://<你的服务器地址>" }
 ```
+
+地址怎么填：
+
+- 模拟器 / 桌面调试：`http://127.0.0.1:8000`（本机 uvicorn，只绑回环，仅本机可达）。
+- 手机真机 / 生产：填 nginx 地址，如 `http://47.108.13.20`（80 端口，nginx 把 `/api`、
+  `/uploads` 反代到后端）。**不要直连 `:8000`**——后端只监听 `127.0.0.1`，手机打不通。
 
 ```powershell
 flutter run       --dart-define-from-file=dart_defines.local.json

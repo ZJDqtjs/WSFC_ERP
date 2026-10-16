@@ -49,6 +49,7 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  /// 口令登录：仅 Go 试验后端支持。生产 FastAPI 请用 [loginWithKey]。
   Future<void> login(String username, String password) async {
     _isLoading = true;
     _error = '';

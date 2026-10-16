@@ -1,8 +1,12 @@
-// 联调冒烟：用 Dart 客户端（dio，与 App 同一套依赖）真实打 Go 服务，
+// 联调冒烟：用 Dart 客户端（dio，与 App 同一套依赖）真实打后端（FastAPI），
 // 断言每个页面用到的接口状态码与关键字段，顺便用 Product.fromJson 解析真实响应。
 //
 // 用法：
 //   dart run tool/api_smoke.dart <baseUrl> <token>
+//   baseUrl 例：http://127.0.0.1:8000（本机 uvicorn）或 http://<服务器IP>（nginx 80）
+//   token 取登录响应 Set-Cookie 里 erp_token 的值，用私钥登录换取：
+//     curl -i -X POST http://<base>/api/auth/login -H 'Content-Type: application/json' \
+//          -d "{\"username\":\"<用户名>\",\"private_key\":\"$(cat ~/id_ed25519)\"}"
 // 退出码非 0 表示有断言失败。
 import 'dart:io';
 
@@ -14,7 +18,7 @@ final List<String> _failures = [];
 int _checked = 0;
 
 Future<void> main(List<String> args) async {
-  final base = args.isNotEmpty ? args[0] : 'http://127.0.0.1:8123';
+  final base = args.isNotEmpty ? args[0] : 'http://127.0.0.1:8000';
   final token = args.length > 1 ? args[1] : (Platform.environment['ERP_TOKEN'] ?? '');
   if (token.isEmpty) {
     stderr.writeln('缺少 token：dart run tool/api_smoke.dart <baseUrl> <token>');
@@ -89,12 +93,12 @@ Future<void> main(List<String> args) async {
   final warehouses = await _get(dio, '/api/warehouses');
   _need(warehouses, ['current', 'warehouses']);
   await _get(dio, '/api/maintenance/status');
-  await _get(dio, '/api/_meta/routes');
 
-  // 7) 错误信封：Go 必须给中文 detail
+  // 7) 错误信封：{"detail": "中文文案"}（FastAPI 的 422 校验失败则是 detail 数组）
   final missing = await dio.delete('/api/products/999999');
-  _ok(missing.statusCode == 404 && (missing.data['detail'] is String),
-      '删不存在的商品 → ${missing.statusCode} ${missing.data['detail']}');
+  final missingDetail = missing.data is Map ? missing.data['detail'] : null;
+  _ok(missing.statusCode == 404 && missingDetail is String && missingDetail.isNotEmpty,
+      '删不存在的商品 → ${missing.statusCode} $missingDetail');
 
   if (_failures.isEmpty) {
     stdout.writeln('✓ Dart 客户端联调通过：$_checked 项断言全部成立（$base）');

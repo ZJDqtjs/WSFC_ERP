@@ -17,18 +17,24 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
-/// 与 Go 后端（wsfc-erp-go）对接的唯一入口。
+/// 与后端（FastAPI，backend/ 下的 uvicorn）对接的唯一入口。
 ///
 /// 后端地址在编译期注入，不要写死在这里（仓库是公开的，内网/生产地址不进代码）：
 ///   flutter run       --dart-define-from-file=dart_defines.local.json
 ///   flutter build apk --release --dart-define-from-file=dart_defines.local.json
 /// 等价写法：--dart-define=API_BASE_URL=http://<服务器地址>
-/// 下面的默认值只是本机联调的兜底（Go 默认监听 :8100）。
+///
+/// 下面的默认值只是本机联调的兜底（FastAPI 监听 127.0.0.1:8000，见 config.json）。
+/// 手机真机/生产环境请填 nginx 地址（80 端口，nginx 把 /api、/uploads 反代到后端），
+/// 不要直连 8000——后端只绑本机回环。
 class ApiService {
   static const String _defaultApiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://127.0.0.1:8100',
+    defaultValue: 'http://127.0.0.1:8000',
   );
+
+  /// 当前生效的后端地址（「我的」页展示、排查连错环境用）
+  static String get baseUrl => _defaultApiBaseUrl;
 
   /// 会话 cookie 名（与 Go / Python 两端一致）
   static const String cookieName = 'erp_token';
@@ -110,16 +116,66 @@ class ApiService {
     return response.data;
   }
 
+  /// 错误信封是 {"detail": ...}：
+  /// - 业务错误（400/401/404…）detail 是中文文案，直接用；
+  /// - 请求体校验失败（FastAPI 422）detail 是 [{loc:[...,字段], msg:'Field required', …}]，
+  ///   取第一条并转成中文，否则登录页会弹出一整块 Map 字符串。
   static String? _detailOf(Response? response) {
     final data = response?.data;
     if (data is! Map) return null;
     final d = data['detail'];
     if (d is String && d.isNotEmpty) return d;
-    // Python 的 422 会回数组；Go 统一回中文文案，这里兜底取第一条
-    if (d is List && d.isNotEmpty) return d.first.toString();
+    if (d is List && d.isNotEmpty) {
+      final first = d.first;
+      if (first is Map) {
+        final loc = first['loc'];
+        final field = (loc is List && loc.isNotEmpty) ? loc.last.toString() : '';
+        final msg = _humanizePydantic(first['msg']?.toString() ?? '', field);
+        if (msg.isNotEmpty) return msg;
+      }
+      return first.toString();
+    }
     if (d != null) return d.toString();
     return null;
   }
+
+  /// pydantic 的英文校验文案 → 中文（带上字段名）；认不出的原样返回，便于排查
+  static String _humanizePydantic(String msg, String field) {
+    final label = _fieldLabels[field] ?? field;
+    switch (msg) {
+      case 'Field required':
+        return label.isEmpty ? '缺少必填参数' : '缺少必填参数：$label';
+      case 'Input should be a valid integer':
+        return label.isEmpty ? '参数必须是整数' : '$label 必须是整数';
+      case 'Input should be a valid number':
+        return label.isEmpty ? '参数必须是数字' : '$label 必须是数字';
+      case 'Input should be a valid string':
+        return label.isEmpty ? '参数必须是文本' : '$label 必须是文本';
+      case 'Input should be a valid list':
+        return label.isEmpty ? '参数必须是数组' : '$label 必须是数组';
+      case 'String should have at least 1 character':
+        return label.isEmpty ? '参数不能为空' : '$label 不能为空';
+      case 'JSON decode error':
+        return '请求体不是合法 JSON';
+      default:
+        return label.isEmpty ? msg : '$label：$msg';
+    }
+  }
+
+  /// 后端字段名 → 界面中文名（只列 Flutter 真实会提交的键）
+  static const Map<String, String> _fieldLabels = {
+    'username': '用户名',
+    'private_key': '私钥',
+    'password': '密码',
+    'date': '日期',
+    'product_id': '商品',
+    'quantity': '数量',
+    'unit': '单位',
+    'ids': '条目',
+    'key': '分仓标识',
+    'name': '名称',
+    'file': '文件',
+  };
 
   /// 去掉空查询参数（后端按「传了就过滤」处理，空串会被当成有效过滤值）
   static Map<String, dynamic>? _clean(Map<String, dynamic> query) {
@@ -129,13 +185,17 @@ class ApiService {
 
   // ---------------- 会话 / 分仓 ----------------
 
-  /// 口令登录（安卓端不在手机里管私钥文件）。返回 {id, username, name, role, warehouse}。
+  /// 口令登录：**仅 Go 试验后端（wsfc-erp-go）支持**。
+  /// 生产 FastAPI 的 /api/auth/login 只接受 username + private_key，
+  /// 走这条会因缺 private_key 收到 422「缺少必填参数：私钥」；保留只为本机连 Go 联调。
   static Future<Map<String, dynamic>> login(String username, String password) async {
     final data = await post('/api/auth/login', data: {'username': username, 'password': password});
     return Map<String, dynamic>.from(data as Map);
   }
 
-  /// 私钥登录（与网页端同一套凭据：粘贴 OpenSSH Ed25519 私钥全文）。
+  /// 私钥登录（**生产通道**）：与网页端同一套凭据——粘贴管理员分发的私钥文件全文。
+  /// backend/app/keys.py 只接受 OpenSSH/PEM 的 Ed25519（ssh-ed25519），
+  /// 其它类型或格式错误由后端回 400「私钥无法解析，请确认是 Ed25519 私钥文件内容」。
   static Future<Map<String, dynamic>> loginWithKey(String username, String privateKey) async {
     final data = await post('/api/auth/login', data: {'username': username, 'private_key': privateKey});
     return Map<String, dynamic>.from(data as Map);
