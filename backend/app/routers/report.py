@@ -453,6 +453,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     # 这样「商品成本 goods_cogs」不会被刷单成本污染。
     brush_cost = round(sum(float(getattr(o, "brush_cost", 0.0) or 0.0) for o in outbounds), 2)
     brush_total = round(sum(brush_adjust(o) for o in outbounds), 2)
+    # 其中「快递+包装固定费」：逐单手填（默认 3.6），与刷单成本一起构成刷单单的全部成本
+    brush_fee_total = round(sum(brush_fee_of(o) for o in outbounds), 2)
     gross = round(revenue - cogs - brush_total, 2)
     # 期间费用 = 财务流水里手工登记的支出（不含采购支出，采购已计入库存成本）+ 其他开支
     manual_expense = sum(f.amount for f in finances if f.type == "expense" and f.category != "采购支出")
@@ -933,16 +935,16 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     for e in others_in:
         other_fees[e.category] = round(other_fees.get(e.category, 0.0) + (e.amount or 0.0), 2)
 
-    # 逐日 / 逐月支出：三类合计——采购进货 + 其他开支 + 手工记账。
-    # 注意口径：total 是"全部支出"（含采购），period_expense 才是从毛利中扣减的「期间费用」；
-    # 采购已计入结转成本（COGS），不重复扣减，因此净利仍按期间费用计算。
+    # 逐日 / 逐月支出：四类合计——采购进货 + 其他开支 + 手工记账 + 刷单成本。
+    # 注意口径：total 是"全部支出"（含采购与刷单成本），period_expense 才是从毛利中扣减的「期间费用」；
+    # 采购已计入结转成本（COGS）、刷单成本已在毛利里扣过，两者都不进期间费用，净利仍按期间费用计算。
     exp_day: dict[str, dict] = {}
     exp_month: dict[str, dict] = {}
 
     def _add_expense(bucket: dict, key: str, kind: str, amount: float) -> None:
         if not key:
             return
-        b = bucket.setdefault(key, {"purchase": 0.0, "other": 0.0, "manual": 0.0, "count": 0})
+        b = bucket.setdefault(key, {"purchase": 0.0, "other": 0.0, "manual": 0.0, "brush": 0.0, "count": 0})
         b[kind] += amount or 0.0
         b["count"] += 1
 
@@ -957,19 +959,28 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             continue
         _add_expense(exp_day, f.date, "manual", f.amount)
         _add_expense(exp_month, (f.date or "")[:7], "manual", f.amount)
+    # 刷单成本（放单仓刷单单 = 快递+包装固定费 + 刷单成本）：一笔=一张刷单单
+    for o in outbounds:
+        adj = brush_adjust(o)
+        if not adj and not float(getattr(o, "brush_fee", 0) or 0):
+            continue
+        _add_expense(exp_day, o.date, "brush", adj)
+        _add_expense(exp_month, (o.date or "")[:7], "brush", adj)
 
     def _expense_rows(bucket: dict, label: str) -> list[dict]:
-        """按日期/月份倒序的支出明细：采购 / 其他开支 / 手工记账 / 合计 / 笔数。"""
+        """按日期/月份倒序的支出明细：采购 / 其他开支 / 手工记账 / 刷单成本 / 合计 / 笔数。"""
         return [
             {
                 label: k,
                 "purchase": round(v["purchase"], 2),
                 "other_expense": round(v["other"], 2),
                 "manual_expense": round(v["manual"], 2),
+                # 刷单成本＝快递+包装固定费＋刷单成本（已从毛利扣减，不重复计入期间费用）
+                "brush_expense": round(v["brush"], 2),
                 # 期间费用＝其他开支＋手工记账（真正从毛利中扣减的部分）
                 "period_expense": round(v["other"] + v["manual"], 2),
-                # 全部支出＝采购＋其他开支＋手工记账
-                "total": round(v["purchase"] + v["other"] + v["manual"], 2),
+                # 全部支出＝采购＋其他开支＋手工记账＋刷单成本
+                "total": round(v["purchase"] + v["other"] + v["manual"] + v["brush"], 2),
                 "count": v["count"],
             }
             for k, v in sorted(bucket.items(), reverse=True)
@@ -1021,6 +1032,24 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             "operator": f.operator or "", "remark": f.remark or "",
             "ref": "", "auto": f.ref_type not in ("", "manual"),
         })
+    # 刷单成本（放单仓刷单单）：逐单列出来，金额 = 快递+包装固定费 + 刷单成本，
+    # 与「支出合计」同口径（已从毛利扣减，不重复计入期间费用）
+    for o in outbounds:
+        adj = brush_adjust(o)
+        if not adj and not float(getattr(o, "brush_fee", 0) or 0):
+            continue
+        fee = round(brush_fee_of(o), 2)
+        cost = round(float(getattr(o, "brush_cost", 0) or 0), 2)
+        detail = " ＋ ".join(x for x in (
+            f"快递+包装 ¥{fee}" if fee else "",
+            f"刷单成本 ¥{cost}" if cost else "",
+        ) if x) or "刷单结算"
+        expense_items.append({
+            "date": o.date, "source": "刷单成本", "category": "刷单成本",
+            "item": detail, "amount": adj,
+            "operator": o.operator or "", "remark": o.remark or "",
+            "ref": o.code or "", "auto": False,
+        })
     # 日期倒序；同一天保持「采购 → 其他开支 → 手工记账」顺序（稳定排序）
     expense_items.sort(key=lambda r: r["date"], reverse=True)
 
@@ -1049,6 +1078,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         # 刷单结算（芳谊放单仓）：刷单成本 + 固定费覆盖差，已从下面的毛利/净利里扣掉
         "brush_cost": brush_total,
         "brush_input_cost": brush_cost,   # 其中「我填的刷单成本」原值合计（展示用）
+        "brush_fee_cost": brush_fee_total,  # 其中「快递+包装固定费」合计（逐单手填，默认 3.6）
         "gross_profit": gross,
         # 期间费用 = 手工记账支出 + 其他开支，从毛利中扣减得到净利
         "expense": expense,
@@ -1059,8 +1089,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         "excluded_other_expense": other_raw,   # 被排除掉的其他开支金额（仅供提示）
         "net_profit": net,
         "purchase": round(purchase_db, 2),
-        # 全部支出 = 采购（进货）+ 其他开支 + 手工记账；仅用于"支出"展示口径
-        "total_expense": round(purchase_db + expense, 2),
+        # 全部支出 = 采购（进货）+ 其他开支 + 手工记账 + 刷单成本；仅用于"支出"展示口径
+        # （采购已进结转成本、刷单成本已在毛利里扣过，都不进期间费用，净利不受影响）
+        "total_expense": round(purchase_db + expense + brush_total, 2),
         "stock_value": stock_value,
         "order_count": len(outbounds),
         "inbound_count": len(inbounds),
@@ -1192,10 +1223,11 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
                 k = r.get(label) or ""
                 if not k:
                     continue
-                b = acc.setdefault(k, {"purchase": 0.0, "other": 0.0, "manual": 0.0, "count": 0})
+                b = acc.setdefault(k, {"purchase": 0.0, "other": 0.0, "manual": 0.0, "brush": 0.0, "count": 0})
                 b["purchase"] += float(r.get("purchase") or 0)
                 b["other"] += float(r.get("other_expense") or 0)
                 b["manual"] += float(r.get("manual_expense") or 0)
+                b["brush"] += float(r.get("brush_expense") or 0)
                 b["count"] += int(r.get("count") or 0)
         return [
             {
@@ -1203,8 +1235,9 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
                 "purchase": round(v["purchase"], 2),
                 "other_expense": round(v["other"], 2),
                 "manual_expense": round(v["manual"], 2),
+                "brush_expense": round(v["brush"], 2),
                 "period_expense": round(v["other"] + v["manual"], 2),
-                "total": round(v["purchase"] + v["other"] + v["manual"], 2),
+                "total": round(v["purchase"] + v["other"] + v["manual"] + v["brush"], 2),
                 "count": v["count"],
             }
             for k, v in sorted(acc.items(), reverse=True)
@@ -1249,6 +1282,7 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
         # 刷单结算（芳谊放单仓）合计：各分仓已按同口径扣减，这里只相加
         "brush_cost": s("brush_cost"),
         "brush_input_cost": s("brush_input_cost"),
+        "brush_fee_cost": s("brush_fee_cost"),
         "gross_profit": s("gross_profit"),
         "expense": s("expense"),
         "manual_expense": s("manual_expense"),
@@ -1611,7 +1645,8 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
         "exclude_other_expense": bool(exclude_other),
         "excluded_other_expense": other_raw,
         "purchase": round(purchase, 2),
-        "total_expense": round(purchase + expense, 2),
+        # 全部支出 = 采购 + 其他开支 + 手工记账 + 刷单成本（与单仓 /report/summary 同口径）
+        "total_expense": round(purchase + expense + brush, 2),
         "net_profit": round(revenue - cogs - brush - expense, 2),
         "orders": int(orders),
         "inbounds": int(inb_cnt),

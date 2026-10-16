@@ -682,7 +682,7 @@
           <div class="card">
             <div class="card-head">
               <h3>支出明细（逐笔）</h3>
-              <span class="muted">采购 / 其他开支 / 手工记账逐条列出，合计与「支出合计」一致</span>
+              <span class="muted">采购 / 其他开支 / 手工记账 / 刷单成本逐条列出，合计与「支出合计」一致</span>
             </div>
             <div class="toolbar">
               <select id="repExpItemSrc" onchange="renderExpenseItemRows()">
@@ -690,6 +690,7 @@
                 <option value="采购">采购（进货）</option>
                 <option value="其他开支">其他开支</option>
                 <option value="手工记账">手工记账</option>
+                <option value="刷单成本">刷单成本</option>
               </select>
               <input id="repExpItemSearch" placeholder="🔍 筛选项目 / 备注 / 操作员..." oninput="renderExpenseItemRows()" />
               <div class="grow"></div>

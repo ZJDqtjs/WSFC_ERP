@@ -7605,8 +7605,9 @@ function repTab(btn) {
 }
 /* 支出下钻（二级页面）：点「按日/按月」表里的日期或金额，展开该时段该来源的逐笔构成。
    数据直接用当前区间已加载的 REP_EXP_ITEMS，不再请求接口；key 为空表示整个查询区间（合计行）。 */
-const REP_DRILL_SRC = { purchase: "采购", other: "其他开支", manual: "手工记账" };
-const REP_SRC_TABS = [["", "全部来源"], ["采购", "采购（进货）"], ["其他开支", "其他开支"], ["手工记账", "手工记账"]];
+const REP_DRILL_SRC = { purchase: "采购", other: "其他开支", manual: "手工记账", brush: "刷单成本" };
+const REP_SRC_TABS = [["", "全部来源"], ["采购", "采购（进货）"], ["其他开支", "其他开支"],
+                      ["手工记账", "手工记账"], ["刷单成本", "刷单成本"]];
 let REP_DRILL = null;
 
 function openExpDrill(key, kind) {
@@ -7698,14 +7699,15 @@ function renderExpenseTables(rep) {
   const other = rep.other_expense || 0;                                // 其他开支
   const manual = rep.manual_expense || 0;                              // 手工记账
   const period = rep.expense || 0;                                     // 期间费用（从毛利中扣减）
-  const total = rep.total_expense != null ? rep.total_expense : purchase + period;  // 全部支出（含采购）
+  const brush = rep.brush_cost || 0;                                   // 刷单成本（放单仓刷单单）
+  const total = rep.total_expense != null ? rep.total_expense : purchase + period + brush;  // 全部支出（含采购与刷单）
   const MAX_DAYS = 90;
   const sumCount = (rows) => rows.reduce((a, r) => a + (r.count || 0), 0);
 
   const hint = $("repExpHint");
   if (hint) {
     hint.textContent = total
-      ? `按日 / 按月列出各项支出，合计 ${fmtMoney(total)} ＝ 采购 ＋ 其他开支 ＋ 手工记账`
+      ? `按日 / 按月列出各项支出，合计 ${fmtMoney(total)} ＝ 采购 ＋ 其他开支 ＋ 手工记账 ＋ 刷单成本`
         + " · 点日期或金额可展开该日/该月的构成明细"
       : "本期无支出";
     if (days.length > MAX_DAYS) hint.textContent += ` · 按日仅列最近 ${MAX_DAYS} 天`;
@@ -7750,6 +7752,7 @@ function renderExpenseTables(rep) {
     cell(r.purchase, "#1989fa", keyOf(r), "purchase", "展开采购支出构成") +
     cell(r.other_expense, "#f97316", keyOf(r), "other", "展开其他开支构成") +
     cell(r.manual_expense, "#6366f1", keyOf(r), "manual", "展开手工记账构成") +
+    cell(r.brush_expense, "#e11d48", keyOf(r), "brush", "展开刷单成本构成（放单仓刷单单）") +
     `<td class="num mono"><b>${r.total ? drill(keyOf(r), "", fmtMoney(r.total), "展开全部支出明细") : "—"}</b></td>`;
   // 合计行：key 为空 = 整个查询区间
   const totalCells = (label, rows) =>
@@ -7757,6 +7760,7 @@ function renderExpenseTables(rep) {
     `<td class="num mono" style="color:#1989fa"><b>${drill("", "purchase", fmtMoney(purchase), "展开本期采购构成")}</b></td>` +
     `<td class="num mono" style="color:#f97316"><b>${drill("", "other", fmtMoney(other), "展开本期其他开支构成")}</b></td>` +
     `<td class="num mono" style="color:#6366f1"><b>${drill("", "manual", fmtMoney(manual), "展开本期手工记账构成")}</b></td>` +
+    `<td class="num mono" style="color:#e11d48"><b>${drill("", "brush", fmtMoney(brush), "展开本期刷单成本明细")}</b></td>` +
     `<td class="num mono"><b>${drill("", "", fmtMoney(total), "展开本期全部支出明细")}</b></td>` +
     `<td></td><td class="num mono"><b>${sumCount(rows)}</b></td></tr>`;
 
@@ -7765,13 +7769,14 @@ function renderExpenseTables(rep) {
   const dayRows = days.slice(0, MAX_DAYS);
   dt.innerHTML = `<thead><tr>
     <th>日期</th><th class="num">采购支出</th><th class="num">其他开支</th><th class="num">手工记账</th>
+    <th class="num">刷单成本</th>
     <th class="num">支出合计</th><th class="num">占比</th><th class="num">笔数</th></tr></thead><tbody>` +
     (dayRows.length
       ? dayRows.map((r) => `<tr>
           <td class="mono">${drill(jsKey(r.date), "", esc(r.date), "展开当天全部支出明细")}</td>${amountCells(r)}
           <td class="num">${bar(r.total)}<span class="muted">${pctOf(r.total).toFixed(1)}%</span></td>
           <td class="num mono">${r.count}</td></tr>`).join("")
-      : `<tr><td colspan="7" class="empty">${emptyText}</td></tr>`) +
+      : `<tr><td colspan="8" class="empty">${emptyText}</td></tr>`) +
     `</tbody>` +
     (days.length ? `<tfoot>${totalCells(`合计（${days.length} 天 · ${sumCount(days)} 笔）`, days)}</tfoot>` : "");
 
@@ -7779,6 +7784,7 @@ function renderExpenseTables(rep) {
   const mt = $("repExpMonthTable");
   mt.innerHTML = `<thead><tr>
     <th>月份</th><th class="num">采购支出</th><th class="num">其他开支</th><th class="num">手工记账</th>
+    <th class="num">刷单成本</th>
     <th class="num">支出合计</th><th class="num">环比</th><th class="num">笔数</th></tr></thead><tbody>` +
     (months.length
       ? months.map((m, i) => {
@@ -7791,13 +7797,13 @@ function renderExpenseTables(rep) {
           <td class="num mono" style="color:${color}">${txt}</td>
           <td class="num mono">${m.count}</td></tr>`;
       }).join("")
-      : `<tr><td colspan="7" class="empty">${emptyText}</td></tr>`) +
+      : `<tr><td colspan="8" class="empty">${emptyText}</td></tr>`) +
     `</tbody>` +
     (months.length ? `<tfoot>${totalCells(`合计（${months.length} 个月 · ${sumCount(months)} 笔）`, months)}</tfoot>` : "");
 }
 
-/* 支出逐笔明细：采购 / 其他开支 / 手工记账，逐条列出（与「支出合计」同口径） */
-const REP_EXP_SRC_COLORS = { "采购": "#1989fa", "其他开支": "#f97316", "手工记账": "#6366f1" };
+/* 支出逐笔明细：采购 / 其他开支 / 手工记账 / 刷单成本，逐条列出（与「支出合计」同口径） */
+const REP_EXP_SRC_COLORS = { "采购": "#1989fa", "其他开支": "#f97316", "手工记账": "#6366f1", "刷单成本": "#e11d48" };
 let REP_EXP_ITEMS = [];
 let REP_EXP_API_OK = true;
 let REP_EXP_WITH_WH = false;   // 全仓总览：逐笔明细来自多个分仓，需要显示来源分仓列
@@ -7881,10 +7887,14 @@ function renderExpenseSummary(rep) {
   const hint = $("repFeeHint");
   if (hint) hint.textContent = `统计区间 ${rep.date_from || "最早"} ~ ${rep.date_to || "最新"} · 支出合计 ${fmtMoney(total)}`;
 
+  const brush = rep.brush_cost || 0;           // 刷单成本：快递+包装固定费 + 刷单成本（已在毛利里扣过）
+  const brushFee = rep.brush_fee_cost || 0;    // 其中「快递+包装固定费」（逐单手填，默认 3.6）
+  const brushInput = rep.brush_input_cost || 0; // 其中「我填的刷单成本」原值
   const rows = [
     { name: "采购支出（进货）", value: purchase, color: "#1989fa", desc: "入库 / 进货金额（与「本期进货」同源，含入库运费/装卸费），已计入结转成本" },
     { name: "其他开支", value: other, color: "#f97316", desc: "网线费 / 安装费 / 机器费 / 样品费等（构成见下表）" },
     { name: "手工记账", value: manual, color: "#6366f1", desc: "财务流水里登记的支出（构成见下表）" },
+    { name: "刷单成本", value: brush, color: "#e11d48", desc: "芳谊放单仓刷单单：快递+包装固定费 ＋ 刷单成本（逐单见「支出明细 / 来源=刷单成本」），已从毛利扣减，不重复计入期间费用" },
   ];
   box.innerHTML = `<thead><tr>
       <th>支出项</th><th class="num">金额</th><th class="num">占全部支出</th><th>说明</th></tr></thead><tbody>` +
@@ -7898,12 +7908,17 @@ function renderExpenseSummary(rep) {
         <td><b>支出合计</b></td>
         <td class="num mono"><b>${fmtMoney(total)}</b></td>
         <td class="num mono"><b>100.0%</b></td>
-        <td class="muted">＝ 采购 ＋ 其他开支 ＋ 手工记账</td></tr>
+        <td class="muted">＝ 采购 ＋ 其他开支 ＋ 手工记账 ＋ 刷单成本</td></tr>
       <tr>
         <td>其中：期间费用</td>
         <td class="num mono">${fmtMoney(period)}</td>
         <td class="num mono">${pctOf(period).toFixed(1)}%</td>
-        <td class="muted">其他开支 ＋ 手工记账；<b>毛利 − 期间费用 = 净利</b>（采购已计入结转成本，不重复扣）</td></tr>
+        <td class="muted">其他开支 ＋ 手工记账；<b>毛利 − 期间费用 = 净利</b>（采购已计入结转成本、刷单成本已在毛利里扣过，都不重复扣）</td></tr>
+      ${brush ? `<tr>
+        <td>其中：刷单成本</td>
+        <td class="num mono">${fmtMoney(brush)}</td>
+        <td class="num mono">${pctOf(brush).toFixed(1)}%</td>
+        <td class="muted">快递+包装固定费 ${fmtMoney(brushFee)} ＋ 刷单成本 ${fmtMoney(brushInput)}（放单仓刷单单，逐单可在「支出明细」按来源筛出）</td></tr>` : ""}
     </tfoot>`;
 }
 
@@ -9776,6 +9791,8 @@ async function runBatchModal(kind) {
 }
 function renderDraftReview(kind, r) {
   const orders = r.orders || [];
+  // 放单仓「快递+包装」默认值（后端给，见 brush.DEFAULT_BRUSH_FEE）：逐单预填，用户可改
+  window.__BRUSH_DEFAULT_FEE__ = +(r.brush_default_fee || 0);
   // 一单多货规则带出的包材/人工行：按 doc_no 记录，确认出库时一并回传
   window.__DRAFT_PACK__ = {};
   orders.forEach((o) => { if (o.pack_lines && o.pack_lines.length) window.__DRAFT_PACK__[o.doc_no] = o.pack_lines; });
@@ -9883,7 +9900,8 @@ function brushRowsHtml(orders) {
     const lines = o.lines || [];
     const income = lines.reduce((s, l) => s + (+l.amount || 0), 0);
     const goods = lines.map((l) => `${l.product_name || ""} × ${fmtNum(l.quantity)}${esc(l.unit || "")}`).join(" ／ ");
-    const fee = +(o.brush_fee_auto || 0);
+    // 「快递+包装」默认预填（后端 brush_fee_auto = brush.DEFAULT_BRUSH_FEE，通常 3.6），可逐单改
+    const fee = +(o.brush_fee_auto || 0) || +(window.__BRUSH_DEFAULT_FEE__ || 0);
     return `<tr class="brush-row" data-doc="${esc(o.doc_no || "")}" data-income="${income.toFixed(2)}">
       <td class="mono">${esc(o.doc_no || "（无单号）")}</td>
       <td class="muted" style="white-space:nowrap;">${esc(o.date || "")}</td>
@@ -10000,7 +10018,7 @@ function renderAggregateReview(kind, orders, warn) {
       </div>
       <div class="muted" style="font-size:12px;margin:6px 0;">
         下面每一单都要填「刷单成本」（也可以只填本次总成本、用下面的「按总额分摊」自动摊到各单）；
-        「快递+包装」默认按系统出库时自动结算的快递费+包材+人工（可改），改了只影响这一单的结算口径。
+        「快递+包装」已按默认值 <b>${fmtMoney(window.__BRUSH_DEFAULT_FEE__ || 0)}</b>/单预填（可逐单改），只影响这一单的结算口径。
         已填 <b id="brushFilled">0</b> / ${brushOrders.length} 单。这些金额会写进出库单，报表里一并从利润扣掉。
       </div>
       <!-- 一键批量：① 每单同一个成本；② 只填「本次刷单总成本」自动分摊，都不用逐单输 -->

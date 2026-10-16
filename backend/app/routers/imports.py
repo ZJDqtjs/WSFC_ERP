@@ -15,10 +15,10 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
-from ..brush import BRUSH_WAREHOUSES, is_brush_warehouse
+from ..brush import BRUSH_WAREHOUSES, DEFAULT_BRUSH_FEE, is_brush_warehouse
 from ..database import get_current_key, get_db, get_warehouses
 from ..jst import settings as jst_settings
-from ..models import CodeMapping, Deduction, Outbound, PackRule, Product, User
+from ..models import CodeMapping, Deduction, PackRule, Product, User
 from .ai import _chat, _extract_json, _llm_config
 from ..services import (
     create_inbound,
@@ -807,16 +807,12 @@ def _line_price_weight(p: Product, qb: float, batch_unit_price: dict[int, float]
     return w
 
 
-def _brush_fee_last(db: Session) -> float:
-    """放单仓「快递+包装固定费」的建议默认值：最近一张刷单单上填过的数（没填过返回 0）。
+def _brush_fee_default() -> float:
+    """放单仓「快递+包装固定费」的默认值：固定 3.6 元/单（见 brush.DEFAULT_BRUSH_FEE）。
 
-    刷单单不出货、没有系统自动成本（见 app/brush.py），所以默认值只能是「上次填的那个」，
-    用户在聚水潭确认框里照样可以改（如按 3.6 / 4.1 元一单固定）。
+    刷单单不出货、没有系统自动成本，逐单预填这个数；用户仍可在确认框里按单改。
     """
-    last = db.execute(
-        select(Outbound.brush_fee).where(Outbound.brush_fee > 0).order_by(Outbound.id.desc()).limit(1)
-    ).scalar()
-    return round(float(last or 0), 2)
+    return round(float(DEFAULT_BRUSH_FEE), 2)
 
 
 def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: tuple | None = ("已出库",)) -> tuple[list[DraftOrder], list[dict], dict, set]:
@@ -988,9 +984,9 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
             )
         )
     # 芳谊放单仓：确认框里要按「每一单」核算 刷单成本 vs 结算价；
-    # 「快递+包装固定费」不做出库试算（刷单单不出货、没有自动成本），直接用上次填过的值当默认，
-    # 用户可覆盖；确认时以用户传回的 brush_fee 为准。
-    fee_default = _brush_fee_last(db) if any(is_brush_warehouse(d.warehouse) for d in drafts) else 0.0
+    # 「快递+包装固定费」不做出库试算（刷单单不出货、没有自动成本），逐单预填默认值 3.6，
+    # 用户可逐单改；确认时以用户传回的 brush_fee 为准。
+    fee_default = _brush_fee_default()
     for d in drafts:
         if is_brush_warehouse(d.warehouse):
             d.brush_fee_auto = fee_default
@@ -1027,6 +1023,8 @@ def preview_import_jushuitan(file: UploadFile, db: Session = Depends(get_db), us
         # 本次解析里命中的「放单仓」（芳谊放单仓…）：前端据此显示逐单刷单成本输入表
         "brush_warehouses": sorted({d.warehouse for d in drafts if is_brush_warehouse(d.warehouse)}),
         "brush_warehouse_names": list(BRUSH_WAREHOUSES),
+        # 「快递+包装」默认值（元/单）：前端逐单预填这个数，用户可改
+        "brush_default_fee": round(float(DEFAULT_BRUSH_FEE), 2),
     }
 
 
