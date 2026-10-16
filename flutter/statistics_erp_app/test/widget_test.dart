@@ -25,6 +25,9 @@ void main() {
     // 默认是私钥登录（生产 FastAPI 的通道）：密码通道只作为切换项保留
     expect(find.text('私钥登录'), findsOneWidget);
     expect(find.text('密码登录'), findsOneWidget);
+    // 私钥走「选择文件」，不再要求手动粘贴
+    expect(find.text('选择私钥文件'), findsOneWidget);
+    expect(find.text('未选择文件'), findsOneWidget);
   });
 
   testWidgets('工作台带业务入口宫格', (tester) async {

@@ -103,7 +103,7 @@ class ApiService {
     try {
       response = await action();
     } on DioException catch (e) {
-      throw ApiException(e.response?.statusCode, _detailOf(e.response) ?? ('网络异常：${e.message}'));
+      throw ApiException(e.response?.statusCode, _networkMessage(e));
     }
     final int code = response.statusCode ?? 0;
     if (code == 401) {
@@ -114,6 +114,24 @@ class ApiService {
       throw ApiException(code, _detailOf(response) ?? '请求失败（HTTP $code）');
     }
     return response.data;
+  }
+
+  /// 网络层失败（请求根本没到后端）单独给文案，并带上当前后端地址——
+  /// 真机最常见的坑就是打包时没注入 API_BASE_URL，落到了兜底的 127.0.0.1。
+  static String _networkMessage(DioException e) {
+    final detail = _detailOf(e.response);
+    if (detail != null) return detail; // 后端已经回话了（4xx/5xx），优先用它的 detail
+    return switch (e.type) {
+      DioExceptionType.connectionTimeout => '连接后端超时（$baseUrl），请检查网络后重试',
+      DioExceptionType.sendTimeout => '上传超时（$baseUrl），请检查网络后重试',
+      DioExceptionType.receiveTimeout => '后端响应超时（$baseUrl），请稍后重试',
+      DioExceptionType.connectionError =>
+        '无法连接后端（$baseUrl），请确认后端在运行、手机能访问该地址',
+      DioExceptionType.badCertificate => '证书校验失败（$baseUrl）',
+      DioExceptionType.cancel => '请求已取消',
+      // badResponse / unknown / 未来新增的枚举值都归到这里
+      _ => '请求失败（$baseUrl）：${e.message ?? e.error ?? '未知错误'}',
+    };
   }
 
   /// 错误信封是 {"detail": ...}：
