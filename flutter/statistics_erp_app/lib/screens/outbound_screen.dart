@@ -1,3 +1,5 @@
+import '../mobile/widgets/mobile_page.dart';
+import '../mobile/widgets/parts.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -31,19 +33,18 @@ class _OutboundScreenState extends State<OutboundScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('出库'),
-        centerTitle: true,
-      ),
+    return MobilePage(
+      title: '出库',
+      tabIndex: 1,
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(12),
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 28),
         child: Form(
           key: _formKey,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Card(
+              GCard(
                 child: Padding(
                   padding: const EdgeInsets.all(14),
                   child: Column(
@@ -249,7 +250,7 @@ class _OutboundScreenState extends State<OutboundScreen> {
   ];
 
   Widget _buildSettlePanel() {
-    return Card(
+    return GCard(
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
@@ -330,8 +331,7 @@ class _OutboundScreenState extends State<OutboundScreen> {
     final gross = (p['gross_profit'] as num?)?.toDouble() ?? 0;
     final net = (p['net_profit'] as num?)?.toDouble() ?? 0;
     final adjust = double.tryParse(_adjust) ?? 0;
-    return Card(
-      color: const Color(0xFFF7FBFF),
+    return GCard(
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
@@ -578,20 +578,18 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('选择销售商品'),
-        centerTitle: true,
-      ),
+    return MobilePage(
+      title: '选择销售商品',
+      back: true,
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
             child: TextField(
               decoration: const InputDecoration(
                 hintText: '搜索商品名称 / 分类',
                 prefixIcon: Icon(Icons.search),
-                border: OutlineInputBorder(),
+                isDense: true,
               ),
               onChanged: (v) => setState(() => _searchKeyword = v),
             ),

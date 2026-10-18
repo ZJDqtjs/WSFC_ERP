@@ -1,5 +1,8 @@
+import '../mobile/widgets/mobile_page.dart';
+import '../mobile/widgets/parts.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../services/api_service.dart';
 
@@ -307,55 +310,49 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('其他开支'),
-        centerTitle: true,
-        actions: [
-          IconButton(
-            onPressed: _loading ? null : _load,
-            icon: const Icon(Icons.refresh),
-            tooltip: '刷新',
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openEditor(),
+    return MobilePage(
+      title: '其他开支',
+      back: true,
+      onRefresh: _loading ? null : _load,
+      actions: [
+        pageAction(Icons.refresh_rounded, _loading ? null : _load, tooltip: '刷新'),
+      ],
+      floating: GlassButton(
         icon: const Icon(Icons.add),
-        label: const Text('记一笔'),
+        label: '记一笔',
+        width: 112,
+        height: 50,
+        onTap: () => _openEditor(),
       ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: CustomScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          slivers: [
-            SliverToBoxAdapter(child: _buildRangeBar()),
-            SliverToBoxAdapter(child: _buildStatCards()),
-            SliverToBoxAdapter(child: _buildCategorySummary()),
-            SliverToBoxAdapter(child: _buildDetailHeader()),
-            SliverToBoxAdapter(child: _buildFilterChips()),
-            if (_loading && _items.isEmpty)
-              const SliverFillRemaining(
-                hasScrollBody: false,
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if (_items.isEmpty)
-              SliverFillRemaining(
-                hasScrollBody: false,
-                child: _buildEmpty(),
-              )
-            else
-              SliverPadding(
-                padding: const EdgeInsets.only(bottom: 88),
-                sliver: SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) => _buildRow(index),
-                    childCount: _items.length,
-                  ),
+      body: CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          SliverToBoxAdapter(child: _buildRangeBar()),
+          SliverToBoxAdapter(child: _buildStatCards()),
+          SliverToBoxAdapter(child: _buildCategorySummary()),
+          SliverToBoxAdapter(child: _buildDetailHeader()),
+          SliverToBoxAdapter(child: _buildFilterChips()),
+          if (_loading && _items.isEmpty)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (_items.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: _buildEmpty(),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.only(bottom: 88),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => _buildRow(index),
+                  childCount: _items.length,
                 ),
               ),
-          ],
-        ),
+            ),
+        ],
       ),
     );
   }
@@ -419,7 +416,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 
   Widget _statCard(String title, double amount, String sub, Color color) {
     return Expanded(
-      child: Card(
+      child: GCard(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
           child: Column(
@@ -455,7 +452,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       if (amount > max) max = amount;
     }
     final rangeCount = _rangeCount();
-    return Card(
+    return GCard(
       margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 2),
@@ -614,7 +611,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     final subtitle = _joinLine(
         [_asString(item['date']), _asString(item['operator']), note]);
 
-    return Card(
+    return GCard(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: Dismissible(
         key: ValueKey<int>(id),

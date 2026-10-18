@@ -1,3 +1,5 @@
+import '../mobile/widgets/mobile_page.dart';
+import '../mobile/widgets/parts.dart';
 import 'package:flutter/material.dart';
 
 import 'package:intl/intl.dart';
@@ -21,19 +23,18 @@ class _InboundScreenState extends State<InboundScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('入库'),
-        centerTitle: true,
-      ),
+    return MobilePage(
+      title: '入库',
+      tabIndex: 2,
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(12),
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 28),
         child: Form(
           key: _formKey,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Card(
+              GCard(
                 child: Padding(
                   padding: const EdgeInsets.all(14),
                   child: Column(
@@ -314,20 +315,18 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('选择入库商品'),
-        centerTitle: true,
-      ),
+    return MobilePage(
+      title: '选择入库商品',
+      back: true,
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
             child: TextField(
               decoration: const InputDecoration(
                 hintText: '搜索商品名称 / 分类',
                 prefixIcon: Icon(Icons.search),
-                border: OutlineInputBorder(),
+                isDense: true,
               ),
               onChanged: (v) => setState(() => _searchKeyword = v),
             ),

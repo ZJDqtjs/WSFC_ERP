@@ -16,6 +16,17 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+// AGP 8.13 的 lintVital 会在插件模块（image_picker_android 等）上把 Metaspace 撑爆，
+// 而第三方 Java 源码的 lint 结论对本项目没有意义。DSL 在这个时点已不可改，直接禁任务。
+// 注意要整条链一起禁：只禁 Analyze/Report 会留下 lintVitalRelease 校验不到输入文件而失败。
+subprojects {
+    project.tasks.configureEach { t ->
+        if (t.name.startsWith("lintVital")) {
+            t.enabled = false
+        }
+    }
+}
+
 tasks.register("clean", Delete) {
     delete rootProject.buildDir
 }
