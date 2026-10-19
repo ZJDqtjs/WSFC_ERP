@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../models/product.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
 import '../desktop_style.dart';
@@ -289,8 +290,7 @@ class _DesktopHomeState extends State<DesktopHome> {
   }
 
   Widget _lowStockRow(dynamic p) {
-    final stock = (p['stock'] ?? 0).toDouble();
-    final unit = p['default_unit'] ?? p['base_unit'] ?? '';
+    final stockText = stockTextOf(p);
     return InkWell(
       onTap: () => widget.onNavigate('/inbound'),
       borderRadius: BorderRadius.circular(WsTokens.radius),
@@ -306,7 +306,7 @@ class _DesktopHomeState extends State<DesktopHome> {
                   style: TextStyle(
                       fontSize: 13.5, color: WsTokens.inkOf(context))),
             ),
-            Text('${stock.toStringAsFixed(0)} $unit',
+            Text(stockText,
                 style: TextStyle(
                     fontSize: 12,
                     color: WsTokens.inkOf(context, level: 3),

@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/product.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
 import '../mobile_style.dart';
@@ -258,8 +259,7 @@ class _MobileHomePageState extends State<MobileHomePage> {
           for (final p in _lowStock.take(6))
             TileRow(
               title: (p['name'] ?? '').toString(),
-              subtitle: '剩余 ${(p['stock'] ?? 0).toDouble().toStringAsFixed(0)} '
-                  '${p['default_unit'] ?? p['base_unit'] ?? ''}',
+              subtitle: '剩余 ${stockTextOf(p)}',
               icon: Icons.warning_amber_rounded,
               iconColor: Mc.danger,
               trailing: TextButton(

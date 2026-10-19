@@ -363,7 +363,7 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
                       return ListTile(
                         title: Text('[库存] ${p.name}'),
                         subtitle: Text(
-                          '${p.category.isEmpty ? '—' : p.category} · 单位 ${p.defaultUnit ?? p.baseUnit} · 库存 ${p.stock}',
+                          '${p.category.isEmpty ? '—' : p.category} · 库存 ${p.stockText}',
                         ),
                         trailing: const Icon(Icons.chevron_right),
                         onTap: () => Navigator.pop(context, p),

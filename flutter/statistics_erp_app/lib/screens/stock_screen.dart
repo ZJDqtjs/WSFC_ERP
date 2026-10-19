@@ -690,7 +690,7 @@ class _AdjustSheetState extends State<_AdjustSheet> {
             const SizedBox(height: 12),
             Row(
               children: [
-                Expanded(child: _field(_avg, '均价增减', '元/基础单位')),
+                Expanded(child: _field(_avg, '均价增减', '元/基础单位（克 或 个）')),
                 const SizedBox(width: 8),
                 Expanded(child: _field(_ucost, '成本单价增减', '元/单位')),
               ],

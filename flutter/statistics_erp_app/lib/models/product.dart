@@ -1,3 +1,27 @@
+// 后端回来的裸 Map（/api/products、/api/dashboard 的 low_stock 等）统一走下面这几个口子：
+// stock / avg_cost / sale_price 恒是基础单位口径，界面必须折算到默认单位再显示，
+// 否则会出现「-1385000 公斤」这种数量配错单位的数。
+
+/// 展示单位：默认单位，没配退回基础单位
+String unitOf(Map row) =>
+    (row['default_unit'] ?? row['base_unit'] ?? '').toString();
+
+/// 1 个展示单位 = factorOf 个基础单位
+double unitFactorOf(Map row) {
+  final conv = row['conversions'];
+  final f = conv is Map
+      ? (num.tryParse('${conv[unitOf(row)]}')?.toDouble() ?? 1)
+      : 1.0;
+  return f == 0 ? 1 : f;
+}
+
+/// 「1365.25 公斤」：整数不带小数，小数最多 2 位
+String stockTextOf(Map row) {
+  final shown = ((row['stock'] as num?)?.toDouble() ?? 0) / unitFactorOf(row);
+  final v = shown.toStringAsFixed(shown == shown.roundToDouble() ? 0 : 2);
+  return '$v ${unitOf(row)}';
+}
+
 class Product {
   final int id;
   final String code;
@@ -18,6 +42,24 @@ class Product {
   final double multiplier;
   final double stock;
   final double stockValue;
+
+  /// 展示单位：默认单位，没配就退回基础单位
+  String get unit {
+    final du = defaultUnit ?? '';
+    return du.isNotEmpty ? du : baseUnit;
+  }
+
+  /// 后端回来的 [stock] 恒是基础单位数量，界面上要按展示单位报数
+  double get stockInUnit {
+    final f = conversions?[unit] ?? 1;
+    return f == 0 ? stock : stock / f;
+  }
+
+  /// 商品选择器用的「1365.25 公斤」：整数不带小数，小数最多 2 位
+  String get stockText {
+    final v = stockInUnit;
+    return v == v.roundToDouble() ? '${v.toStringAsFixed(0)} $unit' : '${v.toStringAsFixed(2)} $unit';
+  }
 
   Product({
     required this.id,

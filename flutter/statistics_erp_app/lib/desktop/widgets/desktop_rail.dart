@@ -33,24 +33,25 @@ class DesktopBackdrop extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // 光斑贴在导航条和工具条背后，这两处玻璃最薄，靠光斑把层次顶出来
+            // 光斑贴在导航条和工具条背后，这两处玻璃最薄，靠光斑把层次顶出来。
+            // 直径按 1920 宽的窗口给：光斑一放大就变成均匀浅蓝，玻璃等于没东西可折射。
             _Blob(
               alignment: const Alignment(-1.05, -0.8),
-              diameter: 620,
+              diameter: 980,
               color: WsTokens.brandTop
-                  .withValues(alpha: (dark ? 0.2 : 0.3) * intensity),
+                  .withValues(alpha: (dark ? 0.3 : 0.46) * intensity),
             ),
             _Blob(
               alignment: const Alignment(1.15, -0.35),
-              diameter: 520,
+              diameter: 820,
               color: WsTokens.green
-                  .withValues(alpha: (dark ? 0.1 : 0.15) * intensity),
+                  .withValues(alpha: (dark ? 0.16 : 0.24) * intensity),
             ),
             _Blob(
               alignment: const Alignment(-0.25, 1.25),
-              diameter: 700,
+              diameter: 1150,
               color: WsTokens.primaryDark
-                  .withValues(alpha: (dark ? 0.18 : 0.16) * intensity),
+                  .withValues(alpha: (dark ? 0.26 : 0.3) * intensity),
             ),
             child,
           ],

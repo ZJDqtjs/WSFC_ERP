@@ -181,16 +181,11 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
   String _saleLabel(Product p) {
     final type = p.productType == 'order' ? '[订单]' : '[库存]';
     final ds = _isDropship(p) ? '（代发）' : '';
-    return '$type ${p.name}$ds（${p.category.isEmpty ? '—' : p.category}）· 库存 ${_q(p.stock)} ${p.baseUnit}';
+    return '$type ${p.name}$ds（${p.category.isEmpty ? '—' : p.category}）· 库存 ${_q(p.stockInUnit)} ${p.unit}';
   }
 
   String _packLabel(Product p) =>
-      '${p.name}（${p.category.isEmpty ? '—' : p.category}）· 单位 ${_defaultUnit(p)} · 库存 ${_q(p.stock)} ${p.baseUnit}';
-
-  String _defaultUnit(Product p) {
-    final du = p.defaultUnit ?? '';
-    return du.isNotEmpty ? du : p.baseUnit;
-  }
+      '${p.name}（${p.category.isEmpty ? '—' : p.category}）· 单位 ${p.unit} · 库存 ${_q(p.stockInUnit)} ${p.unit}';
 
   /// 订单商品没有关联任何库存大类 = 代发（不扣本仓库存，只记代发数量/成本）
   bool _isDropship(Product p) {
@@ -236,7 +231,7 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
       }
       row.product = p;
       final units = _unitsOf(p);
-      final du = p.productType == 'order' ? '单' : _defaultUnit(p);
+      final du = p.productType == 'order' ? '单' : p.unit;
       row.unit = units.any((o) => o.value == du) ? du : units.first.value;
       _fillSalePrice(row);
     });
@@ -261,7 +256,7 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
   List<DesktopOption<String>> _unitsOf(Product? p) {
     if (p == null) return const [DesktopOption<String>('', '—')];
     final convs = p.conversions ?? const <String, double>{};
-    var keys = (convs.isNotEmpty ? convs.keys.toList() : <String>[_defaultUnit(p)])
+    var keys = (convs.isNotEmpty ? convs.keys.toList() : <String>[p.unit])
         .where((k) => k.isNotEmpty)
         .toList();
     if (keys.isEmpty) keys = const ['个'];
@@ -398,7 +393,7 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
     if (!mounted) return;
     final p = _productById[int.tryParse(picked ?? '') ?? 0];
     if (p == null) return;
-    final unit = _defaultUnit(p);
+    final unit = p.unit;
     final ctl = TextEditingController(text: '1');
     ctl.addListener(_rowChanged);
     setState(() {
@@ -900,7 +895,6 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
                       DesktopCol('商品', width: 240),
                       DesktopCol('类型', width: 96, center: true),
                       DesktopCol('数量', width: 120, right: true),
-                      DesktopCol('折算基础量', width: 140, right: true),
                       DesktopCol('金额', width: 110, right: true),
                       DesktopCol('成本', width: 110, right: true),
                       DesktopCol('打包费', width: 96, right: true),
@@ -918,7 +912,6 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
                                   ? const DesktopTag('销售', color: WsTokens.primary)
                                   : const DesktopTag('包装消耗', color: DesktopTag.off),
                               wsCell('${_q(wsD(l['quantity']))} ${wsS(l['unit'])}'),
-                              wsCell('${_q(wsD(l['quantity_base']))} ${wsS(l['base_unit'])}'),
                               wsCell(wsMoney(wsD(l['amount']))),
                               wsCell(wsMoney(wsD(l['cogs']))),
                               wsCell(wsD(l['pack_fee']) > 0 ? wsMoney(wsD(l['pack_fee'])) : '—'),
@@ -1796,7 +1789,7 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
     final drop = p != null && _isDropship(p);
     final need = qty * (p?.conversions?[row.unit] ?? 1.0);
     final short = p != null && !drop && need > p.stock + 1e-6;
-    final stockText = p == null ? '—' : (drop ? '代发·不扣库存' : '${_q(p.stock)} ${p.baseUnit}');
+    final stockText = p == null ? '—' : (drop ? '代发·不扣库存' : '${_q(p.stockInUnit)} ${p.unit}');
     return DesktopRow(
       cells: [
         DesktopSearchField(
@@ -1832,7 +1825,10 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
         wsCell(
           stockText,
           color: short ? WsTokens.red : (drop ? WsTokens.primary : null),
-          tip: short ? '库存不足：需 ${_q(need)} ${p.baseUnit}，现有 ${_q(p.stock)}（仍可继续出库）' : null,
+          tip: short
+              ? '库存不足：需 ${_q(need)} ${p.baseUnit}（= ${_q(qty)} ${row.unit}），'
+                  '现有 ${_q(p.stockInUnit)} ${p.unit}（仍可继续出库）'
+              : null,
         ),
         DesktopLink(
           '✕',

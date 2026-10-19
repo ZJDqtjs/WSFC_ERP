@@ -153,8 +153,7 @@ class _PaletteDialogState extends State<_PaletteDialog> {
               icon: p.productType == 'order'
                   ? Icons.receipt_long_outlined
                   : Icons.inventory_2_outlined,
-              hint:
-                  '${p.category.isEmpty ? '未分类' : p.category} · 库存 ${p.stock} · ${p.defaultUnit ?? p.baseUnit}',
+              hint: '${p.category.isEmpty ? '未分类' : p.category} · 库存 ${p.stockText}',
               run: () {
                 _close();
                 widget.onNavigate('/products');

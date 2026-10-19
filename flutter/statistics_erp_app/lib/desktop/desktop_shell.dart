@@ -50,6 +50,7 @@ class _DesktopShellState extends State<DesktopShell> {
   int _unpaidPayables = 0;
   int _reloadTick = 0;
   bool _railCollapsed = false;
+  bool _paletteOpen = false;
 
   @override
   void initState() {
@@ -60,6 +61,42 @@ class _DesktopShellState extends State<DesktopShell> {
     _nav.load(widget.auth.warehouseKey);
     _refreshPayBadge();
     _loadRailPref();
+    HardwareKeyboard.instance.addHandler(_onHardwareKey);
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onHardwareKey);
+    widget.auth.removeListener(_onAuthChanged);
+    _nav.removeListener(_onNavPrefChanged);
+    super.dispose();
+  }
+
+  /// 全局快捷键。
+  ///
+  /// 不用 CallbackShortcuts：它只在焦点落在自己子树内时才收到按键，而桌面端
+  /// 一进来的默认焦点在 MaterialApp 根部（壳外面），导致 Ctrl+K 看起来"没反应"。
+  /// HardwareKeyboard 挂在焦点系统之前，无论焦点在哪、输入框是否激活都能触发。
+  bool _onHardwareKey(KeyEvent event) {
+    if (!mounted) return false;
+    if (event is! KeyDownEvent) return false;
+    // 修饰键状态在 3.47 上已从 KeyEvent 挪到 HardwareKeyboard 单例
+    final HardwareKeyboard kb = HardwareKeyboard.instance;
+    if (!kb.isControlPressed ||
+        kb.isAltPressed ||
+        kb.isMetaPressed ||
+        kb.isShiftPressed) {
+      return false;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.keyK) {
+      _openPalette();
+      return true;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.keyB) {
+      _toggleRail();
+      return true;
+    }
+    return false;
   }
 
   Future<void> _loadRailPref() async {
@@ -73,13 +110,6 @@ class _DesktopShellState extends State<DesktopShell> {
     setState(() => _railCollapsed = next);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_railPrefKey, next);
-  }
-
-  @override
-  void dispose() {
-    widget.auth.removeListener(_onAuthChanged);
-    _nav.removeListener(_onNavPrefChanged);
-    super.dispose();
   }
 
   void _onAuthChanged() {
@@ -132,7 +162,10 @@ class _DesktopShellState extends State<DesktopShell> {
   }
 
   void _openPalette() {
-    showDesktopCommandPalette(context, onNavigate: _go, auth: widget.auth);
+    if (_paletteOpen) return;
+    _paletteOpen = true;
+    showDesktopCommandPalette(context, onNavigate: _go, auth: widget.auth)
+        .whenComplete(() => _paletteOpen = false);
   }
 
   /// 当前路由在导航模型里的位置，给工具条画「分组 › 页面」。
@@ -199,60 +232,47 @@ class _DesktopShellState extends State<DesktopShell> {
   @override
   Widget build(BuildContext context) {
     final ({String group, String title}) crumb = _crumb(_route);
-    return CallbackShortcuts(
-      bindings: <ShortcutActivator, VoidCallback>{
-        const SingleActivator(LogicalKeyboardKey.keyK, control: true):
-            _openPalette,
-        const SingleActivator(LogicalKeyboardKey.keyB, control: true):
-            _toggleRail,
-      },
-      child: Focus(
-        // 页面里的输入框拿到焦点时，Ctrl 组合键仍要生效；
-        // Focus 本身不吃键，只做一层挂载点。
-        canRequestFocus: false,
-        child: Scaffold(
-          backgroundColor: Colors.transparent,
-          body: DesktopBackdrop(
-            child: Row(
-              children: [
-                DesktopRail(
-                  sections: filterDesktopNav(kDesktopNav, _nav.hidden),
-                  badges: <String, int>{'/payables': _unpaidPayables},
-                  currentRoute: _route,
-                  onSelect: _onSelect,
-                  auth: widget.auth,
-                  collapsed: _railCollapsed,
-                  onToggleCollapse: _toggleRail,
-                ),
-                Expanded(
-                  child: Column(
-                    children: [
-                      DesktopToolbar(
-                        groupTitle: crumb.group,
-                        pageTitle: crumb.title,
-                        auth: widget.auth,
-                        onOpenSearch: _openPalette,
-                        // 短时缓存 45s 内直接回旧数据，所以「刷新」必须先把缓存清掉，
-                        // 再让页面重建重新取数，否则按钮点了像没反应。
-                        onRefresh: () {
-                          ApiService.invalidateCache();
-                          setState(() => _reloadTick++);
-                        },
-                      ),
-                      Expanded(
-                        child: DesktopPageTransition(
-                          // 切分仓 / 点刷新都要整页重建，各页 initState 重新取数
-                          routeKey:
-                              '$_route@${widget.auth.warehouseKey}@$_reloadTick',
-                          child: _buildContent(),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: DesktopBackdrop(
+        child: Row(
+          children: [
+            DesktopRail(
+              sections: filterDesktopNav(kDesktopNav, _nav.hidden),
+              badges: <String, int>{'/payables': _unpaidPayables},
+              currentRoute: _route,
+              onSelect: _onSelect,
+              auth: widget.auth,
+              collapsed: _railCollapsed,
+              onToggleCollapse: _toggleRail,
             ),
-          ),
+            Expanded(
+              child: Column(
+                children: [
+                  DesktopToolbar(
+                    groupTitle: crumb.group,
+                    pageTitle: crumb.title,
+                    auth: widget.auth,
+                    onOpenSearch: _openPalette,
+                    // 短时缓存 45s 内直接回旧数据，所以「刷新」必须先把缓存清掉，
+                    // 再让页面重建重新取数，否则按钮点了像没反应。
+                    onRefresh: () {
+                      ApiService.invalidateCache();
+                      setState(() => _reloadTick++);
+                    },
+                  ),
+                  Expanded(
+                    child: DesktopPageTransition(
+                      // 切分仓 / 点刷新都要整页重建，各页 initState 重新取数
+                      routeKey:
+                          '$_route@${widget.auth.warehouseKey}@$_reloadTick',
+                      child: _buildContent(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

@@ -1005,37 +1005,42 @@ class _DesktopGridState extends State<DesktopGrid> {
                       onTap: c.sortKey == null
                           ? null
                           : () => widget.onSort?.call(c.sortKey!),
-                      child: Row(
-                        mainAxisAlignment: switch (c.align) {
-                          TextAlign.end => MainAxisAlignment.end,
-                          TextAlign.center => MainAxisAlignment.center,
-                          _ => MainAxisAlignment.start,
-                        },
-                        children: [
-                          Flexible(
-                            child: Tooltip(
-                              message: c.tip ?? c.title,
-                              child: Text(
-                                c.title,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  letterSpacing: 0.2,
-                                  color: WsTokens.inkOf(context, level: 2),
+                      child: Padding(
+                        // 表头也要和正文一样留 10px 横向内边距：不留的话
+                        // 「金额」这类右对齐表头会紧贴下一列的左对齐表头，看着像挤成一列
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        child: Row(
+                          mainAxisAlignment: switch (c.align) {
+                            TextAlign.end => MainAxisAlignment.end,
+                            TextAlign.center => MainAxisAlignment.center,
+                            _ => MainAxisAlignment.start,
+                          },
+                          children: [
+                            Flexible(
+                              child: Tooltip(
+                                message: c.tip ?? c.title,
+                                child: Text(
+                                  c.title,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 0.2,
+                                    color: WsTokens.inkOf(context, level: 2),
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                          if (c.sortKey != null && c.sortKey == widget.sortKey)
-                            Icon(
-                              widget.sortAsc
-                                  ? Icons.arrow_upward
-                                  : Icons.arrow_downward,
-                              size: 12,
-                              color: WsTokens.primary,
-                            ),
-                        ],
+                            if (c.sortKey != null && c.sortKey == widget.sortKey)
+                              Icon(
+                                widget.sortAsc
+                                    ? Icons.arrow_upward
+                                    : Icons.arrow_downward,
+                                size: 12,
+                                color: WsTokens.primary,
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                   ),

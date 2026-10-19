@@ -4,6 +4,7 @@ import '../mobile/widgets/parts.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
+import '../models/product.dart';
 import '../services/api_service.dart';
 
 /// 「规则设置」：分类扣点 / 店铺扣点 / 快递计费 / 打包规则 四合一。
@@ -1721,7 +1722,7 @@ class _PackRuleSheetState extends State<_PackRuleSheet> {
       return _PickOption(
         _intOf(m['id']) ?? 0,
         _textOf(m['name']),
-        "${_textOf(m['category'])} · 库存 ${_numText(m['stock'], blank: '0')}${_unitOf(m)}",
+        "${_textOf(m['category'])} · 库存 ${stockTextOf(m)}",
       );
     }).toList();
   }

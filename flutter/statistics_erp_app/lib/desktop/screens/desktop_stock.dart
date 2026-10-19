@@ -525,7 +525,6 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
         'category' => wsS(p['category']),
         'spec' => wsS(p['spec']),
         'stock' => _dispStock(p),
-        'stock_base' => wsD(p['stock']),
         'cost' => _refCost(p),
         'stock_value' => wsD(p['stock_value']),
         'last_in_date' => wsS(p['last_in_date']),
@@ -648,7 +647,6 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
                               DesktopCol('分类', width: 92, sortKey: 'category', center: true),
                               DesktopCol('规格', width: 110, sortKey: 'spec'),
                               DesktopCol('当前库存', width: 132, sortKey: 'stock', right: true),
-                              DesktopCol('基础单位库存', width: 126, sortKey: 'stock_base', right: true),
                               DesktopCol('均价/单位成本', width: 168, sortKey: 'cost', right: true),
                               DesktopCol('库存值', width: 122, sortKey: 'stock_value', right: true),
                               DesktopCol('最近入库', width: 168, sortKey: 'last_in_date'),
@@ -670,7 +668,6 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
                                     wsCell('${_num(_dispStock(p))} ${_unitOf(p)}',
                                         bold: true,
                                         color: _dispStock(p) <= 0 ? WsTokens.red : null),
-                                    wsCell('${_num(wsD(p['stock']))} ${wsS(p['base_unit'])}'),
                                     Tooltip(
                                       message: _refCostTip(p),
                                       child: Text(_refCostText(p),
@@ -695,7 +692,6 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
                             ],
                             footer: [
                               '合计 ${rows.length} 项',
-                              '',
                               '',
                               '',
                               '',
@@ -1694,9 +1690,7 @@ class _StockDetailState extends State<_StockDetail> {
             _kv('分类', wsS(p['category'], fallback: '未分类')),
             _kv('规格', wsS(p['spec'], fallback: '—')),
             _kv('默认单位', du.isEmpty ? '—' : du),
-            _kv('基础单位', wsS(p['base_unit'], fallback: '—')),
             _kv('当前库存', '${_num(wsD(p['stock']) / f)} $du'),
-            _kv('基础单位库存', '${_num(wsD(p['stock']))} ${wsS(p['base_unit'])}'),
             _kv('平均成本', '${wsMoney(wsD(p['avg_cost']) * f)}/$du'),
             _kv('参考成本', wsD(p['unit_cost']) > 0 ? '${wsMoney(wsD(p['unit_cost']) * f)}/$du' : '未设置'),
             _kv('库存值', wsMoney(wsD(p['stock_value']))),
@@ -1708,13 +1702,13 @@ class _StockDetailState extends State<_StockDetail> {
         const WsCardHead(
             title: '换算关系',
             icon: Icons.swap_horiz,
-            trailing: Text('1 个展示单位 = 系数 × 基础单位',
+            trailing: Text('1 个大单位 = 系数 × 基础单位',
                 style: TextStyle(fontSize: 11.5, color: WsTokens.mutedLight))),
         if (conv.isEmpty)
-          const Padding(
-            padding: EdgeInsets.only(bottom: 12),
-            child: Text('该商品没有配置单位换算，库存直接按基础单位记录',
-                style: TextStyle(fontSize: 12.5, color: WsTokens.mutedLight)),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text('该商品没有配置单位换算，库存直接按默认单位「${du.isEmpty ? '—' : du}」记录',
+                style: const TextStyle(fontSize: 12.5, color: WsTokens.mutedLight)),
           )
         else
           DesktopGrid(

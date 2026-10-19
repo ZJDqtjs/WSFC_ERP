@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
+import '../models/product.dart';
 import '../services/api_service.dart';
 
 /// 主色/成功色，和 main.dart 的 AppBar、出库页保持一致
@@ -554,6 +555,7 @@ class _ProductsScreenState extends State<ProductsScreen> with SingleTickerProvid
     final category = _str(p['category']);
     final code = _str(p['code']);
     final unit = _unitText(p);
+    final f = unitFactorOf(p);
     final stock = _num(p['stock']);
     final isOrder = _str(p['product_type']) == 'order';
     final packs = (p['pack_items'] as List?) ?? const [];
@@ -616,11 +618,11 @@ class _ProductsScreenState extends State<ProductsScreen> with SingleTickerProvid
                       spacing: 6,
                       runSpacing: 6,
                       children: [
-                        _tag('库存 ${_qty(stock)} $unit', const Color(0xFFF2F6FF),
+                        _tag('库存 ${_qty(stock / f)} $unit', const Color(0xFFF2F6FF),
                             const Color(0xFF2F54EB)),
-                        _tag('均价 ${_money.format(_num(p['avg_cost']))}/$unit',
+                        _tag('均价 ${_money.format(_num(p['avg_cost']) * f)}/$unit',
                             const Color(0xFFF2F6FF), const Color(0xFF2F54EB)),
-                        _tag('售价 ${_money.format(_num(p['sale_price']))}',
+                        _tag('售价 ${_money.format(_num(p['sale_price']) * f)}/$unit',
                             const Color(0xFFEFFAF2), active ? _ok : Colors.grey.shade500),
                       ],
                     ),

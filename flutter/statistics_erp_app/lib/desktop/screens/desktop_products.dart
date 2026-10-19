@@ -571,14 +571,15 @@ class _DesktopProductsScreenState extends State<DesktopProductsScreen> {
               children: [
                 if (err.isNotEmpty) DesktopNotice(err, kind: DesktopNoticeKind.error),
                 const DesktopNotice(
-                  '批量改价只能按基础单位算（重量类 = 元/克，计数类 = 元/个）；'
+                  '批量改价按基础单位录入（重量类 = 元/克，计数类 = 元/个），'
+                  '列表与出库会按各商品默认单位自动折算；'
                   '单个商品的价建议在商品编辑页按默认单位填。',
                   kind: DesktopNoticeKind.info,
                 ),
                 DesktopFormRow(
                   label: '默认售价',
                   required: true,
-                  tip: '元 / 基础单位',
+                  tip: '元 / 基础单位（克 或 个）',
                   child: DesktopTextField(
                     controller: ctl,
                     hintText: '如 0.016',
@@ -614,7 +615,7 @@ class _DesktopProductsScreenState extends State<DesktopProductsScreen> {
       _selected.clear();
       await _load();
       if (!mounted) return;
-      wsToast(context, '已把 ${wsI(data['updated'])} 个商品售价改为 ${wsMoney(price)}/基础单位');
+      wsToast(context, '已把 ${wsI(data['updated'])} 个商品售价改为 ${wsMoney(price)} 元/基础单位');
     });
   }
 
@@ -1096,7 +1097,6 @@ class _DesktopProductsScreenState extends State<DesktopProductsScreen> {
               DesktopCol('编码', width: 110, sortKey: 'code'),
               DesktopCol('分类', width: 96, sortKey: 'category', center: true),
               DesktopCol('规格', width: 130, sortKey: 'spec'),
-              DesktopCol('基础单位', width: 84, sortKey: 'base_unit', center: true),
               DesktopCol('默认单位', width: 88, sortKey: 'default_unit', center: true),
               DesktopCol('换算关系', width: 132, sortKey: 'conversions', center: true),
               DesktopCol('售价', width: 116, sortKey: 'sale_price', right: true),
@@ -1130,11 +1130,11 @@ class _DesktopProductsScreenState extends State<DesktopProductsScreen> {
     );
   }
 
-  /// 合计行：按列下标填，避免写错位置（1=商品名称，12=库存值）
+  /// 合计行：按列下标填，避免写错位置（1=商品名称，11=库存值）
   List<String> _footer(List<Map<String, dynamic>> rows) {
-    final List<String> out = List<String>.filled(19, '');
+    final List<String> out = List<String>.filled(18, '');
     out[1] = '合计 ${rows.length} 项';
-    out[12] = wsMoney(rows.fold<double>(0, (s, p) => s + wsD(p['stock_value'])));
+    out[11] = wsMoney(rows.fold<double>(0, (s, p) => s + wsD(p['stock_value'])));
     return out;
   }
 
@@ -1183,6 +1183,7 @@ class _DesktopProductsScreenState extends State<DesktopProductsScreen> {
     final int id = wsI(p['id']);
     final bool active = p['is_active'] != false;
     final String du = _unitOf(p);
+    final String base = wsS(p['base_unit']);
     final double f = _factorOf(p, du);
     final List<Map<String, dynamic>> convs = _convOf(p).entries.toList()
         .map((e) => <String, dynamic>{'unit': e.key, 'factor': e.value})
@@ -1214,11 +1215,10 @@ class _DesktopProductsScreenState extends State<DesktopProductsScreen> {
             ? wsCell('—')
             : DesktopTag(wsS(p['category']), color: WsTokens.primary),
         wsCell(wsS(p['spec'], fallback: '—'), tip: wsS(p['spec'])),
-        wsCell(wsS(p['base_unit'], fallback: '—'), tip: '基础单位：库存与成本都按它存库'),
         wsCell(du.isEmpty ? '—' : du),
-        _convCell(convs, du),
+        _convCell(convs, du, base),
         wsCell(wsD(p['sale_price']) > 0 ? '${wsMoney(wsD(p['sale_price']) * f)}/$du' : '—',
-            tip: '默认售价（按默认单位展示，存库按基础单位）'),
+            tip: '默认售价：按默认单位展示，存库按最小计量单位'),
         Tooltip(
           message: _refCostTip(p),
           child: Text(
@@ -1275,7 +1275,7 @@ class _DesktopProductsScreenState extends State<DesktopProductsScreen> {
   }
 
   /// 换算关系：折叠展示，点单元格看全部
-  Widget _convCell(List<Map<String, dynamic>> convs, String du) {
+  Widget _convCell(List<Map<String, dynamic>> convs, String du, String base) {
     if (convs.isEmpty) return wsCell('—');
     final String first = '${convs.first['unit']}=${_qty(convs.first['factor'])}';
     final String full = convs.map((c) => '${wsS(c['unit'])}=${_qty(c['factor'])}').join('；');
@@ -1283,12 +1283,16 @@ class _DesktopProductsScreenState extends State<DesktopProductsScreen> {
       behavior: HitTestBehavior.opaque,
       onTap: () => _showAspect(
         title: '换算关系',
-        cols: const [DesktopCol('单位', width: 160), DesktopCol('折基础单位', width: 160)],
+        cols: const [DesktopCol('单位', width: 160), DesktopCol('折合', width: 200)],
         rows: [
           for (final c in convs)
-            DesktopRow(cells: [wsCell(wsS(c['unit'])), wsCell(_qty(c['factor']))]),
+            DesktopRow(cells: [
+              wsCell(wsS(c['unit'])),
+              wsCell('1 ${wsS(c['unit'])} = ${_qty(c['factor'])} $base'),
+            ]),
         ],
-        note: '基础单位恒等于 1；库存与均价都按基础单位存，展示时除以默认单位的系数（$du）。',
+        note: '库存与均价按基础单位「${base.isEmpty ? '—' : base}」存库，'
+            '展示时除以默认单位「${du.isEmpty ? base : du}」的系数。',
       ),
       child: Tooltip(
         message: full,
@@ -1411,13 +1415,13 @@ class _ProductDetail extends StatelessWidget {
       _kv('分类', wsS(p['category'], fallback: '—')),
       _kv('商品类型', isOrder ? '订单商品（小类·出库销售）' : '库存商品（大类·真实库存）'),
       _kv('规格', wsS(p['spec'], fallback: '—')),
-      _kv('基础单位 / 默认单位', '${wsS(p['base_unit'], fallback: '—')} / $du'),
+      _kv('默认单位', du.isEmpty ? '—' : du),
       _kv('默认售价', wsD(p['sale_price']) > 0 ? '${wsMoney(wsD(p['sale_price']) * f)}/$du' : '—'),
       _kv('参考成本', _refCostOf(p) == null ? '—' : '${wsMoney(_refCostOf(p)!)} / $du'),
       _kv('手填单位成本', wsD(p['unit_cost']) > 0 ? '${wsMoney(wsD(p['unit_cost']) * f)}/$du' : '—'),
       _kv('库存', isOrder
           ? (links.isEmpty ? '代发（本仓不持有库存）' : '记在关联的库存商品上')
-          : '${_qty(_dispStock(p))} $du（基础单位 ${_qty(wsD(p['stock']))} ${wsS(p['base_unit'])}）'),
+          : '${_qty(_dispStock(p))} $du'),
       _kv('库存值', wsMoney(wsD(p['stock_value']))),
       _kv('打包费 / 包邮', '${wsMoney(wsD(p['pack_fee']))} · ${p['free_shipping'] == true ? '包邮' : '不包邮'}'),
       _kv('单件净重', wsD(p['weight_kg']) > 0 ? '${wsTrim(wsD(p['weight_kg']), digits: 3)} kg' : '—'),
@@ -1430,10 +1434,13 @@ class _ProductDetail extends StatelessWidget {
     body.add(const SizedBox(height: 6));
     body.add(DesktopGrid(
       dense: true,
-      cols: const [DesktopCol('单位', width: 150), DesktopCol('折基础单位', width: 150)],
+      cols: const [DesktopCol('单位', width: 150), DesktopCol('折合', width: 220)],
       rows: [
         for (final e in _convOf(p).entries)
-          DesktopRow(cells: [wsCell(e.key), wsCell(_qty(e.value))]),
+          DesktopRow(cells: [
+            wsCell(e.key),
+            wsCell('1 ${e.key} = ${_qty(e.value)} ${wsS(p['base_unit'])}'),
+          ]),
         if (_convOf(p).isEmpty) DesktopRow(cells: [wsCell('未配置'), wsCell('—')]),
       ],
     ));
@@ -1512,7 +1519,11 @@ class _ProductDetail extends StatelessWidget {
     final double unitPrice = wsD(p['last_in_unit_price']);
     final String unit = wsS(p['last_in_unit']);
     if (d.isEmpty && wsD(p['last_in_price']) <= 0) return '还没有入库记录';
-    if (unit.isEmpty) return '$d ${wsMoney(wsD(p['last_in_price']))}（基础单位）';
+    if (unit.isEmpty) {
+      // 老流水没记单位，存的是基础单位价：折算到默认单位再显示
+      final String du = _unitOf(p);
+      return '$d ${wsMoney(wsD(p['last_in_price']) * _factorOf(p, du))}/$du';
+    }
     return '$d · ${wsMoney(unitPrice)}/$unit';
   }
 
