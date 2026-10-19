@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 import 'package:cookie_jar/cookie_jar.dart';
@@ -628,5 +630,342 @@ class ApiService {
     if (url == null || url.isEmpty) return '';
     if (url.startsWith('http://') || url.startsWith('https://')) return url;
     return _defaultApiBaseUrl + (url.startsWith('/') ? '' : '/') + url;
+  }
+
+  /// 带会话 Cookie 下载二进制（导入模板、备份文件、导出 JSON）
+  static Future<void> download(String path, String savePath, {Map<String, dynamic>? query}) async {
+    await init();
+    try {
+      final response = await _dio.get(
+        path,
+        queryParameters: query == null ? null : _clean(query),
+        options: Options(responseType: ResponseType.bytes),
+      );
+      await File(savePath).writeAsBytes(response.data as List<int>);
+    } on DioException catch (e) {
+      throw ApiException(e.response?.statusCode, _networkMessage(e));
+    }
+  }
+
+  /// 带会话 Cookie 拉一段文本（远程备份收发脚本）
+  static Future<String> getText(String path) async {
+    await init();
+    try {
+      final response = await _dio.get(path, options: Options(responseType: ResponseType.plain));
+      if ((response.statusCode ?? 0) >= 400) {
+        throw ApiException(response.statusCode, '拉取失败');
+      }
+      return response.data.toString();
+    } on DioException catch (e) {
+      throw ApiException(e.response?.statusCode, _networkMessage(e));
+    }
+  }
+
+  // ---------------- 报表 ----------------
+
+  /// 报表汇总。[wh] 传 'all' 合并各分仓；空串=当前工作分仓
+  static Future<Map<String, dynamic>> reportSummary({
+    String dateFrom = '',
+    String dateTo = '',
+    String wh = '',
+    bool excludeOther = true,
+  }) async {
+    final data = await get('/api/report/summary', queryParameters: _clean({
+      'date_from': dateFrom,
+      'date_to': dateTo,
+      'wh': wh,
+      'exclude_other': excludeOther ? '1' : '0',
+    }));
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// 各分仓总览（全仓视角的那张表）
+  static Future<Map<String, dynamic>> reportAllWarehouses({
+    String dateFrom = '',
+    String dateTo = '',
+    bool excludeOther = true,
+  }) async {
+    final data = await get('/api/report/all-warehouses', queryParameters: _clean({
+      'date_from': dateFrom,
+      'date_to': dateTo,
+      'exclude_other': excludeOther ? '1' : '0',
+    }));
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// 出库明细（按天 × 规格）
+  static Future<Map<String, dynamic>> reportSalesBySpec({String dateFrom = '', String dateTo = '', String wh = ''}) async {
+    final data = await get('/api/report/sales-by-spec',
+        queryParameters: _clean({'date_from': dateFrom, 'date_to': dateTo, 'wh': wh}));
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  // ---------------- 入仓 ----------------
+
+  /// {items, by_product, total, count}
+  static Future<Map<String, dynamic>> warehouseIns({String dateFrom = '', String dateTo = '', String q = ''}) async {
+    final data = await get('/api/warehouse-in',
+        queryParameters: _clean({'date_from': dateFrom, 'date_to': dateTo, 'q': q}));
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> createWarehouseIn(Map<String, dynamic> body) async {
+    final data = await post('/api/warehouse-in', data: body);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> updateWarehouseIn(int id, Map<String, dynamic> body) async {
+    final data = await put('/api/warehouse-in/$id', data: body);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<void> deleteWarehouseIn(int id) async {
+    await delete('/api/warehouse-in/$id');
+  }
+
+  static Future<Map<String, dynamic>> batchDeleteWarehouseIns(List<int> ids) async {
+    final data = await post('/api/warehouse-in/batch-delete', data: {'ids': ids});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// 入仓品资料
+  static Future<List<dynamic>> warehouseProducts() async {
+    return await get('/api/warehouse-in/products') as List<dynamic>;
+  }
+
+  static Future<Map<String, dynamic>> createWarehouseProduct(Map<String, dynamic> body) async {
+    final data = await post('/api/warehouse-in/products', data: body);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> updateWarehouseProduct(int id, Map<String, dynamic> body) async {
+    final data = await put('/api/warehouse-in/products/$id', data: body);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<void> deleteWarehouseProduct(int id) async {
+    await delete('/api/warehouse-in/products/$id');
+  }
+
+  /// 入仓品扣点（单值，存的是 category=入仓品 那条规则）
+  static Future<Map<String, dynamic>> warehouseDeduction() async {
+    final data = await get('/api/warehouse-in/deduction');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Excel 贴单导入：preview 返回待确认行，confirm 才落库
+  static Future<Map<String, dynamic>> warehouseImportPreview(String filePath, {String sheet = '', String date = ''}) async {
+    await init();
+    final formData = FormData.fromMap({
+      'file': await MultipartFile.fromFile(filePath),
+      'sheet': sheet,
+      'date': date,
+    });
+    return Map<String, dynamic>.from(await _send(() => _dio.post('/api/warehouse-in/import/preview', data: formData)) as Map);
+  }
+
+  static Future<Map<String, dynamic>> warehouseImportConfirm(List<Map<String, dynamic>> items, {String date = ''}) async {
+    final data = await post('/api/warehouse-in/import/confirm', data: {'items': items, 'date': date});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  // ---------------- 批量导入 / 模板 ----------------
+
+  static String templatePath(String kind) => '/api/templates/$kind';
+
+  /// {created, skipped, failed_count, failed:[{row,reason}], warnings:[]}
+  static Future<Map<String, dynamic>> importProducts(String filePath) async {
+    final data = await upload('/api/import/products', filePath);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> previewImportInbounds(String filePath) async {
+    final data = await upload('/api/import/inbounds/preview', filePath);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> confirmImportInbounds(List<Map<String, dynamic>> items) async {
+    final data = await post('/api/import/inbounds/confirm', data: {'items': items});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> previewImportOutbounds(String filePath) async {
+    final data = await upload('/api/import/outbounds/preview', filePath);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> confirmImportOutbounds(List<Map<String, dynamic>> orders, {String source = ''}) async {
+    final data = await post('/api/import/outbounds/confirm', data: {'orders': orders, 'source': source});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> previewImportJushuitan(String filePath) async {
+    final data = await upload('/api/jushuitan/import/preview', filePath);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> confirmImportJushuitan(List<Map<String, dynamic>> orders, {String source = ''}) async {
+    final data = await post('/api/jushuitan/import/confirm', data: {'orders': orders, 'source': source});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// 只解析建编码关联、不建出库单
+  static Future<Map<String, dynamic>> parseJushuitan(String filePath) async {
+    final data = await upload('/api/jushuitan/parse', filePath);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// 鲜货现采：今日订单需求 vs 库存（不扣库存，只出建议）
+  static Future<Map<String, dynamic>> freshPlan(String filePath) async {
+    final data = await upload('/api/fresh/plan', filePath);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  // ---------------- 聚水潭编码关联 ----------------
+
+  /// {summary:{total,linked,unlinked,linked_order,linked_stock}, items:[…]}
+  static Future<Map<String, dynamic>> mappings() async {
+    final data = await get('/api/mappings');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// product_id 传 null 表示清空关联
+  static Future<Map<String, dynamic>> saveMapping({String externalCode = '', int? productId, String source = 'jushuitan'}) async {
+    final data = await post('/api/mappings',
+        data: {'source': source, 'external_code': externalCode, 'product_id': productId});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> autoMapping() async {
+    final data = await post('/api/mappings/auto');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<void> deleteMapping(int id) async {
+    await delete('/api/mappings/$id');
+  }
+
+  static Future<void> clearMappings() async {
+    await delete('/api/mappings');
+  }
+
+  /// 把聚水潭一单多货写成组合规则
+  static Future<Map<String, dynamic>> packRuleFromJushuitan({
+    required String docNo,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    final data = await post('/api/pack-rules/from-jushuitan', data: {'doc_no': docNo, 'items': items});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  // ---------------- 备份 / 商品资料 JSON ----------------
+
+  /// {config, backups, json_backups, remote_status}
+  static Future<Map<String, dynamic>> backups() async {
+    final data = await get('/api/backups');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> createBackup() async {
+    final data = await post('/api/backup');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> saveBackupConfig(Map<String, dynamic> body) async {
+    final data = await post('/api/backup/config', data: body);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<void> restoreBackup(String name) async {
+    await post('/api/backup/restore', data: {'name': name});
+  }
+
+  static Future<Map<String, dynamic>> deleteBackup(String name) async {
+    final data = await delete('/api/backup/${Uri.encodeComponent(name)}');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<String> remoteScript(String which) async =>
+      getText('/api/backup/remote/$which-script');
+
+  /// {dir, rows:[{kind,label,file,count_in_db,count_in_file,exists,mtime}]}
+  static Future<Map<String, dynamic>> productDataStatus() async {
+    final data = await get('/api/product-data/status');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<dynamic> productDataPayload(String kind) async => get('/api/product-data/$kind');
+
+  static Future<Map<String, dynamic>> productDataExport() async {
+    final data = await post('/api/product-data/export');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> productDataImport() async {
+    final data = await post('/api/product-data/import');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> productDataImportKind(String kind) async {
+    final data = await post('/api/product-data/import/$kind');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> productDataImportOne(Map<String, dynamic> payload) async {
+    final data = await post('/api/product-data/import-one', data: {'payload': payload});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  // ---------------- 聚水潭自动出库 ----------------
+
+  static Future<Map<String, dynamic>> jstSettings() async {
+    final data = await get('/api/jst-auto/settings');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> saveJstSettings(Map<String, dynamic> body) async {
+    final data = await post('/api/jst-auto/settings', data: body);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> jstCheck() async {
+    final data = await post('/api/jst-auto/check');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> jstWarehouses() async {
+    final data = await post('/api/jst-auto/jst-warehouses');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> jstRun({bool doImport = true, String window = '', String start = '', String end = ''}) async {
+    final data = await post('/api/jst-auto/run',
+        data: _clean({'do_import': doImport, 'window': window, 'start': start, 'end': end}));
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> jstStatus() async {
+    final data = await get('/api/jst-auto/status');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> jstHistory({int limit = 20}) async {
+    final data = await get('/api/jst-auto/history', queryParameters: {'limit': limit});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> jstPending() async {
+    final data = await get('/api/jst-auto/pending');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> jstResolvePending(int taskId, Map<String, dynamic> body) async {
+    final data = await post('/api/jst-auto/pending/$taskId/resolve', data: body);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> jstDismissPending(int taskId) async {
+    final data = await post('/api/jst-auto/pending/$taskId/dismiss');
+    return Map<String, dynamic>.from(data as Map);
   }
 }

@@ -13,11 +13,19 @@ class DesktopSidebar extends StatelessWidget {
     required this.currentRoute,
     required this.onSelect,
     required this.auth,
+    this.sections = kDesktopNav,
+    this.badges = const <String, int>{},
   });
 
   final String currentRoute;
   final ValueChanged<DesktopNavItem> onSelect;
   final AuthProvider auth;
+
+  /// 已按本机偏好过滤过的分组（web applyNavVisibility）。
+  final List<DesktopNavSection> sections;
+
+  /// 路由 → 角标数字（web #payNavBadge：待付款未结清单据数）。0 或不填则不显示。
+  final Map<String, int> badges;
 
   @override
   Widget build(BuildContext context) {
@@ -40,13 +48,14 @@ class DesktopSidebar extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  for (final section in kDesktopNav) ...[
+                  for (final section in sections) ...[
                     if (section.title.isNotEmpty)
                       _GroupHeader(title: section.title, dark: dark),
                     for (final item in section.items)
                       _NavTile(
                         item: item,
                         active: item.route != null && item.route == currentRoute,
+                        badge: item.route == null ? 0 : (badges[item.route] ?? 0),
                         dark: dark,
                         onTap: item.enabled ? () => onSelect(item) : null,
                       ),
@@ -130,11 +139,15 @@ class _NavTile extends StatefulWidget {
     required this.item,
     required this.active,
     required this.dark,
+    this.badge = 0,
     this.onTap,
   });
   final DesktopNavItem item;
   final bool active;
   final bool dark;
+
+  /// >0 时显示角标（web .badge，橙色 #F97316）
+  final int badge;
   final VoidCallback? onTap;
 
   @override
@@ -211,6 +224,26 @@ class _NavTileState extends State<_NavTile> {
                   ),
                 ),
               ),
+              // 角标（web .nav-item .badge）
+              if (widget.badge > 0) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF97316),
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: Text(
+                    '${widget.badge}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      height: 1.35,
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 9),
+              ],
             ],
           ),
         ),
