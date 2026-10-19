@@ -337,4 +337,5 @@ google-services.json
 
 # 本机调试脚本与截图（不属产品代码）
 /send.ps1
+/shot*.ps1
 /shot_*.png
