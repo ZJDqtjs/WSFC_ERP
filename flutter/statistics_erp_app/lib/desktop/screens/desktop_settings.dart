@@ -8,7 +8,7 @@ import 'package:flutter/services.dart' show Clipboard, ClipboardData, FilteringT
 
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
-import '../fluent_theme.dart';
+import '../desktop_style.dart';
 import '../nav_model.dart';
 import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';

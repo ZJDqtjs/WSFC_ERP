@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
-import '../fluent_theme.dart';
+import '../desktop_style.dart';
 import 'desktop_ui.dart';
 
 /// 「切换分仓」弹层（web openWarehouseModal / loadWarehouses / switchWarehouse /

@@ -2,13 +2,17 @@ import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../providers/auth_provider.dart';
-import 'fluent_theme.dart';
+import 'desktop_style.dart';
+import 'widgets/desktop_motion.dart';
+import 'widgets/desktop_rail.dart';
 
 enum _LoginMode { privateKey, password }
 
-/// 桌面登录页（Material 复刻 Fluent 观感）。复用与移动端同一套 AuthProvider（私钥 / 口令两条通道）。
+/// 桌面登录页。底板与主壳同一套极光 + 玻璃，登录后视觉不跳。
+/// 复用与移动端同一套 AuthProvider（私钥 / 口令两条通道）。
 class DesktopLogin extends StatefulWidget {
   const DesktopLogin({super.key, required this.auth});
   final AuthProvider auth;
@@ -40,14 +44,17 @@ class _DesktopLoginState extends State<DesktopLogin> {
     if (!text.contains('PRIVATE KEY')) return '文件里没有私钥标记，请确认选的是私钥文件本身';
     if (text.contains('RSA PRIVATE KEY')) return '后端只支持 Ed25519 私钥，这是 RSA 私钥';
     if (text.contains('EC PRIVATE KEY')) return '后端只支持 Ed25519 私钥，这是 EC 私钥';
-    if (text.contains('ENCRYPTED PRIVATE KEY')) return '后端不支持带口令加密的私钥，请用未加密的 id_ed25519';
+    if (text.contains('ENCRYPTED PRIVATE KEY')) {
+      return '后端不支持带口令加密的私钥，请用未加密的 id_ed25519';
+    }
     return null;
   }
 
   Future<void> _pickKeyFile() async {
     setState(() => _error = null);
     try {
-      final result = await FilePicker.platform.pickFiles(type: FileType.any, withData: true);
+      final result = await FilePicker.platform
+          .pickFiles(type: FileType.any, withData: true);
       if (result == null || result.files.isEmpty) return;
       final file = result.files.first;
       final bytes = file.bytes;
@@ -104,102 +111,104 @@ class _DesktopLoginState extends State<DesktopLogin> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: WsTokens.bgLight,
-      body: Center(
-        child: SingleChildScrollView(
-          child: Container(
-            width: 400,
-            padding: const EdgeInsets.all(28),
-            decoration: BoxDecoration(
-              color: WsTokens.cardLight,
-              borderRadius: BorderRadius.circular(WsTokens.radiusLg),
-              border: Border.all(color: WsTokens.borderLight),
-              boxShadow: const [
-                BoxShadow(color: Color(0x14000000), blurRadius: 24, offset: Offset(0, 8)),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Row(
-                  children: [
-                    Icon(Icons.inventory_2_outlined, color: WsTokens.primary, size: 26),
-                    SizedBox(width: 10),
-                    Text('企业台账',
-                        style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w600,
-                            color: WsTokens.primary)),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                const Text('库存 · 财务 · 一体化',
-                    style: TextStyle(fontSize: 12, color: WsTokens.mutedLight)),
-                const SizedBox(height: 18),
-                Row(
-                  children: [
-                    _ModeChip(
-                      label: '私钥登录',
-                      selected: _mode == _LoginMode.privateKey,
-                      onTap: () => setState(() => _mode = _LoginMode.privateKey),
-                    ),
-                    const SizedBox(width: 8),
-                    _ModeChip(
-                      label: '密码登录',
-                      selected: _mode == _LoginMode.password,
-                      onTap: () => setState(() => _mode = _LoginMode.password),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                TextFormField(
-                  controller: _username,
-                  decoration: const InputDecoration(
-                    hintText: '用户名',
-                    prefixIcon: Icon(Icons.person_outline, size: 18),
+      backgroundColor: Colors.transparent,
+      body: DesktopBackdrop(
+        child: Center(
+          child: SingleChildScrollView(
+            child: GlassCard(
+              width: 400,
+              padding: const EdgeInsets.all(28),
+              shape: const LiquidRoundedSuperellipse(
+                  borderRadius: WsTokens.radiusPanel),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Row(
+                    children: [
+                      DesktopIconTile(
+                        icon: Icons.insights_outlined,
+                        colors: [WsTokens.brandTop, WsTokens.primary],
+                      ),
+                      SizedBox(width: 10),
+                      Text('企业台账',
+                          style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              color: WsTokens.primary)),
+                    ],
                   ),
-                ),
-                const SizedBox(height: 12),
-                if (_mode == _LoginMode.privateKey)
-                  _buildKeyArea()
-                else
+                  const SizedBox(height: 4),
+                  const Text('库存 · 财务 · 一体化',
+                      style:
+                          TextStyle(fontSize: 12, color: WsTokens.mutedLight)),
+                  const SizedBox(height: 18),
+                  Row(
+                    children: [
+                      _ModeChip(
+                        label: '私钥登录',
+                        selected: _mode == _LoginMode.privateKey,
+                        onTap: () =>
+                            setState(() => _mode = _LoginMode.privateKey),
+                      ),
+                      const SizedBox(width: 8),
+                      _ModeChip(
+                        label: '密码登录',
+                        selected: _mode == _LoginMode.password,
+                        onTap: () =>
+                            setState(() => _mode = _LoginMode.password),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
                   TextFormField(
-                    controller: _password,
-                    obscureText: true,
+                    controller: _username,
                     decoration: const InputDecoration(
-                      hintText: '密码（仅 Go 试验后端）',
-                      prefixIcon: Icon(Icons.lock_outline, size: 18),
+                      hintText: '用户名',
+                      prefixIcon: Icon(Icons.person_outline, size: 18),
                     ),
                   ),
-                if (_error != null) ...[
-                  const SizedBox(height: 14),
-                  _ErrorBar(message: _error!),
-                ],
-                const SizedBox(height: 20),
-                SizedBox(
-                  height: 40,
-                  child: ElevatedButton(
-                    onPressed: _loading ? null : _submit,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: WsTokens.primary,
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(WsTokens.radius),
+                  const SizedBox(height: 12),
+                  if (_mode == _LoginMode.privateKey)
+                    _buildKeyArea()
+                  else
+                    TextFormField(
+                      controller: _password,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        hintText: '密码（仅 Go 试验后端）',
+                        prefixIcon: Icon(Icons.lock_outline, size: 18),
                       ),
                     ),
-                    child: _loading
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.white),
-                          )
-                        : const Text('登 录', style: TextStyle(fontSize: 15)),
+                  if (_error != null) ...[
+                    const SizedBox(height: 14),
+                    _ErrorBar(message: _error!),
+                  ],
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    height: 40,
+                    child: ElevatedButton(
+                      onPressed: _loading ? null : _submit,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: WsTokens.primary,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(WsTokens.radius),
+                        ),
+                      ),
+                      child: _loading
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Text('登 录', style: TextStyle(fontSize: 15)),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -282,7 +291,8 @@ class _DesktopLoginState extends State<DesktopLogin> {
 }
 
 class _ModeChip extends StatelessWidget {
-  const _ModeChip({required this.label, required this.selected, required this.onTap});
+  const _ModeChip(
+      {required this.label, required this.selected, required this.onTap});
   final String label;
   final bool selected;
   final VoidCallback onTap;
@@ -298,7 +308,8 @@ class _ModeChip extends StatelessWidget {
           decoration: BoxDecoration(
             color: selected ? WsTokens.primary : Colors.transparent,
             borderRadius: BorderRadius.circular(WsTokens.radius),
-            border: Border.all(color: selected ? WsTokens.primary : WsTokens.borderLight),
+            border: Border.all(
+                color: selected ? WsTokens.primary : WsTokens.borderLight),
           ),
           child: Text(
             label,
@@ -334,7 +345,8 @@ class _ErrorBar extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(message,
-                style: const TextStyle(fontSize: 12.5, color: Color(0xFF7A0C10))),
+                style:
+                    const TextStyle(fontSize: 12.5, color: Color(0xFF7A0C10))),
           ),
         ],
       ),

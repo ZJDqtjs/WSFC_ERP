@@ -1,11 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
-import '../fluent_theme.dart';
+import '../desktop_style.dart';
+import 'desktop_motion.dart';
 
-/// 桌面端通用控件层：把 web 端的表格 / 筛选栏 / 弹窗表单 / 提示语，
-/// 用 Material 复刻成 Fluent 观感的一套组件，供各业务页复用。
+/// 桌面端通用控件层：页面骨架 / 表格 / 筛选条 / 弹窗表单 / 提示语。
+///
+/// 观感语言只有三种表面，按"离用户视线多远"分工：
+/// - 玻璃（[kGlassSoft]）：壳层，导航条 / 工具条 / 弹层，整屏同时不超过三四个；
+/// - 半透明雾面（[WsTokens.fill]）：卡片、筛选条、表格容器，数量多但不吃 shader；
+/// - 品牌色实底：主按钮、选中态、强调条。
+/// 各业务页不直接碰这三层，只组合这里的原语，所以改这里等于改全部页面。
 
 // ---------------------------------------------------------------- 格式化
 
@@ -22,7 +29,8 @@ String wsNum(num? v, {int? maxFractions}) {
 }
 
 /// 百分比，保留一位
-String wsPct(num? ratio) => ratio == null ? '—' : '${(ratio * 100).toStringAsFixed(1)}%';
+String wsPct(num? ratio) =>
+    ratio == null ? '—' : '${(ratio * 100).toStringAsFixed(1)}%';
 
 /// 后端 JSON 取值（值可能是 int/double/String/null）
 double wsD(dynamic v, {double fallback = 0}) {
@@ -37,7 +45,8 @@ int wsI(dynamic v, {int fallback = 0}) {
   return fallback;
 }
 
-String wsS(dynamic v, {String fallback = ''}) => v == null ? fallback : v.toString();
+String wsS(dynamic v, {String fallback = ''}) =>
+    v == null ? fallback : v.toString();
 
 String wsToday() {
   final now = DateTime.now();
@@ -62,7 +71,10 @@ String wsTrim(num v, {int digits = 4}) {
 
 // ---------------------------------------------------------------- 页面骨架
 
-/// 页面标题行：标题 + 说明 + 右侧按钮组（对应 web .page-head）。
+/// 页面标题行：标题 + 说明 + 右侧按钮组。
+///
+/// 工具条已经写了「分组 › 页面」，这里再摆一行 21px 大标题纯属重复占高度，
+/// 所以改成一行紧凑排布：标题 + 同行淡色说明，动作按钮靠右垂直居中。
 class DesktopPageHead extends StatelessWidget {
   const DesktopPageHead({
     super.key,
@@ -79,38 +91,49 @@ class DesktopPageHead extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dark = wsIsDark(context);
     return Padding(
-      padding: const EdgeInsets.only(bottom: 18),
+      padding: const EdgeInsets.only(bottom: 16),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          Flexible(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 21,
-                    fontWeight: FontWeight.w600,
-                    color: dark ? WsTokens.textDark : WsTokens.textLight,
+                Flexible(
+                  child: Text(
+                    title,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 19,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
+                      color: WsTokens.inkOf(context),
+                    ),
                   ),
                 ),
                 if (subtitle != null) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    subtitle!,
-                    style: TextStyle(
-                        fontSize: 12.5,
-                        color: dark ? WsTokens.mutedDark : WsTokens.mutedLight),
+                  const SizedBox(width: 10),
+                  Flexible(
+                    child: Text(
+                      subtitle!,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          color: WsTokens.inkOf(context, level: 3)),
+                    ),
                   ),
                 ],
               ],
             ),
           ),
+          const SizedBox(width: 12),
           if (actions.isNotEmpty)
-            Wrap(spacing: 10, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: actions),
+            Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: actions),
           if (trailing != null) trailing!,
         ],
       ),
@@ -145,7 +168,8 @@ class DesktopPage extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              DesktopPageHead(title: title, subtitle: subtitle, actions: actions),
+              DesktopPageHead(
+                  title: title, subtitle: subtitle, actions: actions),
               SizedBox(height: headBottom - 18),
               Expanded(child: body),
             ],
@@ -158,7 +182,8 @@ class DesktopPage extends StatelessWidget {
 
 /// 页面正文的默认滚动容器（表格页想固定表头时可自己换成 Column+Expanded）。
 class DesktopScrollBody extends StatelessWidget {
-  const DesktopScrollBody({super.key, required this.children, this.bottom = 24});
+  const DesktopScrollBody(
+      {super.key, required this.children, this.bottom = 24});
   final List<Widget> children;
   final double bottom;
 
@@ -173,7 +198,8 @@ class DesktopScrollBody extends StatelessWidget {
   }
 }
 
-/// 筛选条：日期、关键字、下拉等（对应 web .toolbar / .filters）。
+/// 筛选条：日期、关键字、下拉等。
+/// 用雾面而不是玻璃——筛选条里全是输入框和下拉，再叠一层折射只会让文字发虚。
 class DesktopFilterBar extends StatelessWidget {
   const DesktopFilterBar({super.key, required this.children, this.right});
   final List<Widget> children;
@@ -181,22 +207,26 @@ class DesktopFilterBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dark = wsIsDark(context);
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       decoration: BoxDecoration(
-        color: dark ? WsTokens.cardDark : WsTokens.cardLight,
-        borderRadius: BorderRadius.circular(WsTokens.radius),
-        border: Border.all(color: dark ? WsTokens.borderDark : WsTokens.borderLight),
+        color: WsTokens.fill(context, alpha: 0.74),
+        borderRadius: BorderRadius.circular(WsTokens.radiusLg),
+        border: Border.all(color: WsTokens.line(context, alpha: 0.8)),
       ),
       child: Wrap(
         spacing: 12,
         runSpacing: 12,
         crossAxisAlignment: WrapCrossAlignment.center,
-        alignment: right == null ? WrapAlignment.start : WrapAlignment.spaceBetween,
+        alignment:
+            right == null ? WrapAlignment.start : WrapAlignment.spaceBetween,
         children: [
-          Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: children),
+          Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: children),
           if (right != null) right!,
         ],
       ),
@@ -218,7 +248,10 @@ class DesktopLabeled extends StatelessWidget {
       children: [
         Text(label,
             style: TextStyle(
-                fontSize: 12.5, color: dark ? WsTokens.textSecondaryDark : WsTokens.textSecondaryLight)),
+                fontSize: 12.5,
+                color: dark
+                    ? WsTokens.textSecondaryDark
+                    : WsTokens.textSecondaryLight)),
         const SizedBox(width: 8),
         child,
       ],
@@ -230,7 +263,7 @@ class DesktopLabeled extends StatelessWidget {
 
 enum DesktopButtonKind { normal, primary, success, danger }
 
-class DesktopButton extends StatelessWidget {
+class DesktopButton extends StatefulWidget {
   const DesktopButton({
     super.key,
     required this.label,
@@ -249,13 +282,20 @@ class DesktopButton extends StatelessWidget {
   final double? width;
 
   @override
+  State<DesktopButton> createState() => _DesktopButtonState();
+}
+
+class _DesktopButtonState extends State<DesktopButton> {
+  bool _hover = false;
+
+  @override
   Widget build(BuildContext context) {
-    final dark = wsIsDark(context);
-    final bool enabled = onPressed != null;
+    final bool dark = wsIsDark(context);
+    final bool enabled = widget.onPressed != null;
     Color bg;
     Color fg;
     Color border;
-    switch (kind) {
+    switch (widget.kind) {
       case DesktopButtonKind.primary:
         bg = WsTokens.primary;
         fg = Colors.white;
@@ -269,38 +309,53 @@ class DesktopButton extends StatelessWidget {
         fg = Colors.white;
         border = WsTokens.red;
       case DesktopButtonKind.normal:
-        bg = dark ? WsTokens.cardDark : WsTokens.cardLight;
-        fg = dark ? WsTokens.textDark : WsTokens.textLight;
-        border = dark ? WsTokens.borderDark : WsTokens.borderLight;
+        bg = WsTokens.fill(context, alpha: dark ? 0.9 : 0.86);
+        fg = WsTokens.inkOf(context);
+        border = WsTokens.line(context, alpha: 0.95);
     }
+    // 桌面端鼠标停留时间比点击间隔长得多，hover 必须有反馈，否则按钮看着像死的
+    if (enabled && _hover) bg = Color.lerp(bg, fg, dark ? 0.16 : 0.07)!;
     if (!enabled) {
       bg = bg.withValues(alpha: dark ? 0.35 : 0.45);
       fg = fg.withValues(alpha: 0.55);
     }
+    final bool colored = widget.kind != DesktopButtonKind.normal;
     return SizedBox(
-      width: width,
-      height: small ? 30 : 34,
-      child: ElevatedButton(
-        onPressed: onPressed,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: bg,
-          foregroundColor: fg,
-          elevation: 0,
-          padding: EdgeInsets.symmetric(horizontal: small ? 10 : 14),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(WsTokens.radius),
-            side: BorderSide(color: border),
+      width: widget.width,
+      height: widget.small ? 30 : 34,
+      child: MouseRegion(
+        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        onEnter: enabled ? (_) => setState(() => _hover = true) : null,
+        onExit: enabled ? (_) => setState(() => _hover = false) : null,
+        child: ElevatedButton(
+          onPressed: widget.onPressed,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: bg,
+            foregroundColor: fg,
+            // 实底按钮给一点投影浮起来，描边只留给普通按钮
+            elevation: colored && enabled ? (_hover ? 3 : 1.5) : 0,
+            shadowColor: bg.withValues(alpha: 0.4),
+            padding: EdgeInsets.symmetric(horizontal: widget.small ? 10 : 14),
+            animationDuration: Dm.quick,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(WsTokens.radius),
+              side: BorderSide(color: border),
+            ),
           ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (icon != null) ...[
-              Icon(icon, size: small ? 14 : 15),
-              const SizedBox(width: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.icon != null) ...[
+                Icon(widget.icon, size: widget.small ? 14 : 15),
+                const SizedBox(width: 6),
+              ],
+              Flexible(
+                  child: Text(widget.label,
+                      style: TextStyle(
+                          fontSize: widget.small ? 12 : 13,
+                          fontWeight: colored ? FontWeight.w600 : null))),
             ],
-            Flexible(child: Text(label, style: TextStyle(fontSize: small ? 12 : 13))),
-          ],
+          ),
         ),
       ),
     );
@@ -333,7 +388,8 @@ class DesktopIconButton extends StatelessWidget {
       constraints: BoxConstraints.tightFor(width: size, height: size),
       style: IconButton.styleFrom(
         backgroundColor: (color ?? WsTokens.primary).withValues(alpha: 0.10),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(WsTokens.radiusSm)),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(WsTokens.radiusSm)),
       ),
     );
     return tooltip == null ? btn : Tooltip(message: tooltip!, child: btn);
@@ -381,7 +437,6 @@ class DesktopTextField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dark = wsIsDark(context);
     return SizedBox(
       width: width,
       child: TextField(
@@ -395,27 +450,30 @@ class DesktopTextField extends StatelessWidget {
         onChanged: onChanged,
         onSubmitted: onSubmitted,
         autofocus: autofocus,
-        style: TextStyle(fontSize: 13, color: dark ? WsTokens.textDark : WsTokens.textLight),
+        cursorColor: WsTokens.primary,
+        style: TextStyle(fontSize: 13, color: WsTokens.inkOf(context)),
         decoration: InputDecoration(
           isDense: true,
           hintText: hintText,
-          hintStyle: const TextStyle(fontSize: 13, color: WsTokens.mutedLight),
+          hintStyle:
+              TextStyle(fontSize: 13, color: WsTokens.inkOf(context, level: 3)),
           suffixIcon: suffix,
           filled: true,
           fillColor: readonly
-              ? (dark ? WsTokens.borderDark : WsTokens.borderLighter)
-              : (dark ? WsTokens.bgDark : const Color(0xFFFBFBFB)),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+              ? WsTokens.line(context, alpha: 0.55)
+              : WsTokens.fill(context, alpha: 0.92),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
           border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(WsTokens.radiusSm),
-            borderSide: BorderSide(color: dark ? WsTokens.borderDark : WsTokens.borderLight),
+            borderRadius: BorderRadius.circular(WsTokens.radius),
+            borderSide: BorderSide(color: WsTokens.line(context)),
           ),
           enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(WsTokens.radiusSm),
-            borderSide: BorderSide(color: dark ? WsTokens.borderDark : WsTokens.borderLight),
+            borderRadius: BorderRadius.circular(WsTokens.radius),
+            borderSide: BorderSide(color: WsTokens.line(context)),
           ),
           focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(WsTokens.radiusSm),
+            borderRadius: BorderRadius.circular(WsTokens.radius),
             borderSide: const BorderSide(color: WsTokens.primary, width: 1.5),
           ),
         ),
@@ -458,19 +516,23 @@ class DesktopSelect<T> extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(WsTokens.radiusSm),
-            border: Border.all(color: dark ? WsTokens.borderDark : WsTokens.borderLight),
-            color: dark ? WsTokens.bgDark : const Color(0xFFFBFBFB),
+            borderRadius: BorderRadius.circular(WsTokens.radius),
+            border: Border.all(color: WsTokens.line(context)),
+            color: WsTokens.fill(context, alpha: 0.92),
           ),
           child: DropdownButton<T>(
             value: options.any((o) => o.value == value) ? value : null,
             isExpanded: true,
-            hint: Text(hint ?? '请选择', style: const TextStyle(fontSize: 13, color: WsTokens.mutedLight)),
+            hint: Text(hint ?? '请选择',
+                style:
+                    const TextStyle(fontSize: 13, color: WsTokens.mutedLight)),
             itemHeight: 36,
             dropdownColor: dark ? WsTokens.cardDark : WsTokens.cardLight,
             menuMaxHeight: itemHeight,
             borderRadius: BorderRadius.circular(WsTokens.radius),
-            style: TextStyle(fontSize: 13, color: dark ? WsTokens.textDark : WsTokens.textLight),
+            style: TextStyle(
+                fontSize: 13,
+                color: dark ? WsTokens.textDark : WsTokens.textLight),
             icon: const Icon(Icons.keyboard_arrow_down, size: 18),
             onChanged: onChanged,
             items: [
@@ -509,7 +571,8 @@ class DesktopDateField extends StatelessWidget {
   static DateTime _parse(String s) {
     final parts = s.split('-');
     if (parts.length != 3) return DateTime.now();
-    return DateTime(int.tryParse(parts[0]) ?? 2020, int.tryParse(parts[1]) ?? 1, int.tryParse(parts[2]) ?? 1);
+    return DateTime(int.tryParse(parts[0]) ?? 2020, int.tryParse(parts[1]) ?? 1,
+        int.tryParse(parts[2]) ?? 1);
   }
 
   @override
@@ -551,9 +614,9 @@ class DesktopDateField extends StatelessWidget {
           height: 34,
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
-            color: dark ? WsTokens.bgDark : const Color(0xFFFBFBFB),
-            borderRadius: BorderRadius.circular(WsTokens.radiusSm),
-            border: Border.all(color: dark ? WsTokens.borderDark : WsTokens.borderLight),
+            color: WsTokens.fill(context, alpha: 0.92),
+            borderRadius: BorderRadius.circular(WsTokens.radius),
+            border: Border.all(color: WsTokens.line(context)),
           ),
           child: Row(
             children: [
@@ -572,10 +635,12 @@ class DesktopDateField extends StatelessWidget {
               if (!cleared && allowClear)
                 GestureDetector(
                   onTap: () => onChanged(''),
-                  child: const Icon(Icons.close, size: 14, color: WsTokens.mutedLight),
+                  child: const Icon(Icons.close,
+                      size: 14, color: WsTokens.mutedLight),
                 )
               else
-                const Icon(Icons.event_outlined, size: 15, color: WsTokens.mutedLight),
+                const Icon(Icons.event_outlined,
+                    size: 15, color: WsTokens.mutedLight),
             ],
           ),
         ),
@@ -587,7 +652,8 @@ class DesktopDateField extends StatelessWidget {
 extension DesktopTapX on Widget {
   /// 给只读控件套一层点击区域（日期 / 可搜索下拉那类自绘控件用）
   Widget withTap(Future<void> Function() onTap) {
-    return GestureDetector(onTap: onTap, behavior: HitTestBehavior.deferToChild, child: this);
+    return GestureDetector(
+        onTap: onTap, behavior: HitTestBehavior.deferToChild, child: this);
   }
 }
 
@@ -619,8 +685,8 @@ class DesktopSearchField extends StatelessWidget {
       if (o.value == value) label = o.label;
     }
     return GestureDetector(
-      onTap: () async =>
-          onChanged(await desktopSearchSelect(context, title: title, options: options, value: value)),
+      onTap: () async => onChanged(await desktopSearchSelect(context,
+          title: title, options: options, value: value)),
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         child: Container(
@@ -628,9 +694,9 @@ class DesktopSearchField extends StatelessWidget {
           height: 34,
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
-            color: dark ? WsTokens.bgDark : const Color(0xFFFBFBFB),
-            borderRadius: BorderRadius.circular(WsTokens.radiusSm),
-            border: Border.all(color: dark ? WsTokens.borderDark : WsTokens.borderLight),
+            color: WsTokens.fill(context, alpha: 0.92),
+            borderRadius: BorderRadius.circular(WsTokens.radius),
+            border: Border.all(color: WsTokens.line(context)),
           ),
           child: Row(
             children: [
@@ -646,7 +712,8 @@ class DesktopSearchField extends StatelessWidget {
                   ),
                 ),
               ),
-              const Icon(Icons.keyboard_arrow_down, size: 16, color: WsTokens.mutedLight),
+              const Icon(Icons.keyboard_arrow_down,
+                  size: 16, color: WsTokens.mutedLight),
             ],
           ),
         ),
@@ -670,7 +737,9 @@ Future<String?> desktopSearchSelect(
     builder: (dialogContext) => StatefulBuilder(
       builder: (dialogContext, setDialogState) {
         final all = options
-            .where((o) => keyword.isEmpty || o.label.toLowerCase().contains(keyword.toLowerCase()))
+            .where((o) =>
+                keyword.isEmpty ||
+                o.label.toLowerCase().contains(keyword.toLowerCase()))
             .toList();
         return AlertDialog(
           title: Text(title, style: const TextStyle(fontSize: 16)),
@@ -689,17 +758,23 @@ Future<String?> desktopSearchSelect(
                 const SizedBox(height: 12),
                 Expanded(
                   child: all.isEmpty
-                      ? const Center(child: Text('没有匹配项', style: TextStyle(color: WsTokens.mutedLight)))
+                      ? const Center(
+                          child: Text('没有匹配项',
+                              style: TextStyle(color: WsTokens.mutedLight)))
                       : ListView.builder(
-                          itemCount: all.length > maxLines ? maxLines : all.length,
+                          itemCount:
+                              all.length > maxLines ? maxLines : all.length,
                           itemBuilder: (_, i) => ListTile(
                             dense: true,
                             visualDensity: VisualDensity.compact,
-                            title: Text(all[i].label, style: const TextStyle(fontSize: 13)),
+                            title: Text(all[i].label,
+                                style: const TextStyle(fontSize: 13)),
                             trailing: all[i].value == value
-                                ? const Icon(Icons.check, size: 16, color: WsTokens.primary)
+                                ? const Icon(Icons.check,
+                                    size: 16, color: WsTokens.primary)
                                 : null,
-                            onTap: () => Navigator.of(dialogContext).pop(all[i].value),
+                            onTap: () =>
+                                Navigator.of(dialogContext).pop(all[i].value),
                           ),
                         ),
                 ),
@@ -707,13 +782,16 @@ Future<String?> desktopSearchSelect(
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
                     child: Text('仅显示前 $maxLines 项，请继续搜索',
-                        style: const TextStyle(fontSize: 11, color: WsTokens.mutedLight)),
+                        style: const TextStyle(
+                            fontSize: 11, color: WsTokens.mutedLight)),
                   ),
               ],
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('取消')),
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('取消')),
             TextButton(
               onPressed: () => Navigator.pop(dialogContext, ''),
               child: const Text('清空'),
@@ -753,7 +831,8 @@ class DesktopCheckList<T> extends StatelessWidget {
       child: Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(WsTokens.radiusSm),
-          border: Border.all(color: dark ? WsTokens.borderDark : WsTokens.borderLight),
+          border: Border.all(
+              color: dark ? WsTokens.borderDark : WsTokens.borderLight),
         ),
         child: ListView(
           children: [
@@ -777,7 +856,8 @@ class DesktopCheckList<T> extends StatelessWidget {
 
 /// 付款状态单选：全站只有 paid / unpaid 两态，默认已付款
 class DesktopPayRadios extends StatelessWidget {
-  const DesktopPayRadios({super.key, required this.value, required this.onChanged});
+  const DesktopPayRadios(
+      {super.key, required this.value, required this.onChanged});
 
   final String value;
   final ValueChanged<String> onChanged;
@@ -802,7 +882,8 @@ class DesktopPayRadios extends StatelessWidget {
       selected: value == v,
       onSelected: (_) => onChanged(v),
       selectedColor: WsTokens.primaryLight,
-      labelStyle: TextStyle(color: value == v ? WsTokens.primary : WsTokens.mutedLight),
+      labelStyle:
+          TextStyle(color: value == v ? WsTokens.primary : WsTokens.mutedLight),
       visualDensity: VisualDensity.compact,
     );
   }
@@ -829,7 +910,8 @@ class DesktopCol {
   final bool center;
   final String? tip;
 
-  TextAlign get align => center ? TextAlign.center : (right ? TextAlign.end : TextAlign.start);
+  TextAlign get align =>
+      center ? TextAlign.center : (right ? TextAlign.end : TextAlign.start);
 }
 
 class DesktopRow {
@@ -891,19 +973,24 @@ class _DesktopGridState extends State<DesktopGrid> {
 
   @override
   Widget build(BuildContext context) {
-    final dark = wsIsDark(context);
     final double h = widget.dense ? 32 : widget.rowHeight;
     final double total = widget.cols.fold<double>(0, (s, c) => s + c.width);
-    final Color border = dark ? WsTokens.borderDark : WsTokens.borderLight;
+    final Color border = WsTokens.line(context, alpha: 0.7);
 
     Widget cellText(String text, TextAlign align, TextStyle style) => Padding(
           padding: const EdgeInsets.symmetric(horizontal: 10),
-          child: Text(text, textAlign: align, overflow: TextOverflow.ellipsis, style: style),
+          child: Text(text,
+              textAlign: align, overflow: TextOverflow.ellipsis, style: style),
         );
 
     Widget headerRow() => Container(
-          height: h,
-          color: dark ? const Color(0xFF262626) : const Color(0xFFF7F9FC),
+          height: h + 2,
+          decoration: BoxDecoration(
+            color: WsTokens.primary
+                .withValues(alpha: wsIsDark(context) ? 0.16 : 0.055),
+            border: Border(
+                bottom: BorderSide(color: WsTokens.line(context, alpha: 0.95))),
+          ),
           padding: const EdgeInsets.symmetric(vertical: 0),
           child: Row(
             children: [
@@ -911,9 +998,13 @@ class _DesktopGridState extends State<DesktopGrid> {
                 SizedBox(
                   width: c.width,
                   child: MouseRegion(
-                    cursor: c.sortKey == null ? MouseCursor.defer : SystemMouseCursors.click,
+                    cursor: c.sortKey == null
+                        ? MouseCursor.defer
+                        : SystemMouseCursors.click,
                     child: GestureDetector(
-                      onTap: c.sortKey == null ? null : () => widget.onSort?.call(c.sortKey!),
+                      onTap: c.sortKey == null
+                          ? null
+                          : () => widget.onSort?.call(c.sortKey!),
                       child: Row(
                         mainAxisAlignment: switch (c.align) {
                           TextAlign.end => MainAxisAlignment.end,
@@ -928,16 +1019,19 @@ class _DesktopGridState extends State<DesktopGrid> {
                                 c.title,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  fontSize: 12.5,
+                                  fontSize: 12,
                                   fontWeight: FontWeight.w600,
-                                  color: dark ? WsTokens.textSecondaryDark : WsTokens.textSecondaryLight,
+                                  letterSpacing: 0.2,
+                                  color: WsTokens.inkOf(context, level: 2),
                                 ),
                               ),
                             ),
                           ),
                           if (c.sortKey != null && c.sortKey == widget.sortKey)
                             Icon(
-                              widget.sortAsc ? Icons.arrow_upward : Icons.arrow_downward,
+                              widget.sortAsc
+                                  ? Icons.arrow_upward
+                                  : Icons.arrow_downward,
                               size: 12,
                               color: WsTokens.primary,
                             ),
@@ -951,16 +1045,16 @@ class _DesktopGridState extends State<DesktopGrid> {
         );
 
     Widget bodyRow(DesktopRow r, int i) {
+      final bool dark = wsIsDark(context);
       final bg = r.highlight
-          ? WsTokens.primaryLight.withValues(alpha: dark ? 0.22 : 1)
+          ? WsTokens.primary.withValues(alpha: dark ? 0.2 : 0.09)
           : (_hovered.contains(i)
-              ? (dark ? const Color(0xFF333333) : const Color(0xFFF5F8FC))
+              ? WsTokens.primary.withValues(alpha: dark ? 0.1 : 0.045)
               : Colors.transparent);
       final style = TextStyle(
         fontSize: 13,
-        color: r.dim
-            ? WsTokens.mutedLight
-            : (dark ? WsTokens.textDark : WsTokens.textLight),
+        color:
+            r.dim ? WsTokens.inkOf(context, level: 3) : WsTokens.inkOf(context),
       );
       return MouseRegion(
         onEnter: (_) => setState(() => _hovered.add(i)),
@@ -1005,7 +1099,12 @@ class _DesktopGridState extends State<DesktopGrid> {
 
     Widget footerRow() => Container(
           height: h,
-          color: dark ? const Color(0xFF262626) : const Color(0xFFF7F9FC),
+          decoration: BoxDecoration(
+            color: WsTokens.primary
+                .withValues(alpha: wsIsDark(context) ? 0.2 : 0.075),
+            border: Border(
+                top: BorderSide(color: WsTokens.line(context, alpha: 0.95))),
+          ),
           child: Row(
             children: [
               for (var k = 0; k < widget.cols.length; k++)
@@ -1014,7 +1113,10 @@ class _DesktopGridState extends State<DesktopGrid> {
                   child: cellText(
                     k < (widget.footer?.length ?? 0) ? widget.footer![k] : '',
                     widget.cols[k].align,
-                    const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: WsTokens.primary),
+                    const TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: WsTokens.primary),
                   ),
                 ),
             ],
@@ -1023,8 +1125,9 @@ class _DesktopGridState extends State<DesktopGrid> {
 
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(WsTokens.radius),
-        border: Border.all(color: border),
+        color: WsTokens.fill(context, alpha: 0.8),
+        borderRadius: BorderRadius.circular(WsTokens.radiusLg),
+        border: Border.all(color: WsTokens.line(context, alpha: 0.9)),
       ),
       clipBehavior: Clip.antiAlias,
       child: SingleChildScrollView(
@@ -1039,12 +1142,15 @@ class _DesktopGridState extends State<DesktopGrid> {
                 Container(
                   height: 96,
                   alignment: Alignment.center,
-                  color: dark ? WsTokens.cardDark : WsTokens.cardLight,
+                  color: Colors.transparent,
                   child: Text(widget.emptyText,
-                      style: const TextStyle(fontSize: 12.5, color: WsTokens.mutedLight)),
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          color: WsTokens.inkOf(context, level: 3))),
                 )
               else
-                for (var i = 0; i < widget.rows.length; i++) bodyRow(widget.rows[i], i),
+                for (var i = 0; i < widget.rows.length; i++)
+                  bodyRow(widget.rows[i], i),
               if (widget.footer != null) footerRow(),
             ],
           ),
@@ -1059,7 +1165,8 @@ Widget wsCell(String text, {Color? color, bool bold = false, String? tip}) {
   final w = Text(
     text,
     overflow: TextOverflow.ellipsis,
-    style: TextStyle(fontSize: 13, fontWeight: bold ? FontWeight.w600 : null, color: color),
+    style: TextStyle(
+        fontSize: 13, fontWeight: bold ? FontWeight.w600 : null, color: color),
   );
   return tip == null ? w : Tooltip(message: tip, child: w);
 }
@@ -1081,12 +1188,15 @@ class DesktopTag extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = color ?? off;
     final tag = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
         color: c.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(WsTokens.radiusSm),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: c.withValues(alpha: 0.24)),
       ),
-      child: Text(text, style: TextStyle(fontSize: 11.5, color: c, fontWeight: FontWeight.w600)),
+      child: Text(text,
+          style:
+              TextStyle(fontSize: 11.5, color: c, fontWeight: FontWeight.w600)),
     );
     return tip == null ? tag : Tooltip(message: tip, child: tag);
   }
@@ -1117,6 +1227,8 @@ class DesktopLink extends StatelessWidget {
 
 // ---------------------------------------------------------------- 统计卡
 
+/// 指标卡。桌面端一屏能摆 6-8 张，所以做得很紧凑：
+/// 数值用等宽数字（fontFeatures tabularFigures），刷新时数字不会左右抖。
 class DesktopStatCard extends StatelessWidget {
   const DesktopStatCard({
     super.key,
@@ -1125,6 +1237,8 @@ class DesktopStatCard extends StatelessWidget {
     this.sub,
     this.color,
     this.gradient,
+    this.icon,
+    this.onTap,
   });
 
   final String label;
@@ -1132,47 +1246,94 @@ class DesktopStatCard extends StatelessWidget {
   final String? sub;
   final Color? color;
   final Gradient? gradient;
+  final IconData? icon;
+
+  /// 点击整张卡跳到对应页面（工作台常用：点「今日出库」进出库页）
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final dark = wsIsDark(context);
-    return Container(
+    final Color tint = color ?? WsTokens.primary;
+    final Widget body = Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
       decoration: BoxDecoration(
-        color: dark ? WsTokens.cardDark : WsTokens.cardLight,
+        color: gradient != null ? null : WsTokens.fill(context, alpha: 0.8),
         gradient: gradient,
         borderRadius: BorderRadius.circular(WsTokens.radiusLg),
-        border: Border.all(color: dark ? WsTokens.borderDark : WsTokens.borderLight),
+        border: Border.all(color: WsTokens.line(context, alpha: 0.8)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Text(label, style: const TextStyle(fontSize: 12.5, color: WsTokens.mutedLight)),
-          const SizedBox(height: 8),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(
-              value,
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
-                color: color ?? (dark ? WsTokens.textDark : WsTokens.textLight),
+          if (icon != null) ...[
+            Container(
+              width: 38,
+              height: 38,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: tint.withValues(alpha: 0.13),
+                borderRadius: BorderRadius.circular(WsTokens.radius),
               ),
+              child: Icon(icon, size: 19, color: tint),
+            ),
+            const SizedBox(width: 13),
+          ],
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 12.5,
+                        color: WsTokens.inkOf(context, level: 3))),
+                const SizedBox(height: 4),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    value,
+                    style: TextStyle(
+                      fontSize: 22,
+                      height: 1.15,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.4,
+                      color: color ?? WsTokens.inkOf(context),
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ),
+                if (sub != null) ...[
+                  const SizedBox(height: 3),
+                  Text(sub!,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 11.5,
+                          color: WsTokens.inkOf(context, level: 3))),
+                ],
+              ],
             ),
           ),
-          if (sub != null) ...[
-            const SizedBox(height: 5),
-            Text(sub!, style: const TextStyle(fontSize: 11.5, color: WsTokens.mutedLight)),
-          ],
         ],
       ),
+    );
+    if (onTap == null) return body;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+          onTap: onTap, behavior: HitTestBehavior.opaque, child: body),
     );
   }
 }
 
 /// 等宽 N 列的统计卡网格（换行时自动按 min 宽度折行）
 class DesktopStatGrid extends StatelessWidget {
-  const DesktopStatGrid({super.key, required this.children, this.minTileWidth = 210, this.spacing = 14});
+  const DesktopStatGrid(
+      {super.key,
+      required this.children,
+      this.minTileWidth = 210,
+      this.spacing = 14});
   final List<Widget> children;
   final double minTileWidth;
   final double spacing;
@@ -1181,12 +1342,16 @@ class DesktopStatGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, c) {
       if (children.isEmpty) return const SizedBox.shrink();
-      final cross = (c.maxWidth / (minTileWidth + spacing)).ceil().clamp(1, children.length);
+      final cross = (c.maxWidth / (minTileWidth + spacing))
+          .ceil()
+          .clamp(1, children.length);
       final w = (c.maxWidth - spacing * (cross - 1)) / cross;
       return Wrap(
         spacing: spacing,
         runSpacing: spacing,
-        children: [for (final child in children) SizedBox(width: w, child: child)],
+        children: [
+          for (final child in children) SizedBox(width: w, child: child)
+        ],
       );
     });
   }
@@ -1212,7 +1377,9 @@ class DesktopStackBar extends StatelessWidget {
               if (p.value > 0)
                 Expanded(
                   flex: (p.value / total * 1000).round().clamp(1, 1000),
-                  child: Tooltip(message: '${p.label} ${wsMoney(p.value)}', child: Container(color: p.color)),
+                  child: Tooltip(
+                      message: '${p.label} ${wsMoney(p.value)}',
+                      child: Container(color: p.color)),
                 ),
           ],
         ),
@@ -1239,7 +1406,8 @@ class DesktopBars extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (items.isEmpty) return const SizedBox.shrink();
-    final maxV = items.map((e) => e.value).fold<double>(0, (a, b) => a > b ? a : b);
+    final maxV =
+        items.map((e) => e.value).fold<double>(0, (a, b) => a > b ? a : b);
     if (maxV <= 0) return const SizedBox.shrink();
     return SizedBox(
       height: height,
@@ -1263,7 +1431,8 @@ class DesktopBars extends StatelessWidget {
                               Container(
                                 height: (height - 22) * (it.value / maxV),
                                 decoration: BoxDecoration(
-                                  color: color.withValues(alpha: it.value <= 0 ? 0.15 : 0.85),
+                                  color: color.withValues(
+                                      alpha: it.value <= 0 ? 0.15 : 0.85),
                                   borderRadius: const BorderRadius.vertical(
                                       top: Radius.circular(3)),
                                 ),
@@ -1300,7 +1469,8 @@ class DesktopBarLabels extends StatelessWidget {
               l,
               textAlign: TextAlign.center,
               overflow: TextOverflow.ellipsis,
-              style: style ?? const TextStyle(fontSize: 10.5, color: WsTokens.mutedLight),
+              style: style ??
+                  const TextStyle(fontSize: 10.5, color: WsTokens.mutedLight),
             ),
           ),
       ],
@@ -1339,7 +1509,8 @@ class DesktopPager extends StatelessWidget {
       child: Row(
         children: [
           Text('共 $total $unit · 第 $current / ${pages < 1 ? 1 : pages} 页',
-              style: const TextStyle(fontSize: 12.5, color: WsTokens.mutedLight)),
+              style:
+                  const TextStyle(fontSize: 12.5, color: WsTokens.mutedLight)),
           const Spacer(),
           if (onLimitChanged != null) ...[
             DesktopLabeled(
@@ -1356,13 +1527,15 @@ class DesktopPager extends StatelessWidget {
           DesktopIconButton(
             icon: Icons.chevron_left,
             tooltip: '上一页',
-            onPressed: current > 1 ? () => onChanged(((current - 2) * limit)) : null,
+            onPressed:
+                current > 1 ? () => onChanged(((current - 2) * limit)) : null,
           ),
           const SizedBox(width: 6),
           DesktopIconButton(
             icon: Icons.chevron_right,
             tooltip: '下一页',
-            onPressed: current < pages ? () => onChanged(current * limit) : null,
+            onPressed:
+                current < pages ? () => onChanged(current * limit) : null,
           ),
         ],
       ),
@@ -1396,10 +1569,15 @@ class DesktopStateView extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.4)),
+            const SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(strokeWidth: 2.4)),
             if (loadingText != null) ...[
               const SizedBox(height: 10),
-              Text(loadingText!, style: const TextStyle(fontSize: 12.5, color: WsTokens.mutedLight)),
+              Text(loadingText!,
+                  style: const TextStyle(
+                      fontSize: 12.5, color: WsTokens.mutedLight)),
             ],
           ],
         ),
@@ -1410,9 +1588,12 @@ class DesktopStateView extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.cloud_off_outlined, size: 32, color: WsTokens.mutedLight),
+            const Icon(Icons.cloud_off_outlined,
+                size: 32, color: WsTokens.mutedLight),
             const SizedBox(height: 10),
-            Text('$error', style: const TextStyle(fontSize: 13, color: WsTokens.mutedLight)),
+            Text('$error',
+                style:
+                    const TextStyle(fontSize: 13, color: WsTokens.mutedLight)),
             const SizedBox(height: 10),
             DesktopButton(label: '重试', icon: Icons.refresh, onPressed: onRetry),
           ],
@@ -1425,47 +1606,48 @@ class DesktopStateView extends StatelessWidget {
 
 /// 页内提示条（web .alert）
 class DesktopNotice extends StatelessWidget {
-  const DesktopNotice(this.text, {super.key, this.kind = DesktopNoticeKind.info});
+  const DesktopNotice(this.text,
+      {super.key, this.kind = DesktopNoticeKind.info});
   final String text;
   final DesktopNoticeKind kind;
 
   @override
   Widget build(BuildContext context) {
-    late final Color fg;
-    late final Color bg;
+    late final Color tone;
     late final IconData icon;
     switch (kind) {
       case DesktopNoticeKind.info:
-        fg = WsTokens.primary;
-        bg = WsTokens.primaryLight;
+        tone = WsTokens.primary;
         icon = Icons.info_outline;
       case DesktopNoticeKind.success:
-        fg = WsTokens.green;
-        bg = WsTokens.greenLight;
+        tone = WsTokens.green;
         icon = Icons.check_circle_outline;
       case DesktopNoticeKind.warn:
-        fg = const Color(0xFF8A5A00);
-        bg = WsTokens.amberLight;
+        tone = WsTokens.amber;
         icon = Icons.warning_amber;
       case DesktopNoticeKind.error:
-        fg = WsTokens.red;
-        bg = WsTokens.redLight;
+        tone = WsTokens.red;
         icon = Icons.error_outline;
     }
+    // 淡色底 + 同色系描边比"贴一张浅黄块"更稳：暗色主题下浅黄块直接把文字吃掉
+    final bool dark = wsIsDark(context);
+    final Color fg = dark ? Color.lerp(tone, Colors.white, 0.35)! : tone;
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
       decoration: BoxDecoration(
-        color: bg.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(WsTokens.radius),
-        border: Border.all(color: fg.withValues(alpha: 0.25)),
+        color: tone.withValues(alpha: dark ? 0.16 : 0.08),
+        borderRadius: BorderRadius.circular(WsTokens.radiusLg),
+        border: Border.all(color: tone.withValues(alpha: 0.28)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(icon, size: 16, color: fg),
           const SizedBox(width: 8),
-          Expanded(child: Text(text, style: TextStyle(fontSize: 12.5, color: fg, height: 1.5))),
+          Expanded(
+              child: Text(text,
+                  style: TextStyle(fontSize: 12.5, color: fg, height: 1.5))),
         ],
       ),
     );
@@ -1476,9 +1658,15 @@ enum DesktopNoticeKind { info, success, warn, error }
 
 // ---------------------------------------------------------------- 分段 Tab
 
-/// 分组 Tab（对应 web .seg）：库存 4 个子页、报表 4 个分区都用它
+/// 分段 Tab：库存 4 个子页、报表 4 个分区都用它。
+/// 玻璃轨道 + 品牌色滑块，选中态一眼可见。
 class DesktopTabs extends StatelessWidget {
-  const DesktopTabs({super.key, required this.items, required this.index, required this.onChanged, this.small = false});
+  const DesktopTabs(
+      {super.key,
+      required this.items,
+      required this.index,
+      required this.onChanged,
+      this.small = false});
 
   final List<String> items;
   final int index;
@@ -1487,12 +1675,12 @@ class DesktopTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dark = wsIsDark(context);
     return Container(
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
-        color: dark ? WsTokens.borderDark : WsTokens.borderLighter,
-        borderRadius: BorderRadius.circular(WsTokens.radius),
+        color: WsTokens.fill(context, alpha: 0.6),
+        borderRadius: BorderRadius.circular(WsTokens.radiusLg),
+        border: Border.all(color: WsTokens.line(context, alpha: 0.8)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1502,17 +1690,20 @@ class DesktopTabs extends StatelessWidget {
               padding: const EdgeInsets.only(right: 3),
               child: Material(
                 color: i == index
-                    ? (dark ? WsTokens.cardDark : WsTokens.cardLight)
+                    ? WsTokens.primary
+                        .withValues(alpha: wsIsDark(context) ? 0.28 : 0.1)
                     : Colors.transparent,
-                borderRadius: BorderRadius.circular(WsTokens.radiusSm),
+                borderRadius: BorderRadius.circular(WsTokens.radius),
                 child: InkWell(
-                  borderRadius: BorderRadius.circular(WsTokens.radiusSm),
+                  borderRadius: BorderRadius.circular(WsTokens.radius),
                   onTap: () => onChanged(i),
                   child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 140),
-                    padding: EdgeInsets.symmetric(horizontal: small ? 10 : 14, vertical: small ? 5 : 7),
+                    duration: Dm.quick,
+                    curve: Dm.curve,
+                    padding: EdgeInsets.symmetric(
+                        horizontal: small ? 11 : 15, vertical: small ? 5 : 7),
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(WsTokens.radiusSm),
+                      borderRadius: BorderRadius.circular(WsTokens.radius),
                       border: Border.all(
                         color: i == index
                             ? WsTokens.primary.withValues(alpha: 0.35)
@@ -1523,10 +1714,11 @@ class DesktopTabs extends StatelessWidget {
                       items[i],
                       style: TextStyle(
                         fontSize: small ? 12 : 13,
-                        fontWeight: i == index ? FontWeight.w600 : FontWeight.w400,
+                        fontWeight:
+                            i == index ? FontWeight.w600 : FontWeight.w400,
                         color: i == index
                             ? WsTokens.primary
-                            : (dark ? WsTokens.textSecondaryDark : WsTokens.textSecondaryLight),
+                            : WsTokens.inkOf(context, level: 2),
                       ),
                     ),
                   ),
@@ -1541,7 +1733,10 @@ class DesktopTabs extends StatelessWidget {
 
 // ---------------------------------------------------------------- 弹窗
 
-/// 通用弹窗：标题 + 主体 + 底部按钮，宽表用 900，普通表单 480
+/// 通用弹窗：标题 + 主体 + 底部按钮，宽表用 900，普通表单 480。
+/// 弹层是「暂时盖住工作台」的东西，用玻璃正好——背后的内容若隐若现，
+/// 用户知道关掉之后会回到哪里。用雾面（[kGlassSoft]）不折射，
+/// 因为弹窗里全是表单文字，折射会把笔画拉糊。
 Future<T?> desktopDialog<T>(
   BuildContext context, {
   required String title,
@@ -1552,16 +1747,17 @@ Future<T?> desktopDialog<T>(
   VoidCallback? onSubmit,
   String? submitLabel,
 }) {
-  final dark = wsIsDark(context);
   return showDialog<T>(
     context: context,
     builder: (dialogContext) => Dialog(
-      backgroundColor: dark ? WsTokens.cardDark : WsTokens.cardLight,
+      backgroundColor: Colors.transparent,
+      elevation: 0,
       insetPadding: const EdgeInsets.all(28),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(WsTokens.radiusLg)),
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: width, maxHeight: maxHeight),
-        child: Padding(
+        child: GlassContainer(
+          settings: kGlassSoft,
+          shape: const LiquidRoundedSuperellipse(borderRadius: 20),
           padding: const EdgeInsets.fromLTRB(22, 18, 22, 16),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1574,18 +1770,24 @@ Future<T?> desktopDialog<T>(
                         style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: dark ? WsTokens.textDark : WsTokens.textLight)),
+                            color: WsTokens.inkOf(dialogContext))),
                   ),
                   DesktopIconButton(
                     icon: Icons.close,
-                    color: WsTokens.mutedLight,
+                    color: WsTokens.inkOf(dialogContext, level: 3),
                     tooltip: '关闭',
                     onPressed: () => Navigator.of(dialogContext).pop(),
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
-              Flexible(child: SingleChildScrollView(child: builder(dialogContext))),
+              const SizedBox(height: 10),
+              Divider(
+                  height: 1,
+                  thickness: 1,
+                  color: WsTokens.line(dialogContext, alpha: 0.7)),
+              const SizedBox(height: 14),
+              Flexible(
+                  child: SingleChildScrollView(child: builder(dialogContext))),
               if (actions.isNotEmpty || submitLabel != null) ...[
                 const SizedBox(height: 16),
                 Row(
@@ -1647,7 +1849,9 @@ class DesktopFormRow extends StatelessWidget {
                   fontSize: 12.5,
                   color: required
                       ? WsTokens.primary
-                      : (dark ? WsTokens.textSecondaryDark : WsTokens.textSecondaryLight),
+                      : (dark
+                          ? WsTokens.textSecondaryDark
+                          : WsTokens.textSecondaryLight),
                 ),
               ),
             ),
@@ -1660,7 +1864,10 @@ class DesktopFormRow extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(tip!,
-                    style: const TextStyle(fontSize: 11.5, color: WsTokens.mutedLight, height: 1.4)),
+                    style: const TextStyle(
+                        fontSize: 11.5,
+                        color: WsTokens.mutedLight,
+                        height: 1.4)),
               ),
             ),
           ],
@@ -1681,22 +1888,63 @@ Future<bool> wsConfirm(
 }) async {
   final result = await showDialog<bool>(
     context: context,
-    builder: (dialogContext) => AlertDialog(
-      title: Text(title, style: const TextStyle(fontSize: 15.5)),
-      content: SizedBox(
-        width: 420,
-        child: Text(message, style: const TextStyle(fontSize: 13, height: 1.6)),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: Text(cancelLabel)),
-        FilledButton(
-          style: FilledButton.styleFrom(
-            backgroundColor: danger ? WsTokens.red : WsTokens.primary,
+    builder: (dialogContext) => Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      child: GlassContainer(
+        settings: kGlassSoft,
+        shape: const LiquidRoundedSuperellipse(borderRadius: 20),
+        padding: const EdgeInsets.fromLTRB(22, 20, 20, 16),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    danger ? Icons.delete_forever_outlined : Icons.help_outline,
+                    size: 19,
+                    color: danger ? WsTokens.red : WsTokens.primary,
+                  ),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Text(title,
+                        style: TextStyle(
+                            fontSize: 15.5,
+                            fontWeight: FontWeight.w600,
+                            color: WsTokens.inkOf(dialogContext))),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(message,
+                  style: TextStyle(
+                      fontSize: 13,
+                      height: 1.6,
+                      color: WsTokens.inkOf(dialogContext, level: 2))),
+              const SizedBox(height: 18),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  DesktopButton(
+                      label: cancelLabel,
+                      onPressed: () => Navigator.pop(dialogContext, false)),
+                  const SizedBox(width: 10),
+                  DesktopButton(
+                    label: okLabel,
+                    kind: danger
+                        ? DesktopButtonKind.danger
+                        : DesktopButtonKind.primary,
+                    onPressed: () => Navigator.pop(dialogContext, true),
+                  ),
+                ],
+              ),
+            ],
           ),
-          onPressed: () => Navigator.pop(dialogContext, true),
-          child: Text(okLabel),
         ),
-      ],
+      ),
     ),
   );
   return result ?? false;
@@ -1714,7 +1962,8 @@ void wsToast(BuildContext context, String message, {bool error = false}) {
       width: 420,
       backgroundColor: error ? WsTokens.red : const Color(0xFF2B2B2B),
       duration: Duration(milliseconds: error ? 3200 : 2200),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(WsTokens.radius)),
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(WsTokens.radius)),
     ),
   );
 }

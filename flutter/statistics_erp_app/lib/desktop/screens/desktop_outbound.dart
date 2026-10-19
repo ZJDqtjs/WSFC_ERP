@@ -5,7 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/product.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
-import '../fluent_theme.dart';
+import '../desktop_style.dart';
 import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';
 import '../widgets/ws_card.dart';

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../fluent_theme.dart';
+import '../desktop_style.dart';
 import '../widgets/desktop_ui.dart';
 
 /// 桌面端「财务报表」页专用的私有部件（[DesktopReportScreen] 拆分出来的部分）。
