@@ -29,6 +29,16 @@ class AuthProvider extends ChangeNotifier {
     return (_user['username'] ?? '用户').toString();
   }
 
+  /// 头像占位字：中文姓名末字才是姓氏（「小王」→「王」），字母账号沿用首字母。
+  String get displayInitial {
+    final name = displayName.trim();
+    if (name.isEmpty) return '管';
+    if (RegExp(r'^[A-Za-z]').hasMatch(name)) {
+      return name.characters.first.toUpperCase();
+    }
+    return name.characters.last;
+  }
+
   AuthProvider() {
     // 401 统一在这里收敛：清登录态，由路由的 refreshListenable 把用户送回登录页
     ApiService.setOnUnauthorized(() {

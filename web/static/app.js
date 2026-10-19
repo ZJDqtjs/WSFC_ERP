@@ -835,7 +835,13 @@ function setUser(u) {
   const disp = u.name || u.username;
   $("userName").textContent = disp;
   $("userRole").textContent = u.role === "admin" ? "管理员" : "业务员";
-  $("userAvatar").textContent = disp.slice(0, 1);
+  // 中文姓名取末字才是姓氏（「小王」→「王」）；字母账号沿用首字母惯例。
+  const t = disp.trim();
+  $("userAvatar").textContent = !t
+    ? "管"
+    : /^[A-Za-z]/.test(t)
+      ? t.charAt(0).toUpperCase()
+      : t.slice(-1);
   const wt = $("warehouseTag");
   if (wt) wt.textContent = u.warehouse ? `当前分仓：${u.warehouse.name}` : "";
   // 操作员 = 当前登录账号：始终回填并锁定只读（服务端同样以登录账号为准，不信前端值）

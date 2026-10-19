@@ -391,8 +391,8 @@ class _RailUser extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final name = auth.displayName;
-    final initial = name.isNotEmpty ? name.characters.first : '管';
+    final name = auth.displayName.trim();
+    final initial = auth.displayInitial;
     final warehouse =
         auth.warehouseName.isNotEmpty ? auth.warehouseName : auth.warehouseKey;
 

@@ -75,11 +75,16 @@ class _MobileMinePageState extends State<MobileMinePage> {
                   Container(
                     width: 52,
                     height: 52,
+                    alignment: Alignment.center,
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.22),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.person, color: Colors.white, size: 28),
+                    child: Text(auth.displayInitial,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 24,
+                            fontWeight: FontWeight.w600)),
                   ),
                   const SizedBox(width: 14),
                   Expanded(
