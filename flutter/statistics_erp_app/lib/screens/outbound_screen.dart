@@ -1,5 +1,6 @@
 import '../mobile/widgets/mobile_page.dart';
 import '../mobile/widgets/parts.dart';
+import '../mobile/mobile_style.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -58,110 +59,116 @@ class _OutboundScreenState extends State<OutboundScreen> {
                       Row(
                         children: [
                           Expanded(
-                            child: TextFormField(
-                              initialValue: _date,
-                              decoration: const InputDecoration(
-                                labelText: '日期',
-                                prefixIcon: Icon(Icons.calendar_today),
+                            child: FormCell(
+                              label: '日期',
+                              child: CellInput(
+                                initialValue: _date,
+                                onTap: () async {
+                                  final picked = await showDatePicker(
+                                    context: context,
+                                    initialDate: DateTime.now(),
+                                    firstDate: DateTime(2020),
+                                    lastDate: DateTime(2030),
+                                  );
+                                  if (picked != null) {
+                                    setState(() {
+                                      _date = DateFormat('yyyy-MM-dd').format(picked);
+                                    });
+                                  }
+                                },
                               ),
-                              onTap: () async {
-                                final picked = await showDatePicker(
-                                  context: context,
-                                  initialDate: DateTime.now(),
-                                  firstDate: DateTime(2020),
-                                  lastDate: DateTime(2030),
-                                );
-                                if (picked != null) {
-                                  setState(() {
-                                    _date = DateFormat('yyyy-MM-dd').format(picked);
-                                  });
-                                }
-                              },
                             ),
                           ),
                           const SizedBox(width: 12),
                           Expanded(
-                            child: TextFormField(
-                              decoration: const InputDecoration(
-                                labelText: '客户',
-                                prefixIcon: Icon(Icons.person),
+                            child: FormCell(
+                              label: '客户',
+                              child: CellInput(
+                                hint: '客户名称',
+                                onChanged: (v) => _customer = v,
                               ),
-                              onChanged: (v) => _customer = v,
                             ),
                           ),
                         ],
                       ),
-                      TextFormField(
-                        decoration: const InputDecoration(
-                          labelText: '备注 / 附件说明',
-                          prefixIcon: Icon(Icons.note_alt_outlined),
+                      const SizedBox(height: 12),
+                      FormCell(
+                        label: '备注 / 附件说明',
+                        child: CellInput(
+                          hint: '本单补充说明',
+                          onChanged: (v) => _remark = v,
                         ),
-                        onChanged: (v) => _remark = v,
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
                       ..._rows.asMap().entries.map((entry) {
                         final i = entry.key;
                         final row = entry.value;
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 12),
                           child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                            crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
                               Expanded(
-                                flex: 3,
-                                child: InkWell(
-                                  onTap: () => _openProductPicker(i),
-                                  borderRadius: BorderRadius.circular(8),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      color: row.product == null
-                                          ? const Color(0xFFF0F8FF)
-                                          : Colors.grey[100],
-                                      borderRadius: BorderRadius.circular(8),
+                                child: FormCell(
+                                  label: '商品',
+                                  child: CellTapBox(
+                                    onTap: () => _openProductPicker(i),
+                                    background: row.product == null
+                                        ? const Color(0xFFF0F8FF)
+                                        : Colors.grey[100],
+                                    child: Text(
+                                      row.product == null
+                                          ? '＋ 选择商品'
+                                          : '[${row.product!.productType == 'order' ? '订单' : '库存'}] ${row.product!.name}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: row.product == null
+                                            ? const Color(0xFF1989FA)
+                                            : Mc.ink,
+                                      ),
                                     ),
-                                    child: row.product == null
-                                        ? const Text('＋ 选择商品',
-                                            style: TextStyle(color: Color(0xFF1989FA)))
-                                        : Text(
-                                            '[${row.product!.productType == 'order' ? '订单' : '库存'}] ${row.product!.name}',
-                                            style: const TextStyle(fontSize: 13),
-                                          ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              SizedBox(
+                                width: 62,
+                                child: FormCell(
+                                  label: '数量',
+                                  child: CellInput(
+                                    initialValue: '1',
+                                    keyboardType: TextInputType.number,
+                                    onChanged: (v) => row.quantity = v,
                                   ),
                                 ),
                               ),
                               const SizedBox(width: 8),
                               SizedBox(
                                 width: 70,
-                                child: TextFormField(
-                                  initialValue: '1',
-                                  decoration: const InputDecoration(
-                                    labelText: '数量',
-                                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                child: FormCell(
+                                  label: '售价',
+                                  child: CellInput(
+                                    initialValue: '0',
+                                    keyboardType: TextInputType.number,
+                                    onChanged: (v) => row.price = v,
                                   ),
-                                  keyboardType: TextInputType.number,
-                                  onChanged: (v) => row.quantity = v,
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              SizedBox(
-                                width: 80,
-                                child: TextFormField(
-                                  initialValue: '0',
-                                  decoration: const InputDecoration(
-                                    labelText: '售价',
-                                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                                  ),
-                                  keyboardType: TextInputType.number,
-                                  onChanged: (v) => row.price = v,
+                              const SizedBox(width: 2),
+                              Padding(
+                                padding: const EdgeInsets.only(top: 17),
+                                child: IconButton(
+                                  visualDensity: VisualDensity.compact,
+                                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                                  padding: EdgeInsets.zero,
+                                  icon: const Icon(Icons.delete_outline,
+                                      size: 22, color: Colors.red),
+                                  onPressed: _rows.length > 1
+                                      ? () => setState(() => _rows.removeAt(i))
+                                      : null,
                                 ),
-                              ),
-                              const SizedBox(width: 4),
-                              IconButton(
-                                icon: const Icon(Icons.delete_outline, color: Colors.red),
-                                onPressed: _rows.length > 1
-                                    ? () => setState(() => _rows.removeAt(i))
-                                    : null,
                               ),
                             ],
                           ),
@@ -181,6 +188,7 @@ class _OutboundScreenState extends State<OutboundScreen> {
                       const SizedBox(height: 16),
                       SizedBox(
                         height: 44,
+                        width: double.infinity,
                         child: ElevatedButton(
                           onPressed: _isLoading ? null : _submit,
                           style: ElevatedButton.styleFrom(

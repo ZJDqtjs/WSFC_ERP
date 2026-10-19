@@ -93,28 +93,34 @@ class _MobileHomePageState extends State<MobileHomePage> {
                   index: 1,
                   child: Padding(
                     padding: const EdgeInsets.only(top: 12),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Expanded(
-                          child: StatCard(
-                            label: '本月毛利',
-                            value: (_month['gross'] ?? 0).toDouble(),
-                            format: _money.format,
-                            foot: '净利 ${_money.format((_month['net'] ?? 0).toDouble())}',
-                            accent: Mc.fresh,
+                    // SliverList 给子项的高度约束是无界的，Row 直接 stretch 会
+                    // 强制出无限高并抛异常（异常之后同一 Sliver 里后面的卡片全部不渲染，
+                    // 首屏就看不到「业务办理」了）。用 IntrinsicHeight 先量出高度再拉平。
+                    child: IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            child: StatCard(
+                              label: '本月毛利',
+                              value: (_month['gross'] ?? 0).toDouble(),
+                              format: _money.format,
+                              foot:
+                                  '净利 ${_money.format((_month['net'] ?? 0).toDouble())}',
+                              accent: Mc.fresh,
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: StatCard(
-                            label: '库存总值',
-                            value: _stockValue,
-                            format: _money.format,
-                            foot: '$_productCount 种商品',
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: StatCard(
+                              label: '库存总值',
+                              value: _stockValue,
+                              format: _money.format,
+                              foot: '$_productCount 种商品',
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -286,8 +292,11 @@ class _AiInputState extends State<_AiInput> {
     super.dispose();
   }
 
-  void _soon(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  void _open({bool image = false}) {
+    context.pushNamed('ai-entry', extra: {
+      'text': _controller.text.trim(),
+      'image': image,
+    });
   }
 
   @override
@@ -310,7 +319,7 @@ class _AiInputState extends State<_AiInput> {
             children: [
               Expanded(
                 child: FilledButton.icon(
-                  onPressed: () => _soon('AI 识别功能开发中...'),
+                  onPressed: () => _open(),
                   icon: const Icon(Icons.auto_awesome, size: 18),
                   label: const Text('识别并录入'),
                   style: FilledButton.styleFrom(
@@ -322,7 +331,7 @@ class _AiInputState extends State<_AiInput> {
               const SizedBox(width: 10),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: () => _soon('拍单识别功能开发中...'),
+                  onPressed: () => _open(image: true),
                   icon: const Icon(Icons.photo_camera_outlined, size: 18),
                   label: const Text('拍单识别'),
                   style: OutlinedButton.styleFrom(

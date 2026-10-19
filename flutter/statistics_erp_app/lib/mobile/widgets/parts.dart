@@ -296,6 +296,113 @@ class TileRow extends StatelessWidget {
   }
 }
 
+/// 录入行的一格：标签在上、控件在下，高度写死。
+/// 出库/入库的商品行里「选择商品」不是输入框，靠浮动标签的 OutlineInput 和它
+/// 永远对不齐（一个 42 一个 56，Row 里还各顶各的），所以统一由这里定高。
+class FormCell extends StatelessWidget {
+  const FormCell({super.key, required this.label, required this.child, this.height = 42});
+
+  final String label;
+  final Widget child;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 11, height: 1.25, color: Mc.inkThird)),
+        const SizedBox(height: 3),
+        SizedBox(height: height, child: child),
+      ],
+    );
+  }
+}
+
+/// FormCell 里的定高输入框：标签交给 FormCell，这里只留提示词，避免浮动标签再撑高。
+class CellInput extends StatelessWidget {
+  const CellInput({
+    super.key,
+    this.initialValue,
+    this.controller,
+    this.hint = '',
+    this.keyboardType,
+    this.onChanged,
+    this.onTap,
+  });
+
+  final String? initialValue;
+  final TextEditingController? controller;
+  final String hint;
+  final TextInputType? keyboardType;
+  final ValueChanged<String>? onChanged;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextFormField(
+      controller: controller,
+      initialValue: controller == null ? initialValue : null,
+      keyboardType: keyboardType,
+      onChanged: onChanged,
+      onTap: onTap,
+      style: const TextStyle(fontSize: 14),
+      decoration: InputDecoration(
+        hintText: hint.isEmpty ? null : hint,
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
+        enabledBorder: _cellBorder,
+        focusedBorder: _cellBorderFocus,
+      ),
+    );
+  }
+}
+
+const OutlineInputBorder _cellBorder = OutlineInputBorder(
+  borderRadius: BorderRadius.all(Radius.circular(8)),
+  borderSide: BorderSide(color: Color(0xFFDCDFE6)),
+);
+
+const OutlineInputBorder _cellBorderFocus = OutlineInputBorder(
+  borderRadius: BorderRadius.all(Radius.circular(8)),
+  borderSide: BorderSide(color: Mc.brand, width: 1.4),
+);
+
+/// FormCell 里的可点击格（「选择商品」这类），外观与 CellInput 对齐。
+class CellTapBox extends StatelessWidget {
+  const CellTapBox({
+    super.key,
+    required this.child,
+    this.onTap,
+    this.filled = true,
+    this.background,
+  });
+
+  final Widget child;
+  final VoidCallback? onTap;
+  final bool filled;
+  final Color? background;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        alignment: Alignment.centerLeft,
+        decoration: BoxDecoration(
+          color: background ?? (filled ? const Color(0xFFF7FAFF) : Colors.transparent),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFDCDFE6)),
+        ),
+        child: child,
+      ),
+    );
+  }
+}
+
 /// 空状态：图标 + 一句话 + 可选操作。
 class EmptyState extends StatelessWidget {
   const EmptyState({super.key, required this.text, this.icon, this.action});

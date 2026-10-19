@@ -403,6 +403,15 @@ class _StockScreenState extends State<StockScreen> with SingleTickerProviderStat
                       )),
                   TextButton(
                     onPressed: () => _openAdjust(p),
+                    // ListTile 给 trailing 的高度只有 56，默认 TextButton 自带
+                    // 48 的最小命中区，加上面那行数量就溢出 8px（调试期表现为
+                    // 每行底部一条黄黑条纹）。
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(0, 30),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                    ),
                     child: const Text('盘点'),
                   ),
                 ],

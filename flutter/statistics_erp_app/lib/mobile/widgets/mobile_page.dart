@@ -78,7 +78,11 @@ class MobilePage extends StatelessWidget {
 
     return GlassScaffold(
       background: const AuroraBackground(),
-      enableBackgroundSampling: true,
+      // 关键：这里必须显式关掉背板采样。GlassScaffold 的默认值是
+      // "background != null 就开采样"，一旦开启，整页正文（含各张玻璃卡自己的文字）
+      // 会被抓成 GPU 纹理再喂给每层玻璃做折射，于是卡片里的文字被放大、染色、
+      // 叠出一层黄色描边，排版看起来整片错位。极光背景是静态渐变，本来也不需要采样。
+      enableBackgroundSampling: false,
       // 正文不铺到导航条底下：这些页面都是表单/列表，不是「内容穿过玻璃」的滚动设计，
       // extendBody 还会顺带打开边缘渐隐，实测会把首屏下方的卡片整段抹掉。
       extendBody: false,
@@ -124,13 +128,21 @@ class MobilePage extends StatelessWidget {
               actions: actions,
             ),
       bottomBar: tabIndex != null ? MobileTabBar(currentIndex: tabIndex!) : null,
-      bottomBarHeight: 58,
+      bottomBarHeight: 66,
       // 正文盒子已经精确排在两条导航之间，滚动组件再自动加一次系统内边距会变成双倍留白
-      body: MediaQuery.removePadding(
-        context: context,
-        removeTop: true,
-        removeBottom: true,
-        child: content,
+      //
+      // 必须垫一层透明 Material：GlassScaffold 走的是 CupertinoPageScaffold，整棵树
+      // 没有 Material 祖先，而 InkWell/TextField/ListTile 的 build 里是
+      // `Material.of(context)`（release 下同样会抛 null-check），
+      // 缺它就直接 RenderError → 那些行既不显示也点不动。
+      body: Material(
+        type: MaterialType.transparency,
+        child: MediaQuery.removePadding(
+          context: context,
+          removeTop: true,
+          removeBottom: true,
+          child: content,
+        ),
       ),
     );
   }

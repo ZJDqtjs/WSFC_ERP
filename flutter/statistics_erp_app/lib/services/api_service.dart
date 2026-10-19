@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -51,15 +52,27 @@ class ApiService {
   static bool _initialized = false;
   static void Function()? _onUnauthorized;
 
+  /// CookieJar 只有内存态，冷启动必掉登录；网页端靠浏览器存 cookie，
+  /// App 得自己把 erp_token 另存一份到 SharedPreferences 再灌回去。
+  static const String _cookiePrefsKey = 'erp_cookie';
+  static final Uri _cookieUri = Uri.parse('$_defaultApiBaseUrl/');
+
   /// 401 时的回调（跳登录页由 AuthProvider 注册，service 不依赖 UI）。
   static void setOnUnauthorized(void Function()? cb) => _onUnauthorized = cb;
 
   static Future<void> init() async {
     if (_initialized) return;
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_cookiePrefsKey);
+    if (saved != null && saved.isNotEmpty) {
+      await _cookieJar.saveFromResponse(_cookieUri, [Cookie.fromSetCookieValue(saved)]);
+    }
     _dio.interceptors.add(CookieManager(_cookieJar));
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) {
-        options.headers['Content-Type'] = 'application/json';
+        // FormData 得留给 Dio 自己写 multipart boundary 和 Content-Type，
+        // 这里无脑覆盖成 json 会让后端 /api/ai/parse-image 直接 422。
+        if (options.data is! FormData) options.headers['Content-Type'] = 'application/json';
         return handler.next(options);
       },
     ));
@@ -69,6 +82,7 @@ class ApiService {
   static Future<void> _clearAuth() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('erp_authed');
+    await prefs.remove(_cookiePrefsKey);
     await _cookieJar.deleteAll();
   }
 
@@ -105,15 +119,25 @@ class ApiService {
     try {
       response = await action();
     } on DioException catch (e) {
-      throw ApiException(e.response?.statusCode, _networkMessage(e));
+      final int? status = e.response?.statusCode;
+      // Dio 默认 validateStatus 只放过 2xx，401 是直接抛异常进来的，
+      // 走不到下面那段——所以掉线清理必须写在 catch 里，否则「登录已过期」永远不会跳登录页。
+      if (status == 401) {
+        await _clearAuth();
+        _onUnauthorized?.call();
+      }
+      throw ApiException(status, _networkMessage(e));
     }
     final int code = response.statusCode ?? 0;
-    if (code == 401) {
-      await _clearAuth();
-      _onUnauthorized?.call();
-    }
     if (code >= 400) {
       throw ApiException(code, _detailOf(response) ?? '请求失败（HTTP $code）');
+    }
+    final setCookie = response.headers.value('set-cookie');
+    if (setCookie != null && setCookie.contains('$cookieName=')) {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getString(_cookiePrefsKey) != setCookie) {
+        await prefs.setString(_cookiePrefsKey, setCookie);
+      }
     }
     return response.data;
   }
@@ -967,5 +991,90 @@ class ApiService {
   static Future<Map<String, dynamic>> jstDismissPending(int taskId) async {
     final data = await post('/api/jst-auto/pending/$taskId/dismiss');
     return Map<String, dynamic>.from(data as Map);
+  }
+
+  // ---------------- AI 智能录入（/api/ai） ----------------
+
+  /// 文本识别。后端先走本地规则快速解析，不中再调大模型，返回规范化单据。
+  static Future<Map<String, dynamic>> aiParse(String text) async {
+    final data = await post('/api/ai/parse', data: {'text': text});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// 票据图片识别。后端这条只有 SSE 流式接口，真正的单据只在最后一条
+  /// `data: {"result": …}` 事件里；中间的 stage/think/delta 只够用来刷进度文案。
+  /// 大模型识别一张票据要几十秒，接收超时单独放宽到 5 分钟。
+  static Future<Map<String, dynamic>> aiParseImage(
+    String filePath, {
+    String text = '',
+    void Function(String stage)? onStage,
+  }) async {
+    await init();
+    final form = FormData.fromMap({
+      'file': await MultipartFile.fromFile(
+        filePath,
+        filename: filePath.split(RegExp(r'[/\\]')).last,
+      ),
+      'text': text,
+    });
+    final Response<ResponseBody> res;
+    try {
+      res = await _dio.post<ResponseBody>(
+        '/api/ai/parse-image/stream',
+        data: form,
+        options: Options(
+          responseType: ResponseType.stream,
+          receiveTimeout: const Duration(minutes: 5),
+          headers: {'Accept': 'text/event-stream'},
+        ),
+      );
+    } on DioException catch (e) {
+      throw ApiException(e.response?.statusCode, _networkMessage(e));
+    }
+
+    Map<String, dynamic>? result;
+    String? failure;
+    // 按字节块解码会把跨块的汉字截断，所以先过一遍 utf8 decoder 再切事件
+    var buf = '';
+    await for (final piece in utf8.decoder.bind(res.data!.stream)) {
+      buf += piece;
+      var cut = buf.indexOf('\n\n');
+      while (cut >= 0) {
+        for (final line in buf.substring(0, cut).split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          final payload = line.substring(5).trim();
+          if (payload.isEmpty) continue;
+          final dynamic obj;
+          try {
+            obj = jsonDecode(payload);
+          } catch (_) {
+            continue;
+          }
+          if (obj is! Map) continue;
+          final m = Map<String, dynamic>.from(obj);
+          if (m['error'] != null) {
+            failure = m['error'].toString();
+          } else if (m['result'] is Map) {
+            result = Map<String, dynamic>.from(m['result'] as Map);
+          } else if (m['stage'] != null) {
+            onStage?.call(m['stage'].toString());
+          }
+        }
+        buf = buf.substring(cut + 2);
+        cut = buf.indexOf('\n\n');
+      }
+    }
+    if (result == null) {
+      throw ApiException(502, failure ?? '识别失败：后端未返回结果');
+    }
+    return result;
+  }
+
+  /// 把识别出的「新物品」真正写进商品档案（识别阶段不写库，确认提交时才建）。
+  /// 返回与入参同序的 `[{name, product_id, category, created}]`。
+  static Future<List<dynamic>> aiMaterialize(List<Map<String, dynamic>> items) async {
+    if (items.isEmpty) return const [];
+    final data = await post('/api/ai/products', data: {'items': items});
+    return (data as Map)['items'] as List<dynamic>? ?? const [];
   }
 }

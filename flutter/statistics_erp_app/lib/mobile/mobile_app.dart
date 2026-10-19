@@ -15,6 +15,7 @@ import '../screens/products_screen.dart';
 import '../screens/rules_screen.dart';
 import '../screens/stock_screen.dart';
 import 'mobile_style.dart';
+import 'screens/ai_entry_screen.dart';
 import 'screens/home_page.dart';
 import 'screens/login_page.dart';
 import 'screens/mine_page.dart';
@@ -41,7 +42,10 @@ class _MobileAppState extends State<MobileApp> {
         ChangeNotifierProvider(create: (_) => ProductProvider()),
       ],
       child: LiquidGlassWidgets.wrap(
-        adaptiveQuality: true,
+        // 组件库把 adaptiveQuality 标为 experimental（默认 false）：它会按帧耗时
+        // 在 premium/balanced/minimal 之间来回切档，切换瞬间玻璃层会退化成
+        // 一块不透明的灰矩形并把背板重排，实测在手机上是"界面错位"的主要来源。
+        adaptiveQuality: false,
         brightnessResolver: Theme.maybeBrightnessOf,
         theme: mobileGlassTheme(),
         child: MaterialApp.router(
@@ -123,5 +127,17 @@ GoRouter buildMobileRouter(AuthProvider auth) => GoRouter(
         GoRoute(path: '/expenses', name: 'expenses', builder: (c, s) => const ExpensesScreen()),
         GoRoute(path: '/finance', name: 'finance', builder: (c, s) => const FinanceScreen()),
         GoRoute(path: '/rules', name: 'rules', builder: (c, s) => const RulesScreen()),
+        GoRoute(
+          path: '/ai-entry',
+          name: 'ai-entry',
+          builder: (c, s) {
+            final extra = s.extra;
+            final args = extra is Map ? Map<String, dynamic>.from(extra) : const {};
+            return AiEntryScreen(
+              initialText: (args['text'] ?? '').toString(),
+              pickImageFirst: args['image'] == true,
+            );
+          },
+        ),
       ],
     );

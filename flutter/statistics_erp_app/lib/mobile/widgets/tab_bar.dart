@@ -43,8 +43,10 @@ class MobileTabBar extends StatelessWidget {
     return GlassTabBar.bottom(
       selectedIndex: currentIndex,
       onTabSelected: (i) => context.go(kMobileTabs[i].path),
-      barHeight: 58,
-      verticalPadding: 10,
+      // 58 装不下「23 图标 + 间距 + 11 号文字」再加上下 10 的内边距，
+      // 每个标签底部会溢出几像素（调试期是黄黑条纹，release 是文字被切齐底）。
+      barHeight: 66,
+      verticalPadding: 6,
       horizontalPadding: 14,
       iconSize: 23,
       labelFontSize: 11,

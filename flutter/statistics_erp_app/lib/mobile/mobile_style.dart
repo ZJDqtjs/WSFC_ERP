@@ -106,15 +106,20 @@ ThemeData mobileLightTheme() {
 
 /// 玻璃层主题：亮度略高于默认（底色偏浅，玻璃要看得见），
 /// 品牌色只用于发光/高亮，不改变玻璃本身的通透感。
+///
+/// 折射相关参数贴着组件库默认值走（refractiveIndex 1.15 / chromaticAberration 0.5）：
+/// 之前设成 1.6 + 高饱和，卡片边缘把背后内容折得太过分，文字被拉大、分出红蓝边，
+/// 看着就像排版错位。玻璃要"好看"靠 frost/发光，不靠折射率。
 GlassThemeData mobileGlassTheme() {
   const settings = GlassThemeSettings(
-    blur: 12,
+    blur: 5,
     frost: 0.42,
     frostOpacity: 0.72,
-    thickness: 22,
+    thickness: 18,
     lightIntensity: 0.55,
-    refractiveIndex: 1.6,
-    saturation: 1.5,
+    refractiveIndex: 1.15,
+    chromaticAberration: 0.25,
+    saturation: 1.2,
   );
 
   const glow = GlassGlowColors(
@@ -137,13 +142,14 @@ GlassThemeData mobileGlassTheme() {
     ),
     dark: GlassThemeVariant(
       settings: GlassThemeSettings(
-        blur: 14,
+        blur: 6,
         frost: 0.5,
         frostOpacity: 0.6,
-        thickness: 22,
+        thickness: 18,
         lightIntensity: 0.45,
-        refractiveIndex: 1.6,
-        saturation: 1.4,
+        refractiveIndex: 1.15,
+        chromaticAberration: 0.25,
+        saturation: 1.15,
       ),
       glowColors: glow,
       borderRadius: Mc.radiusCard,
