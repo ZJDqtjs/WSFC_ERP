@@ -1,6 +1,10 @@
+import '../mobile/widgets/mobile_page.dart';
 
+import '../mobile/widgets/parts.dart';
 import 'package:flutter/material.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
+import '../models/product.dart';
 import '../services/api_service.dart';
 
 /// 「规则设置」：分类扣点 / 店铺扣点 / 快递计费 / 打包规则 四合一。
@@ -33,15 +37,17 @@ class _RulesScreenState extends State<RulesScreen> with SingleTickerProviderStat
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('规则设置'),
-        centerTitle: true,
-        bottom: TabBar(
-          controller: _tabController,
-          isScrollable: true,
-          tabs: <Widget>[
-            for (final String t in _titles) Tab(text: t),
+    return MobilePage(
+      title: '规则设置',
+      back: true,
+      underBar: AnimatedBuilder(
+        animation: _tabController,
+        builder: (BuildContext context, Widget? child) => GlassSegmentedControl(
+          height: 38,
+          selectedIndex: _tabController.index,
+          onSegmentSelected: (int i) => _tabController.animateTo(i),
+          segments: <GlassSegment>[
+            for (final String t in _titles) GlassSegment(label: t),
           ],
         ),
       ),
@@ -461,7 +467,7 @@ class _CategoryDeductionTabState extends State<_CategoryDeductionTab> {
     final String category = _textOf(row['category']);
     final String remark = _textOf(row['remark']);
     final String percent = _pctText(row['percent']);
-    return Card(
+    return GCard(
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
         onTap: () => _openSheet(row),
@@ -725,7 +731,7 @@ class _ShopDeductionTabState extends State<_ShopDeductionTab> {
     final String shop = _textOf(rule['shop']);
     final Object? percent = rule['percent'];
     final Map<String, dynamic> categories = _mapOf(rule['categories']);
-    return Card(
+    return GCard(
       margin: const EdgeInsets.only(bottom: 8),
       child: InkWell(
         onTap: () => _openSheet(rule),
@@ -1161,7 +1167,7 @@ class _ExpressRuleTabState extends State<_ExpressRuleTab> {
     final String tip = _mode == 'tiered'
         ? '分段计费 = 首重价 +（超出 1kg 的部分，每超 1kg 加收一次$tieredTip）'
         : '按重量单价 = 重量 × 每 kg 单价';
-    return Card(
+    return GCard(
       margin: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -1194,7 +1200,7 @@ class _ExpressRuleTabState extends State<_ExpressRuleTab> {
   }
 
   Widget _feeCard() {
-    return Card(
+    return GCard(
       margin: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -1558,7 +1564,7 @@ class _PackRuleTabState extends State<_PackRuleTab> {
     }
 
     final String laborText = labor == null ? '人工 未设置' : '人工 ${_moneyText(labor)}/单';
-    return Card(
+    return GCard(
       margin: const EdgeInsets.only(bottom: 8),
       child: InkWell(
         onTap: () => _openSheet(rule),
@@ -1716,7 +1722,7 @@ class _PackRuleSheetState extends State<_PackRuleSheet> {
       return _PickOption(
         _intOf(m['id']) ?? 0,
         _textOf(m['name']),
-        "${_textOf(m['category'])} · 库存 ${_numText(m['stock'], blank: '0')}${_unitOf(m)}",
+        "${_textOf(m['category'])} · 库存 ${stockTextOf(m)}",
       );
     }).toList();
   }

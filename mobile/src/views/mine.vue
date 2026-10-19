@@ -2,7 +2,7 @@
   <div>
     <div class="card">
       <div class="row">
-        <van-icon name="manager" size="40" color="#1989fa" />
+        <div class="avatar">{{ initial }}</div>
         <div class="grow">
           <div style="font-weight:700;font-size:17px;">{{ user.name || user.username || '—' }}</div>
           <div class="muted">{{ roleText }} · 企业台账系统</div>
@@ -57,6 +57,13 @@ const version = '0.2.0'
 
 const roleText = computed(() => (user.value.role === 'admin' ? '管理员' : '业务员'))
 
+// 头像占位字：中文姓名末字才是姓氏（「小王」→「王」），字母账号沿用首字母
+const initial = computed(() => {
+  const n = ((user.value.name || user.value.username || '') + '').trim()
+  if (!n) return '管'
+  return /^[A-Za-z]/.test(n) ? n.charAt(0).toUpperCase() : n.slice(-1)
+})
+
 onMounted(async () => {
   try { user.value = await api('/api/auth/me') } catch (e) {}
   try {
@@ -75,3 +82,19 @@ async function logout() {
   router.replace('/login')
 }
 </script>
+
+<style scoped>
+.avatar {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #1989fa, #61b6ff);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+</style>

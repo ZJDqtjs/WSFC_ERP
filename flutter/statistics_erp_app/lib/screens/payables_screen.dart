@@ -1,5 +1,8 @@
+import '../mobile/widgets/mobile_page.dart';
+import '../mobile/widgets/parts.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../services/api_service.dart';
 
@@ -340,15 +343,19 @@ class _PayablesScreenState extends State<PayablesScreen> with SingleTickerProvid
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('待付款'),
-        centerTitle: true,
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const <Tab>[
-            Tab(text: '常规账单'),
-            Tab(text: '代发账单'),
+    final batchBar = _buildBatchBar();
+    return MobilePage(
+      title: '待付款',
+      back: true,
+      underBar: AnimatedBuilder(
+        animation: _tabController,
+        builder: (BuildContext context, Widget? child) => GlassSegmentedControl(
+          height: 38,
+          selectedIndex: _tabController.index,
+          onSegmentSelected: (int i) => _tabController.animateTo(i),
+          segments: const <GlassSegment>[
+            GlassSegment(label: '常规账单'),
+            GlassSegment(label: '代发账单'),
           ],
         ),
       ),
@@ -364,15 +371,15 @@ class _PayablesScreenState extends State<PayablesScreen> with SingleTickerProvid
               ],
             ),
           ),
+          if (batchBar != null) batchBar,
         ],
       ),
-      bottomNavigationBar: _buildBatchBar(),
     );
   }
 
   /// 顶部汇总条：应收 / 应付 / 未结笔数 + 「显示已结」开关 + 天数下拉
   Widget _buildSummaryBar() {
-    return Card(
+    return GCard(
       margin: const EdgeInsets.fromLTRB(12, 10, 12, 4),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
@@ -477,7 +484,7 @@ class _PayablesScreenState extends State<PayablesScreen> with SingleTickerProvid
   Widget _buildBillCard(_PayableItem item) {
     final bool selected = _selected.contains(item.key);
     final Color amountColor = item.isReceivable ? Colors.blue : Colors.deepOrange;
-    return Card(
+    return GCard(
       margin: const EdgeInsets.symmetric(vertical: 4),
       child: InkWell(
         onTap: () => _toggleItem(item),
@@ -579,7 +586,7 @@ class _PayablesScreenState extends State<PayablesScreen> with SingleTickerProvid
 
   Widget _buildDropshipHeader() {
     final bool hasRange = _dateFrom.isNotEmpty || _dateTo.isNotEmpty;
-    return Card(
+    return GCard(
       margin: const EdgeInsets.fromLTRB(12, 0, 12, 4),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
@@ -675,7 +682,7 @@ class _PayablesScreenState extends State<PayablesScreen> with SingleTickerProvid
   Widget _buildGroupCard(_DropshipGroup group, int index) {
     final bool selected = _selectedGroups.contains(index);
     final String specText = group.spec.isEmpty ? group.unit : '${group.spec} · ${group.unit}';
-    return Card(
+    return GCard(
       margin: const EdgeInsets.symmetric(vertical: 4),
       child: InkWell(
         onTap: () => _toggleGroup(index),

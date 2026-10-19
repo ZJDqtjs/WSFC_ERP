@@ -1,5 +1,8 @@
+import '../mobile/widgets/mobile_page.dart';
+import '../mobile/widgets/parts.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../services/api_service.dart';
 
@@ -245,24 +248,25 @@ class _StockScreenState extends State<StockScreen> with SingleTickerProviderStat
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('库存'),
-        centerTitle: true,
-        bottom: TabBar(
-          controller: _tabController,
-          isScrollable: true,
-          tabs: const [
-            Tab(text: '库存总览'),
-            Tab(text: '库存流水'),
-            Tab(text: '盘点记录'),
-          ],
-        ),
+    return MobilePage(
+      title: '库存',
+      tabIndex: 3,
+      underBar: GlassSegmentedControl(
+        height: 38,
+        selectedIndex: _tabController.index,
+        onSegmentSelected: (i) => _tabController.animateTo(i),
+        segments: const [
+          GlassSegment(label: '库存总览'),
+          GlassSegment(label: '库存流水'),
+          GlassSegment(label: '盘点记录'),
+        ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _openAdjust,
+      floating: GlassButton(
         icon: const Icon(Icons.edit_note),
-        label: const Text('盘点'),
+        label: '盘点',
+        width: 112,
+        height: 50,
+        onTap: _openAdjust,
       ),
       body: Column(
         children: [
@@ -382,7 +386,7 @@ class _StockScreenState extends State<StockScreen> with SingleTickerProviderStat
           final unit = (p['default_unit'] ?? p['base_unit'] ?? '').toString();
           final avg = (p['avg_cost'] as num?)?.toDouble() ?? 0;
           final value = (p['stock_value'] as num?)?.toDouble() ?? 0;
-          return Card(
+          return GCard(
             margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: ListTile(
               title: Text((p['name'] ?? '').toString()),
@@ -399,6 +403,15 @@ class _StockScreenState extends State<StockScreen> with SingleTickerProviderStat
                       )),
                   TextButton(
                     onPressed: () => _openAdjust(p),
+                    // ListTile 给 trailing 的高度只有 56，默认 TextButton 自带
+                    // 48 的最小命中区，加上面那行数量就溢出 8px（调试期表现为
+                    // 每行底部一条黄黑条纹）。
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(0, 30),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                    ),
                     child: const Text('盘点'),
                   ),
                 ],
@@ -433,7 +446,7 @@ class _StockScreenState extends State<StockScreen> with SingleTickerProviderStat
             (m['operator'] ?? '').toString(),
             if (remark.isNotEmpty) remark,
           ].where((s) => s.isNotEmpty).join(' · ');
-          return Card(
+          return GCard(
             margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
             child: ListTile(
               dense: true,
@@ -500,7 +513,7 @@ class _StockScreenState extends State<StockScreen> with SingleTickerProviderStat
           final qty = (g['quantity'] as num?)?.toDouble() ?? 0;
           final avg = (g['avg_cost_delta'] as num?)?.toDouble() ?? 0;
           final ucost = (g['unit_cost_delta'] as num?)?.toDouble() ?? 0;
-          return Card(
+          return GCard(
             margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: ListTile(
               title: Text((g['product_name'] ?? '').toString()),
@@ -677,7 +690,7 @@ class _AdjustSheetState extends State<_AdjustSheet> {
             const SizedBox(height: 12),
             Row(
               children: [
-                Expanded(child: _field(_avg, '均价增减', '元/基础单位')),
+                Expanded(child: _field(_avg, '均价增减', '元/基础单位（克 或 个）')),
                 const SizedBox(width: 8),
                 Expanded(child: _field(_ucost, '成本单价增减', '元/单位')),
               ],

@@ -114,7 +114,7 @@ body {
   width: 20px; 
   height: 20px; 
   border-radius: 6px; 
-  background: linear-gradient(135deg, #0067c0, #00a3ed); 
+  background: url('/brand-icon.png') center / cover no-repeat; 
   flex-shrink: 0;
   box-shadow: 0 2px 8px rgba(0, 103, 192, 0.3);
 }

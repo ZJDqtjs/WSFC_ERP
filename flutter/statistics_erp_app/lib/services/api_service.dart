@@ -1,7 +1,27 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+/// 短时内存缓存活多久。后端这几个接口单请求只有 50ms 出头，
+/// 但一个页面能把同一份数据重复要十几遍（规则页 5 个页签各拉一遍商品+大类），
+/// 体感的"卡"是排队，不是后端慢。到点自动回源，写操作立刻整表作废。
+const Duration _apiCacheTtl = Duration(seconds: 45);
+
+int _cacheEntryVersion = 0;
+
+class _CacheEntry {
+  _CacheEntry(this.value)
+      : expiresAt = DateTime.now().add(_apiCacheTtl),
+        version = ++_cacheEntryVersion;
+
+  final dynamic value;
+  final DateTime expiresAt;
+  final int version;
+}
 
 /// 后端返回的业务错误（FastAPI / Go 都是 detail=中文提示 的形状）。
 /// 页面里 catch ApiException 就能直接拿到可展示的文案，不必自己解析 dio 异常。
@@ -49,15 +69,53 @@ class ApiService {
   static bool _initialized = false;
   static void Function()? _onUnauthorized;
 
+  /// CookieJar 只有内存态，冷启动必掉登录；网页端靠浏览器存 cookie，
+  /// App 得自己把 erp_token 另存一份到 SharedPreferences 再灌回去。
+  static const String _cookiePrefsKey = 'erp_cookie';
+  static final Uri _cookieUri = Uri.parse('$_defaultApiBaseUrl/');
+
+  /// 只有这几个纯读聚合接口进缓存。单据列表 / 库存流水 / 报表都不缓存——
+  /// 用户打开那些页面就是要看"刚刚发生了什么"。
+  static const Set<String> _cachedGetPaths = {
+    '/api/products',
+    '/api/stocks',
+    '/api/dashboard',
+  };
+
+  static final Map<String, _CacheEntry> _getCache = {};
+  static final Map<String, Future<dynamic>> _getPending = {};
+
+  /// 写操作计数：写之前就已经发出、写之后才回来的读请求，发现自己这一代已经过期，
+  /// 就不再把旧快照写回缓存（否则刚开完单进去还是旧库存）。
+  static int _generation = 0;
+
+  /// 任何写操作都可能改动商品 / 大类 / 工作台数字，整表作废比逐条推断安全。
+  static void invalidateCache() {
+    _generation++;
+    _getCache.clear();
+  }
+
+  /// 某个接口当前的数据版本，没缓存时是 0。缓存被替换或被写操作作废都会变。
+  /// 持有解析副本的调用方（ProductProvider）拿它判断要不要重算——
+  /// 否则那份副本会一直用到 App 重启，别人改了商品这边看不出来。
+  static int dataVersion(String path) => _getCache[path]?.version ?? 0;
+
   /// 401 时的回调（跳登录页由 AuthProvider 注册，service 不依赖 UI）。
   static void setOnUnauthorized(void Function()? cb) => _onUnauthorized = cb;
 
   static Future<void> init() async {
     if (_initialized) return;
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_cookiePrefsKey);
+    if (saved != null && saved.isNotEmpty) {
+      await _cookieJar.saveFromResponse(_cookieUri, [Cookie.fromSetCookieValue(saved)]);
+    }
     _dio.interceptors.add(CookieManager(_cookieJar));
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) {
-        options.headers['Content-Type'] = 'application/json';
+        // FormData 得留给 Dio 自己写 multipart boundary 和 Content-Type，
+        // 这里无脑覆盖成 json 会让后端 /api/ai/parse-image 直接 422。
+        if (options.data is! FormData) options.headers['Content-Type'] = 'application/json';
         return handler.next(options);
       },
     ));
@@ -67,24 +125,75 @@ class ApiService {
   static Future<void> _clearAuth() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('erp_authed');
+    await prefs.remove(_cookiePrefsKey);
     await _cookieJar.deleteAll();
+    // 掉登录后可能是另一个分仓的账号，缓存着上一个仓的商品表会把库存认错
+    invalidateCache();
   }
 
   // ---------------- 低层通用方法（保留给页面直接拼路径的用法） ----------------
 
-  static Future<dynamic> get(String path, {Map<String, dynamic>? queryParameters}) async {
-    return _send(() => _dio.get(path, queryParameters: queryParameters));
+  /// [refresh] = true 只给「下拉刷新 / 刷新按钮」这类显式动作使用，绕开缓存强制回源。
+  static Future<dynamic> get(String path,
+      {Map<String, dynamic>? queryParameters, bool refresh = false}) {
+    final key = _cacheKey(path, queryParameters);
+    if (key == null) return _send(() => _dio.get(path, queryParameters: queryParameters));
+
+    final cached = _getCache[key];
+    if (!refresh && cached != null && DateTime.now().isBefore(cached.expiresAt)) {
+      return Future.value(_copyCached(cached.value));
+    }
+    // 同一时刻好几个页面都要商品表：只发一次请求，其余挂在同一个 Future 上
+    if (!refresh) {
+      final pending = _getPending[key];
+      if (pending != null) return pending.then(_copyCached);
+    }
+    final shared = _fetchToCache(key);
+    _getPending[key] = shared;
+    // 挂单只是用来去重的，错误已经由各调用方自己处理；这里补一个空 handler，
+    // 否则这个派生 Future 会变成「未捕获的异步异常」在断网时刷日志。
+    // identical 判断避免把后来那次 refresh 的挂单给摘掉。
+    shared
+        .then<void>((_) {}, onError: (_) {})
+        .whenComplete(() {
+          if (identical(_getPending[key], shared)) _getPending.remove(key);
+        });
+    return shared.then(_copyCached);
+  }
+
+  static String? _cacheKey(String path, Map<String, dynamic>? query) {
+    // 带查询条件的同名接口当成不同数据看待，直接不缓存最稳
+    if (!_cachedGetPaths.contains(path) || (query != null && query.isNotEmpty)) return null;
+    return path;
+  }
+
+  static Future<dynamic> _fetchToCache(String key) async {
+    final int generation = _generation;
+    final dynamic data = await _send(() => _dio.get(key));
+    if (generation == _generation) _getCache[key] = _CacheEntry(data);
+    return data;
+  }
+
+  /// 列表给一份浅拷贝：页面里常见 `list.sort()`、`..removeWhere()`，
+  /// 把缓存里那个 List 直接交出去等于让调用方改缓存本身。
+  static dynamic _copyCached(dynamic value) {
+    if (value is List) return List<dynamic>.from(value);
+    if (value is Map) return Map<String, dynamic>.from(value);
+    return value;
   }
 
   static Future<dynamic> post(String path, {dynamic data}) async {
+    invalidateCache();
     return _send(() => _dio.post(path, data: data));
   }
 
   static Future<dynamic> put(String path, {dynamic data}) async {
+    invalidateCache();
     return _send(() => _dio.put(path, data: data));
   }
 
   static Future<dynamic> delete(String path, {dynamic data}) async {
+    invalidateCache();
     return _send(() => _dio.delete(path, data: data));
   }
 
@@ -94,6 +203,7 @@ class ApiService {
     final formData = FormData.fromMap({
       field: await MultipartFile.fromFile(filePath),
     });
+    invalidateCache();
     return _send(() => _dio.post(path, data: formData));
   }
 
@@ -103,15 +213,25 @@ class ApiService {
     try {
       response = await action();
     } on DioException catch (e) {
-      throw ApiException(e.response?.statusCode, _networkMessage(e));
+      final int? status = e.response?.statusCode;
+      // Dio 默认 validateStatus 只放过 2xx，401 是直接抛异常进来的，
+      // 走不到下面那段——所以掉线清理必须写在 catch 里，否则「登录已过期」永远不会跳登录页。
+      if (status == 401) {
+        await _clearAuth();
+        _onUnauthorized?.call();
+      }
+      throw ApiException(status, _networkMessage(e));
     }
     final int code = response.statusCode ?? 0;
-    if (code == 401) {
-      await _clearAuth();
-      _onUnauthorized?.call();
-    }
     if (code >= 400) {
       throw ApiException(code, _detailOf(response) ?? '请求失败（HTTP $code）');
+    }
+    final setCookie = response.headers.value('set-cookie');
+    if (setCookie != null && setCookie.contains('$cookieName=')) {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getString(_cookiePrefsKey) != setCookie) {
+        await prefs.setString(_cookiePrefsKey, setCookie);
+      }
     }
     return response.data;
   }
@@ -250,19 +370,19 @@ class ApiService {
   // ---------------- 工作台 ----------------
 
   /// 9 个键：today/month 汇总、低库存、最近出入库、鲜货提示等
-  static Future<Map<String, dynamic>> dashboard() async {
-    return Map<String, dynamic>.from(await get('/api/dashboard') as Map);
+  static Future<Map<String, dynamic>> dashboard({bool refresh = false}) async {
+    return Map<String, dynamic>.from(await get('/api/dashboard', refresh: refresh) as Map);
   }
 
   // ---------------- 商品 / 单位 ----------------
 
   /// 全量商品（含停用项，字段与后端 _to_dict 一致：last_in_* / stock_links / conversions 等）
-  static Future<List<dynamic>> products() async {
-    return await get('/api/products') as List<dynamic>;
+  static Future<List<dynamic>> products({bool refresh = false}) async {
+    return await get('/api/products', refresh: refresh) as List<dynamic>;
   }
 
-  static Future<List<dynamic>> stocks() async {
-    return await get('/api/stocks') as List<dynamic>;
+  static Future<List<dynamic>> stocks({bool refresh = false}) async {
+    return await get('/api/stocks', refresh: refresh) as List<dynamic>;
   }
 
   static Future<Map<String, dynamic>> createProduct(Map<String, dynamic> body) async {
@@ -628,5 +748,427 @@ class ApiService {
     if (url == null || url.isEmpty) return '';
     if (url.startsWith('http://') || url.startsWith('https://')) return url;
     return _defaultApiBaseUrl + (url.startsWith('/') ? '' : '/') + url;
+  }
+
+  /// 带会话 Cookie 下载二进制（导入模板、备份文件、导出 JSON）
+  static Future<void> download(String path, String savePath, {Map<String, dynamic>? query}) async {
+    await init();
+    try {
+      final response = await _dio.get(
+        path,
+        queryParameters: query == null ? null : _clean(query),
+        options: Options(responseType: ResponseType.bytes),
+      );
+      await File(savePath).writeAsBytes(response.data as List<int>);
+    } on DioException catch (e) {
+      throw ApiException(e.response?.statusCode, _networkMessage(e));
+    }
+  }
+
+  /// 带会话 Cookie 拉一段文本（远程备份收发脚本）
+  static Future<String> getText(String path) async {
+    await init();
+    try {
+      final response = await _dio.get(path, options: Options(responseType: ResponseType.plain));
+      if ((response.statusCode ?? 0) >= 400) {
+        throw ApiException(response.statusCode, '拉取失败');
+      }
+      return response.data.toString();
+    } on DioException catch (e) {
+      throw ApiException(e.response?.statusCode, _networkMessage(e));
+    }
+  }
+
+  // ---------------- 报表 ----------------
+
+  /// 报表汇总。[wh] 传 'all' 合并各分仓；空串=当前工作分仓
+  static Future<Map<String, dynamic>> reportSummary({
+    String dateFrom = '',
+    String dateTo = '',
+    String wh = '',
+    bool excludeOther = true,
+  }) async {
+    final data = await get('/api/report/summary', queryParameters: _clean({
+      'date_from': dateFrom,
+      'date_to': dateTo,
+      'wh': wh,
+      'exclude_other': excludeOther ? '1' : '0',
+    }));
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// 各分仓总览（全仓视角的那张表）
+  static Future<Map<String, dynamic>> reportAllWarehouses({
+    String dateFrom = '',
+    String dateTo = '',
+    bool excludeOther = true,
+  }) async {
+    final data = await get('/api/report/all-warehouses', queryParameters: _clean({
+      'date_from': dateFrom,
+      'date_to': dateTo,
+      'exclude_other': excludeOther ? '1' : '0',
+    }));
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// 出库明细（按天 × 规格）
+  static Future<Map<String, dynamic>> reportSalesBySpec({String dateFrom = '', String dateTo = '', String wh = ''}) async {
+    final data = await get('/api/report/sales-by-spec',
+        queryParameters: _clean({'date_from': dateFrom, 'date_to': dateTo, 'wh': wh}));
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  // ---------------- 入仓 ----------------
+
+  /// {items, by_product, total, count}
+  static Future<Map<String, dynamic>> warehouseIns({String dateFrom = '', String dateTo = '', String q = ''}) async {
+    final data = await get('/api/warehouse-in',
+        queryParameters: _clean({'date_from': dateFrom, 'date_to': dateTo, 'q': q}));
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> createWarehouseIn(Map<String, dynamic> body) async {
+    final data = await post('/api/warehouse-in', data: body);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> updateWarehouseIn(int id, Map<String, dynamic> body) async {
+    final data = await put('/api/warehouse-in/$id', data: body);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<void> deleteWarehouseIn(int id) async {
+    await delete('/api/warehouse-in/$id');
+  }
+
+  static Future<Map<String, dynamic>> batchDeleteWarehouseIns(List<int> ids) async {
+    final data = await post('/api/warehouse-in/batch-delete', data: {'ids': ids});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// 入仓品资料
+  static Future<List<dynamic>> warehouseProducts() async {
+    return await get('/api/warehouse-in/products') as List<dynamic>;
+  }
+
+  static Future<Map<String, dynamic>> createWarehouseProduct(Map<String, dynamic> body) async {
+    final data = await post('/api/warehouse-in/products', data: body);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> updateWarehouseProduct(int id, Map<String, dynamic> body) async {
+    final data = await put('/api/warehouse-in/products/$id', data: body);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<void> deleteWarehouseProduct(int id) async {
+    await delete('/api/warehouse-in/products/$id');
+  }
+
+  /// 入仓品扣点（单值，存的是 category=入仓品 那条规则）
+  static Future<Map<String, dynamic>> warehouseDeduction() async {
+    final data = await get('/api/warehouse-in/deduction');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Excel 贴单导入：preview 返回待确认行，confirm 才落库
+  static Future<Map<String, dynamic>> warehouseImportPreview(String filePath, {String sheet = '', String date = ''}) async {
+    await init();
+    final formData = FormData.fromMap({
+      'file': await MultipartFile.fromFile(filePath),
+      'sheet': sheet,
+      'date': date,
+    });
+    return Map<String, dynamic>.from(await _send(() => _dio.post('/api/warehouse-in/import/preview', data: formData)) as Map);
+  }
+
+  static Future<Map<String, dynamic>> warehouseImportConfirm(List<Map<String, dynamic>> items, {String date = ''}) async {
+    final data = await post('/api/warehouse-in/import/confirm', data: {'items': items, 'date': date});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  // ---------------- 批量导入 / 模板 ----------------
+
+  static String templatePath(String kind) => '/api/templates/$kind';
+
+  /// {created, skipped, failed_count, failed:[{row,reason}], warnings:[]}
+  static Future<Map<String, dynamic>> importProducts(String filePath) async {
+    final data = await upload('/api/import/products', filePath);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> previewImportInbounds(String filePath) async {
+    final data = await upload('/api/import/inbounds/preview', filePath);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> confirmImportInbounds(List<Map<String, dynamic>> items) async {
+    final data = await post('/api/import/inbounds/confirm', data: {'items': items});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> previewImportOutbounds(String filePath) async {
+    final data = await upload('/api/import/outbounds/preview', filePath);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> confirmImportOutbounds(List<Map<String, dynamic>> orders, {String source = ''}) async {
+    final data = await post('/api/import/outbounds/confirm', data: {'orders': orders, 'source': source});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> previewImportJushuitan(String filePath) async {
+    final data = await upload('/api/jushuitan/import/preview', filePath);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> confirmImportJushuitan(List<Map<String, dynamic>> orders, {String source = ''}) async {
+    final data = await post('/api/jushuitan/import/confirm', data: {'orders': orders, 'source': source});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// 只解析建编码关联、不建出库单
+  static Future<Map<String, dynamic>> parseJushuitan(String filePath) async {
+    final data = await upload('/api/jushuitan/parse', filePath);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// 鲜货现采：今日订单需求 vs 库存（不扣库存，只出建议）
+  static Future<Map<String, dynamic>> freshPlan(String filePath) async {
+    final data = await upload('/api/fresh/plan', filePath);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  // ---------------- 聚水潭编码关联 ----------------
+
+  /// {summary:{total,linked,unlinked,linked_order,linked_stock}, items:[…]}
+  static Future<Map<String, dynamic>> mappings() async {
+    final data = await get('/api/mappings');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// product_id 传 null 表示清空关联
+  static Future<Map<String, dynamic>> saveMapping({String externalCode = '', int? productId, String source = 'jushuitan'}) async {
+    final data = await post('/api/mappings',
+        data: {'source': source, 'external_code': externalCode, 'product_id': productId});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> autoMapping() async {
+    final data = await post('/api/mappings/auto');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<void> deleteMapping(int id) async {
+    await delete('/api/mappings/$id');
+  }
+
+  static Future<void> clearMappings() async {
+    await delete('/api/mappings');
+  }
+
+  /// 把聚水潭一单多货写成组合规则
+  static Future<Map<String, dynamic>> packRuleFromJushuitan({
+    required String docNo,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    final data = await post('/api/pack-rules/from-jushuitan', data: {'doc_no': docNo, 'items': items});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  // ---------------- 备份 / 商品资料 JSON ----------------
+
+  /// {config, backups, json_backups, remote_status}
+  static Future<Map<String, dynamic>> backups() async {
+    final data = await get('/api/backups');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> createBackup() async {
+    final data = await post('/api/backup');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> saveBackupConfig(Map<String, dynamic> body) async {
+    final data = await post('/api/backup/config', data: body);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<void> restoreBackup(String name) async {
+    await post('/api/backup/restore', data: {'name': name});
+  }
+
+  static Future<Map<String, dynamic>> deleteBackup(String name) async {
+    final data = await delete('/api/backup/${Uri.encodeComponent(name)}');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<String> remoteScript(String which) async =>
+      getText('/api/backup/remote/$which-script');
+
+  /// {dir, rows:[{kind,label,file,count_in_db,count_in_file,exists,mtime}]}
+  static Future<Map<String, dynamic>> productDataStatus() async {
+    final data = await get('/api/product-data/status');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<dynamic> productDataPayload(String kind) async => get('/api/product-data/$kind');
+
+  static Future<Map<String, dynamic>> productDataExport() async {
+    final data = await post('/api/product-data/export');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> productDataImport() async {
+    final data = await post('/api/product-data/import');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> productDataImportKind(String kind) async {
+    final data = await post('/api/product-data/import/$kind');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> productDataImportOne(Map<String, dynamic> payload) async {
+    final data = await post('/api/product-data/import-one', data: {'payload': payload});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  // ---------------- 聚水潭自动出库 ----------------
+
+  static Future<Map<String, dynamic>> jstSettings() async {
+    final data = await get('/api/jst-auto/settings');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> saveJstSettings(Map<String, dynamic> body) async {
+    final data = await post('/api/jst-auto/settings', data: body);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> jstCheck() async {
+    final data = await post('/api/jst-auto/check');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> jstWarehouses() async {
+    final data = await post('/api/jst-auto/jst-warehouses');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> jstRun({bool doImport = true, String window = '', String start = '', String end = ''}) async {
+    final data = await post('/api/jst-auto/run',
+        data: _clean({'do_import': doImport, 'window': window, 'start': start, 'end': end}));
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> jstStatus() async {
+    final data = await get('/api/jst-auto/status');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> jstHistory({int limit = 20}) async {
+    final data = await get('/api/jst-auto/history', queryParameters: {'limit': limit});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> jstPending() async {
+    final data = await get('/api/jst-auto/pending');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> jstResolvePending(int taskId, Map<String, dynamic> body) async {
+    final data = await post('/api/jst-auto/pending/$taskId/resolve', data: body);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  static Future<Map<String, dynamic>> jstDismissPending(int taskId) async {
+    final data = await post('/api/jst-auto/pending/$taskId/dismiss');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  // ---------------- AI 智能录入（/api/ai） ----------------
+
+  /// 文本识别。后端先走本地规则快速解析，不中再调大模型，返回规范化单据。
+  static Future<Map<String, dynamic>> aiParse(String text) async {
+    final data = await post('/api/ai/parse', data: {'text': text});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// 票据图片识别。后端这条只有 SSE 流式接口，真正的单据只在最后一条
+  /// `data: {"result": …}` 事件里；中间的 stage/think/delta 只够用来刷进度文案。
+  /// 大模型识别一张票据要几十秒，接收超时单独放宽到 5 分钟。
+  static Future<Map<String, dynamic>> aiParseImage(
+    String filePath, {
+    String text = '',
+    void Function(String stage)? onStage,
+  }) async {
+    await init();
+    final form = FormData.fromMap({
+      'file': await MultipartFile.fromFile(
+        filePath,
+        filename: filePath.split(RegExp(r'[/\\]')).last,
+      ),
+      'text': text,
+    });
+    final Response<ResponseBody> res;
+    try {
+      res = await _dio.post<ResponseBody>(
+        '/api/ai/parse-image/stream',
+        data: form,
+        options: Options(
+          responseType: ResponseType.stream,
+          receiveTimeout: const Duration(minutes: 5),
+          headers: {'Accept': 'text/event-stream'},
+        ),
+      );
+    } on DioException catch (e) {
+      throw ApiException(e.response?.statusCode, _networkMessage(e));
+    }
+
+    Map<String, dynamic>? result;
+    String? failure;
+    // 按字节块解码会把跨块的汉字截断，所以先过一遍 utf8 decoder 再切事件
+    var buf = '';
+    await for (final piece in utf8.decoder.bind(res.data!.stream)) {
+      buf += piece;
+      var cut = buf.indexOf('\n\n');
+      while (cut >= 0) {
+        for (final line in buf.substring(0, cut).split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          final payload = line.substring(5).trim();
+          if (payload.isEmpty) continue;
+          final dynamic obj;
+          try {
+            obj = jsonDecode(payload);
+          } catch (_) {
+            continue;
+          }
+          if (obj is! Map) continue;
+          final m = Map<String, dynamic>.from(obj);
+          if (m['error'] != null) {
+            failure = m['error'].toString();
+          } else if (m['result'] is Map) {
+            result = Map<String, dynamic>.from(m['result'] as Map);
+          } else if (m['stage'] != null) {
+            onStage?.call(m['stage'].toString());
+          }
+        }
+        buf = buf.substring(cut + 2);
+        cut = buf.indexOf('\n\n');
+      }
+    }
+    if (result == null) {
+      throw ApiException(502, failure ?? '识别失败：后端未返回结果');
+    }
+    return result;
+  }
+
+  /// 把识别出的「新物品」真正写进商品档案（识别阶段不写库，确认提交时才建）。
+  /// 返回与入参同序的 `[{name, product_id, category, created}]`。
+  static Future<List<dynamic>> aiMaterialize(List<Map<String, dynamic>> items) async {
+    if (items.isEmpty) return const [];
+    final data = await post('/api/ai/products', data: {'items': items});
+    return (data as Map)['items'] as List<dynamic>? ?? const [];
   }
 }

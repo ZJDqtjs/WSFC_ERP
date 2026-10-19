@@ -330,3 +330,12 @@ google-services.json
 /go/
 # Go 试验实现相关文档（同为试验产物，不入库）
 /docs/go_*.md
+
+# Flutter / JVM 堆转储与 AI 工具本机缓存（体积巨大，勿提交）
+*.hprof
+/.qoder-credits/
+
+# 本机调试脚本与截图（不属产品代码）
+/send.ps1
+/shot*.ps1
+/shot_*.png

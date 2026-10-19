@@ -1,7 +1,12 @@
+import '../mobile/widgets/mobile_page.dart';
+import '../mobile/widgets/parts.dart';
+import '../mobile/mobile_style.dart';
 import 'package:flutter/material.dart';
 
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 
+import '../providers/product_provider.dart';
 import '../services/api_service.dart';
 import '../models/product.dart';
 
@@ -21,19 +26,18 @@ class _InboundScreenState extends State<InboundScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('入库'),
-        centerTitle: true,
-      ),
+    return MobilePage(
+      title: '入库',
+      tabIndex: 2,
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(12),
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 28),
         child: Form(
           key: _formKey,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Card(
+              GCard(
                 child: Padding(
                   padding: const EdgeInsets.all(14),
                   child: Column(
@@ -47,103 +51,108 @@ class _InboundScreenState extends State<InboundScreen> {
                       Row(
                         children: [
                           Expanded(
-                            child: TextFormField(
-                              initialValue: _date,
-                              decoration: const InputDecoration(
-                                labelText: '日期',
-                                prefixIcon: Icon(Icons.calendar_today),
+                            child: FormCell(
+                              label: '日期',
+                              child: CellInput(
+                                initialValue: _date,
+                                onTap: () async {
+                                  final picked = await showDatePicker(
+                                    context: context,
+                                    initialDate: DateTime.now(),
+                                    firstDate: DateTime(2020),
+                                    lastDate: DateTime(2030),
+                                  );
+                                  if (picked != null) {
+                                    setState(() {
+                                      _date = DateFormat('yyyy-MM-dd').format(picked);
+                                    });
+                                  }
+                                },
                               ),
-                              onTap: () async {
-                                final picked = await showDatePicker(
-                                  context: context,
-                                  initialDate: DateTime.now(),
-                                  firstDate: DateTime(2020),
-                                  lastDate: DateTime(2030),
-                                );
-                                if (picked != null) {
-                                  setState(() {
-                                    _date = DateFormat('yyyy-MM-dd').format(picked);
-                                  });
-                                }
-                              },
                             ),
                           ),
                           const SizedBox(width: 12),
                           Expanded(
-                            child: TextFormField(
-                              decoration: const InputDecoration(
-                                labelText: '供应商',
-                                prefixIcon: Icon(Icons.business),
+                            child: FormCell(
+                              label: '供应商',
+                              child: CellInput(
+                                hint: '供应商名称',
+                                onChanged: (v) => _supplier = v,
                               ),
-                              onChanged: (v) => _supplier = v,
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
                       ..._rows.asMap().entries.map((entry) {
                         final i = entry.key;
                         final row = entry.value;
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 12),
                           child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                            crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
                               Expanded(
-                                flex: 3,
-                                child: InkWell(
-                                  onTap: () => _openProductPicker(i),
-                                  borderRadius: BorderRadius.circular(8),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      color: row.product == null
-                                          ? const Color(0xFFF0F8FF)
-                                          : Colors.grey[100],
-                                      borderRadius: BorderRadius.circular(8),
+                                child: FormCell(
+                                  label: '商品',
+                                  child: CellTapBox(
+                                    onTap: () => _openProductPicker(i),
+                                    background: row.product == null
+                                        ? const Color(0xFFF0F8FF)
+                                        : Colors.grey[100],
+                                    child: Text(
+                                      row.product == null
+                                          ? '＋ 选择商品'
+                                          : '[库存] ${row.product!.name}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: row.product == null
+                                            ? const Color(0xFF1989FA)
+                                            : Mc.ink,
+                                      ),
                                     ),
-                                    child: row.product == null
-                                        ? const Text('＋ 选择商品',
-                                            style: TextStyle(color: Color(0xFF1989FA)))
-                                        : Text(
-                                            '[库存] ${row.product!.name}',
-                                            style: const TextStyle(fontSize: 13),
-                                          ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              SizedBox(
+                                width: 62,
+                                child: FormCell(
+                                  label: '数量',
+                                  child: CellInput(
+                                    initialValue: '1',
+                                    keyboardType: TextInputType.number,
+                                    onChanged: (v) => row.quantity = v,
                                   ),
                                 ),
                               ),
                               const SizedBox(width: 8),
                               SizedBox(
                                 width: 70,
-                                child: TextFormField(
-                                  initialValue: '1',
-                                  decoration: const InputDecoration(
-                                    labelText: '数量',
-                                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                child: FormCell(
+                                  label: '单价',
+                                  child: CellInput(
+                                    initialValue: '0',
+                                    keyboardType: TextInputType.number,
+                                    onChanged: (v) => row.price = v,
                                   ),
-                                  keyboardType: TextInputType.number,
-                                  onChanged: (v) => row.quantity = v,
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              SizedBox(
-                                width: 80,
-                                child: TextFormField(
-                                  initialValue: '0',
-                                  decoration: const InputDecoration(
-                                    labelText: '单价',
-                                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                                  ),
-                                  keyboardType: TextInputType.number,
-                                  onChanged: (v) => row.price = v,
+                              const SizedBox(width: 2),
+                              Padding(
+                                padding: const EdgeInsets.only(top: 17),
+                                child: IconButton(
+                                  visualDensity: VisualDensity.compact,
+                                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                                  padding: EdgeInsets.zero,
+                                  icon: const Icon(Icons.delete_outline,
+                                      size: 22, color: Colors.red),
+                                  onPressed: _rows.length > 1
+                                      ? () => setState(() => _rows.removeAt(i))
+                                      : null,
                                 ),
-                              ),
-                              const SizedBox(width: 4),
-                              IconButton(
-                                icon: const Icon(Icons.delete_outline, color: Colors.red),
-                                onPressed: _rows.length > 1
-                                    ? () => setState(() => _rows.removeAt(i))
-                                    : null,
                               ),
                             ],
                           ),
@@ -160,6 +169,7 @@ class _InboundScreenState extends State<InboundScreen> {
                       const SizedBox(height: 16),
                       SizedBox(
                         height: 44,
+                        width: double.infinity,
                         child: ElevatedButton(
                           onPressed: _isLoading ? null : _submit,
                           style: ElevatedButton.styleFrom(
@@ -269,38 +279,20 @@ class _ProductPickerScreen extends StatefulWidget {
 class _ProductPickerScreenState extends State<_ProductPickerScreen> {
   String _searchKeyword = '';
   String _filterCategory = '';
-  List<Product> _products = [];
-  bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
-    _loadProducts();
+    // 商品表由 ProductProvider 统一持有：只有全 App 第一次要它时才真的走网络
+    context.read<ProductProvider>().ensureLoaded();
   }
 
-  Future<void> _loadProducts() async {
-    setState(() => _isLoading = true);
-    try {
-      final data = await ApiService.get('/api/products');
-      setState(() {
-        _products = (data as List)
-            .where((p) => p['is_active'] == true && p['product_type'] == 'stock')
-            .where((p) => !['人工', '快递'].contains(p['category']))
-            .map((p) => Product.fromJson(p))
-            .toList();
-      });
-    } catch (e) {
-      // 忽略错误
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  List<Product> get _filteredProducts {
-    return _products.where((p) {
-      if (_searchKeyword.isNotEmpty &&
-          !p.name.toLowerCase().contains(_searchKeyword.toLowerCase()) &&
-          !p.category.toLowerCase().contains(_searchKeyword.toLowerCase())) {
+  List<Product> _visible(List<Product> source) {
+    final k = _searchKeyword.toLowerCase();
+    return source.where((p) {
+      if (k.isNotEmpty &&
+          !p.name.toLowerCase().contains(k) &&
+          !p.category.toLowerCase().contains(k)) {
         return false;
       }
       if (_filterCategory.isNotEmpty && p.category != _filterCategory) return false;
@@ -308,26 +300,24 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
     }).toList();
   }
 
-  Set<String> get _categories {
-    return _products.map((p) => p.category).where((c) => c.isNotEmpty).toSet();
-  }
-
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('选择入库商品'),
-        centerTitle: true,
-      ),
+    final provider = context.watch<ProductProvider>();
+    final source = provider.getStockProducts();
+    final shown = _visible(source);
+    final categories = source.map((p) => p.category).where((c) => c.isNotEmpty).toSet();
+    return MobilePage(
+      title: '选择入库商品',
+      back: true,
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
             child: TextField(
               decoration: const InputDecoration(
                 hintText: '搜索商品名称 / 分类',
                 prefixIcon: Icon(Icons.search),
-                border: OutlineInputBorder(),
+                isDense: true,
               ),
               onChanged: (v) => setState(() => _searchKeyword = v),
             ),
@@ -341,7 +331,7 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
                   padding: EdgeInsets.only(right: 8),
                   child: FilterChip(label: Text('全部'), selected: true, onSelected: null),
                 ),
-                ..._categories.map((c) => Padding(
+                ...categories.map((c) => Padding(
                       padding: const EdgeInsets.only(right: 8),
                       child: FilterChip(
                         label: Text(c),
@@ -356,24 +346,30 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
           ),
           const Divider(),
           Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _filteredProducts.isEmpty
-                    ? const Center(child: Text('无匹配商品'))
-                    : ListView.builder(
-                        itemCount: _filteredProducts.length,
-                        itemBuilder: (context, index) {
-                          final p = _filteredProducts[index];
-                          return ListTile(
-                            title: Text('[库存] ${p.name}'),
-                            subtitle: Text(
-                              '${p.category.isEmpty ? '—' : p.category} · 单位 ${p.defaultUnit ?? p.baseUnit} · 库存 ${p.stock}',
-                            ),
-                            trailing: const Icon(Icons.chevron_right),
-                            onTap: () => Navigator.pop(context, p),
-                          );
-                        },
-                      ),
+            child: shown.isEmpty
+                ? Center(
+                    child: Text(
+                      provider.error != null
+                          ? '商品加载失败：${provider.error}'
+                          : provider.isLoading
+                              ? '加载中…'
+                              : '无匹配商品',
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: shown.length,
+                    itemBuilder: (context, index) {
+                      final p = shown[index];
+                      return ListTile(
+                        title: Text('[库存] ${p.name}'),
+                        subtitle: Text(
+                          '${p.category.isEmpty ? '—' : p.category} · 库存 ${p.stockText}',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.pop(context, p),
+                      );
+                    },
+                  ),
           ),
         ],
       ),

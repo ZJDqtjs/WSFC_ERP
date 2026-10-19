@@ -1,5 +1,8 @@
+import '../mobile/widgets/mobile_page.dart';
+import '../mobile/widgets/parts.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../services/api_service.dart';
 
@@ -333,54 +336,48 @@ class _FinanceScreenState extends State<FinanceScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('财务流水'),
-        centerTitle: true,
-        actions: [
-          IconButton(
-            onPressed: _loading ? null : _load,
-            icon: const Icon(Icons.refresh),
-            tooltip: '刷新',
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openEditor(),
+    return MobilePage(
+      title: '财务流水',
+      back: true,
+      onRefresh: _loading ? null : _load,
+      actions: [
+        pageAction(Icons.refresh_rounded, _loading ? null : _load, tooltip: '刷新'),
+      ],
+      floating: GlassButton(
         icon: const Icon(Icons.account_balance_wallet_outlined),
-        label: const Text('手动记账'),
+        label: '手动记账',
+        width: 128,
+        height: 50,
+        onTap: () => _openEditor(),
       ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: CustomScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          slivers: [
-            SliverToBoxAdapter(child: _buildRangeBar()),
-            SliverToBoxAdapter(child: _buildSummaryCards()),
-            SliverToBoxAdapter(child: _buildWorkloadCard()),
-            SliverToBoxAdapter(child: _buildListHeader()),
-            if (_loading && _rows.isEmpty)
-              const SliverFillRemaining(
-                hasScrollBody: false,
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if (_rows.isEmpty)
-              SliverFillRemaining(
-                hasScrollBody: false,
-                child: _buildEmpty(),
-              )
-            else
-              SliverPadding(
-                padding: const EdgeInsets.only(bottom: 88),
-                sliver: SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) => _buildRow(index),
-                    childCount: _rows.length,
-                  ),
+      body: CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          SliverToBoxAdapter(child: _buildRangeBar()),
+          SliverToBoxAdapter(child: _buildSummaryCards()),
+          SliverToBoxAdapter(child: _buildWorkloadCard()),
+          SliverToBoxAdapter(child: _buildListHeader()),
+          if (_loading && _rows.isEmpty)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (_rows.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: _buildEmpty(),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.only(bottom: 88),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => _buildRow(index),
+                  childCount: _rows.length,
                 ),
               ),
-          ],
-        ),
+            ),
+        ],
       ),
     );
   }
@@ -473,7 +470,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
 
   Widget _summaryCard(String title, double amount, String sub, Color color) {
     return Expanded(
-      child: Card(
+      child: GCard(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           child: Column(
@@ -509,7 +506,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
     final productText = products.isEmpty
         ? ''
         : '涉及 ${products.length} 个人工 / 快递商品';
-    return Card(
+    return GCard(
       margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
@@ -616,7 +613,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
     final sourceTag = manual ? '手动' : '自动·$sourceName';
     final payTag = _payLabel(row);
 
-    return Card(
+    return GCard(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: InkWell(
         borderRadius: BorderRadius.circular(10),

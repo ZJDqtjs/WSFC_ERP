@@ -1,6 +1,10 @@
+import '../mobile/widgets/mobile_page.dart';
+import '../mobile/widgets/parts.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
+import '../models/product.dart';
 import '../services/api_service.dart';
 
 /// 主色/成功色，和 main.dart 的 AppBar、出库页保持一致
@@ -89,10 +93,10 @@ class _ProductsScreenState extends State<ProductsScreen> with SingleTickerProvid
 
   // ---------------- 数据 ----------------
 
-  Future<void> _loadProducts() async {
+  Future<void> _loadProducts({bool refresh = false}) async {
     setState(() => _loading = true);
     try {
-      final data = await ApiService.products();
+      final data = await ApiService.products(refresh: refresh);
       if (!mounted) return;
       setState(() {
         _products = data;
@@ -426,60 +430,48 @@ class _ProductsScreenState extends State<ProductsScreen> with SingleTickerProvid
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_selecting ? '已选 ${_selected.length} 项' : '商品'),
-        actions: _selecting
-            ? [
-                IconButton(
-                  onPressed: () => _selectAll(_tabController.index),
-                  icon: const Icon(Icons.select_all),
-                  tooltip: '全选 / 取消全选',
-                ),
-                IconButton(
-                  onPressed: _batchCategory,
-                  icon: const Icon(Icons.sell_outlined),
-                  tooltip: '批量改类别',
-                ),
-                IconButton(
-                  onPressed: () => _batchActive(true),
-                  icon: const Icon(Icons.play_circle_outline),
-                  tooltip: '批量启用',
-                ),
-                IconButton(
-                  onPressed: () => _batchActive(false),
-                  icon: const Icon(Icons.pause_circle_outline),
-                  tooltip: '批量停用',
-                ),
-                IconButton(
-                  onPressed: _batchDelete,
-                  icon: const Icon(Icons.delete_outline),
-                  tooltip: '批量删除',
-                ),
-                IconButton(
-                  onPressed: _exitSelect,
-                  icon: const Icon(Icons.close),
-                  tooltip: '退出多选',
-                ),
-              ]
-            : [
-                IconButton(
-                  onPressed: _loadProducts,
-                  icon: const Icon(Icons.refresh),
-                  tooltip: '刷新',
-                ),
-              ],
-        bottom: TabBar(
-          controller: _tabController,
-          labelColor: Colors.white,
-          unselectedLabelColor: Colors.white70,
-          indicatorColor: Colors.white,
-          tabs: const [
-            Tab(text: '库存商品（大类）'),
-            Tab(text: '订单商品（小类）'),
+    return MobilePage(
+      title: _selecting ? '已选 ${_selected.length} 项' : '商品',
+      back: true,
+      actions: _selecting
+          ? [
+              pageAction(
+                Icons.select_all,
+                () => _selectAll(_tabController.index),
+                tooltip: '全选 / 取消全选',
+              ),
+              pageAction(Icons.sell_outlined, _batchCategory, tooltip: '批量改类别'),
+              pageAction(
+                  Icons.play_circle_outline, () => _batchActive(true), tooltip: '批量启用'),
+              pageAction(
+                  Icons.pause_circle_outline, () => _batchActive(false), tooltip: '批量停用'),
+              pageAction(Icons.delete_outline, _batchDelete, tooltip: '批量删除'),
+              pageAction(Icons.close_rounded, _exitSelect, tooltip: '退出多选'),
+            ]
+          : [
+              pageAction(Icons.refresh_rounded, () => _loadProducts(refresh: true), tooltip: '刷新'),
+            ],
+      underBar: AnimatedBuilder(
+        animation: _tabController,
+        builder: (BuildContext context, Widget? child) => GlassSegmentedControl(
+          height: 38,
+          selectedIndex: _tabController.index,
+          onSegmentSelected: (int i) => _tabController.animateTo(i),
+          segments: const <GlassSegment>[
+            GlassSegment(label: '库存商品'),
+            GlassSegment(label: '订单商品'),
           ],
         ),
       ),
+      floating: _selecting
+          ? null
+          : GlassButton(
+              icon: const Icon(Icons.add),
+              label: '新增商品',
+              width: 124,
+              height: 50,
+              onTap: () => _openForm(),
+            ),
       body: Column(
         children: [
           _searchBar(),
@@ -492,15 +484,6 @@ class _ProductsScreenState extends State<ProductsScreen> with SingleTickerProvid
           ),
         ],
       ),
-      floatingActionButton: _selecting
-          ? null
-          : FloatingActionButton.extended(
-              onPressed: () => _openForm(),
-              backgroundColor: _brand,
-              foregroundColor: Colors.white,
-              icon: const Icon(Icons.add),
-              label: const Text('新增商品'),
-            ),
     );
   }
 
@@ -536,7 +519,7 @@ class _ProductsScreenState extends State<ProductsScreen> with SingleTickerProvid
     }
     final rows = _visible(tabIndex);
     return RefreshIndicator(
-      onRefresh: _loadProducts,
+      onRefresh: () => _loadProducts(refresh: true),
       child: rows.isEmpty
           ? ListView(
               children: [
@@ -572,10 +555,11 @@ class _ProductsScreenState extends State<ProductsScreen> with SingleTickerProvid
     final category = _str(p['category']);
     final code = _str(p['code']);
     final unit = _unitText(p);
+    final f = unitFactorOf(p);
     final stock = _num(p['stock']);
     final isOrder = _str(p['product_type']) == 'order';
     final packs = (p['pack_items'] as List?) ?? const [];
-    return Card(
+    return GCard(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: _selecting ? () => _toggle(id) : () => _openForm(p),
@@ -634,11 +618,11 @@ class _ProductsScreenState extends State<ProductsScreen> with SingleTickerProvid
                       spacing: 6,
                       runSpacing: 6,
                       children: [
-                        _tag('库存 ${_qty(stock)} $unit', const Color(0xFFF2F6FF),
+                        _tag('库存 ${_qty(stock / f)} $unit', const Color(0xFFF2F6FF),
                             const Color(0xFF2F54EB)),
-                        _tag('均价 ${_money.format(_num(p['avg_cost']))}/$unit',
+                        _tag('均价 ${_money.format(_num(p['avg_cost']) * f)}/$unit',
                             const Color(0xFFF2F6FF), const Color(0xFF2F54EB)),
-                        _tag('售价 ${_money.format(_num(p['sale_price']))}',
+                        _tag('售价 ${_money.format(_num(p['sale_price']) * f)}/$unit',
                             const Color(0xFFEFFAF2), active ? _ok : Colors.grey.shade500),
                       ],
                     ),
