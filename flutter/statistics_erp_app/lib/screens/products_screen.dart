@@ -92,10 +92,10 @@ class _ProductsScreenState extends State<ProductsScreen> with SingleTickerProvid
 
   // ---------------- 数据 ----------------
 
-  Future<void> _loadProducts() async {
+  Future<void> _loadProducts({bool refresh = false}) async {
     setState(() => _loading = true);
     try {
-      final data = await ApiService.products();
+      final data = await ApiService.products(refresh: refresh);
       if (!mounted) return;
       setState(() {
         _products = data;
@@ -448,7 +448,7 @@ class _ProductsScreenState extends State<ProductsScreen> with SingleTickerProvid
               pageAction(Icons.close_rounded, _exitSelect, tooltip: '退出多选'),
             ]
           : [
-              pageAction(Icons.refresh_rounded, _loadProducts, tooltip: '刷新'),
+              pageAction(Icons.refresh_rounded, () => _loadProducts(refresh: true), tooltip: '刷新'),
             ],
       underBar: AnimatedBuilder(
         animation: _tabController,
@@ -518,7 +518,7 @@ class _ProductsScreenState extends State<ProductsScreen> with SingleTickerProvid
     }
     final rows = _visible(tabIndex);
     return RefreshIndicator(
-      onRefresh: _loadProducts,
+      onRefresh: () => _loadProducts(refresh: true),
       child: rows.isEmpty
           ? ListView(
               children: [

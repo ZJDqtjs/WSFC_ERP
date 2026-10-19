@@ -6,6 +6,23 @@ import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// 短时内存缓存活多久。后端这几个接口单请求只有 50ms 出头，
+/// 但一个页面能把同一份数据重复要十几遍（规则页 5 个页签各拉一遍商品+大类），
+/// 体感的"卡"是排队，不是后端慢。到点自动回源，写操作立刻整表作废。
+const Duration _apiCacheTtl = Duration(seconds: 45);
+
+int _cacheEntryVersion = 0;
+
+class _CacheEntry {
+  _CacheEntry(this.value)
+      : expiresAt = DateTime.now().add(_apiCacheTtl),
+        version = ++_cacheEntryVersion;
+
+  final dynamic value;
+  final DateTime expiresAt;
+  final int version;
+}
+
 /// 后端返回的业务错误（FastAPI / Go 都是 detail=中文提示 的形状）。
 /// 页面里 catch ApiException 就能直接拿到可展示的文案，不必自己解析 dio 异常。
 class ApiException implements Exception {
@@ -57,6 +74,32 @@ class ApiService {
   static const String _cookiePrefsKey = 'erp_cookie';
   static final Uri _cookieUri = Uri.parse('$_defaultApiBaseUrl/');
 
+  /// 只有这几个纯读聚合接口进缓存。单据列表 / 库存流水 / 报表都不缓存——
+  /// 用户打开那些页面就是要看"刚刚发生了什么"。
+  static const Set<String> _cachedGetPaths = {
+    '/api/products',
+    '/api/stocks',
+    '/api/dashboard',
+  };
+
+  static final Map<String, _CacheEntry> _getCache = {};
+  static final Map<String, Future<dynamic>> _getPending = {};
+
+  /// 写操作计数：写之前就已经发出、写之后才回来的读请求，发现自己这一代已经过期，
+  /// 就不再把旧快照写回缓存（否则刚开完单进去还是旧库存）。
+  static int _generation = 0;
+
+  /// 任何写操作都可能改动商品 / 大类 / 工作台数字，整表作废比逐条推断安全。
+  static void invalidateCache() {
+    _generation++;
+    _getCache.clear();
+  }
+
+  /// 某个接口当前的数据版本，没缓存时是 0。缓存被替换或被写操作作废都会变。
+  /// 持有解析副本的调用方（ProductProvider）拿它判断要不要重算——
+  /// 否则那份副本会一直用到 App 重启，别人改了商品这边看不出来。
+  static int dataVersion(String path) => _getCache[path]?.version ?? 0;
+
   /// 401 时的回调（跳登录页由 AuthProvider 注册，service 不依赖 UI）。
   static void setOnUnauthorized(void Function()? cb) => _onUnauthorized = cb;
 
@@ -84,23 +127,73 @@ class ApiService {
     await prefs.remove('erp_authed');
     await prefs.remove(_cookiePrefsKey);
     await _cookieJar.deleteAll();
+    // 掉登录后可能是另一个分仓的账号，缓存着上一个仓的商品表会把库存认错
+    invalidateCache();
   }
 
   // ---------------- 低层通用方法（保留给页面直接拼路径的用法） ----------------
 
-  static Future<dynamic> get(String path, {Map<String, dynamic>? queryParameters}) async {
-    return _send(() => _dio.get(path, queryParameters: queryParameters));
+  /// [refresh] = true 只给「下拉刷新 / 刷新按钮」这类显式动作使用，绕开缓存强制回源。
+  static Future<dynamic> get(String path,
+      {Map<String, dynamic>? queryParameters, bool refresh = false}) {
+    final key = _cacheKey(path, queryParameters);
+    if (key == null) return _send(() => _dio.get(path, queryParameters: queryParameters));
+
+    final cached = _getCache[key];
+    if (!refresh && cached != null && DateTime.now().isBefore(cached.expiresAt)) {
+      return Future.value(_copyCached(cached.value));
+    }
+    // 同一时刻好几个页面都要商品表：只发一次请求，其余挂在同一个 Future 上
+    if (!refresh) {
+      final pending = _getPending[key];
+      if (pending != null) return pending.then(_copyCached);
+    }
+    final shared = _fetchToCache(key);
+    _getPending[key] = shared;
+    // 挂单只是用来去重的，错误已经由各调用方自己处理；这里补一个空 handler，
+    // 否则这个派生 Future 会变成「未捕获的异步异常」在断网时刷日志。
+    // identical 判断避免把后来那次 refresh 的挂单给摘掉。
+    shared
+        .then<void>((_) {}, onError: (_) {})
+        .whenComplete(() {
+          if (identical(_getPending[key], shared)) _getPending.remove(key);
+        });
+    return shared.then(_copyCached);
+  }
+
+  static String? _cacheKey(String path, Map<String, dynamic>? query) {
+    // 带查询条件的同名接口当成不同数据看待，直接不缓存最稳
+    if (!_cachedGetPaths.contains(path) || (query != null && query.isNotEmpty)) return null;
+    return path;
+  }
+
+  static Future<dynamic> _fetchToCache(String key) async {
+    final int generation = _generation;
+    final dynamic data = await _send(() => _dio.get(key));
+    if (generation == _generation) _getCache[key] = _CacheEntry(data);
+    return data;
+  }
+
+  /// 列表给一份浅拷贝：页面里常见 `list.sort()`、`..removeWhere()`，
+  /// 把缓存里那个 List 直接交出去等于让调用方改缓存本身。
+  static dynamic _copyCached(dynamic value) {
+    if (value is List) return List<dynamic>.from(value);
+    if (value is Map) return Map<String, dynamic>.from(value);
+    return value;
   }
 
   static Future<dynamic> post(String path, {dynamic data}) async {
+    invalidateCache();
     return _send(() => _dio.post(path, data: data));
   }
 
   static Future<dynamic> put(String path, {dynamic data}) async {
+    invalidateCache();
     return _send(() => _dio.put(path, data: data));
   }
 
   static Future<dynamic> delete(String path, {dynamic data}) async {
+    invalidateCache();
     return _send(() => _dio.delete(path, data: data));
   }
 
@@ -110,6 +203,7 @@ class ApiService {
     final formData = FormData.fromMap({
       field: await MultipartFile.fromFile(filePath),
     });
+    invalidateCache();
     return _send(() => _dio.post(path, data: formData));
   }
 
@@ -276,19 +370,19 @@ class ApiService {
   // ---------------- 工作台 ----------------
 
   /// 9 个键：today/month 汇总、低库存、最近出入库、鲜货提示等
-  static Future<Map<String, dynamic>> dashboard() async {
-    return Map<String, dynamic>.from(await get('/api/dashboard') as Map);
+  static Future<Map<String, dynamic>> dashboard({bool refresh = false}) async {
+    return Map<String, dynamic>.from(await get('/api/dashboard', refresh: refresh) as Map);
   }
 
   // ---------------- 商品 / 单位 ----------------
 
   /// 全量商品（含停用项，字段与后端 _to_dict 一致：last_in_* / stock_links / conversions 等）
-  static Future<List<dynamic>> products() async {
-    return await get('/api/products') as List<dynamic>;
+  static Future<List<dynamic>> products({bool refresh = false}) async {
+    return await get('/api/products', refresh: refresh) as List<dynamic>;
   }
 
-  static Future<List<dynamic>> stocks() async {
-    return await get('/api/stocks') as List<dynamic>;
+  static Future<List<dynamic>> stocks({bool refresh = false}) async {
+    return await get('/api/stocks', refresh: refresh) as List<dynamic>;
   }
 
   static Future<Map<String, dynamic>> createProduct(Map<String, dynamic> body) async {

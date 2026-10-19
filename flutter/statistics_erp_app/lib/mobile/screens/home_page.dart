@@ -35,10 +35,10 @@ class _MobileHomePageState extends State<MobileHomePage> {
     _load();
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool refresh = false}) async {
     setState(() => _loading = true);
     try {
-      final data = await ApiService.dashboard();
+      final data = await ApiService.dashboard(refresh: refresh);
       if (!mounted) return;
       setState(() {
         _today = data['today_summary'] ?? {};
@@ -76,9 +76,11 @@ class _MobileHomePageState extends State<MobileHomePage> {
     return MobilePage(
       title: '工作台',
       tabIndex: 0,
-      onRefresh: _load,
+      // 手动刷新要绕开工作台数据的短时缓存，否则刚在别的仓改完数字拉了也看不出变化
+      onRefresh: () => _load(refresh: true),
       actions: [
-        pageAction(Icons.refresh_rounded, _loading ? null : _load, tooltip: '刷新'),
+        pageAction(Icons.refresh_rounded, _loading ? null : () => _load(refresh: true),
+            tooltip: '刷新'),
         pageAction(Icons.person_outline, () => context.go('/mine'), tooltip: '我的'),
       ],
       body: CustomScrollView(

@@ -3,7 +3,9 @@ import '../mobile/widgets/parts.dart';
 import '../mobile/mobile_style.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 
+import '../providers/product_provider.dart';
 import '../services/api_service.dart';
 import '../models/product.dart';
 
@@ -540,38 +542,20 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
   String _searchKeyword = '';
   String _filterType = '';
   String _filterCategory = '';
-  List<Product> _products = [];
-  bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
-    _loadProducts();
+    // 商品表由 ProductProvider 统一持有：只有全 App 第一次要它时才真的走网络
+    context.read<ProductProvider>().ensureLoaded();
   }
 
-  Future<void> _loadProducts() async {
-    setState(() => _isLoading = true);
-    try {
-      final data = await ApiService.get('/api/products');
-      setState(() {
-        _products = (data as List)
-            .where((p) => p['is_active'] == true)
-            .where((p) => !['人工', '快递'].contains(p['category']))
-            .map((p) => Product.fromJson(p))
-            .toList();
-      });
-    } catch (e) {
-      // 忽略错误
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  List<Product> get _filteredProducts {
-    return _products.where((p) {
-      if (_searchKeyword.isNotEmpty &&
-          !p.name.toLowerCase().contains(_searchKeyword.toLowerCase()) &&
-          !p.category.toLowerCase().contains(_searchKeyword.toLowerCase())) {
+  List<Product> _visible(List<Product> source) {
+    final k = _searchKeyword.toLowerCase();
+    return source.where((p) {
+      if (k.isNotEmpty &&
+          !p.name.toLowerCase().contains(k) &&
+          !p.category.toLowerCase().contains(k)) {
         return false;
       }
       if (_filterType.isNotEmpty && p.productType != _filterType) return false;
@@ -580,12 +564,12 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
     }).toList();
   }
 
-  Set<String> get _categories {
-    return _products.map((p) => p.category).where((c) => c.isNotEmpty).toSet();
-  }
-
   @override
   Widget build(BuildContext context) {
+    final provider = context.watch<ProductProvider>();
+    final source = provider.getSaleProducts();
+    final shown = _visible(source);
+    final categories = source.map((p) => p.category).where((c) => c.isNotEmpty).toSet();
     return MobilePage(
       title: '选择销售商品',
       back: true,
@@ -611,7 +595,7 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
                 _filterChip('订单', 'order'),
                 _filterChip('库存', 'stock'),
                 const SizedBox(width: 8),
-                ..._categories.map((c) => Padding(
+                ...categories.map((c) => Padding(
                       padding: const EdgeInsets.only(right: 8),
                       child: FilterChip(
                         label: Text(c),
@@ -626,26 +610,32 @@ class _ProductPickerScreenState extends State<_ProductPickerScreen> {
           ),
           const Divider(),
           Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _filteredProducts.isEmpty
-                    ? const Center(child: Text('无匹配商品'))
-                    : ListView.builder(
-                        itemCount: _filteredProducts.length,
-                        itemBuilder: (context, index) {
-                          final p = _filteredProducts[index];
-                          return ListTile(
-                            title: Text(
-                              '[${p.productType == 'order' ? '订单' : '库存'}] ${p.name}',
-                            ),
-                            subtitle: Text(
-                              '${p.category.isEmpty ? '—' : p.category} · 单位 ${p.defaultUnit ?? p.baseUnit} · 库存 ${p.stock}',
-                            ),
-                            trailing: const Icon(Icons.chevron_right),
-                            onTap: () => Navigator.pop(context, p),
-                          );
-                        },
-                      ),
+            child: shown.isEmpty
+                ? Center(
+                    child: Text(
+                      provider.error != null
+                          ? '商品加载失败：${provider.error}'
+                          : provider.isLoading
+                              ? '加载中…'
+                              : '无匹配商品',
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: shown.length,
+                    itemBuilder: (context, index) {
+                      final p = shown[index];
+                      return ListTile(
+                        title: Text(
+                          '[${p.productType == 'order' ? '订单' : '库存'}] ${p.name}',
+                        ),
+                        subtitle: Text(
+                          '${p.category.isEmpty ? '—' : p.category} · 单位 ${p.defaultUnit ?? p.baseUnit} · 库存 ${p.stock}',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.pop(context, p),
+                      );
+                    },
+                  ),
           ),
         ],
       ),
