@@ -8,6 +8,7 @@ import '../../services/api_service.dart';
 import '../desktop_style.dart';
 import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';
+import '../widgets/out_batch_detail.dart';
 import '../widgets/ws_card.dart';
 
 /// 桌面端「出库 / 销售」，复刻 web #page-outbound（出库录单 + 出库记录 + 批量/聚水潭导入）。
@@ -866,65 +867,92 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
   }
 
   Future<void> _openDetail(_OutEntry e) {
+    if (e.isGroup) {
+      return desktopDialog(
+        context,
+        title: '出库批次明细 · ${e.importGroup}',
+        width: 1160,
+        maxHeight: 820,
+        builder: (ctx) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            OutBatchDetail(records: e.records, onOpenOrder: _openOrder),
+            const SizedBox(height: 14),
+            Align(
+              alignment: Alignment.centerRight,
+              child: DesktopButton(label: '关闭', onPressed: () => Navigator.of(ctx).pop()),
+            ),
+          ],
+        ),
+      );
+    }
+    return _openOrder(e.records.first);
+  }
+
+  /// 单张出库单的原行明细（批次聚合面板里点单号也走这里）
+  Future<void> _openOrder(Map<String, dynamic> o) {
     return desktopDialog(
       context,
-      title: e.isGroup ? '出库批次明细 · ${e.importGroup}' : '出库单明细 · ${e.code}',
+      title: '出库单明细 · ${wsS(o['code'])}',
       width: 980,
       maxHeight: 780,
       builder: (ctx) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final o in e.records)
-            WsCard(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
-              marginBottom: 12,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    '${wsS(o['code'])} · ${wsS(o['date'])} · ${wsS(o['customer'], fallback: '—')}'
-                    ' · 操作员 ${wsS(o['operator'], fallback: '—')}'
-                    ' · 实收 ${wsMoney(wsD(o['final_amount']))}'
-                    ' · ${wsS(o['pay_status'], fallback: 'paid') == 'paid' ? '已付款' : '待付款'}',
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 10),
-                  DesktopGrid(
-                    dense: true,
-                    cols: const <DesktopCol>[
-                      DesktopCol('商品', width: 240),
-                      DesktopCol('类型', width: 96, center: true),
-                      DesktopCol('数量', width: 120, right: true),
-                      DesktopCol('金额', width: 110, right: true),
-                      DesktopCol('成本', width: 110, right: true),
-                      DesktopCol('打包费', width: 96, right: true),
-                    ],
-                    rows: [
-                      for (final l in ((o['lines'] as List?) ?? const []))
-                        if (l is Map)
-                          DesktopRow(
-                            cells: [
-                              wsCell(
-                                '${wsS(l['product_name'])}${l['is_dropship'] == true ? '（代发）' : ''}',
-                                tip: wsS(l['spec']),
-                              ),
-                              l['line_type'] == 'sale'
-                                  ? const DesktopTag('销售', color: WsTokens.primary)
-                                  : const DesktopTag('包装消耗', color: DesktopTag.off),
-                              wsCell('${_q(wsD(l['quantity']))} ${wsS(l['unit'])}'),
-                              wsCell(wsMoney(wsD(l['amount']))),
-                              wsCell(wsMoney(wsD(l['cogs']))),
-                              wsCell(wsD(l['pack_fee']) > 0 ? wsMoney(wsD(l['pack_fee'])) : '—'),
-                            ],
-                          ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
+          _orderCard(o),
           Align(
             alignment: Alignment.centerRight,
             child: DesktopButton(label: '关闭', onPressed: () => Navigator.of(ctx).pop()),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _orderCard(Map<String, dynamic> o) {
+    return WsCard(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+      marginBottom: 12,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '${wsS(o['code'])} · ${wsS(o['date'])} · ${wsS(o['customer'], fallback: '—')}'
+            ' · 操作员 ${wsS(o['operator'], fallback: '—')}'
+            ' · 实收 ${wsMoney(wsD(o['final_amount']))}'
+            ' · ${wsS(o['pay_status'], fallback: 'paid') == 'paid' ? '已付款' : '待付款'}',
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 10),
+          DesktopGrid(
+            dense: true,
+            cols: const <DesktopCol>[
+              DesktopCol('商品', width: 240),
+              DesktopCol('类型', width: 96, center: true),
+              DesktopCol('数量', width: 120, right: true),
+              DesktopCol('金额', width: 110, right: true),
+              DesktopCol('成本', width: 110, right: true),
+              DesktopCol('打包费', width: 96, right: true),
+            ],
+            rows: [
+              for (final l in ((o['lines'] as List?) ?? const []))
+                if (l is Map)
+                  DesktopRow(
+                    cells: [
+                      wsCell(
+                        '${wsS(l['product_name'])}${l['is_dropship'] == true ? '（代发）' : ''}',
+                        tip: wsS(l['spec']),
+                      ),
+                      l['line_type'] == 'sale'
+                          ? const DesktopTag('销售', color: WsTokens.primary)
+                          : const DesktopTag('包装消耗', color: DesktopTag.off),
+                      wsCell('${_q(wsD(l['quantity']))} ${wsS(l['unit'])}'),
+                      wsCell(wsMoney(wsD(l['amount']))),
+                      wsCell(wsMoney(wsD(l['cogs']))),
+                      wsCell(wsD(l['pack_fee']) > 0 ? wsMoney(wsD(l['pack_fee'])) : '—'),
+                    ],
+                  ),
+            ],
           ),
         ],
       ),
@@ -1988,9 +2016,16 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
     for (final e in entries) {
       rows.add(_entryRow(e));
       if (e.isGroup && _expanded.contains(e.key)) {
-        for (final m in e.records) {
-          rows.add(_entryRow(_OutEntry.of(m), child: true));
-        }
+        rows.add(
+          DesktopRow(
+            tag: '${e.key}agg',
+            cells: const <Widget>[],
+            span: OutBatchDetail(
+              records: e.records,
+              onOpenOrder: _openOrder,
+            ),
+          ),
+        );
       }
     }
     final totalAmount = entries.fold<double>(0, (s, e) => s + e.amount);
@@ -2040,7 +2075,7 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
     );
   }
 
-  DesktopRow _entryRow(_OutEntry e, {bool child = false}) {
+  DesktopRow _entryRow(_OutEntry e) {
     final sale = e.saleLines;
     final names = sale.map((l) => wsS(l['product_name'])).where((n) => n.isNotEmpty).toSet().toList();
     final qtyText = sale.map((l) => '${_q(wsD(l['quantity']))}${wsS(l['unit'])}').take(3).join(' / ');
@@ -2058,9 +2093,9 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
       if (wsD(first['brush_adjust']) != 0) '刷单结算 ${wsMoney(wsD(first['brush_adjust']))}',
     ].join(' · ');
     return DesktopRow(
-      tag: child ? '${e.key}c' : e.key,
+      tag: e.key,
       dim: !paid,
-      onTap: e.isGroup && !child ? () => _toggleExpand(e.key) : () => _openDetail(e),
+      onTap: e.isGroup ? () => _toggleExpand(e.key) : () => _openDetail(e),
       cells: [
         Checkbox(
           value: allChecked,
@@ -2078,9 +2113,9 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
           children: [
             Flexible(
               child: wsCell(
-                child ? '└ ${e.code}' : (e.isGroup ? '▸ ${e.code}' : e.code),
-                bold: !child,
-                tip: e.importGroup.isEmpty ? null : '批次号 ${e.importGroup}',
+                e.isGroup ? '${_expanded.contains(e.key) ? '▾' : '▸'} ${e.code}' : e.code,
+                bold: true,
+                tip: e.importGroup.isEmpty ? null : '批次号 ${e.importGroup}（点击展开聚合明细）',
               ),
             ),
             if (e.hasDropship) ...[
@@ -2110,7 +2145,7 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
           spacing: 2,
           children: [
             DesktopLink('改', onPressed: () => _openEdit(e)),
-            DesktopLink('明细', onPressed: () => _openDetail(e)),
+            DesktopLink(e.isGroup ? '汇总' : '明细', onPressed: () => _openDetail(e)),
             DesktopLink(paid ? '转待付' : '标记已付', onPressed: () => _markPaid(e)),
             DesktopLink('删', color: WsTokens.red, onPressed: () => _deleteEntry(e)),
           ],

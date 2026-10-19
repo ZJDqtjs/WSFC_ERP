@@ -921,10 +921,15 @@ class DesktopRow {
     this.highlight = false,
     this.onTap,
     this.tag,
+    this.span,
   });
 
   /// 与 cols 等长；缺元素按空字符串渲染
   final List<Widget> cells;
+
+  /// 非空则整行合并成一块自定义面板（批次展开的聚合明细这类），
+  /// 不受 cols 宽度和行高约束，也不参与 hover。
+  final Widget? span;
 
   /// 灰行（已失效 / 已结清）
   final bool dim;
@@ -1051,6 +1056,16 @@ class _DesktopGridState extends State<DesktopGrid> {
 
     Widget bodyRow(DesktopRow r, int i) {
       final bool dark = wsIsDark(context);
+      if (r.span case final Widget panel) {
+        return Container(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 16),
+          decoration: BoxDecoration(
+            color: WsTokens.primary.withValues(alpha: dark ? 0.07 : 0.028),
+            border: Border(bottom: BorderSide(color: border)),
+          ),
+          child: panel,
+        );
+      }
       final bg = r.highlight
           ? WsTokens.primary.withValues(alpha: dark ? 0.2 : 0.09)
           : (_hovered.contains(i)
