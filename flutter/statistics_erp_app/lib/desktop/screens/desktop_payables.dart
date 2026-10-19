@@ -6,6 +6,7 @@ import '../desktop_style.dart';
 import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';
 import '../widgets/ws_card.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 桌面端「待付款账单」页：1:1 复刻 web `#page-payables`（统计卡 + 账单 / 代发两个页签）。
 ///
@@ -521,10 +522,10 @@ class _DesktopPayablesScreenState extends State<DesktopPayablesScreen> {
       actions: [
         DesktopButton(
           label: '其他开支',
-          icon: Icons.account_balance_outlined,
+          icon: SolarIconsOutline.banknote,
           onPressed: () => widget.onNavigate('/expenses'),
         ),
-        DesktopButton(label: '刷新', icon: Icons.refresh, onPressed: _busy ? null : _refresh),
+        DesktopButton(label: '刷新', icon: SolarIconsOutline.refresh, onPressed: _busy ? null : _refresh),
       ],
       body: ListView(
         padding: EdgeInsets.zero,
@@ -582,7 +583,7 @@ class _DesktopPayablesScreenState extends State<DesktopPayablesScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const WsCardHead(title: '待付款账单', icon: Icons.receipt_long_outlined),
+          const WsCardHead(title: '待付款账单', icon: SolarIconsOutline.billList),
           _hintText('入库 / 入仓 / 出库 / 其他开支 / 手动记账 里勾了「待付款」的单据，以及出库单里代发商品自动带出的'
               '「代发成本」，都汇总在这里；点「已支付」后按原日期纳入财务报表。'
               '上方统计卡是全部待结清，下方「合计」随日期 / 关键词筛选实时更新；已结清只载入最近 30 天'),
@@ -652,7 +653,7 @@ class _DesktopPayablesScreenState extends State<DesktopPayablesScreen> {
                   style: const TextStyle(fontSize: 12, color: WsTokens.mutedLight)),
               DesktopButton(
                 label: '批量标记已支付',
-                icon: Icons.check,
+                icon: SolarIconsOutline.checkCircle,
                 kind: DesktopButtonKind.success,
                 small: true,
                 onPressed: _busy ? null : () => _batchBills(true),
@@ -902,7 +903,7 @@ class _DesktopPayablesScreenState extends State<DesktopPayablesScreen> {
                   style: const TextStyle(fontSize: 12, color: WsTokens.mutedLight)),
               DesktopButton(
                 label: '批量标记已支付',
-                icon: Icons.check,
+                icon: SolarIconsOutline.checkCircle,
                 kind: DesktopButtonKind.success,
                 small: true,
                 onPressed: _busy ? null : () => _dsBatch(true),

@@ -13,6 +13,7 @@ import '../nav_model.dart';
 import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';
 import '../widgets/ws_card.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 「设置」页（web page-settings 六合一）：
 /// 商品资料备份 / 备份与恢复 / 批量导入 / 聚水潭关联 / 自动出库设置 / 模块显示。
@@ -141,7 +142,7 @@ Future<T?> _wsDialog<T>(
                     ),
                   ),
                   DesktopIconButton(
-                    icon: Icons.close,
+                    icon: SolarIconsOutline.closeCircle,
                     color: WsTokens.mutedLight,
                     tooltip: '关闭',
                     onPressed: () => Navigator.of(dialogContext).pop(),
@@ -500,19 +501,19 @@ class _PdataPanelState extends State<_PdataPanel> {
             children: [
               WsCardHead(
                 title: '商品资料备份（解耦维护）',
-                icon: Icons.backup_outlined,
+                icon: SolarIconsOutline.archive,
                 trailing: Wrap(
                   spacing: 10,
                   children: [
                     DesktopButton(
                       label: '一键导出到 json 目录',
-                      icon: Icons.save_outlined,
+                      icon: SolarIconsOutline.diskette,
                       kind: DesktopButtonKind.success,
                       onPressed: _busy ? null : _exportAll,
                     ),
                     DesktopButton(
                       label: '从 json 目录一键导入',
-                      icon: Icons.refresh,
+                      icon: SolarIconsOutline.refresh,
                       onPressed: _busy ? null : _importAll,
                     ),
                   ],
@@ -595,8 +596,8 @@ class _PdataPanelState extends State<_PdataPanel> {
                 trailing: Wrap(
                   spacing: 10,
                   children: [
-                    DesktopButton(label: '选择 json 文件', icon: Icons.upload_file, onPressed: _busy ? null : _uploadImport),
-                    DesktopButton(label: '刷新状态', icon: Icons.refresh, onPressed: _load),
+                    DesktopButton(label: '选择 json 文件', icon: SolarIconsOutline.uploadSquare, onPressed: _busy ? null : _uploadImport),
+                    DesktopButton(label: '刷新状态', icon: SolarIconsOutline.refresh, onPressed: _load),
                   ],
                 ),
               ),
@@ -843,14 +844,14 @@ class _BackupPanelState extends State<_BackupPanel> {
               children: [
                 WsCardHead(
                   title: '自动备份设置',
-                  icon: Icons.safety_check_outlined,
+                  icon: SolarIconsOutline.shieldCheck,
                   trailing: Wrap(
                     spacing: 10,
                     children: [
-                      DesktopButton(label: '保存设置', icon: Icons.save_outlined, onPressed: _busy ? null : _saveConfig),
+                      DesktopButton(label: '保存设置', icon: SolarIconsOutline.diskette, onPressed: _busy ? null : _saveConfig),
                       DesktopButton(
                         label: '立即备份',
-                        icon: Icons.save_outlined,
+                        icon: SolarIconsOutline.diskette,
                         kind: DesktopButtonKind.success,
                         onPressed: _busy ? null : _backupNow,
                       ),
@@ -929,7 +930,7 @@ class _BackupPanelState extends State<_BackupPanel> {
                                 hintText: '如 1.2.3.4:8080/cloudback',
                               ),
                             ),
-                            DesktopButton(label: '下载部署脚本', icon: Icons.save_outlined, onPressed: () => _script('deploy')),
+                            DesktopButton(label: '下载部署脚本', icon: SolarIconsOutline.diskette, onPressed: () => _script('deploy')),
                             DesktopButton(label: '下载停止脚本', onPressed: () => _script('stop')),
                           ],
                         ),
@@ -957,7 +958,7 @@ class _BackupPanelState extends State<_BackupPanel> {
               children: [
                 WsCardHead(
                   title: '备份列表',
-                  icon: Icons.folder_open_outlined,
+                  icon: SolarIconsOutline.folderOpen,
                   trailing: Text('恢复会用所选备份覆盖当前数据库，请谨慎操作',
                       style: TextStyle(fontSize: 12, color: dark ? WsTokens.mutedDark : WsTokens.mutedLight)),
                 ),
@@ -1169,13 +1170,13 @@ class _ImportPanelState extends State<_ImportPanel> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const WsCardHead(title: '导入模板下载', icon: Icons.description_outlined),
+              const WsCardHead(title: '导入模板下载', icon: SolarIconsOutline.documentText),
               Wrap(
                 spacing: 10,
                 children: [
-                  DesktopButton(label: '商品导入模板', icon: Icons.download_outlined, onPressed: () => _downloadTemplate('products', '商品导入模板.xlsx')),
-                  DesktopButton(label: '入库导入模板', icon: Icons.download_outlined, onPressed: () => _downloadTemplate('inbounds', '入库批量导入模板.xlsx')),
-                  DesktopButton(label: '出库导入模板', icon: Icons.download_outlined, onPressed: () => _downloadTemplate('outbounds', '出库批量导入模板.xlsx')),
+                  DesktopButton(label: '商品导入模板', icon: SolarIconsOutline.download, onPressed: () => _downloadTemplate('products', '商品导入模板.xlsx')),
+                  DesktopButton(label: '入库导入模板', icon: SolarIconsOutline.download, onPressed: () => _downloadTemplate('inbounds', '入库批量导入模板.xlsx')),
+                  DesktopButton(label: '出库导入模板', icon: SolarIconsOutline.download, onPressed: () => _downloadTemplate('outbounds', '出库批量导入模板.xlsx')),
                 ],
               ),
               const SizedBox(height: 10),
@@ -1192,7 +1193,7 @@ class _ImportPanelState extends State<_ImportPanel> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const WsCardHead(title: '商品批量导入', icon: Icons.upload_file_outlined),
+                    const WsCardHead(title: '商品批量导入', icon: SolarIconsOutline.uploadSquare),
                     _fileLine(_prodFile),
                     Wrap(
                       spacing: 10,
@@ -1213,7 +1214,7 @@ class _ImportPanelState extends State<_ImportPanel> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const WsCardHead(title: '入库批量导入', icon: Icons.upload_file_outlined),
+                    const WsCardHead(title: '入库批量导入', icon: SolarIconsOutline.uploadSquare),
                     const Text(
                       '按模板填写后上传，先解析预览（可勾选、改数量/单价/运费/装卸），确认后才真正入库并更新库存。'
                       '若商品类别配置了扣点，单价将按 原价×(1-扣点%) 自动折算。',
@@ -1248,7 +1249,7 @@ class _ImportPanelState extends State<_ImportPanel> {
             children: [
               WsCardHead(
                 title: '出库批量导入',
-                icon: Icons.upload_file_outlined,
+                icon: SolarIconsOutline.uploadSquare,
                 trailing: Text('同「单号」自动合并为一单，自动结转关联材料与费用',
                     style: TextStyle(fontSize: 12, color: dark ? WsTokens.mutedDark : WsTokens.mutedLight)),
               ),
@@ -1268,7 +1269,7 @@ class _ImportPanelState extends State<_ImportPanel> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const WsCardHead(title: '导入聚水潭出库单（自动结算）', icon: Icons.local_shipping_outlined),
+              const WsCardHead(title: '导入聚水潭出库单（自动结算）', icon: SolarIconsOutline.scooter),
               const Text(
                 '上传聚水潭导出的「销售出库单_*.xlsx」，自动识别商品并按件数×每件规格结算。'
                 '先解析预览，确认后才出库。「仓储方」为芳谊放单仓的订单，'
@@ -2664,7 +2665,7 @@ class _MappingPanelState extends State<_MappingPanel> {
                   children: [
                     DesktopButton(
                         label: _parseFile == null ? '选择出库单（xlsx）' : _parseFile!.name,
-                        icon: Icons.attach_file,
+                        icon: SolarIconsOutline.paperclip,
                         onPressed: _busy
                             ? null
                             : () async {
@@ -2699,7 +2700,7 @@ class _MappingPanelState extends State<_MappingPanel> {
                   children: [
                     DesktopButton(
                         label: _importFile == null ? '选择出库单（xlsx）' : _importFile!.name,
-                        icon: Icons.attach_file,
+                        icon: SolarIconsOutline.paperclip,
                         onPressed: _busy
                             ? null
                             : () async {
@@ -3023,10 +3024,10 @@ class _JstDateTimeBox extends StatelessWidget {
               if (!cleared)
                 GestureDetector(
                   onTap: () => onChanged(''),
-                  child: const Icon(Icons.close, size: 14, color: WsTokens.mutedLight),
+                  child: const Icon(SolarIconsOutline.closeCircle, size: 14, color: WsTokens.mutedLight),
                 )
               else
-                const Icon(Icons.schedule, size: 15, color: WsTokens.mutedLight),
+                const Icon(SolarIconsOutline.clockCircle, size: 15, color: WsTokens.mutedLight),
             ],
           ),
         ),
@@ -3492,7 +3493,7 @@ class _JstAutoPanelState extends State<_JstAutoPanel> {
         children: [
           WsCardHead(
             title: '自动出库设置',
-            icon: Icons.local_shipping_outlined,
+            icon: SolarIconsOutline.scooter,
             trailing: Text('设置按分仓隔离，当前分仓：$_whName',
                 style: const TextStyle(fontSize: 12, color: WsTokens.mutedLight)),
           ),
@@ -3604,7 +3605,7 @@ class _JstAutoPanelState extends State<_JstAutoPanel> {
             children: [
               DesktopButton(
                 label: '保存设置',
-                icon: Icons.save_outlined,
+                icon: SolarIconsOutline.diskette,
                 kind: DesktopButtonKind.success,
                 onPressed: _busy ? null : () => _save(),
               ),
@@ -3674,7 +3675,7 @@ class _JstAutoPanelState extends State<_JstAutoPanel> {
         children: [
           const WsCardHead(
             title: '本分仓的自动出库',
-            icon: Icons.schedule,
+            icon: SolarIconsOutline.clockCircle,
             trailing: Text('勾选要从哪些聚水潭分仓导出、导出哪个时间段、每天几点执行',
                 style: TextStyle(fontSize: 12, color: WsTokens.mutedLight)),
           ),
@@ -3834,7 +3835,7 @@ class _JstAutoPanelState extends State<_JstAutoPanel> {
             children: [
               DesktopButton(
                 label: '保存设置',
-                icon: Icons.save_outlined,
+                icon: SolarIconsOutline.diskette,
                 kind: DesktopButtonKind.success,
                 onPressed: _busy ? null : () => _save(),
               ),
@@ -3846,7 +3847,7 @@ class _JstAutoPanelState extends State<_JstAutoPanel> {
                 label: '只导出试跑（不建单）',
                 onPressed: _busy ? null : () => _run(true),
               ),
-              DesktopButton(label: '刷新状态', icon: Icons.refresh, onPressed: _refreshStatus),
+              DesktopButton(label: '刷新状态', icon: SolarIconsOutline.refresh, onPressed: _refreshStatus),
             ],
           ),
           _statusSection(),
@@ -3862,7 +3863,7 @@ class _JstAutoPanelState extends State<_JstAutoPanel> {
         children: [
           const WsCardHead(
             title: '待办处理',
-            icon: Icons.warning_amber_rounded,
+            icon: SolarIconsOutline.dangerTriangle,
             trailing: Text('商品资料待补全 / 需要验证码；本轮桌面端先支持「忽略」，补关联请到「聚水潭关联」页',
                 style: TextStyle(fontSize: 12, color: WsTokens.mutedLight)),
           ),
@@ -3924,8 +3925,8 @@ class _JstAutoPanelState extends State<_JstAutoPanel> {
         children: [
           WsCardHead(
             title: '执行记录',
-            icon: Icons.history,
-            trailing: DesktopButton(label: '刷新', icon: Icons.refresh, onPressed: _loadHistory),
+            icon: SolarIconsOutline.history,
+            trailing: DesktopButton(label: '刷新', icon: SolarIconsOutline.refresh, onPressed: _loadHistory),
           ),
           DesktopGrid(
             cols: const [
@@ -4054,8 +4055,8 @@ class _ModulesPanelState extends State<_ModulesPanel> {
             children: [
               WsCardHead(
                 title: '模块显示调整',
-                icon: Icons.view_sidebar_outlined,
-                trailing: DesktopButton(label: '恢复显示全部', icon: Icons.refresh, onPressed: _reset),
+                icon: SolarIconsOutline.sidebar,
+                trailing: DesktopButton(label: '恢复显示全部', icon: SolarIconsOutline.refresh, onPressed: _reset),
               ),
               const Text(
                 '勾选需要在左侧侧边栏显示的功能（如 入仓 / 鲜货现采 等）；'

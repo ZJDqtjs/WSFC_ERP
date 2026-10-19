@@ -6,6 +6,7 @@ import '../desktop_style.dart';
 import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';
 import '../widgets/ws_card.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 桌面端「一单多货」页：1:1 复刻 web `#page-packrules`。
 ///
@@ -509,10 +510,10 @@ class _DesktopPackRulesScreenState extends State<DesktopPackRulesScreen> {
       title: '一单多货（多货打包规则）',
       subtitle: '区别于「关联结算 / 人工」的一单一货；此处维护一张订单含多种商品时的合并打包规则（纸箱 + 人工）。',
       actions: [
-        DesktopButton(label: '刷新', icon: Icons.refresh, onPressed: _loading ? null : _load),
+        DesktopButton(label: '刷新', icon: SolarIconsOutline.refresh, onPressed: _loading ? null : _load),
         DesktopButton(
           label: '新增一单多货规则',
-          icon: Icons.add,
+          icon: SolarIconsOutline.plus,
           kind: DesktopButtonKind.primary,
           onPressed: _loading ? null : () => _openEditor(),
         ),

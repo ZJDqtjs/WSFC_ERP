@@ -6,6 +6,7 @@ import '../desktop_style.dart';
 import '../nav_model.dart';
 import 'desktop_motion.dart';
 import 'desktop_warehouse_switch.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 桌面底板的"极光"：静态渐变 + 几团品牌色光斑，给玻璃层东西可折射。
 /// 不参与逐帧动画，整块包在 RepaintBoundary 里，只在主题切换时重绘。
@@ -178,7 +179,7 @@ class _RailHead extends StatelessWidget {
             collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
         children: [
           const DesktopIconTile(
-            icon: Icons.insights_outlined,
+            icon: SolarIconsOutline.graphNewUp,
             colors: [WsTokens.brandTop, WsTokens.primary],
           ),
           if (!collapsed) ...[
@@ -206,8 +207,8 @@ class _RailHead extends StatelessWidget {
             iconSize: 17,
             visualDensity: VisualDensity.compact,
             icon: Icon(collapsed
-                ? Icons.keyboard_double_arrow_right
-                : Icons.keyboard_double_arrow_left),
+                ? SolarIconsOutline.doubleAltArrowRight
+                : SolarIconsOutline.doubleAltArrowLeft),
           ),
         ],
       ),
@@ -446,7 +447,7 @@ class _RailUser extends StatelessWidget {
           ],
           PopupMenuButton<String>(
             tooltip: '账户 / 分仓',
-            icon: const Icon(Icons.more_horiz, size: 18),
+            icon: const Icon(SolarIconsOutline.menuDots, size: 18),
             padding: EdgeInsets.zero,
             onSelected: (String action) async {
               switch (action) {

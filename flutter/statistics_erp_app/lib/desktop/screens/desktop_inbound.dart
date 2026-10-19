@@ -7,6 +7,7 @@ import '../desktop_style.dart';
 import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';
 import '../widgets/ws_card.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 桌面端「入库」页，1:1 复刻 web #page-inbound（web/static/index.html + app.js）。
 ///
@@ -1149,9 +1150,9 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
       subtitle: '按采购单位录入，一行 = 一张入库单；入库自动更新库存与批次成本。',
       headBottom: 14,
       actions: [
-        DesktopButton(label: 'Excel 导入', icon: Icons.table_view_outlined, onPressed: _openExcelImport),
-        DesktopButton(label: '模板下载', icon: Icons.download_outlined, onPressed: _downloadTemplate),
-        DesktopButton(label: '刷新', icon: Icons.refresh, onPressed: _refreshAll),
+        DesktopButton(label: 'Excel 导入', icon: SolarIconsOutline.fileText, onPressed: _openExcelImport),
+        DesktopButton(label: '模板下载', icon: SolarIconsOutline.download, onPressed: _downloadTemplate),
+        DesktopButton(label: '刷新', icon: SolarIconsOutline.refresh, onPressed: _refreshAll),
       ],
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1187,7 +1188,7 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
             children: [
               WsCardHead(
                 title: '新增入库单',
-                icon: Icons.download_outlined,
+                icon: SolarIconsOutline.download,
                 trailing: Text('一行 = 一张入库单 · 共 ${_rows.length} 行',
                     style: const TextStyle(fontSize: 12, color: WsTokens.mutedLight)),
               ),
@@ -1200,13 +1201,13 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
                 right: DesktopButton(
                   label: _submitting ? '提交中…' : '✓ 批量入库',
                   kind: DesktopButtonKind.success,
-                  icon: Icons.check,
+                  icon: SolarIconsOutline.checkCircle,
                   onPressed: _submitting ? null : _submitBatch,
                 ),
                 children: [
-                  DesktopButton(label: '＋ 加一行', icon: Icons.add, onPressed: _addRow),
-                  DesktopButton(label: '复制最后一行', icon: Icons.copy_all_outlined, onPressed: _duplicateLastRow),
-                  DesktopButton(label: '清空', icon: Icons.delete_sweep_outlined, onPressed: _clearRows),
+                  DesktopButton(label: '＋ 加一行', icon: SolarIconsOutline.plus, onPressed: _addRow),
+                  DesktopButton(label: '复制最后一行', icon: SolarIconsOutline.copy, onPressed: _duplicateLastRow),
+                  DesktopButton(label: '清空', icon: SolarIconsOutline.trashBinMinimalistic, onPressed: _clearRows),
                   const SizedBox(width: 6),
                   Text('没选商品或没填数量的行不会入库',
                       style: TextStyle(fontSize: 12, color: dark ? WsTokens.mutedDark : WsTokens.mutedLight)),
@@ -1267,7 +1268,7 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
                   DesktopButton(
                     label: _submitting ? '提交中…' : '✓ 批量入库',
                     kind: DesktopButtonKind.success,
-                    icon: Icons.check,
+                    icon: SolarIconsOutline.checkCircle,
                     width: 150,
                     onPressed: _submitting ? null : _submitBatch,
                   ),
@@ -1403,7 +1404,7 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
       ),
       DesktopTextField(controller: r.remark, width: 140, hintText: '可选'),
       DesktopIconButton(
-        icon: Icons.delete_outline,
+        icon: SolarIconsOutline.trashBinTrash,
         color: WsTokens.red,
         tooltip: '删除这一行',
         size: 28,
@@ -1432,7 +1433,7 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
             children: [
               WsCardHead(
                 title: '入库记录',
-                icon: Icons.history,
+                icon: SolarIconsOutline.history,
                 trailing: Text(
                   '共 ${rows.length} 条 · 货款 ${wsMoney(amount)} · 运费/装卸 ${wsMoney(freight + handling)}'
                   ' · 总计支出 ${wsMoney(total)}',
@@ -1485,7 +1486,7 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
                       onChanged: (v) => setState(() => _payFilter = v ?? ''),
                     ),
                   ),
-                  DesktopButton(label: '查询', icon: Icons.search, small: true, onPressed: _loadRecords),
+                  DesktopButton(label: '查询', icon: SolarIconsOutline.magnifier, small: true, onPressed: _loadRecords),
                 ],
               ),
               DesktopStateView(
@@ -1656,7 +1657,7 @@ class _LockedBox extends StatelessWidget {
               style: TextStyle(fontSize: 13, color: dark ? WsTokens.mutedDark : WsTokens.mutedLight),
             ),
           ),
-          const Icon(Icons.lock_outline, size: 13, color: WsTokens.mutedLight),
+          const Icon(SolarIconsOutline.lock, size: 13, color: WsTokens.mutedLight),
         ],
       ),
     );

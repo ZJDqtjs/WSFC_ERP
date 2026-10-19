@@ -4,6 +4,7 @@ import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
 import '../desktop_style.dart';
 import 'desktop_ui.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 「切换分仓」弹层（web openWarehouseModal / loadWarehouses / switchWarehouse /
 /// createWarehouse 的桌面复刻）。
@@ -151,7 +152,7 @@ class _WarehouseSwitchDialogState extends State<_WarehouseSwitchDialog> {
                         style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                   ),
                   DesktopIconButton(
-                    icon: Icons.close,
+                    icon: SolarIconsOutline.closeCircle,
                     color: WsTokens.mutedLight,
                     tooltip: '关闭',
                     onPressed: () => Navigator.of(context).pop(),
@@ -240,7 +241,7 @@ class _WarehouseSwitchDialogState extends State<_WarehouseSwitchDialog> {
                     children: [
                       DesktopButton(
                         label: '＋ 新建并切换',
-                        icon: Icons.add,
+                        icon: SolarIconsOutline.plus,
                         kind: DesktopButtonKind.success,
                         onPressed: _busy ? null : _create,
                       ),

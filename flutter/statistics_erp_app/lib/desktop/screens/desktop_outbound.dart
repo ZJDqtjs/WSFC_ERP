@@ -10,6 +10,7 @@ import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';
 import '../widgets/out_batch_detail.dart';
 import '../widgets/ws_card.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 桌面端「出库 / 销售」，复刻 web #page-outbound（出库录单 + 出库记录 + 批量/聚水潭导入）。
 ///
@@ -1133,7 +1134,7 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
                         DesktopButton(
                           small: true,
                           label: '去新增商品：$c',
-                          icon: Icons.add,
+                          icon: SolarIconsOutline.plus,
                           onPressed: () {
                             Navigator.of(ctx).pop();
                             widget.onNavigate('/products');
@@ -1414,20 +1415,20 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
       title: '出库 / 销售',
       subtitle: '卖商品自动结转关联包装材料与打包费；成本按先进先出（FIFO）结转，待付款单先进「待付款账单」',
       actions: [
-        DesktopButton(label: '导入模板下载', icon: Icons.download_outlined, onPressed: _downloadTemplate),
+        DesktopButton(label: '导入模板下载', icon: SolarIconsOutline.download, onPressed: _downloadTemplate),
         DesktopButton(
           label: 'Excel 导入',
-          icon: Icons.table_view_outlined,
+          icon: SolarIconsOutline.fileText,
           onPressed: () => _openBatchImport(jushuitan: false),
         ),
         DesktopButton(
           label: '聚水潭出库单导入',
-          icon: Icons.cloud_download_outlined,
+          icon: SolarIconsOutline.cloudDownload,
           onPressed: () => _openBatchImport(jushuitan: true),
         ),
         DesktopButton(
           label: '刷新',
-          icon: Icons.refresh,
+          icon: SolarIconsOutline.refresh,
           onPressed: () {
             _loadMeta();
             _loadRecords();
@@ -1463,7 +1464,7 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const WsCardHead(title: '新增出库 / 销售单', icon: Icons.upload_outlined),
+                const WsCardHead(title: '新增出库 / 销售单', icon: SolarIconsOutline.upload),
                 Wrap(
                   spacing: 18,
                   runSpacing: 12,
@@ -1517,7 +1518,7 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const WsCardHead(title: '销售商品行', icon: Icons.list_alt),
+                const WsCardHead(title: '销售商品行', icon: SolarIconsOutline.listCheck),
                 DesktopGrid(
                   cols: const <DesktopCol>[
                     DesktopCol('商品', width: 280),
@@ -1536,10 +1537,10 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
                   runSpacing: 10,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    DesktopButton(label: '＋ 添加商品行', icon: Icons.add, onPressed: _addRow),
+                    DesktopButton(label: '＋ 添加商品行', icon: SolarIconsOutline.plus, onPressed: _addRow),
                     DesktopButton(
                       label: _previewing ? '结算中…' : '🔍 预览结算',
-                      icon: Icons.calculate_outlined,
+                      icon: SolarIconsOutline.calculator,
                       kind: DesktopButtonKind.primary,
                       onPressed: _previewing || _submitting ? null : _doPreview,
                     ),
@@ -1583,7 +1584,7 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
                 children: [
                   WsCardHead(
                     title: '关联结算（包装材料 / 固定费用）',
-                    icon: Icons.inventory_outlined,
+                    icon: SolarIconsOutline.layers,
                     trailing: DesktopButton(label: '清除预览', small: true, onPressed: _clearPreview),
                   ),
                   for (final w in _warnings)
@@ -1617,7 +1618,7 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
                       DesktopButton(
                         label: '＋ 添加关联物品',
                         small: true,
-                        icon: Icons.add,
+                        icon: SolarIconsOutline.plus,
                         onPressed: _addManualPackItem,
                       ),
                       const SizedBox(
@@ -1740,7 +1741,7 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
                     children: [
                       DesktopButton(
                         label: _submitting ? '出库中…' : '✓ 确认出库',
-                        icon: Icons.check,
+                        icon: SolarIconsOutline.checkCircle,
                         kind: DesktopButtonKind.success,
                         onPressed: _submitting ? null : _submit,
                       ),
@@ -1960,7 +1961,7 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
                 onChanged: (v) => setState(() => _payFilter = v ?? ''),
               ),
             ),
-            DesktopButton(label: '筛选', icon: Icons.search, onPressed: _loadRecords),
+            DesktopButton(label: '筛选', icon: SolarIconsOutline.magnifier, onPressed: _loadRecords),
           ],
         ),
         if (!_summaryView)
@@ -1986,7 +1987,7 @@ class _DesktopOutboundState extends State<DesktopOutboundScreen> {
                   const SizedBox(width: 12),
                   DesktopButton(
                     label: '批量删除',
-                    icon: Icons.delete_outline,
+                    icon: SolarIconsOutline.trashBinTrash,
                     kind: DesktopButtonKind.danger,
                     small: true,
                     onPressed: _batchDelete,

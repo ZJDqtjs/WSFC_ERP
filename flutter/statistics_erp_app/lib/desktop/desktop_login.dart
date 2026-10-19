@@ -8,6 +8,7 @@ import '../providers/auth_provider.dart';
 import 'desktop_style.dart';
 import 'widgets/desktop_motion.dart';
 import 'widgets/desktop_rail.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 enum _LoginMode { privateKey, password }
 
@@ -127,7 +128,7 @@ class _DesktopLoginState extends State<DesktopLogin> {
                   const Row(
                     children: [
                       DesktopIconTile(
-                        icon: Icons.insights_outlined,
+                        icon: SolarIconsOutline.graphNewUp,
                         colors: [WsTokens.brandTop, WsTokens.primary],
                       ),
                       SizedBox(width: 10),
@@ -165,7 +166,7 @@ class _DesktopLoginState extends State<DesktopLogin> {
                     controller: _username,
                     decoration: const InputDecoration(
                       hintText: '用户名',
-                      prefixIcon: Icon(Icons.person_outline, size: 18),
+                      prefixIcon: Icon(SolarIconsOutline.user, size: 18),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -177,7 +178,7 @@ class _DesktopLoginState extends State<DesktopLogin> {
                       obscureText: true,
                       decoration: const InputDecoration(
                         hintText: '密码（仅 Go 试验后端）',
-                        prefixIcon: Icon(Icons.lock_outline, size: 18),
+                        prefixIcon: Icon(SolarIconsOutline.lock, size: 18),
                       ),
                     ),
                   if (_error != null) ...[
@@ -235,7 +236,7 @@ class _DesktopLoginState extends State<DesktopLogin> {
               child: const Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.folder_open, size: 15),
+                  Icon(SolarIconsOutline.folderOpen, size: 15),
                   SizedBox(width: 8),
                   Text('选择私钥文件'),
                 ],
@@ -341,7 +342,7 @@ class _ErrorBar extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.error_outline, size: 16, color: WsTokens.red),
+          const Icon(SolarIconsOutline.dangerCircle, size: 16, color: WsTokens.red),
           const SizedBox(width: 8),
           Expanded(
             child: Text(message,

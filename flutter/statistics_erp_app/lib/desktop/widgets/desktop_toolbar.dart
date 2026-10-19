@@ -5,6 +5,7 @@ import '../../providers/auth_provider.dart';
 import '../desktop_style.dart';
 import 'desktop_motion.dart';
 import 'desktop_warehouse_switch.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 顶部玻璃工具条：全局只放"我在哪个仓 / 我在哪一页 / 我要找什么"。
 /// 页面自己的动作按钮仍在页面头里，工具条不参与业务。
@@ -45,7 +46,7 @@ class DesktopToolbar extends StatelessWidget {
               IconButton(
                 tooltip: '刷新本页数据',
                 onPressed: onRefresh,
-                icon: const Icon(Icons.refresh_rounded, size: 19),
+                icon: const Icon(SolarIconsOutline.refresh, size: 19),
               ),
             ],
             const SizedBox(width: 4),
@@ -82,7 +83,7 @@ class _WarehouseChip extends StatelessWidget {
                   color: WsTokens.primary.withValues(alpha: 0.14),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(Icons.warehouse_outlined,
+                child: const Icon(SolarIconsOutline.buildings,
                     size: 15, color: WsTokens.primary),
               ),
               const SizedBox(width: 8),
@@ -97,7 +98,7 @@ class _WarehouseChip extends StatelessWidget {
                       color: WsTokens.inkOf(context)),
                 ),
               ),
-              Icon(Icons.unfold_more,
+              Icon(SolarIconsOutline.transferVertical,
                   size: 15, color: WsTokens.inkOf(context, level: 3)),
             ],
           ),
@@ -176,7 +177,7 @@ class _SearchBoxState extends State<_SearchBox> {
           ),
           child: Row(
             children: [
-              Icon(Icons.search_rounded, size: 17, color: muted),
+              Icon(SolarIconsOutline.magnifier, size: 17, color: muted),
               const SizedBox(width: 8),
               Expanded(
                 child: Text('搜索页面 / 商品',

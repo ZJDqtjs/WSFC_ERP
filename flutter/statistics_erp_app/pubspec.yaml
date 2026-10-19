@@ -30,6 +30,7 @@ dependencies:
   image_picker: ^1.0.7
   file_picker: ^8.1.7
   liquid_glass_widgets: ^1.13.0
+  solar_icons: ^0.2.0
 
 dev_dependencies:
   flutter_test:

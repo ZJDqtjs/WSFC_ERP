@@ -6,6 +6,7 @@ import '../desktop_style.dart';
 import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';
 import '../widgets/ws_card.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 桌面端「快递费」页：1:1 复刻 web `#page-express`。
 ///
@@ -158,7 +159,7 @@ class _DesktopExpressScreenState extends State<DesktopExpressScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const WsCardHead(title: '计费方式', icon: Icons.local_shipping_outlined),
+                    const WsCardHead(title: '计费方式', icon: SolarIconsOutline.scooter),
                     Wrap(
                       spacing: 20,
                       runSpacing: 16,
@@ -219,12 +220,12 @@ class _DesktopExpressScreenState extends State<DesktopExpressScreen> {
                       children: [
                         DesktopButton(
                           label: '保存计费规则',
-                          icon: Icons.save_outlined,
+                          icon: SolarIconsOutline.diskette,
                           kind: DesktopButtonKind.success,
                           onPressed: _save,
                         ),
                         const SizedBox(width: 10),
-                        DesktopButton(label: '刷新', icon: Icons.refresh, onPressed: _load),
+                        DesktopButton(label: '刷新', icon: SolarIconsOutline.refresh, onPressed: _load),
                         if (_info.isNotEmpty) ...[
                           const SizedBox(width: 14),
                           Text(_info,
@@ -255,7 +256,7 @@ class _DesktopExpressScreenState extends State<DesktopExpressScreen> {
                   children: [
                     WsCardHead(
                       title: '计费预览（毛重 = 净重 + 0.1kg 箱重）',
-                      icon: Icons.preview_outlined,
+                      icon: SolarIconsOutline.eye,
                       trailing: Text(
                         _mode == 'flat' ? '每 kg 单价' : (_roundUp ? '首重+续重（续重整 kg 向上取整）' : '首重+续重（续重按实际差值）'),
                         style: const TextStyle(fontSize: 12, color: WsTokens.mutedLight),

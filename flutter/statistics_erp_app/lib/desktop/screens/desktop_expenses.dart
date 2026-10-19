@@ -6,6 +6,7 @@ import '../desktop_style.dart';
 import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';
 import '../widgets/ws_card.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 桌面端「其他开支」页：1:1 复刻 web `#page-otherexp`（登记区 / 统计区 / 开支明细）。
 ///
@@ -492,13 +493,13 @@ class _DesktopExpensesScreenState extends State<DesktopExpensesScreen> {
       actions: <Widget>[
         DesktopButton(
           label: '待付款账单',
-          icon: Icons.credit_card_outlined,
+          icon: SolarIconsOutline.card,
           onPressed: () => widget.onNavigate('/payables'),
         ),
-        DesktopButton(label: '刷新', icon: Icons.refresh, onPressed: _loading ? null : _load),
+        DesktopButton(label: '刷新', icon: SolarIconsOutline.refresh, onPressed: _loading ? null : _load),
         DesktopButton(
           label: _editId == null ? '记一笔' : '取消编辑',
-          icon: _editId == null ? Icons.add : Icons.close,
+          icon: _editId == null ? SolarIconsOutline.plus : SolarIconsOutline.closeCircle,
           kind: DesktopButtonKind.primary,
           onPressed: () => setState(() {
             _formOpen = true;
@@ -534,11 +535,11 @@ class _DesktopExpensesScreenState extends State<DesktopExpensesScreen> {
         children: <Widget>[
           WsCardHead(
             title: '登记其他开支${editing ? '（修改中）' : ''}',
-            icon: Icons.account_balance_wallet_outlined,
+            icon: SolarIconsOutline.wallet2,
             trailing: DesktopButton(
               label: _formOpen ? '收起' : '展开登记',
               small: true,
-              icon: _formOpen ? Icons.expand_less : Icons.expand_more,
+              icon: _formOpen ? SolarIconsOutline.altArrowUp : SolarIconsOutline.altArrowDown,
               onPressed: () => setState(() => _formOpen = !_formOpen),
             ),
           ),
@@ -570,7 +571,7 @@ class _DesktopExpensesScreenState extends State<DesktopExpensesScreen> {
                           hintText: '如：网线费 / 安装费',
                           width: 220,
                           suffix: DesktopIconButton(
-                            icon: Icons.keyboard_arrow_down,
+                            icon: SolarIconsOutline.altArrowDown,
                             tooltip: '选择费用类型',
                             onPressed: _pickCategory,
                           ),
@@ -649,14 +650,14 @@ class _DesktopExpensesScreenState extends State<DesktopExpensesScreen> {
               children: <Widget>[
                 DesktopButton(
                   label: _saving ? '保存中…' : (editing ? '保存修改' : '保存开支'),
-                  icon: Icons.check,
+                  icon: SolarIconsOutline.checkCircle,
                   kind: DesktopButtonKind.success,
                   onPressed: _saving ? null : _submit,
                 ),
                 const SizedBox(width: 10),
                 DesktopButton(
                   label: '清空',
-                  icon: Icons.clear,
+                  icon: SolarIconsOutline.closeSquare,
                   onPressed: _saving ? null : () => setState(_resetForm),
                 ),
               ],
@@ -683,7 +684,7 @@ class _DesktopExpensesScreenState extends State<DesktopExpensesScreen> {
           label: '止',
           child: DesktopDateField(value: _dateTo, onChanged: (v) => setState(() => _dateTo = v)),
         ),
-        DesktopButton(label: '查询', icon: Icons.search, small: true, onPressed: _loading ? null : _load),
+        DesktopButton(label: '查询', icon: SolarIconsOutline.magnifier, small: true, onPressed: _loading ? null : _load),
         DesktopButton(label: '今天', small: true, onPressed: () => _quick('today')),
         DesktopButton(label: '近7天', small: true, onPressed: () => _quick('week')),
         DesktopButton(label: '本月', small: true, onPressed: () => _quick('month')),
@@ -743,7 +744,7 @@ class _DesktopExpensesScreenState extends State<DesktopExpensesScreen> {
         children: <Widget>[
           WsCardHead(
             title: '开支统计',
-            icon: Icons.bar_chart_outlined,
+            icon: SolarIconsOutline.chart,
             trailing: Text('区间 ${wsI(_stats['range_count'])} 笔 · 合计 ${wsMoney(wsD(_stats['range_total']))}',
                 style: const TextStyle(fontSize: 12, color: WsTokens.mutedLight)),
           ),
@@ -897,11 +898,11 @@ class _DesktopExpensesScreenState extends State<DesktopExpensesScreen> {
         children: <Widget>[
           WsCardHead(
             title: '开支明细',
-            icon: Icons.receipt_long_outlined,
+            icon: SolarIconsOutline.billList,
             trailing: DesktopButton(
               label: '刷新',
               small: true,
-              icon: Icons.refresh,
+              icon: SolarIconsOutline.refresh,
               onPressed: _loading ? null : _load,
             ),
           ),
@@ -935,7 +936,7 @@ class _DesktopExpensesScreenState extends State<DesktopExpensesScreen> {
               DesktopButton(
                 label: '清空筛选',
                 small: true,
-                icon: Icons.filter_alt_off_outlined,
+                icon: SolarIconsOutline.filters,
                 onPressed: (_category.isEmpty && _keyword.isEmpty)
                     ? null
                     : () => setState(() {
@@ -1049,7 +1050,7 @@ class _DesktopExpensesScreenState extends State<DesktopExpensesScreen> {
           Padding(
             padding: const EdgeInsets.only(left: 2),
             child: DesktopIconButton(
-              icon: a.isImage ? Icons.image_outlined : Icons.attach_file,
+              icon: a.isImage ? SolarIconsOutline.gallery : SolarIconsOutline.paperclip,
               size: 22,
               tooltip: a.isImage ? '图片：${a.name}（点击预览）' : '附件：${a.name}（点击复制完整链接）',
               onPressed: () => _previewAttachment(a.url, a.name),

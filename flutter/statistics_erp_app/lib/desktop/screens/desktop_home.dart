@@ -8,6 +8,7 @@ import '../desktop_style.dart';
 import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';
 import '../widgets/ws_card.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 桌面工作台：一屏看清「今天怎么样 / 哪里要处理 / 我要去哪」。
 ///
@@ -138,19 +139,19 @@ class _DesktopHomeState extends State<DesktopHome> {
               children: [
                 DesktopButton(
                   label: '快速入库',
-                  icon: Icons.download_outlined,
+                  icon: SolarIconsOutline.download,
                   kind: DesktopButtonKind.normal,
                   onPressed: () => widget.onNavigate('/inbound'),
                 ),
                 DesktopButton(
                   label: '快速出库',
-                  icon: Icons.upload_outlined,
+                  icon: SolarIconsOutline.upload,
                   kind: DesktopButtonKind.primary,
                   onPressed: () => widget.onNavigate('/outbound'),
                 ),
                 DesktopButton(
                   label: '新增商品',
-                  icon: Icons.add,
+                  icon: SolarIconsOutline.plus,
                   onPressed: () => widget.onNavigate('/products'),
                 ),
               ],
@@ -172,7 +173,7 @@ class _DesktopHomeState extends State<DesktopHome> {
               label: '今日收入',
               value: _money.format(_today['revenue'] ?? 0),
               sub: '${_today['orders'] ?? 0} 单 · 今日出库',
-              icon: Icons.trending_up,
+              icon: SolarIconsOutline.graphUp,
               color: WsTokens.primary,
               onTap: () => widget.onNavigate('/outbound'),
             ),
@@ -183,7 +184,7 @@ class _DesktopHomeState extends State<DesktopHome> {
               label: '本月毛利',
               value: _money.format(_month['gross'] ?? 0),
               sub: '净利 ${_money.format(_month['net'] ?? 0)}',
-              icon: Icons.savings_outlined,
+              icon: SolarIconsOutline.moneyBag,
               color: WsTokens.green,
               onTap: () => widget.onNavigate('/report'),
             ),
@@ -194,7 +195,7 @@ class _DesktopHomeState extends State<DesktopHome> {
               label: '库存总值',
               value: _money.format(_stockValue),
               sub: '$_productCount 种商品',
-              icon: Icons.inventory_2_outlined,
+              icon: SolarIconsOutline.boxMinimalistic,
               color: WsTokens.brandTop,
               onTap: () => widget.onNavigate('/stock'),
             ),
@@ -205,7 +206,7 @@ class _DesktopHomeState extends State<DesktopHome> {
               label: '缺货预警',
               value: '$lowCount',
               sub: lowCount == 0 ? '库存都够' : '需要补货',
-              icon: Icons.warning_amber,
+              icon: SolarIconsOutline.dangerTriangle,
               color: lowCount == 0 ? WsTokens.green : WsTokens.red,
               onTap: () => widget.onNavigate('/stock'),
             ),
@@ -236,7 +237,7 @@ class _DesktopHomeState extends State<DesktopHome> {
         children: [
           WsCardHead(
             title: '缺货预警',
-            icon: Icons.warning_amber,
+            icon: SolarIconsOutline.dangerTriangle,
             trailing: TextButton(
               onPressed: () => widget.onNavigate('/stock'),
               child: const Text('查看全部库存 →', style: TextStyle(fontSize: 12.5)),
@@ -256,7 +257,7 @@ class _DesktopHomeState extends State<DesktopHome> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const WsCardHead(title: '常用入口', icon: Icons.apps),
+          const WsCardHead(title: '常用入口', icon: SolarIconsOutline.widget),
           LayoutBuilder(
             builder: (BuildContext context, BoxConstraints c) {
               final double itemW = (c.maxWidth - 20) / 3;
@@ -264,12 +265,12 @@ class _DesktopHomeState extends State<DesktopHome> {
                 spacing: 10,
                 runSpacing: 10,
                 children: [
-                  _quickEntry('商品资料', Icons.tag_outlined, '/products'),
-                  _quickEntry('待付款', Icons.credit_card_outlined, '/payables'),
-                  _quickEntry('其他开支', Icons.account_balance_outlined, '/expenses'),
-                  _quickEntry('财务流水', Icons.payments_outlined, '/finance'),
-                  _quickEntry('鲜货现采', Icons.shopping_cart_outlined, '/fresh'),
-                  _quickEntry('入仓登记', Icons.storefront_outlined, '/warehouse-in'),
+                  _quickEntry('商品资料', SolarIconsOutline.tag, '/products'),
+                  _quickEntry('待付款', SolarIconsOutline.card, '/payables'),
+                  _quickEntry('其他开支', SolarIconsOutline.banknote, '/expenses'),
+                  _quickEntry('财务流水', SolarIconsOutline.wallet, '/finance'),
+                  _quickEntry('鲜货现采', SolarIconsOutline.cart, '/fresh'),
+                  _quickEntry('入仓登记', SolarIconsOutline.buildings, '/warehouse-in'),
                 ]
                     .map((Widget w) => SizedBox(width: itemW, height: 74, child: w))
                     .toList(),
@@ -298,7 +299,7 @@ class _DesktopHomeState extends State<DesktopHome> {
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
         child: Row(
           children: [
-            const Icon(Icons.error_outline, size: 14, color: WsTokens.red),
+            const Icon(SolarIconsOutline.dangerCircle, size: 14, color: WsTokens.red),
             const SizedBox(width: 10),
             Expanded(
               child: Text(p['name'] ?? '',

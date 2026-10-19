@@ -4,15 +4,18 @@
 //   dart run tool/gen_icons.dart
 //
 // 源图 <repo>/capacitor/.../mipmap-xxxhdpi/ic_launcher_foreground.png 是一个「双色蓝几何 mark」，
-// 但上面烘焙了一层白色斜网格水印，且 mark 只占画布 ~45%，直接铺白底会又小又淡。
-// 所以这里不按颜色合成，而是先把 mark 的字形（高饱和蓝像素）抠成掩膜、补掉被网格切断的洞，
-// 再用「白 + 72% 白」两档重绘，放到品牌蓝渐变底上并放大到安全区。
+// 但上面烘焙了一层白色斜网格水印，且 mark 只占画布 ~45%。
+// 所以这里先把 mark 的字形（高饱和蓝像素）抠成掩膜、补掉被网格切断的洞，
+// 并保留每个像素的原始蓝色（连续渐变），按两种配色重绘：
+//   - 安卓 / Windows 桌面：白底 + 蓝色 mark（原版配色）
+//   - web 目录（flutter web、老 web 的 brand-dot）：蓝渐变底 + 白色 mark
 //
 // 产物：
 //   - Android  mipmap-*/ic_launcher.png + ic_launcher_round.png + ic_launcher_foreground.png
-//              + mipmap-anydpi-v26/*.xml + drawable/ic_launcher_background.xml
-//   - Web      web/favicon.png + web/icons/Icon-192/512.png + Icon-maskable-192/512.png
-//   - Windows  windows/runner/resources/app_icon.ico (16..256 多尺寸，圆角)
+//              + mipmap-anydpi-v26/*.xml + drawable/ic_launcher_background.xml（白底）
+//   - Web      web/favicon.png + web/icons/Icon-192/512.png + Icon-maskable-192/512.png（蓝底白 X）
+//   - 老 Web   <repo>/web/static/brand-icon.png（蓝底白 X，侧边栏 brand-dot 用）
+//   - Windows  windows/runner/resources/app_icon.ico (16..256 多尺寸，圆角，白底蓝 X)
 
 import 'dart:io';
 import 'dart:typed_data';
@@ -34,10 +37,11 @@ const double kInkMin = 0.90;
 const double kInkMax = 1.00;
 
 class Glyph {
-  Glyph(this.mask, this.ink, this.w, this.h, this.box);
+  Glyph(this.mask, this.ink, this.rgb, this.w, this.h, this.box);
 
   final Uint8List mask; // 0 = 背景，255 = mark
-  final Uint8List ink; // mark 内的亮度映射 0..255
+  final Uint8List ink; // mark 内的亮度映射 0..255（白 X 模式用）
+  final Uint8List rgb; // mark 像素的原始颜色，3 字节/像素（蓝 X 模式用）
   final int w;
   final int h;
   final List<int> box; // x0,y0,x1,y1
@@ -51,6 +55,7 @@ Glyph extractGlyph(img.Image src) {
   final w = src.width, h = src.height;
   final mask = Uint8List(w * h);
   final ink = Uint8List(w * h);
+  final rgb = Uint8List(w * h * 3);
   final lum = List<int>.filled(w * h, 0);
   final samples = <int>[];
 
@@ -65,6 +70,9 @@ Glyph extractGlyph(img.Image src) {
         lum[i] = l;
         samples.add(l);
         mask[i] = 255;
+        rgb[i * 3] = p.r.toInt();
+        rgb[i * 3 + 1] = p.g.toInt();
+        rgb[i * 3 + 2] = p.b.toInt();
       }
     }
     i++;
@@ -90,13 +98,13 @@ Glyph extractGlyph(img.Image src) {
     }
   }
 
-  _fillHoles(mask, ink, w, h);
-  return Glyph(mask, ink, w, h, [x0, y0, x1, y1]);
+  _fillHoles(mask, ink, rgb, w, h);
+  return Glyph(mask, ink, rgb, w, h, [x0, y0, x1, y1]);
 }
 
 /// 网格水印把 mark 切成若干条白缝。做法：从画布边缘漫填「非 mark」区域，
 /// 漫填不到的非 mark 像素就是缝；再用多源 BFS 用最近的 mark 像素把缝染回去。
-void _fillHoles(Uint8List mask, Uint8List ink, int w, int h) {
+void _fillHoles(Uint8List mask, Uint8List ink, Uint8List rgb, int w, int h) {
   final outside = Uint8List(w * h);
   final queue = <int>[];
   void seed(int k) {
@@ -155,6 +163,9 @@ void _fillHoles(Uint8List mask, Uint8List ink, int w, int h) {
           dist[n] = step + 1;
           mask[n] = 255;
           ink[n] = ink[k];
+          rgb[n * 3] = rgb[k * 3];
+          rgb[n * 3 + 1] = rgb[k * 3 + 1];
+          rgb[n * 3 + 2] = rgb[k * 3 + 2];
           remaining.remove(n);
           next.add(n);
         }
@@ -166,10 +177,12 @@ void _fillHoles(Uint8List mask, Uint8List ink, int w, int h) {
 }
 
 /// 把字形按 glyphRatio 缩放后画到 kMaster 画布上；gradientBg=false 时输出透明底前景。
+/// blueInk=true：白底（或透明底）+ mark 原始蓝色；false：品牌蓝渐变底 + 白色 mark。
 img.Image render(
     {required Glyph glyph,
     required double glyphRatio,
     required bool gradientBg,
+    bool blueInk = false,
     int size = kMaster}) {
   final canvas = img.Image(width: size, height: size, numChannels: 4);
   final radius = size * 0.22;
@@ -177,6 +190,10 @@ img.Image render(
   if (gradientBg) {
     for (var y = 0; y < size; y++) {
       for (var x = 0; x < size; x++) {
+        if (blueInk) {
+          canvas.setPixelRgba(x, y, 255, 255, 255, 255);
+          continue;
+        }
         final t = (x + y) / (2 * (size - 1));
         final r = (kBgTop[0] + (kBgBottom[0] - kBgTop[0]) * t).round();
         final gg = (kBgTop[1] + (kBgBottom[1] - kBgTop[1]) * t).round();
@@ -196,11 +213,37 @@ img.Image render(
   // 二值掩膜三次插值后直接当 alpha → 边缘自带抗锯齿；墨色用连续亮度，避免分档硬边
   final mask = img.Image(width: bw, height: bh, numChannels: 4);
   final tone = img.Image(width: bw, height: bh, numChannels: 4);
+  // 蓝 X 模式下掩膜外若填黑色，cubic 插值会在 mark 边缘带出黑边 → 用 mark 平均色垫底
+  var avgR = 0, avgG = 0, avgB = 0, avgN = 0;
+  if (blueInk) {
+    for (var k = 0; k < glyph.mask.length; k++) {
+      if (glyph.mask[k] != 0) {
+        avgR += glyph.rgb[k * 3];
+        avgG += glyph.rgb[k * 3 + 1];
+        avgB += glyph.rgb[k * 3 + 2];
+        avgN++;
+      }
+    }
+    avgR = avgN == 0 ? 82 : avgR ~/ avgN;
+    avgG = avgN == 0 ? 175 : avgG ~/ avgN;
+    avgB = avgN == 0 ? 255 : avgB ~/ avgN;
+  }
   for (var y = 0; y < bh; y++) {
     for (var x = 0; x < bw; x++) {
       final on = glyph.at(bx0 + x, by0 + y);
       mask.setPixelRgba(x, y, on, 0, 0, 255);
-      tone.setPixelRgba(x, y, on == 0 ? 0 : glyph.inkAt(bx0 + x, by0 + y), 0, 0, 255);
+      if (blueInk) {
+        final k = ((by0 + y) * glyph.w + bx0 + x) * 3;
+        tone.setPixelRgba(
+            x,
+            y,
+            on == 0 ? avgR : glyph.rgb[k],
+            on == 0 ? avgG : glyph.rgb[k + 1],
+            on == 0 ? avgB : glyph.rgb[k + 2],
+            255);
+      } else {
+        tone.setPixelRgba(x, y, on == 0 ? 0 : glyph.inkAt(bx0 + x, by0 + y), 0, 0, 255);
+      }
     }
   }
   final maskBig =
@@ -212,9 +255,28 @@ img.Image render(
     for (var x = 0; x < gw; x++) {
       final a = maskBig.getPixel(x, y).r.toInt();
       if (a < 8) continue;
-      final toneW = toneBig.getPixel(x, y).r.toInt() / 255.0;
       final px = ox + x, py = oy + y;
       if (px < 0 || py < 0 || px >= size || py >= size) continue;
+      final tp = toneBig.getPixel(x, y);
+      if (blueInk) {
+        // 原始蓝色直接作为墨色，掩膜 alpha 决定边缘过渡
+        if (!gradientBg) {
+          canvas.setPixelRgba(px, py, tp.r.toInt(), tp.g.toInt(), tp.b.toInt(), a);
+          continue;
+        }
+        final bg = canvas.getPixel(px, py);
+        final t = a / 255.0;
+        canvas.setPixelRgba(
+          px,
+          py,
+          (bg.r + (tp.r - bg.r) * t).round(),
+          (bg.g + (tp.g - bg.g) * t).round(),
+          (bg.b + (tp.b - bg.b) * t).round(),
+          255,
+        );
+        continue;
+      }
+      final toneW = tp.r.toInt() / 255.0;
       final ink = kInkMin + (kInkMax - kInkMin) * toneW;
       final wgt = (a / 255.0) * ink;
       if (!gradientBg) {
@@ -335,11 +397,14 @@ void main() {
   stdout.writeln('字形包围盒 ${glyph.box}，已抠除网格水印并补缝');
 
   // 方形（web/旧版 launcher）与自适应前景：mark 占比不同，前景要留蒙版余量
-  final square = render(glyph: glyph, glyphRatio: 0.62, gradientBg: true);
-  final adaptiveFg = render(glyph: glyph, glyphRatio: 0.44, gradientBg: false);
+  // 安卓/Windows：白底蓝 X（原版配色）；web 目录：蓝渐变底白 X
+  final squareBlueBg = render(glyph: glyph, glyphRatio: 0.62, gradientBg: true);
+  final squareWhiteBg =
+      render(glyph: glyph, glyphRatio: 0.62, gradientBg: true, blueInk: true);
+  final adaptiveFg = render(glyph: glyph, glyphRatio: 0.44, gradientBg: false, blueInk: true);
   final maskable = render(glyph: glyph, glyphRatio: 0.50, gradientBg: true);
-  final round = circleMask(square);
-  final icoMaster = roundCorners(square, 0.22);
+  final round = circleMask(squareWhiteBg);
+  final icoMaster = roundCorners(squareWhiteBg, 0.22);
 
   // ---- Android ----
   final androidRes = '${_projRoot.path}/android/app/src/main/res';
@@ -350,11 +415,11 @@ void main() {
     'xxhdpi': 144,
     'xxxhdpi': 192,
   };
-  stdout.writeln('\n[Android]');
+  stdout.writeln('\n[Android] 白底蓝 X');
   androidDensity.forEach((dpi, px) {
-    _writePng('$androidRes/mipmap-$dpi/ic_launcher.png', _down(square, px));
+    _writePng('$androidRes/mipmap-$dpi/ic_launcher.png', _down(squareWhiteBg, px));
     _writePng('$androidRes/mipmap-$dpi/ic_launcher_round.png', _down(round, px));
-    // 自适应前景：透明底，108dp 画布
+    // 自适应前景：透明底蓝色 mark，配纯白背景层
     _writePng('$androidRes/mipmap-$dpi/ic_launcher_foreground.png',
         _down(adaptiveFg, (px * 108 / 48).round()));
   });
@@ -373,22 +438,18 @@ void main() {
   File('${drawable.path}/ic_launcher_background.xml').writeAsStringSync('''<?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <gradient
-        android:type="linear"
-        android:angle="315"
-        android:startColor="#FF${_hex(kBgTop)}"
-        android:endColor="#FF${_hex(kBgBottom)}" />
+    <solid android:color="#FFFFFFFF" />
 </shape>
 ''');
   final staleColor = File('$androidRes/values/ic_launcher_background.xml');
   if (staleColor.existsSync()) staleColor.deleteSync();
   stdout.writeln('  XML  adaptive-icon + drawable/ic_launcher_background.xml');
 
-  // ---- Web ----
-  stdout.writeln('\n[Web]');
+  // ---- Web（蓝底白 X）----
+  stdout.writeln('\n[Web] 蓝底白 X');
   final webDir = '${_projRoot.path}/web';
-  _writePng('$webDir/favicon.png', _down(square, 48));
-  _writePng('$webDir/icons/Icon-192.png', _down(square, 192));
+  _writePng('$webDir/favicon.png', _down(squareBlueBg, 48));
+  _writePng('$webDir/icons/Icon-192.png', _down(squareBlueBg, 192));
   // 512 比 432 源还大，直接从字形掩膜按 512 原生渲染，避免把 432 位图放大
   _writePng('$webDir/icons/Icon-512.png',
       render(glyph: glyph, glyphRatio: 0.62, gradientBg: true, size: 512));
@@ -396,8 +457,13 @@ void main() {
   _writePng('$webDir/icons/Icon-maskable-512.png',
       render(glyph: glyph, glyphRatio: 0.50, gradientBg: true, size: 512));
 
+  // ---- 老 Web 前端 brand-dot ----
+  _writePng(
+      '${_repoRoot.path}/web/static/brand-icon.png',
+      render(glyph: glyph, glyphRatio: 0.62, gradientBg: true, size: 256));
+
   // ---- Windows ----
-  stdout.writeln('\n[Windows]');
+  stdout.writeln('\n[Windows] 白底蓝 X');
   final icoSizes = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256];
   _writeIco('${_projRoot.path}/windows/runner/resources/app_icon.ico', {
     for (final s in icoSizes) s: _down(icoMaster, s),
@@ -405,6 +471,3 @@ void main() {
 
   stdout.writeln('\n完成：三端图标已按 432 源统一下采样生成。');
 }
-
-String _hex(List<int> rgb) =>
-    rgb.map((c) => c.toRadixString(16).padLeft(2, '0').toUpperCase()).join();

@@ -8,6 +8,7 @@ import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';
 import '../widgets/ws_card.dart';
 import 'desktop_report_parts.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 桌面端「财务报表」：1:1 复刻 web `#page-report`，含四个分区
 /// （汇总 / 支出 / 商品 / 流水），「财务流水」作为第 4 个分区并入本页。
@@ -384,13 +385,13 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
       actions: [
         DesktopButton(
           label: '记账',
-          icon: Icons.add,
+          icon: SolarIconsOutline.plus,
           kind: DesktopButtonKind.primary,
           onPressed: _loading ? null : _openFinanceDialog,
         ),
         DesktopButton(
           label: '刷新',
-          icon: Icons.refresh,
+          icon: SolarIconsOutline.refresh,
           onPressed: _loading ? null : _load,
         ),
       ],
@@ -482,7 +483,7 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
                 ],
               ),
             ),
-            DesktopButton(label: '查询', icon: Icons.search, kind: DesktopButtonKind.primary, onPressed: _load),
+            DesktopButton(label: '查询', icon: SolarIconsOutline.magnifier, kind: DesktopButtonKind.primary, onPressed: _load),
             DesktopButton(label: '今天', small: true, onPressed: () => _quickRange('today')),
             DesktopButton(label: '本月', small: true, onPressed: () => _quickRange('month')),
             DesktopButton(label: '全部', small: true, onPressed: () => _quickRange('all')),
@@ -717,7 +718,7 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
         children: [
           WsCardHead(
             title: '销售成本构成',
-            icon: Icons.donut_small_outlined,
+            icon: SolarIconsOutline.donut,
             trailing: total == 0
                 ? null
                 : Text(
@@ -821,7 +822,7 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
         children: [
           WsCardHead(
             title: '各分仓收入 / 支出 / 利润',
-            icon: Icons.warehouse_outlined,
+            icon: SolarIconsOutline.buildings,
             trailing: Text(hint, style: const TextStyle(fontSize: 12, color: WsTokens.mutedLight)),
           ),
           if (bad.isNotEmpty)
@@ -939,7 +940,7 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
             children: [
               WsCardHead(
                 title: '支出汇总',
-                icon: Icons.payments_outlined,
+                icon: SolarIconsOutline.wallet,
                 trailing: Row(
                   children: [
                     Text(feeHint, style: const TextStyle(fontSize: 12, color: WsTokens.mutedLight)),
@@ -1199,7 +1200,7 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
         children: [
           WsCardHead(
             title: '支出统计',
-            icon: Icons.bar_chart_outlined,
+            icon: SolarIconsOutline.chart,
             trailing: DesktopTabs(
               small: true,
               items: const ['按日', '按月'],
@@ -1380,7 +1381,7 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
         children: [
           const WsCardHead(
             title: '支出明细（逐笔）',
-            icon: Icons.receipt_long_outlined,
+            icon: SolarIconsOutline.billList,
             trailing: Text('采购 / 其他开支 / 手工记账 / 刷单成本逐条列出，合计与「支出合计」一致',
                 style: TextStyle(fontSize: 12, color: WsTokens.mutedLight)),
           ),
@@ -1589,7 +1590,7 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
         children: [
           WsCardHead(
             title: '商品销售明细',
-            icon: Icons.shopping_basket_outlined,
+            icon: SolarIconsOutline.bag,
             trailing: Row(
               children: [
                 DesktopTextField(
@@ -1779,7 +1780,7 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
         children: [
           WsCardHead(
             title: '出库明细：每天 × 每种规格卖了多少单',
-            icon: Icons.calendar_view_day_outlined,
+            icon: SolarIconsOutline.calendarMinimalistic,
             trailing: Row(
               children: [
                 Text(hint, style: const TextStyle(fontSize: 12, color: WsTokens.mutedLight)),
@@ -1872,10 +1873,10 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
             children: [
               WsCardHead(
                 title: '财务流水',
-                icon: Icons.swap_horiz_outlined,
+                icon: SolarIconsOutline.transferHorizontal,
                 trailing: DesktopButton(
                   label: '＋ 手动记账',
-                  icon: Icons.add,
+                  icon: SolarIconsOutline.plus,
                   small: true,
                   onPressed: _openFinanceDialog,
                 ),

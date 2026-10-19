@@ -6,6 +6,7 @@ import '../desktop_style.dart';
 import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';
 import '../widgets/ws_card.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 桌面端「库存管理」，1:1 复刻 web #page-stock 的四个分区：
 /// 库存总览 / 库存流水 / 盘点记录 / 工作量统计。
@@ -473,10 +474,10 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
       subtitle: '分仓「${widget.auth.warehouseName.isEmpty ? '当前分仓' : widget.auth.warehouseName}」'
           '的库存总览、出入库流水、盘点记录与工作量统计；数量与成本都按商品默认单位展示',
       actions: [
-        DesktopButton(label: '刷新', icon: Icons.refresh, onPressed: _reloadCurrent),
+        DesktopButton(label: '刷新', icon: SolarIconsOutline.refresh, onPressed: _reloadCurrent),
         DesktopButton(
           label: '盘点调整',
-          icon: Icons.edit_note,
+          icon: SolarIconsOutline.pen,
           kind: DesktopButtonKind.primary,
           onPressed: _openAdjust,
         ),
@@ -547,7 +548,7 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         DesktopFilterBar(
-          right: DesktopButton(label: '盘点调整', icon: Icons.edit_note, small: true, onPressed: _openAdjust),
+          right: DesktopButton(label: '盘点调整', icon: SolarIconsOutline.pen, small: true, onPressed: _openAdjust),
           children: [
             DesktopLabeled(
               label: '分类',
@@ -631,7 +632,7 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
                       children: [
                         const WsCardHead(
                           title: '库存明细',
-                          icon: Icons.inventory_2_outlined,
+                          icon: SolarIconsOutline.boxMinimalistic,
                           trailing: Text('点击任意一行查看商品库存详情',
                               style: TextStyle(fontSize: 11.5, color: WsTokens.mutedLight)),
                         ),
@@ -764,14 +765,14 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
       padding: const EdgeInsets.symmetric(vertical: 26),
       child: Column(
         children: [
-          const Icon(Icons.inbox_outlined, size: 30, color: WsTokens.mutedLight),
+          const Icon(SolarIconsOutline.inbox, size: 30, color: WsTokens.mutedLight),
           const SizedBox(height: 10),
           Text(text, style: const TextStyle(fontSize: 13, color: WsTokens.mutedLight)),
           if (onGoProducts) ...[
             const SizedBox(height: 10),
             DesktopButton(
                 label: '去商品管理',
-                icon: Icons.tag_outlined,
+                icon: SolarIconsOutline.tag,
                 onPressed: () => widget.onNavigate('/products')),
           ],
         ],
@@ -858,7 +859,7 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
             ),
             DesktopButton(
               label: '查询',
-              icon: Icons.search,
+              icon: SolarIconsOutline.magnifier,
               kind: DesktopButtonKind.primary,
               onPressed: () {
                 _mvKeyword = _mvKwCtl.text.trim();
@@ -908,7 +909,7 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
                       children: [
                         WsCardHead(
                           title: '流水明细',
-                          icon: Icons.swap_vert,
+                          icon: SolarIconsOutline.transferVertical,
                           trailing: Text(
                             '第 ${_mvTotal == 0 ? 0 : _mvOffset + 1}–${_mvOffset.clamp(0, _mvTotal) + _mvRows.length} 条，'
                             '共 $_mvTotal 条${_mvMergedFlag ? '（出库已合并）' : ''} · 点表头在服务端重排',
@@ -1062,7 +1063,7 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
         children: [
           WsCardHead(
             title: '库存变动趋势',
-            icon: Icons.bar_chart,
+            icon: SolarIconsOutline.chart,
             trailing: Text('$from ~ $to · 只统计真实库存进出',
                 style: const TextStyle(fontSize: 11.5, color: WsTokens.mutedLight)),
           ),
@@ -1183,7 +1184,7 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
       children: [
         DesktopFilterBar(
           right: DesktopButton(
-              label: '新增盘点', icon: Icons.add, kind: DesktopButtonKind.success, onPressed: () => _openAdjust()),
+              label: '新增盘点', icon: SolarIconsOutline.plus, kind: DesktopButtonKind.success, onPressed: () => _openAdjust()),
           children: [
             DesktopLabeled(
               label: '关键字',
@@ -1198,7 +1199,7 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
             DesktopDateField(value: _adjFrom, width: 132, onChanged: (v) => setState(() => _adjFrom = v)),
             const Text('-', style: TextStyle(fontSize: 12.5, color: WsTokens.mutedLight)),
             DesktopDateField(value: _adjTo, width: 132, onChanged: (v) => setState(() => _adjTo = v)),
-            DesktopButton(label: '查询', icon: Icons.search, kind: DesktopButtonKind.primary, onPressed: _loadAdjustments),
+            DesktopButton(label: '查询', icon: SolarIconsOutline.magnifier, kind: DesktopButtonKind.primary, onPressed: _loadAdjustments),
             Text('共 ${rows.length} 组（一次盘点算一组，关键字在本页面过滤）',
                 style: const TextStyle(fontSize: 12, color: WsTokens.mutedLight)),
           ],
@@ -1218,7 +1219,7 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const WsCardHead(title: '盘点调整记录', icon: Icons.fact_check_outlined),
+                        const WsCardHead(title: '盘点调整记录', icon: SolarIconsOutline.clipboardCheck),
                         const DesktopNotice(
                           '一次盘点可能同时写入 库存变动 + 均价重估 + 成本单价 三条流水，这里按分组号（gid）合并成一行；'
                           '「删除回退」会整组撤销，同时回退库存、平均成本与成本单价。',
@@ -1416,7 +1417,7 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
             DesktopDateField(value: _wlTo, width: 140, onChanged: (v) => setState(() => _wlTo = v)),
             DesktopButton(
                 label: '查询',
-                icon: Icons.search,
+                icon: SolarIconsOutline.magnifier,
                 kind: DesktopButtonKind.primary,
                 onPressed: () {
                   setState(() => _wlLoaded = false);
@@ -1494,7 +1495,7 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
                       children: [
                         WsCardHead(
                           title: '按日工作量',
-                          icon: Icons.bar_chart,
+                          icon: SolarIconsOutline.chart,
                           trailing: Text('绿柱=当天完成的人工工作量（单位：单）${byDate.length > recent.length ? ' · 仅显示最近 ${recent.length} 天' : ''}',
                               style: const TextStyle(fontSize: 11.5, color: WsTokens.mutedLight)),
                         ),
@@ -1528,7 +1529,7 @@ class _DesktopStockScreenState extends State<DesktopStockScreen> {
                       children: [
                         const WsCardHead(
                           title: '按工种汇总',
-                          icon: Icons.groups_outlined,
+                          icon: SolarIconsOutline.usersGroupRounded,
                           trailing: Text('工作量条：绿=各工种相对量（以最大值为满格）',
                               style: TextStyle(fontSize: 11.5, color: WsTokens.mutedLight)),
                         ),
@@ -1681,7 +1682,7 @@ class _StockDetailState extends State<_StockDetail> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const WsCardHead(title: '基本信息', icon: Icons.info_outline),
+        const WsCardHead(title: '基本信息', icon: SolarIconsOutline.infoCircle),
         Wrap(
           spacing: 26,
           runSpacing: 8,
@@ -1701,7 +1702,7 @@ class _StockDetailState extends State<_StockDetail> {
         const SizedBox(height: 16),
         const WsCardHead(
             title: '换算关系',
-            icon: Icons.swap_horiz,
+            icon: SolarIconsOutline.transferHorizontal,
             trailing: Text('1 个大单位 = 系数 × 基础单位',
                 style: TextStyle(fontSize: 11.5, color: WsTokens.mutedLight))),
         if (conv.isEmpty)
@@ -1737,7 +1738,7 @@ class _StockDetailState extends State<_StockDetail> {
         const SizedBox(height: 16),
         const WsCardHead(
           title: '最近 $_recent 条库存流水',
-          icon: Icons.history,
+          icon: SolarIconsOutline.history,
           trailing: Text('流水金额按真实进出记账，均价/成本调整金额为增量',
               style: TextStyle(fontSize: 11.5, color: WsTokens.mutedLight)),
         ),
@@ -1775,7 +1776,7 @@ class _StockDetailState extends State<_StockDetail> {
           children: [
             DesktopLink('查看全部流水', onPressed: widget.onMovements),
             const Spacer(),
-            DesktopButton(label: '盘点调整', icon: Icons.edit_note, small: true, onPressed: widget.onAdjust),
+            DesktopButton(label: '盘点调整', icon: SolarIconsOutline.pen, small: true, onPressed: widget.onAdjust),
           ],
         ),
       ],
@@ -2090,7 +2091,7 @@ class _AdjustFormState extends State<_AdjustForm> {
             DesktopButton(
               label: _busy ? '提交中…' : '确认调整',
               kind: DesktopButtonKind.primary,
-              icon: Icons.check,
+              icon: SolarIconsOutline.checkCircle,
               onPressed: _busy ? null : _submit,
             ),
           ],

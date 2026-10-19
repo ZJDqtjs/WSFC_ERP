@@ -10,6 +10,7 @@ import '../desktop_style.dart';
 import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';
 import '../widgets/ws_card.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 桌面端「数据工具 · 鲜货」页，复刻 web `#page-fresh`（鲜货现采）+ `#page-fresh-in`（鲜货入库二级页）。
 ///
@@ -583,7 +584,7 @@ class _DesktopFreshScreenState extends State<DesktopFreshScreen> {
         ),
         child: Row(
           children: [
-            Icon(on ? Icons.check_circle : Icons.radio_button_unchecked,
+            Icon(on ? SolarIconsOutline.checkCircle : SolarIconsOutline.minusCircle,
                 size: 15, color: on ? WsTokens.primary : WsTokens.mutedLight),
             const SizedBox(width: 8),
             Expanded(child: Text(label, style: const TextStyle(fontSize: 12.5))),
@@ -614,21 +615,21 @@ class _DesktopFreshScreenState extends State<DesktopFreshScreen> {
           ),
           Expanded(child: Text(label, style: const TextStyle(fontSize: 12.5))),
           DesktopIconButton(
-            icon: Icons.arrow_upward,
+            icon: SolarIconsOutline.arrowUp,
             tooltip: '上移',
             size: 26,
             onPressed: index == 0 ? null : onUp,
           ),
           const SizedBox(width: 4),
           DesktopIconButton(
-            icon: Icons.arrow_downward,
+            icon: SolarIconsOutline.arrowDown,
             tooltip: '下移',
             size: 26,
             onPressed: index == total - 1 ? null : onDown,
           ),
           const SizedBox(width: 4),
           DesktopIconButton(
-            icon: Icons.close,
+            icon: SolarIconsOutline.closeCircle,
             tooltip: '移除',
             size: 26,
             color: WsTokens.red,
@@ -954,12 +955,12 @@ class _DesktopFreshScreenState extends State<DesktopFreshScreen> {
           '鲜货入库只列清单里挑过的商品，填数量即可逐行生成入库单。',
       actions: <Widget>[
         DesktopButton(
-            label: '刷新', icon: Icons.refresh, onPressed: _loading ? null : () => _load(silent: true)),
-        DesktopButton(label: '管理展示商品', icon: Icons.tune, onPressed: _openFreshConfig),
+            label: '刷新', icon: SolarIconsOutline.refresh, onPressed: _loading ? null : () => _load(silent: true)),
+        DesktopButton(label: '管理展示商品', icon: SolarIconsOutline.sliderHorizontal, onPressed: _openFreshConfig),
         if (_tab == 0)
           DesktopButton(
             label: _planning ? '⏳ 演算中…' : '导入今日订单',
-            icon: Icons.file_download_outlined,
+            icon: SolarIconsOutline.fileDownload,
             kind: DesktopButtonKind.success,
             onPressed: _planning ? null : _importPlan,
           )
@@ -1047,7 +1048,7 @@ class _DesktopFreshScreenState extends State<DesktopFreshScreen> {
             children: [
               WsCardHead(
                 title: '鲜货现采',
-                icon: Icons.eco_outlined,
+                icon: SolarIconsOutline.leaf,
                 trailing: Text('${items.length} 个鲜货商品',
                     style: const TextStyle(fontSize: 12.5, color: WsTokens.mutedLight)),
               ),
@@ -1189,7 +1190,7 @@ class _DesktopFreshScreenState extends State<DesktopFreshScreen> {
             children: [
               WsCardHead(
                 title: '鲜货入库',
-                icon: Icons.local_florist_outlined,
+                icon: SolarIconsOutline.cartPlus,
                 trailing: Text('${_rows.length} 个商品在展示清单里',
                     style: const TextStyle(fontSize: 12.5, color: WsTokens.mutedLight)),
               ),
@@ -1250,7 +1251,7 @@ class _DesktopFreshScreenState extends State<DesktopFreshScreen> {
                   const SizedBox(width: 16),
                   DesktopButton(
                     label: _submitLabel,
-                    icon: Icons.check,
+                    icon: SolarIconsOutline.checkCircle,
                     kind: DesktopButtonKind.success,
                     onPressed: _submitting ? null : () => _submitFin(),
                   ),
@@ -1327,7 +1328,7 @@ class _DesktopFreshScreenState extends State<DesktopFreshScreen> {
                     fontSize: 13, color: dark ? WsTokens.textDark : WsTokens.textLight),
               ),
             ),
-            const Icon(Icons.lock_outline, size: 14, color: WsTokens.mutedLight),
+            const Icon(SolarIconsOutline.lock, size: 14, color: WsTokens.mutedLight),
           ],
         ),
       ),

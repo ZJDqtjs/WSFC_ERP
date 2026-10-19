@@ -25,6 +25,7 @@ import 'widgets/desktop_rail.dart';
 import 'widgets/desktop_toolbar.dart';
 import 'widgets/desktop_warehouse_switch.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 桌面主壳：极光底板 + 左侧玻璃导航条 + 顶部玻璃工具条 + 内容区。
 ///
@@ -291,7 +292,7 @@ class _PlaceholderPage extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.add_box_outlined,
+          const Icon(SolarIconsOutline.addSquare,
               size: 40, color: WsTokens.mutedLight),
           const SizedBox(height: 14),
           Text('$title · 桌面版待移植',

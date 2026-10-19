@@ -7,6 +7,7 @@ import '../desktop_style.dart';
 import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';
 import '../widgets/ws_card.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 桌面端「入仓」页：1:1 复刻 web `#page-warehouse-in`（入仓品资料 + 入仓记录）
 /// 与二级页 `#page-wingroup`（导入批次折叠明细）两块内容。
@@ -989,7 +990,7 @@ class _DesktopWarehouseInScreenState extends State<DesktopWarehouseInScreen> {
               const SizedBox(height: 4),
               WsCardHead(
                 title: '随货包材（关联结算）',
-                icon: Icons.inventory_2_outlined,
+                icon: SolarIconsOutline.boxMinimalistic,
                 trailing: DesktopLink(
                   '＋ 添加',
                   onPressed: () => setDialogState(() => draft.packs.add(_PackRow())),
@@ -1463,7 +1464,7 @@ class _DesktopWarehouseInScreenState extends State<DesktopWarehouseInScreen> {
                   }),
                 ),
                 const SizedBox(width: 10),
-                DesktopButton(label: '刷新', icon: Icons.refresh, small: true, onPressed: _loadIns),
+                DesktopButton(label: '刷新', icon: SolarIconsOutline.refresh, small: true, onPressed: _loadIns),
               ],
             ),
             children: [
@@ -1479,7 +1480,7 @@ class _DesktopWarehouseInScreenState extends State<DesktopWarehouseInScreen> {
                   onSubmitted: (_) => _loadIns(),
                 ),
               ),
-              DesktopButton(label: '筛选', icon: Icons.filter_alt_outlined, small: true, onPressed: _loadIns),
+              DesktopButton(label: '筛选', icon: SolarIconsOutline.filter, small: true, onPressed: _loadIns),
               DesktopButton(
                 label: '本月',
                 small: true,
@@ -1527,7 +1528,7 @@ class _DesktopWarehouseInScreenState extends State<DesktopWarehouseInScreen> {
                 const SizedBox(width: 10),
                 DesktopButton(
                   label: '批量删除',
-                  icon: Icons.delete_outline,
+                  icon: SolarIconsOutline.trashBinTrash,
                   kind: DesktopButtonKind.danger,
                   small: true,
                   onPressed: _batchDelete,
@@ -1654,9 +1655,9 @@ class _DesktopWarehouseInScreenState extends State<DesktopWarehouseInScreen> {
           right: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              DesktopButton(label: '新增入仓品', icon: Icons.add, kind: DesktopButtonKind.success, small: true, onPressed: () => _openWProductForm()),
+              DesktopButton(label: '新增入仓品', icon: SolarIconsOutline.plus, kind: DesktopButtonKind.success, small: true, onPressed: () => _openWProductForm()),
               const SizedBox(width: 10),
-              DesktopButton(label: '刷新', icon: Icons.refresh, small: true, onPressed: _loadWProducts),
+              DesktopButton(label: '刷新', icon: SolarIconsOutline.refresh, small: true, onPressed: _loadWProducts),
             ],
           ),
           children: [
@@ -1704,7 +1705,7 @@ class _DesktopWarehouseInScreenState extends State<DesktopWarehouseInScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const WsCardHead(title: '入仓口径（成本与毛利）', icon: Icons.functions),
+                const WsCardHead(title: '入仓口径（成本与毛利）', icon: SolarIconsOutline.chart_2),
                 _formulaRow(
                   '收入',
                   '数量 × 采购单价 ×（1 − 入仓扣点%）',
@@ -1741,7 +1742,7 @@ class _DesktopWarehouseInScreenState extends State<DesktopWarehouseInScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const WsCardHead(title: '当前分仓与本页合计', icon: Icons.storefront_outlined),
+                const WsCardHead(title: '当前分仓与本页合计', icon: SolarIconsOutline.buildings),
                 _formulaRow('分仓', widget.auth.warehouseName.isEmpty ? widget.auth.warehouseKey : widget.auth.warehouseName),
                 _formulaRow('入仓品扣点', _pct(_deduction), note: 'GET /api/warehouse-in/deduction'),
                 _formulaRow(
@@ -1799,8 +1800,8 @@ class _DesktopWarehouseInScreenState extends State<DesktopWarehouseInScreen> {
       subtitle: '按「袋」采购的备货商品（半加工等）入仓台账：收入 = 数量 × 采购价 ×（1 − 扣点%），'
           '成本按关联库存商品或手填代发成本，随货包材按 FIFO 结转并扣减库存',
       actions: [
-        DesktopButton(label: '导入$_autoSheet', icon: Icons.download_outlined, onPressed: _openImport),
-        DesktopButton(label: '手动入仓', icon: Icons.add, kind: DesktopButtonKind.primary, onPressed: () => _openInboundForm()),
+        DesktopButton(label: '导入$_autoSheet', icon: SolarIconsOutline.download, onPressed: _openImport),
+        DesktopButton(label: '手动入仓', icon: SolarIconsOutline.plus, kind: DesktopButtonKind.primary, onPressed: () => _openInboundForm()),
       ],
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

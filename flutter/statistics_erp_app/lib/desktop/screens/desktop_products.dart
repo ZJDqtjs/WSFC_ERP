@@ -7,6 +7,7 @@ import '../desktop_style.dart';
 import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';
 import '../widgets/ws_card.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 桌面端「商品资料」，1:1 复刻 web #page-products（商品 / 关联结算 / 包材 / 人工
 /// 四个侧边栏入口共用这一页，只是进来时预置了筛选条件，见 [DesktopProductsScreen.preset]）。
@@ -916,13 +917,13 @@ class _DesktopProductsScreenState extends State<DesktopProductsScreen> {
       title: '商品资料',
       subtitle: _subtitle,
       actions: [
-        DesktopButton(label: '刷新', icon: Icons.refresh, onPressed: _loading ? null : _load),
-        DesktopButton(label: '模板下载', icon: Icons.download_outlined, onPressed: _downloadTemplate),
-        DesktopButton(label: 'Excel 导入', icon: Icons.upload_file_outlined, onPressed: _importExcel),
-        DesktopButton(label: '单位管理', icon: Icons.straighten_outlined, onPressed: _openUnits),
+        DesktopButton(label: '刷新', icon: SolarIconsOutline.refresh, onPressed: _loading ? null : _load),
+        DesktopButton(label: '模板下载', icon: SolarIconsOutline.download, onPressed: _downloadTemplate),
+        DesktopButton(label: 'Excel 导入', icon: SolarIconsOutline.uploadSquare, onPressed: _importExcel),
+        DesktopButton(label: '单位管理', icon: SolarIconsOutline.ruler, onPressed: _openUnits),
         DesktopButton(
           label: '新增商品',
-          icon: Icons.add,
+          icon: SolarIconsOutline.plus,
           kind: DesktopButtonKind.primary,
           onPressed: _openNew,
         ),
@@ -1023,7 +1024,7 @@ class _DesktopProductsScreenState extends State<DesktopProductsScreen> {
             suffix: _keyword.isEmpty
                 ? null
                 : DesktopIconButton(
-                    icon: Icons.close,
+                    icon: SolarIconsOutline.closeCircle,
                     size: 26,
                     color: WsTokens.mutedLight,
                     tooltip: '清空',
@@ -1085,7 +1086,7 @@ class _DesktopProductsScreenState extends State<DesktopProductsScreen> {
         children: [
           const WsCardHead(
             title: '商品列表',
-            icon: Icons.tag_outlined,
+            icon: SolarIconsOutline.tag,
             trailing: Text('点击任意一行查看全部资料；换算关系与关联结算点单元格展开',
                 style: TextStyle(fontSize: 11.5, color: WsTokens.mutedLight)),
           ),
@@ -1501,12 +1502,12 @@ class _ProductDetail extends StatelessWidget {
     body.add(const SizedBox(height: 16));
     body.add(Row(
       children: [
-        DesktopButton(label: '编辑', icon: Icons.edit_outlined, kind: DesktopButtonKind.primary, onPressed: onEdit),
+        DesktopButton(label: '编辑', icon: SolarIconsOutline.penNewSquare, kind: DesktopButtonKind.primary, onPressed: onEdit),
         const SizedBox(width: 10),
-        DesktopButton(label: '复制新增', icon: Icons.content_copy_outlined, onPressed: onCopy),
+        DesktopButton(label: '复制新增', icon: SolarIconsOutline.copy, onPressed: onCopy),
         if (isOrder) ...[
           const SizedBox(width: 10),
-          DesktopButton(label: '一单多货规则', icon: Icons.link, onPressed: onRules),
+          DesktopButton(label: '一单多货规则', icon: SolarIconsOutline.link, onPressed: onRules),
         ],
       ],
     ));
@@ -2112,7 +2113,7 @@ class _ProductFormState extends State<_ProductForm> {
                         wsCell(_baseUnit, color: WsTokens.mutedLight),
                         const Spacer(),
                         DesktopIconButton(
-                          icon: Icons.remove_circle_outline,
+                          icon: SolarIconsOutline.minusCircle,
                           color: WsTokens.red,
                           tooltip: '删除这一行',
                           onPressed: () => setState(() {
@@ -2300,7 +2301,7 @@ class _ProductFormState extends State<_ProductForm> {
                           ),
                           const SizedBox(width: 8),
                           DesktopIconButton(
-                            icon: Icons.link_off,
+                            icon: SolarIconsOutline.linkBroken,
                             color: WsTokens.red,
                             tooltip: '不再关联',
                             onPressed: () => setState(() {
@@ -2389,7 +2390,7 @@ class _ProductFormState extends State<_ProductForm> {
                         ),
                         const SizedBox(width: 8),
                         DesktopIconButton(
-                          icon: Icons.delete_outline,
+                          icon: SolarIconsOutline.trashBinTrash,
                           color: WsTokens.red,
                           tooltip: '删除这一行',
                           onPressed: () => setState(() {

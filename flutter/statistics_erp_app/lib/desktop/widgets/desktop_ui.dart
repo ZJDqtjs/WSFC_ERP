@@ -5,6 +5,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../desktop_style.dart';
 import 'desktop_motion.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 桌面端通用控件层：页面骨架 / 表格 / 筛选条 / 弹窗表单 / 提示语。
 ///
@@ -533,7 +534,7 @@ class DesktopSelect<T> extends StatelessWidget {
             style: TextStyle(
                 fontSize: 13,
                 color: dark ? WsTokens.textDark : WsTokens.textLight),
-            icon: const Icon(Icons.keyboard_arrow_down, size: 18),
+            icon: const Icon(SolarIconsOutline.altArrowDown, size: 18),
             onChanged: onChanged,
             items: [
               for (final o in options)
@@ -635,11 +636,11 @@ class DesktopDateField extends StatelessWidget {
               if (!cleared && allowClear)
                 GestureDetector(
                   onTap: () => onChanged(''),
-                  child: const Icon(Icons.close,
+                  child: const Icon(SolarIconsOutline.closeCircle,
                       size: 14, color: WsTokens.mutedLight),
                 )
               else
-                const Icon(Icons.event_outlined,
+                const Icon(SolarIconsOutline.calendarDate,
                     size: 15, color: WsTokens.mutedLight),
             ],
           ),
@@ -712,7 +713,7 @@ class DesktopSearchField extends StatelessWidget {
                   ),
                 ),
               ),
-              const Icon(Icons.keyboard_arrow_down,
+              const Icon(SolarIconsOutline.altArrowDown,
                   size: 16, color: WsTokens.mutedLight),
             ],
           ),
@@ -770,7 +771,7 @@ Future<String?> desktopSearchSelect(
                             title: Text(all[i].label,
                                 style: const TextStyle(fontSize: 13)),
                             trailing: all[i].value == value
-                                ? const Icon(Icons.check,
+                                ? const Icon(SolarIconsOutline.checkCircle,
                                     size: 16, color: WsTokens.primary)
                                 : null,
                             onTap: () =>
@@ -1039,8 +1040,8 @@ class _DesktopGridState extends State<DesktopGrid> {
                             if (c.sortKey != null && c.sortKey == widget.sortKey)
                               Icon(
                                 widget.sortAsc
-                                    ? Icons.arrow_upward
-                                    : Icons.arrow_downward,
+                                    ? SolarIconsOutline.arrowUp
+                                    : SolarIconsOutline.arrowDown,
                                 size: 12,
                                 color: WsTokens.primary,
                               ),
@@ -1545,14 +1546,14 @@ class DesktopPager extends StatelessWidget {
             const SizedBox(width: 12),
           ],
           DesktopIconButton(
-            icon: Icons.chevron_left,
+            icon: SolarIconsOutline.altArrowLeft,
             tooltip: '上一页',
             onPressed:
                 current > 1 ? () => onChanged(((current - 2) * limit)) : null,
           ),
           const SizedBox(width: 6),
           DesktopIconButton(
-            icon: Icons.chevron_right,
+            icon: SolarIconsOutline.altArrowRight,
             tooltip: '下一页',
             onPressed:
                 current < pages ? () => onChanged(current * limit) : null,
@@ -1608,14 +1609,14 @@ class DesktopStateView extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.cloud_off_outlined,
+            const Icon(SolarIconsOutline.cloudCross,
                 size: 32, color: WsTokens.mutedLight),
             const SizedBox(height: 10),
             Text('$error',
                 style:
                     const TextStyle(fontSize: 13, color: WsTokens.mutedLight)),
             const SizedBox(height: 10),
-            DesktopButton(label: '重试', icon: Icons.refresh, onPressed: onRetry),
+            DesktopButton(label: '重试', icon: SolarIconsOutline.refresh, onPressed: onRetry),
           ],
         ),
       );
@@ -1638,16 +1639,16 @@ class DesktopNotice extends StatelessWidget {
     switch (kind) {
       case DesktopNoticeKind.info:
         tone = WsTokens.primary;
-        icon = Icons.info_outline;
+        icon = SolarIconsOutline.infoCircle;
       case DesktopNoticeKind.success:
         tone = WsTokens.green;
-        icon = Icons.check_circle_outline;
+        icon = SolarIconsOutline.checkCircle;
       case DesktopNoticeKind.warn:
         tone = WsTokens.amber;
-        icon = Icons.warning_amber;
+        icon = SolarIconsOutline.dangerTriangle;
       case DesktopNoticeKind.error:
         tone = WsTokens.red;
-        icon = Icons.error_outline;
+        icon = SolarIconsOutline.dangerCircle;
     }
     // 淡色底 + 同色系描边比"贴一张浅黄块"更稳：暗色主题下浅黄块直接把文字吃掉
     final bool dark = wsIsDark(context);
@@ -1793,7 +1794,7 @@ Future<T?> desktopDialog<T>(
                             color: WsTokens.inkOf(dialogContext))),
                   ),
                   DesktopIconButton(
-                    icon: Icons.close,
+                    icon: SolarIconsOutline.closeCircle,
                     color: WsTokens.inkOf(dialogContext, level: 3),
                     tooltip: '关闭',
                     onPressed: () => Navigator.of(dialogContext).pop(),
@@ -1924,7 +1925,7 @@ Future<bool> wsConfirm(
               Row(
                 children: [
                   Icon(
-                    danger ? Icons.delete_forever_outlined : Icons.help_outline,
+                    danger ? SolarIconsOutline.trashBinMinimalistic_2 : SolarIconsOutline.help,
                     size: 19,
                     color: danger ? WsTokens.red : WsTokens.primary,
                   ),

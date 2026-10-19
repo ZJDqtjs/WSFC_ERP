@@ -6,6 +6,7 @@ import '../desktop_style.dart';
 import '../widgets/desktop_motion.dart';
 import '../widgets/desktop_ui.dart';
 import '../widgets/ws_card.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 桌面端「扣点」页，1:1 复刻 web `#page-deduction`（三张卡：扣点设置 / 入仓品扣点 / 店铺扣点规则）。
 ///
@@ -243,7 +244,7 @@ class _DesktopDeductionScreenState extends State<DesktopDeductionScreen> {
                   ),
                   const SizedBox(width: 6),
                   DesktopIconButton(
-                    icon: Icons.search,
+                    icon: SolarIconsOutline.magnifier,
                     tooltip: '从商品分类里选',
                     onPressed: () async {
                       final String? picked = await desktopSearchSelect(
@@ -406,7 +407,7 @@ class _DesktopDeductionScreenState extends State<DesktopDeductionScreen> {
                   ),
                   const SizedBox(width: 6),
                   DesktopIconButton(
-                    icon: Icons.search,
+                    icon: SolarIconsOutline.magnifier,
                     tooltip: '从已配置的店铺里选',
                     onPressed: draft.shopOptions.isEmpty
                         ? null
@@ -500,7 +501,7 @@ class _DesktopDeductionScreenState extends State<DesktopDeductionScreen> {
                   child: DesktopButton(
                     label: '＋ 加一行分类',
                     small: true,
-                    icon: Icons.add,
+                    icon: SolarIconsOutline.plus,
                     onPressed: () => setDialogState(() => draft.catRows.add(_ShopCatRow())),
                   ),
                 ),
@@ -601,7 +602,7 @@ class _DesktopDeductionScreenState extends State<DesktopDeductionScreen> {
       subtitle: '三处扣点用在三条不同链路上，互不影响：分类扣点在「批量导入 → 入库」时把进货单价折算成入库成本；'
           '入仓品扣点在「入仓结算」时把采购价折算成实际收入；店铺扣点在「聚水潭订单导入」时从卖家实收里扣。',
       actions: [
-        DesktopButton(label: '刷新', icon: Icons.refresh, onPressed: _load),
+        DesktopButton(label: '刷新', icon: SolarIconsOutline.refresh, onPressed: _load),
       ],
       body: DesktopStateView(
         loading: _loading,
@@ -631,7 +632,7 @@ class _DesktopDeductionScreenState extends State<DesktopDeductionScreen> {
           children: [
             WsCardHead(
               title: '扣点设置',
-              icon: Icons.calculate_outlined,
+              icon: SolarIconsOutline.calculator,
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -640,7 +641,7 @@ class _DesktopDeductionScreenState extends State<DesktopDeductionScreen> {
                   const SizedBox(width: 12),
                   DesktopButton(
                     label: '＋ 新增扣点',
-                    icon: Icons.add,
+                    icon: SolarIconsOutline.plus,
                     kind: DesktopButtonKind.success,
                     small: true,
                     onPressed: () => _openDeducEditor(),
@@ -695,13 +696,13 @@ class _DesktopDeductionScreenState extends State<DesktopDeductionScreen> {
           children: [
             WsCardHead(
               title: '入仓品扣点',
-              icon: Icons.storefront_outlined,
+              icon: SolarIconsOutline.buildings,
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   DesktopButton(
                     label: '保存',
-                    icon: Icons.save_outlined,
+                    icon: SolarIconsOutline.diskette,
                     kind: DesktopButtonKind.success,
                     small: true,
                     onPressed: _saveWh,
@@ -774,7 +775,7 @@ class _DesktopDeductionScreenState extends State<DesktopDeductionScreen> {
           children: [
             WsCardHead(
               title: '店铺扣点规则',
-              icon: Icons.store_outlined,
+              icon: SolarIconsOutline.shopMinimalistic,
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -783,7 +784,7 @@ class _DesktopDeductionScreenState extends State<DesktopDeductionScreen> {
                   const SizedBox(width: 12),
                   DesktopButton(
                     label: '＋ 新增店铺扣点',
-                    icon: Icons.add,
+                    icon: SolarIconsOutline.plus,
                     kind: DesktopButtonKind.success,
                     small: true,
                     onPressed: () => _openShopEditor(),

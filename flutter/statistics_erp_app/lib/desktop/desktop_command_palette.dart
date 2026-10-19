@@ -8,6 +8,7 @@ import '../providers/product_provider.dart';
 import 'desktop_style.dart';
 import 'nav_model.dart';
 import 'widgets/desktop_warehouse_switch.dart';
+import 'package:solar_icons/solar_icons.dart';
 
 /// 一条命令：标题 + 说明 + 图标 + 执行动作。
 class _Cmd {
@@ -121,7 +122,7 @@ class _PaletteDialogState extends State<_PaletteDialog> {
       _Cmd(
         label: '切换分仓',
         group: '动作',
-        icon: Icons.storage_outlined,
+        icon: SolarIconsOutline.server,
         run: () {
           _close();
           showWarehouseSwitcher(context, widget.auth);
@@ -151,8 +152,8 @@ class _PaletteDialogState extends State<_PaletteDialog> {
               label: p.name,
               group: '商品',
               icon: p.productType == 'order'
-                  ? Icons.receipt_long_outlined
-                  : Icons.inventory_2_outlined,
+                  ? SolarIconsOutline.billList
+                  : SolarIconsOutline.boxMinimalistic,
               hint: '${p.category.isEmpty ? '未分类' : p.category} · 库存 ${p.stockText}',
               run: () {
                 _close();
@@ -251,7 +252,7 @@ class _SearchField extends StatelessWidget {
           const Padding(
             padding: EdgeInsets.only(left: 10, right: 8),
             child:
-                Icon(Icons.search_rounded, size: 18, color: WsTokens.primary),
+                Icon(SolarIconsOutline.magnifier, size: 18, color: WsTokens.primary),
           ),
           Expanded(
             child: TextField(
