@@ -77,6 +77,10 @@ class WsTokens {
   static Color line(BuildContext context, {double alpha = 1}) =>
       (wsIsDark(context) ? borderDark : borderLight).withValues(alpha: alpha);
 
+  /// 弹窗遮罩：把背景压暗，弹层才浮得起来。
+  static Color scrim(bool dark) =>
+      Colors.black.withValues(alpha: dark ? 0.62 : 0.4);
+
   static Color inkOf(BuildContext context, {int level = 1}) {
     if (wsIsDark(context)) {
       return switch (level) {
@@ -127,6 +131,26 @@ const LiquidGlassSettings kGlassSoft = LiquidGlassSettings(
   glowIntensity: 0.35,
   shadowElevation: 0.5,
 );
+
+/// 弹层（弹窗 / 命令面板）专用：先垫一块近乎不透明的背板，再上玻璃。
+/// [kGlassSoft] 的雾面在这种大尺寸面板上压不住背景——出库单弹窗里，
+/// 表格行文字会直接透到表单标签上，两层字叠在一起完全读不了。
+/// 背板只挡在弹层这一块，边缘的折射和高光还在，通透感换成可读性。
+LiquidGlassSettings wsOverlayGlass(bool dark) => LiquidGlassSettings(
+      blur: 22,
+      frost: 0.58,
+      frostOpacity: 0.9,
+      thickness: 6,
+      lightIntensity: 0.24,
+      refractiveIndex: 1.0,
+      chromaticAberration: 0.0,
+      saturation: 1.02,
+      glowIntensity: 0.32,
+      shadowElevation: 0.6,
+      backerColor: dark
+          ? const Color(0xF21B2130)
+          : const Color(0xF0FFFFFF),
+    );
 
 /// 玻璃层主题：桌面用大圆角、低折射，品牌色只出现在发光和高亮上。
 GlassThemeData desktopGlassTheme() {

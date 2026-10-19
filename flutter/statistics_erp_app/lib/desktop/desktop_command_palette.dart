@@ -44,6 +44,7 @@ Future<void> showDesktopCommandPalette(
 }) {
   return showDialog<void>(
     context: context,
+    barrierColor: WsTokens.scrim(wsIsDark(context)),
     builder: (_) => _PaletteDialog(onNavigate: onNavigate, auth: auth),
   );
 }
@@ -178,7 +179,7 @@ class _PaletteDialogState extends State<_PaletteDialog> {
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 620, maxHeight: 520),
           child: GlassContainer(
-            settings: kGlassSoft,
+            settings: wsOverlayGlass(wsIsDark(context)),
             shape: const LiquidRoundedSuperellipse(borderRadius: 20),
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
             child: Column(

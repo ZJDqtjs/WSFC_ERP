@@ -1770,6 +1770,7 @@ Future<T?> desktopDialog<T>(
 }) {
   return showDialog<T>(
     context: context,
+    barrierColor: WsTokens.scrim(wsIsDark(context)),
     builder: (dialogContext) => Dialog(
       backgroundColor: Colors.transparent,
       elevation: 0,
@@ -1777,7 +1778,7 @@ Future<T?> desktopDialog<T>(
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: width, maxHeight: maxHeight),
         child: GlassContainer(
-          settings: kGlassSoft,
+          settings: wsOverlayGlass(wsIsDark(dialogContext)),
           shape: const LiquidRoundedSuperellipse(borderRadius: 20),
           padding: const EdgeInsets.fromLTRB(22, 18, 22, 16),
           child: Column(
@@ -1909,11 +1910,12 @@ Future<bool> wsConfirm(
 }) async {
   final result = await showDialog<bool>(
     context: context,
+    barrierColor: WsTokens.scrim(wsIsDark(context)),
     builder: (dialogContext) => Dialog(
       backgroundColor: Colors.transparent,
       elevation: 0,
       child: GlassContainer(
-        settings: kGlassSoft,
+        settings: wsOverlayGlass(wsIsDark(dialogContext)),
         shape: const LiquidRoundedSuperellipse(borderRadius: 20),
         padding: const EdgeInsets.fromLTRB(22, 20, 20, 16),
         child: ConstrainedBox(
