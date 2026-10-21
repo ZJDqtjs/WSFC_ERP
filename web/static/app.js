@@ -4852,6 +4852,19 @@ function unitOptions(product, selected) {
   ).join("");
 }
 
+/** 把搜索框内容拆成多个关键词（小写）。分隔符：全/半角冒号、空格（含全角）、逗号、顿号、竖线。
+    多个关键词之间是「且」的关系：都要命中才算匹配。例：「牛油果：代发」→ ['牛油果','代发'] */
+function splitSearchKeywords(raw) {
+  return String(raw || "")
+    .toLowerCase()
+    .split(/[：:，,、\s|｜]+/)
+    .filter(Boolean);
+}
+/** 多关键词匹配：每个关键词都要在 hay（已小写的可搜索文本）里出现。关键词为空视为全部命中。 */
+function searchHit(hay, kws) {
+  const text = String(hay || "").toLowerCase();
+  return !kws || !kws.length || kws.every((k) => text.includes(k));
+}
 async function renderProducts() {
   if (!PRODUCTS.length) PRODUCTS = await api("/api/products");
   const EXCLUDED = ["包材", "人工", "快递"]; // 已独立成侧边栏入口的分类，商品页默认不显示
@@ -4889,23 +4902,25 @@ async function renderProducts() {
     cats.sort();
     catSel.insertAdjacentHTML("beforeend", cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join(""));
   }
-  const kw = ($("prodSearch")?.value || "").trim().toLowerCase();
-  const cat = forced ? "" : (catSel ? catSel.value : "");
-  const ptype = $("prodType")?.value || "";
-  // 关键词匹配：名称 / 分类 / 规格 / 编码 / 单位 / 出库方式（代发、扣减库存）/ 关联结算商品名
-  // 这样输入「代发」就能筛出未关联库存大类的订单商品。
-  const kwHit = (p) => {
-    if (!kw) return true;
-    if ((p.name || "").toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw)) return true;
-    // 代发的关键词刻意不含「库存」二字：这样搜「库存」只出库存/扣减库存的商品，搜「代发」只出代发商品
+  // 搜索词：支持多关键词（用「：」「:」、空格、逗号、顿号、竖线分隔），多个关键词需**同时**命中。
+  // 例：「牛油果：代发」= 名称/分类等含「牛油果」，且出库方式含「代发」。
+  const kws = splitSearchKeywords($("prodSearch")?.value);
+  // 单个商品的「可搜索文本」：名称 / 分类 / 规格 / 编码 / 单位 / 出库方式 / 关联结算商品名 / 随货包材。
+  // 代发这一档刻意不含「库存」二字：搜「库存」只出扣减库存的商品，搜「代发」只出代发商品。
+  const hayOf = (p) => {
+    const links = p.product_type === "order" ? prodStockLinks(p) : [];
     const way = p.product_type === "order"
-      ? (prodStockLinks(p).length ? `订单 扣减库存 ${prodStockLinks(p).map((l) => l.name).join(" ")}` : "订单 代发 外发")
+      ? (links.length ? `订单 扣减库存 ${links.map((l) => l.name).join(" ")}` : "订单 代发 外发")
       : "库存商品";
     const packs = (p.pack_items || [])
       .map((it) => (PRODUCTS.find((x) => x.id === it.product_id) || {}).name || "")
       .join(" ");
-    return [p.spec, p.code, p.unit, p.base_unit, way, packs].join(" ").toLowerCase().includes(kw);
+    return [p.name, p.category, p.spec, p.code, p.unit, p.base_unit, way, packs]
+      .join(" ").toLowerCase();
   };
+  const kwHit = (p) => searchHit(hayOf(p), kws);   // 多个关键词：全部命中才算匹配
+  const cat = forced ? "" : (catSel ? catSel.value : "");
+  const ptype = $("prodType")?.value || "";
   let rows = PRODUCTS.filter((p) =>
     kwHit(p) &&
     (!cat || p.category === cat) &&
@@ -4965,7 +4980,12 @@ async function renderProducts() {
           <button class="btn sm secondary" onclick="openProductModal(${p.id})">编辑</button>
         </td></tr>`;
     }).join("") + `</tbody>`;
-  if (!rows.length) t.innerHTML = `<tr><td colspan="10" class="empty">暂无商品</td></tr>`;
+  if (!rows.length) {
+    // 空结果时把命中的关键词逐个写出来，方便发现「某个关键词打错了」
+    t.innerHTML = kws.length
+      ? `<tr><td colspan="10" class="empty">没有同时匹配 ${kws.map((k) => `「${esc(k)}」`).join(" ")} 的商品</td></tr>`
+      : `<tr><td colspan="10" class="empty">暂无商品</td></tr>`;
+  }
   t._rows = rows;
   t._render = renderProducts;
   updateBatchBar("prod");
