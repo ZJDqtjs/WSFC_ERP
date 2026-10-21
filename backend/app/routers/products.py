@@ -17,7 +17,7 @@ from ..models import (
     User,
     WarehouseProduct,
 )
-from ..services import default_conversions, recompute_product, seed_units
+from ..services import _latest_inbound_dates, default_conversions, recompute_product, seed_units
 
 router = APIRouter(prefix="/api", tags=["products"])
 
@@ -32,6 +32,12 @@ class StockLinkIn(BaseModel):
     """订单商品 → 库存商品（大类）的扣减关联项。"""
     product_id: int
     multiplier: float = 1.0  # 1单订单商品 = multiplier × 该库存商品默认单位
+
+
+class StockSchemeIn(BaseModel):
+    """一套扣减方案：方案名 + 扣减清单（库存商品 × 倍数）。"""
+    name: str = ""
+    links: list[StockLinkIn] = []
 
 
 class ProductIn(BaseModel):
@@ -53,6 +59,9 @@ class ProductIn(BaseModel):
     multiplier: float = 1.0  # 1单订单商品 = multiplier × 库存商品默认单位
     # 订单商品可关联多个扣减库存商品：[{product_id, multiplier}]；None = 未提供（回退单关联字段）
     stock_links: list[StockLinkIn] | None = None
+    # 多套扣减方案：[{name, links:[{product_id, multiplier}]}]。
+    # None = 未提供（保留原有方案，兼容未升级客户端）；[] = 清空（只剩 stock_links 那一套）
+    stock_schemes: list[StockSchemeIn] | None = None
     # 改基础单位（计数「个」↔ 重量「克」）时的换算关系：1（旧）基础单位 = unit_change_ratio（新）基础单位。
     # 商品已有库存流水/入库记录/库存时必须给（见 _rescale_base_unit_change）；没有历史数据时可省。
     unit_change_ratio: float | None = None
@@ -115,6 +124,29 @@ def _to_dict(p: Product, db: Session | None = None, last_in: dict[int, dict] | N
             "multiplier": float((it or {}).get("multiplier") or 1.0),
             "default_unit": sp.default_unit or sp.base_unit,
         })
+    # 多套扣减方案（含每项库存商品「最近一次采购入库」的日期，前端据此提示会自动选哪一套）
+    raw_schemes = [s for s in (getattr(p, "stock_schemes", None) or []) if isinstance(s, dict)]
+    schemes_out: list[dict] = []
+    if raw_schemes:
+        _pids = [(it or {}).get("product_id") for s in raw_schemes for it in (s.get("links") or [])]
+        last_dates = _latest_inbound_dates(db, _pids) if db else {}
+        for i, s in enumerate(raw_schemes):
+            s_links = []
+            for it in (s.get("links") or []):
+                pid = (it or {}).get("product_id")
+                sp = db.get(Product, pid) if (db and pid) else None
+                if not sp:
+                    continue
+                s_links.append({
+                    "product_id": sp.id,
+                    "name": sp.name,
+                    "category": sp.category,
+                    "multiplier": float((it or {}).get("multiplier") or 1.0),
+                    "default_unit": sp.default_unit or sp.base_unit,
+                    "last_in_date": last_dates.get(sp.id, ""),
+                })
+            if s_links:
+                schemes_out.append({"name": (s.get("name") or "").strip() or f"方案{i + 1}", "links": s_links})
     return {
         "id": p.id,
         "code": p.code,
@@ -140,6 +172,8 @@ def _to_dict(p: Product, db: Session | None = None, last_in: dict[int, dict] | N
         "stock_product_name": sp_name,
         "multiplier": p.multiplier,
         "stock_links": links,
+        # 多套扣减方案：[{name, links:[{product_id, name, multiplier, last_in_date}]}]，空 = 只有上面那一套
+        "stock_schemes": schemes_out,
         "is_active": p.is_active,
         "stock": p.stock,
         "avg_cost": p.avg_cost,
@@ -175,6 +209,38 @@ def _validate_stock_links(db: Session, data: ProductIn) -> list[dict]:
         seen.add(sp.id)
         links.append({"product_id": sp.id, "multiplier": mult})
     return links
+
+
+def _validate_stock_schemes(db: Session, data: ProductIn) -> list[dict]:
+    """校验并规范化「多套扣减方案」→ [{name, links:[{product_id, multiplier}]}]。
+
+    - 每套方案至少要有一个扣减项（空方案没有意义，且会让自动选方案选到空扣减）；
+    - 库存商品必须是 product_type=stock、倍数 > 0；同一套里重复的库存商品只保留第一项；
+    - 方案名留空则按顺序补「方案1／方案2…」。
+    """
+    if data.stock_schemes is None:
+        return []
+    out: list[dict] = []
+    for i, s in enumerate(data.stock_schemes):
+        links, seen = [], set()
+        for it in (s.links or []):
+            sp = db.get(Product, it.product_id)
+            if not sp:
+                raise HTTPException(400, "关联的库存商品不存在")
+            if sp.product_type != "stock":
+                raise HTTPException(400, "只能关联「库存商品」（大类）作为扣减对象")
+            if sp.id in seen:
+                continue
+            mult = float(it.multiplier or 0)
+            if mult <= 0:
+                raise HTTPException(400, f"「{sp.name}」的扣减倍数必须大于 0")
+            seen.add(sp.id)
+            links.append({"product_id": sp.id, "multiplier": mult})
+        name = (s.name or "").strip() or f"方案{i + 1}"
+        if not links:
+            raise HTTPException(400, f"扣减方案「{name}」至少要有一个扣减库存商品")
+        out.append({"name": name, "links": links})
+    return out
 
 
 @router.get("/stocks")
@@ -287,6 +353,10 @@ def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = 
     if data.product_type not in ("stock", "order"):
         raise HTTPException(400, "商品类型必须为 stock 或 order")
     stock_links = _validate_stock_links(db, data)
+    schemes = _validate_stock_schemes(db, data)
+    if schemes and not stock_links:
+        # 兼容：报表/移动端/需求预演算仍读 stock_links → 同步成第一套方案
+        stock_links = [dict(x) for x in schemes[0]["links"]]
     first = stock_links[0] if stock_links else None
     conversions = data.conversions or default_conversions(data.base_unit)
     p = Product(
@@ -307,6 +377,7 @@ def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = 
         stock_product_id=first["product_id"] if first else None,
         multiplier=first["multiplier"] if first else 1.0,
         stock_links=stock_links,
+        stock_schemes=schemes,
         is_active=data.is_active,
     )
     db.add(p)
@@ -395,6 +466,14 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
         stock_links = [dict(x) for x in (p.stock_links or [])]
     else:
         stock_links = _validate_stock_links(db, data)
+    # 多套扣减方案：未传（None）→ 保留原方案（兼容未升级客户端）；传 [] → 清空
+    if data.stock_schemes is not None:
+        schemes = _validate_stock_schemes(db, data)
+    else:
+        schemes = [dict(s) for s in (p.stock_schemes or []) if isinstance(s, dict)]
+    if schemes and not stock_links:
+        # 兼容：报表/移动端/需求预演算仍读 stock_links → 同步成第一套方案
+        stock_links = [dict(x) for x in schemes[0]["links"]]
     first = stock_links[0] if stock_links else None
     # 换基础单位（计数↔重量）先校验并取换算关系：不合格就整体报错，什么都不写
     unit_k = _rescale_base_unit_change(db, p, data.base_unit, data.unit_change_ratio)
@@ -415,6 +494,7 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
     p.stock_product_id = first["product_id"] if first else None
     p.multiplier = first["multiplier"] if first else 1.0
     p.stock_links = stock_links
+    p.stock_schemes = schemes
     p.is_active = data.is_active
     db.flush()
     if unit_k:

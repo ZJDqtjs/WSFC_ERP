@@ -63,6 +63,10 @@ class Product(Base):
     # 订单商品 → 库存商品 的**多扣减关联**：[{product_id, multiplier}, ...]
     # 卖 1 单该订单商品时依次扣减这些库存商品（如 礼盒 = 苹果1斤 + 梨1斤）；空 = 代发（不扣库存）
     stock_links: Mapped[list] = mapped_column(JSON, default=list)
+    # 多套扣减方案（可选）：[{name, links:[{product_id, multiplier}]}, ...]
+    # 配了多套时，出库自动选一套：比较每套方案里库存商品「最近一次采购入库」的日期，谁最新用谁；
+    # 都没入过库或日期并列 → 用第一套。为空 = 只有 stock_links 那一套（老数据口径不变）。
+    stock_schemes: Mapped[list] = mapped_column(JSON, default=list)
 
     # 缓存聚合（由库存流水重算）
     stock: Mapped[float] = mapped_column(Float, default=0.0)

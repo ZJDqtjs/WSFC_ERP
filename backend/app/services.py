@@ -52,27 +52,85 @@ def unit_to_base(product: Product, unit: str, quantity: float) -> float:
     return quantity * float(factor)
 
 
-def stock_deductions(db: Session, order_product: Product, qty_base_in_order: float) -> list[tuple[Product, float]]:
-    """计算出库时实际需扣减的库存商品清单 [(库存商品, 扣减数量(基础单位)), ...]（可为多个）。
+def _latest_inbound_dates(db: Session, product_ids) -> dict[int, str]:
+    """各库存商品「最近一次采购入库」的日期（YYYY-MM-DD，取 Inbound.date 的最大值）。
 
-    - 订单商品关联了 1~N 个库存商品（stock_links）：逐个扣减，扣减数 = 订单基础数量 × 倍数 × 库存默认单位折算；
-    - 仅配置了旧的单关联字段（stock_product_id + multiplier）时按单关联扣减；
-    - **订单商品无任何关联**：视为**代发**（别人代发，自己不出货），返回空列表，不扣任何库存，
-      只在出库明细里记代发数量与代发成本；
+    用于多方案扣减时挑方案：哪套方案里的库存商品最近进了货，就优先扣那套。
+    没有入库记录的商品不在返回里。口径只看「采购入库单日期」，不含入仓台账与盘点调整。
+    """
+    ids = {int(p) for p in (product_ids or []) if p}
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(Inbound.product_id, func.max(Inbound.date))
+        .where(Inbound.product_id.in_(ids))
+        .group_by(Inbound.product_id)
+    ).all()
+    return {int(pid): (dt or "") for pid, dt in rows if pid}
+
+
+def _scheme_list(order_product: Product) -> list[dict]:
+    """商品的扣减方案清单（只保留有扣减项的方案）。空 = 没配多方案（走 stock_links 老口径）。"""
+    out = []
+    for s in (getattr(order_product, "stock_schemes", None) or []):
+        links = [it for it in ((s or {}).get("links") or []) if (it or {}).get("product_id")]
+        if links:
+            out.append({"name": ((s or {}).get("name") or "").strip(), "links": links})
+    return out
+
+
+def deduction_scheme(db: Session, order_product: Product) -> tuple[list[dict], str]:
+    """选出本次出库要用的扣减方案 → (扣减项清单, 方案名)。
+
+    规则（与用户确认一致）：
+    - 没配多方案（stock_schemes 为空）→ 用商品自身的 stock_links（老数据口径不变），方案名为空；
+    - 配了多方案 → 每套方案取「方案内库存商品最近一次采购入库日期」的最大值，谁最新用谁；
+      都没有入库记录、或日期并列 → 用第一套（顺序最可预期）。
+    """
+    schemes = _scheme_list(order_product)
+    if not schemes:
+        return list(order_product.stock_links or []), ""
+    pids = [(it or {}).get("product_id") for s in schemes for it in s["links"]]
+    last_in = _latest_inbound_dates(db, pids)
+    best_i, best_date = 0, ""
+    for i, s in enumerate(schemes):
+        d = max((last_in.get(int((it or {}).get("product_id") or 0)) or "" for it in s["links"]), default="")
+        if d > best_date:            # 严格大于：日期并列时保留前面那套（第一套优先）
+            best_i, best_date = i, d
+    chosen = schemes[best_i]
+    return list(chosen["links"]), (chosen["name"] or f"方案{best_i + 1}")
+
+
+def _deduction_plan(db: Session, order_product: Product, qty_base_in_order: float,
+                    stock_product_id: int | None = None,
+                    multiplier: float = 1.0) -> tuple[list[tuple[Product, float]], str]:
+    """计算一次出库需扣减的库存商品清单 → ([(库存商品, 扣减数量(基础单位)), ...], 采用的方案名)。
+
+    - 一单多货规则显式指定了库存商品（大类）与倍数 → 按它扣单项（方案名为空，规则优先于商品方案）；
+    - 否则按商品自身的扣减方案：多方案时自动选（见 deduction_scheme），没配多方案就是 stock_links；
+      仅配置了旧的单关联字段（stock_product_id + multiplier）时按单关联扣减；
+    - **订单商品无任何关联**：视为**代发**，返回空列表，不扣任何库存，只记代发数量与成本；
     - **库存商品（大类）直接出现在销售行上（无关联结算清单）：不再兜底扣自身库存**，
-      返回空列表。大类的扣减必须由「关联结算」（订单商品/小类）显式建立；
+      返回空。大类的扣减必须由「关联结算」（订单商品/小类）显式建立；
       调用方（见 build_order）应在此情形报错，要求用户先补关联，而不是默默改账。
     """
     items: list[tuple[Product, float]] = []
 
-    def _add(sp: Product, multiplier: float) -> None:
+    def _add(sp: Product, mult: float) -> None:
         du = sp.default_unit or sp.base_unit
         factor = (sp.conversions or {}).get(du, 1.0)
-        qty = qty_base_in_order * float(multiplier or 1.0) * float(factor)
+        qty = qty_base_in_order * float(mult or 1.0) * float(factor)
         if qty > 0:
             items.append((sp, qty))
 
-    for it in (order_product.stock_links or []):
+    if stock_product_id:
+        sp = db.get(Product, stock_product_id)
+        if sp and sp.product_type == "stock":
+            _add(sp, multiplier or 1.0)
+            return items, ""
+
+    links, scheme_name = deduction_scheme(db, order_product)
+    for it in links:
         pid = (it or {}).get("product_id")
         sp = db.get(Product, pid) if pid else None
         if sp:
@@ -81,10 +139,13 @@ def stock_deductions(db: Session, order_product: Product, qty_base_in_order: flo
         sp = db.get(Product, order_product.stock_product_id)
         if sp:
             _add(sp, order_product.multiplier or 1.0)
-    # 库存商品（大类）无关联时**不再兜底扣自身库存**：
-    # 大类在商品编辑页不允许配置关联（关联是小类的事），若平台商品名直接落到大类，
-    # 旧逻辑会默默扣掉大类库存、账实不符。现改为返回空，由 build_order 报错要求补关联结算。
-    return items
+    # 库存商品（大类）无关联时**不再兜底扣自身库存**（详见 build_order 的报错处）
+    return items, (scheme_name if items else "")
+
+
+def stock_deductions(db: Session, order_product: Product, qty_base_in_order: float) -> list[tuple[Product, float]]:
+    """计算出库时实际需扣减的库存商品清单 [(库存商品, 扣减数量(基础单位)), ...]（口径见 _deduction_plan）。"""
+    return _deduction_plan(db, order_product, qty_base_in_order)[0]
 
 
 def stock_deduction(db: Session, order_product: Product, qty_base_in_order: float) -> tuple[Product, float, bool]:
@@ -98,22 +159,8 @@ def stock_deduction(db: Session, order_product: Product, qty_base_in_order: floa
 
 def _deductions_with_override(db: Session, order_product: Product, qty_base_in_order: float,
                               stock_product_id: int | None, multiplier: float = 1.0) -> list[tuple[Product, float]]:
-    """计算一次出库需扣减的库存商品清单。
-
-    一单多货规则若显式指定了关联库存商品（大类）与倍数，则优先按其扣减（单项）；
-    否则回退为按订单商品自身关联扣减（stock_deductions；订单商品未关联即代发，返回空）。
-    扣减数 = 订单基础数量 × 倍数 × 库存商品默认单位系数。
-    """
-    if stock_product_id:
-        sp = db.get(Product, stock_product_id)
-        if sp and sp.product_type == "stock":
-            du = sp.default_unit or sp.base_unit
-            factor = (sp.conversions or {}).get(du, 1.0)
-            qty = qty_base_in_order * float(multiplier or 1.0) * float(factor)
-            if qty > 0:
-                return [(sp, qty)]
-            return []
-    return stock_deductions(db, order_product, qty_base_in_order)
+    """（兼容旧接口）只要扣减清单，不要方案名；规则与口径见 _deduction_plan。"""
+    return _deduction_plan(db, order_product, qty_base_in_order, stock_product_id, multiplier)[0]
 
 
 def base_to_unit(product: Product, unit: str, quantity_base: float) -> float:
@@ -984,13 +1031,14 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
             })
             total_amount += amount
             continue
-        # 扣减目标：一单多货规则如指定库存大类则按其扣减；否则按订单商品关联的库存商品（大类）；
+        # 扣减目标：一单多货规则如指定库存大类则按其扣减；否则按商品自身的扣减方案
+        # （配了多套方案时按「最近一次采购入库」自动选一套，见 deduction_scheme）；
         # 订单商品未关联库存大类 = 代发：不扣任何库存，只记代发数量与代发成本。
-        deds = _deductions_with_override(db, p, qty_base, ov_sp, ov_mult)
+        deds, scheme_name = _deduction_plan(db, p, qty_base, ov_sp, ov_mult)
         if not deds and (p.product_type or "stock") == "stock":
             if allow_self_stock:
                 # 手动出库直接选了库存商品（大类）：就扣它自己的库存（本来就是它的货）
-                deds = [(p, qty_base)]
+                deds, scheme_name = [(p, qty_base)], ""
             else:
                 # 导入路径：库存大类没有「关联结算清单」（关联属于订单小类）时报错，
                 # 不做「兜底扣大类自身库存」—— 那属于默默改账，会让用户以为平台商品已正确关联。
@@ -1048,6 +1096,8 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
                 "stock_product_name": deds[0][0].name if deds else p.name,
                 "deduction_base": deds[0][1] if deds else 0.0,
                 "deductions": ded_info, "is_dropship": is_dropship, "free_shipping": line_free,
+                # 本次采用的扣减方案名（配了多方案时才有值，如「四合一蔬菜」），供预览/核对用
+                "scheme_name": scheme_name if not is_dropship else "",
                 "unit_price": price, "amount": amount, "cogs": cogs, "pack_fee": fee, "gross_sales": gross_sales,
                 "line_type": "sale", "spec": spec,
             }

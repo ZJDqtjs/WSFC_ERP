@@ -334,6 +334,26 @@ function prodStockLinks(p) {
     default_unit: l.default_unit || ((PRODUCTS.find((x) => x.id === l.product_id) || {}).default_unit || ""),
   }));
 }
+/* 商品的扣减方案清单：[{name, links:[{product_id, multiplier, name, default_unit, last_in_date}]}]。
+   没配多方案时，把现有 stock_links 当成「方案1」返回（老数据口径不变，界面照样能编辑）。
+   出库时会按各方案库存商品的「最近一次采购入库」日期自动选一套（后端 deduction_scheme）。 */
+function prodSchemes(p) {
+  const raw = (p && Array.isArray(p.stock_schemes)) ? p.stock_schemes.filter((s) => s && (s.links || []).length) : [];
+  if (raw.length) {
+    return raw.map((s, i) => ({
+      name: (s.name || "").trim() || `方案${i + 1}`,
+      links: (s.links || []).map((l) => ({
+        product_id: l.product_id,
+        multiplier: Number(l.multiplier) || 1,
+        name: l.name || (PRODUCTS.find((x) => x.id === l.product_id) || {}).name || "?",
+        default_unit: l.default_unit || ((PRODUCTS.find((x) => x.id === l.product_id) || {}).default_unit || ""),
+        last_in_date: l.last_in_date || "",
+      })),
+    }));
+  }
+  const links = prodStockLinks(p || {});
+  return links.length ? [{ name: "方案1", links }] : [];
+}
 function stockSortValue(p) {
   if (p.product_type === "order") {
     const links = prodStockLinks(p);
@@ -4962,9 +4982,12 @@ async function renderProducts() {
   // 单个商品的「可搜索文本」：名称 / 分类 / 规格 / 编码 / 单位 / 出库方式 / 关联结算商品名 / 随货包材。
   // 代发这一档刻意不含「库存」二字：搜「库存」只出扣减库存的商品，搜「代发」只出代发商品。
   const hayOf = (p) => {
-    const links = p.product_type === "order" ? prodStockLinks(p) : [];
+    const schemes = p.product_type === "order" ? prodSchemes(p) : [];
     const way = p.product_type === "order"
-      ? (links.length ? `订单 扣减库存 ${links.map((l) => l.name).join(" ")}` : "订单 代发 外发")
+      ? (schemes.length
+        // 方案名也进搜索文本：搜「四合一」能筛出用了这套方案的商品
+        ? `订单 扣减库存 ${schemes.map((s) => `${s.name} ${s.links.map((l) => l.name).join(" ")}`).join(" ")}`
+        : "订单 代发 外发")
       : "库存商品";
     const packs = (p.pack_items || [])
       .map((it) => (PRODUCTS.find((x) => x.id === it.product_id) || {}).name || "")
@@ -5007,11 +5030,13 @@ async function renderProducts() {
       const typeBadge = p.product_type === "order"
         ? '<span class="badge income">订单</span>'
         : '<span class="badge adjust">库存</span>';
-      // linkInfo 允许含 HTML（代发徽章），所以文本分支这里自己先 esc，渲染时不能再 esc 一次
-      const links = p.product_type === "order" ? prodStockLinks(p) : [];
+      // linkInfo 允许含 HTML（代发徽章 / 方案名），所以文本分支这里自己先 esc，渲染时不能再 esc 一次
+      const schemes = p.product_type === "order" ? prodSchemes(p) : [];
       const linkInfo = p.product_type === "order"
-        ? (links.length
-          ? `扣减：${links.map((l) => `${esc(l.name)} ×${fmtNum(l.multiplier)}`).join("、")}`
+        ? (schemes.length
+          // 配了多套方案时把方案名标出来（如「四合一蔬菜 四合一蔬菜×2；方案1 西芹×0.5」）
+          ? `扣减：${schemes.map((s) => (schemes.length > 1 ? `<b>${esc(s.name)}</b> ` : "")
+            + s.links.map((l) => `${esc(l.name)} ×${fmtNum(l.multiplier)}`).join("、")).join("；")}`
           : '<span class="badge income">代发</span> <span class="muted">不扣库存，只统计代发数量/成本</span>')
         : esc(p.spec || "");
       const isLabor = p.category === "人工";
@@ -5202,10 +5227,10 @@ async function openProductModal(pid = 0, prefillName = "") {
     </div>
     <div id="pStockBox" class="form-grid" style="margin-top:10px;display:${ptype === "order" ? "grid" : "none"};">
       <div class="field" style="grid-column:1/-1;">
-        <label>关联库存商品（可多个，出库时全部扣减）</label>
-        <div id="stockLinkRows"></div>
-        <button class="btn secondary sm" onclick="addStockLinkRow()">＋ 添加扣减库存商品</button>
-        <div class="field-hint">卖 1 单本商品时，从下面每个库存大类按其倍数扣减库存（可输入名称快速筛选）；如 礼盒 = 苹果1斤 + 梨1斤。一个都不填 = <b>代发</b>：本仓不扣任何库存，只统计代发数量与代发成本（按下面「参考成本」计）</div>
+        <label>关联库存商品（可配多套方案，出库时按「最近入库」自动选一套扣减）</label>
+        <div id="stockSchemeList"></div>
+        <button class="btn secondary sm" onclick="addStockScheme()">＋ 新增扣减方案</button>
+        <div class="field-hint">每套方案 = 若干「库存商品 × 倍数」，卖 1 单本商品时按选中的方案逐个扣减（可输入名称快速筛选），如 方案1 = 苹果1斤 + 梨1斤、方案2 = 四合一蔬菜×2。<b>出库时自动选</b>：比较各方案里库存商品「最近一次采购入库」的日期，谁最新用谁；都没入过库或日期相同 → 用第一套。一套都不配 = <b>代发</b>：本仓不扣库存，只统计代发数量与代发成本（按「参考成本」计）</div>
       </div>
     </div>
     <div class="field" style="margin-top:10px;"><label>规格说明</label><input id="pSpec" value="${esc(p?.spec || "")}" placeholder="如：每个约150克；或每袋5斤" /></div>
@@ -5226,14 +5251,14 @@ async function openProductModal(pid = 0, prefillName = "") {
   initProductUnitSelect(ptype, curUnit);
   updateProductPriceLabels(du0, f0, up0.base_unit);   // 价格字段标签/提示按默认单位显示
   updateUnitChangeBox(up0);                            // 跨类别换单位时显示「换算关系」输入框（初始=没换，隐藏）
-  // 加载库存商品（大类）列表，并渲染「扣减库存商品」多行（支持 + 号新增）
+  // 加载库存商品（大类）列表，并渲染「扣减方案」（每套方案多行，支持 + 号新增方案/扣减项）
   if (ptype === "order") {
     api("/api/stocks").then((stocks) => {
       STOCKS = stocks || [];
-      renderStockLinkRows(prodStockLinks(p || {}));
-    }).catch(() => { $("stockLinkRows").innerHTML = '<div class="muted">库存商品加载失败</div>'; });
+      renderStockSchemes(prodSchemes(p || {}));
+    }).catch(() => { $("stockSchemeList").innerHTML = '<div class="muted">库存商品加载失败</div>'; });
   } else {
-    $("stockLinkRows").innerHTML = "";
+    $("stockSchemeList").innerHTML = "";
   }
 }
 /* 商品表单的单位一律取自「计量单位管理」(/api/units)，用户新增的单位要能直接选到。
@@ -5364,12 +5389,13 @@ function pTypeChanged() {
   if (t === "order" && !STOCKS.length) {
     api("/api/stocks").then((stocks) => {
       STOCKS = stocks || [];
-      if ($("stockLinkRows") && !$("stockLinkRows").querySelector(".stock-link-row")) renderStockLinkRows([]);
+      const box = $("stockSchemeList");
+      if (box && !box.querySelector(".stock-scheme")) renderStockSchemes([]);   // 还没渲染过就补一套空方案
     });
   }
 }
 
-/* ---------- 订单商品「扣减库存商品」多行（支持 + 号新增多个） ---------- */
+/* ---------- 订单商品「扣减方案」多套（每套 = 若干 库存商品 × 倍数） ---------- */
 let STOCKS = [];   // 库存商品（大类）缓存，供关联行下拉使用
 function stockLinkOptions(selId) {
   const list = STOCKS.length ? STOCKS : PRODUCTS.filter((p) => p.is_active && p.product_type === "stock");
@@ -5378,32 +5404,67 @@ function stockLinkOptions(selId) {
     return `<option value="${s.id}" ${Number(selId) === s.id ? "selected" : ""}>${esc(s.name)}（${esc(s.category || "—")}${du ? "·单位" + esc(du) : ""}）</option>`;
   }).join("");
 }
-function stockLinkRowHtml(link) {
+/* ---------- 订单商品「扣减方案」多套（每套 = 若干 库存商品 × 倍数） ----------
+   出库时后端按各方案库存商品的「最近一次采购入库」日期自动选一套（都不/并列 → 第一套）。
+   这里只负责编辑：方案卡片可增删，卡片内扣减项可增删；名称留空自动叫「方案N」。 */
+function schemeLinkRowHtml(link) {
+  const hint = link && link.last_in_date
+    ? `<span class="muted" style="font-size:12px;white-space:nowrap;">最近入库 ${esc(link.last_in_date)}</span>` : "";
   return `<div class="stock-link-row">
     <select class="stock-link searchable">${stockLinkOptions(link && link.product_id)}</select>
     <input type="number" step="any" min="0" class="stock-mult" value="${link ? (Number(link.multiplier) || 1) : 1}" placeholder="倍数（1单=？库存单位）" />
+    ${hint}
     <button class="btn danger sm" onclick="this.closest('.stock-link-row').remove()">删</button>
   </div>`;
 }
-function renderStockLinkRows(links) {
-  const box = $("stockLinkRows");
+function schemeBlockHtml(scheme, idx) {
+  const links = (scheme && scheme.links) || [];
+  const lastDates = links.map((l) => l.last_in_date).filter(Boolean).sort();
+  const latest = lastDates.length ? lastDates[lastDates.length - 1] : "";
+  return `<div class="stock-scheme" style="border:1px solid var(--line,#e5e7eb);border-radius:8px;padding:8px;margin-bottom:8px;">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+      <input class="scheme-name" value="${esc((scheme && scheme.name) || `方案${idx + 1}`)}" placeholder="方案名，如 四合一蔬菜" style="max-width:220px;" />
+      <span class="muted" style="font-size:12px;">${latest ? `本方案最近入库 ${esc(latest)}` : "本方案暂无入库记录"}</span>
+      <button class="btn danger sm" style="margin-left:auto;" onclick="this.closest('.stock-scheme').remove()">删除方案</button>
+    </div>
+    <div class="scheme-links">${links.map((l) => schemeLinkRowHtml(l)).join("")}</div>
+    <button class="btn secondary sm" onclick="addSchemeLink(this)">＋ 添加扣减库存商品</button>
+  </div>`;
+}
+function renderStockSchemes(schemes) {
+  const box = $("stockSchemeList");
   if (!box) return;
-  box.innerHTML = (links || []).map((l) => stockLinkRowHtml(l)).join("");
+  const list = (schemes || []).length ? schemes : [{ name: "方案1", links: [] }];
+  box.innerHTML = list.map((s, i) => schemeBlockHtml(s, i)).join("");
   bindSearchable(box);
 }
-function addStockLinkRow() {
-  const box = $("stockLinkRows");
+function addStockScheme() {
+  const box = $("stockSchemeList");
   if (!box) return;
-  box.insertAdjacentHTML("beforeend", stockLinkRowHtml(null));
-  bindSearchable(box); // 新追加行的下拉也需支持输入筛选
+  const idx = box.querySelectorAll(".stock-scheme").length;
+  box.insertAdjacentHTML("beforeend", schemeBlockHtml({ name: `方案${idx + 1}`, links: [{}] }, idx));
+  bindSearchable(box);
 }
-function collectStockLinks() {
+function addSchemeLink(btn) {
+  const block = btn.closest(".stock-scheme");
+  if (!block) return;
+  block.querySelector(".scheme-links").insertAdjacentHTML("beforeend", schemeLinkRowHtml(null));
+  bindSearchable(block);
+}
+/** 收集多套方案 → [{name, links:[{product_id, multiplier}]}]（空方案/空行自动丢掉） */
+function collectStockSchemes() {
   const out = [];
-  document.querySelectorAll("#stockLinkRows .stock-link-row").forEach((row) => {
-    const sel = row.querySelector(".stock-link");
-    const pid = sel && sel.value ? +sel.value : null;
-    const mult = parseFloat(row.querySelector(".stock-mult").value);
-    if (pid && mult > 0) out.push({ product_id: pid, multiplier: mult });
+  document.querySelectorAll("#stockSchemeList .stock-scheme").forEach((block, i) => {
+    const links = [];
+    block.querySelectorAll(".stock-link-row").forEach((row) => {
+      const sel = row.querySelector(".stock-link");
+      const pid = sel && sel.value ? +sel.value : null;
+      const mult = parseFloat(row.querySelector(".stock-mult").value);
+      if (pid && mult > 0) links.push({ product_id: pid, multiplier: mult });
+    });
+    if (!links.length) return;      // 空方案不提交（后端也要求至少一项）
+    const name = (block.querySelector(".scheme-name").value || "").trim() || `方案${i + 1}`;
+    out.push({ name, links });
   });
   return out;
 }
@@ -5431,8 +5492,10 @@ async function saveProduct(pid, opts) {
   const ptype = $("pType").value;
   const unit = $("pUnit") ? $("pUnit").value : "斤";
   const unitPayload = deriveUnitPayload(ptype, unit, PM_EDIT_P);
-  // 订单商品可关联多个扣减库存商品（stock_links）；stock_product_id/multiplier 保留首项以兼容旧逻辑（扣点分类等）
-  const stockLinks = ptype === "order" ? collectStockLinks() : [];
+  // 订单商品可配多套扣减方案（stock_schemes）；stock_links / stock_product_id / multiplier 仍写第一套
+  // 方案，兼容报表、移动端、需求预演算等只认单方案的旧消费方。
+  const schemes = ptype === "order" ? collectStockSchemes() : [];
+  const stockLinks = schemes.length ? schemes[0].links : [];
   const payload = {
     code: $("pCode").value,
     // 编码冲突时点「替换编码」→ 传 true：把占用该编码的原商品编码清空，改给当前商品
@@ -5456,6 +5519,7 @@ async function saveProduct(pid, opts) {
     stock_product_id: stockLinks.length ? stockLinks[0].product_id : null,
     multiplier: stockLinks.length ? stockLinks[0].multiplier : 1,
     stock_links: stockLinks,
+    stock_schemes: schemes,   // 多套扣减方案（[] = 清空，只剩上面的 stock_links）
     free_shipping: $("pFreeShip") ? $("pFreeShip").checked : false,
     is_active: $("pActive") ? $("pActive").checked : true,
   };
