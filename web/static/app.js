@@ -1220,7 +1220,6 @@ function viewProductMv(pid) {
 /* =============== 工作台 =============== */
 async function loadDashboard() {
   refreshPayBadge();   // 侧边栏「待付款账单」角标
-  loadAiMemories(true);   // 工作台的 AI 记忆（别名 / 装箱换算）
   try {
     const d = await api("/api/dashboard");
     const now = new Date();
@@ -2824,8 +2823,12 @@ function evaTab(tab) {
   if (EVA_TAB !== "ai") { const c = $("evaLiveCard"); if (c) c.style.display = "none"; }
   else evaRenderLive();
 }
-function loadEva() { renderEva(); evaTab(EVA_TAB); }
-function evaRefresh() { renderEva(); refreshEvaBadge(); aiQueueTick(); }
+function loadEva() {
+  renderEva();
+  evaTab(EVA_TAB);
+  loadAiMemories(true);   // 待办页的「🧠 AI 记忆」（别名 / 装箱换算）
+}
+function evaRefresh() { renderEva(); refreshEvaBadge(); aiQueueTick(); loadAiMemories(true); }
 function evaRunQueue() {
   const waiting = AI_QUEUE.filter((j) => j.status === "waiting").length;
   toast(waiting ? `队列里还有 ${waiting} 项，继续识别…` : "队列已全部识别完");
