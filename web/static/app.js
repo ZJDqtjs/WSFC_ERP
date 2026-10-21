@@ -232,9 +232,17 @@ async function api(path, method = "GET", body) {
   const res = await fetch(routePath(path), opt);
   if (res.status === 401) { showLogin(); throw new Error("请先登录"); }
   if (!res.ok) {
-    let msg = "请求失败";
-    try { const j = await res.json(); msg = j.detail || msg; } catch (e) {}
-    throw new Error(msg);
+    let msg = "请求失败", detail = null;
+    try {
+      const j = await res.json();
+      detail = j.detail;
+      // detail 可能是字符串，也可能是结构化对象（如编码冲突 {message, code_conflict}）
+      msg = typeof j.detail === "string" ? j.detail : (j.detail && j.detail.message) || msg;
+    } catch (e) {}
+    const err = new Error(msg);
+    err.status = res.status;
+    err.detail = detail;   // 调用方需要时自行判断（如 409 编码冲突弹「替换」）
+    throw err;
   }
   return res.json();
 }
@@ -5345,7 +5353,7 @@ function collectPacks() {
   });
   return out;
 }
-async function saveProduct(pid) {
+async function saveProduct(pid, opts) {
   const ptype = $("pType").value;
   const unit = $("pUnit") ? $("pUnit").value : "斤";
   const unitPayload = deriveUnitPayload(ptype, unit, PM_EDIT_P);
@@ -5353,6 +5361,8 @@ async function saveProduct(pid) {
   const stockLinks = ptype === "order" ? collectStockLinks() : [];
   const payload = {
     code: $("pCode").value,
+    // 编码冲突时点「替换编码」→ 传 true：把占用该编码的原商品编码清空，改给当前商品
+    code_takeover: !!(opts && opts.takeover),
     name: $("pName").value,
     category: $("pCategory").value,
     product_type: ptype,
@@ -5388,10 +5398,36 @@ async function saveProduct(pid) {
     PRODUCTS = await api("/api/products");
     renderProducts();
   } catch (e) {
+    // 编码已被别的商品占用（编码一对一）：不关弹窗、不动已填内容，就地给「替换编码」按钮
+    const conflict = e.detail && e.detail.code_conflict;
+    if (e.status === 409 && conflict) { showCodeConflict(pid, conflict); return; }
     // 换单位的换算关系没填：后端消息是分行的说明，toast 看不全，用弹窗
     if (/换算关系/.test(e.message || "")) alert(e.message);
     else toast("保存失败：" + e.message);
   }
+}
+/** 编码冲突：在「商品编码」输入框下面挂一条提示 + 「替换编码」按钮（表单内容不丢）。
+    点替换 = 把占用该编码的商品编码清空、改给当前商品（后端 code_takeover=true 原子完成）。 */
+function showCodeConflict(pid, c) {
+  const input = $("pCode");
+  if (!input) { toast(`编码被「${c.name}」占用`); return; }
+  const field = input.closest(".field") || input.parentElement;
+  let box = $("pCodeWarn");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "pCodeWarn";
+    box.className = "alert warn";
+    box.style.marginTop = "8px";
+    field.appendChild(box);
+  }
+  box.innerHTML = `编码 <b>${esc(c.code)}</b> 已被商品「<b>${esc(c.name)}</b>」使用（编码一对一）。
+    <div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <button class="btn sm" onclick="saveProduct(${pid || 0}, {takeover: true})">
+        <svg class="ic"><use href="#i-check"/></svg> 替换编码（原商品改回空编码）
+      </button>
+      <span class="muted" style="font-size:12px;">或者自己换一个不重复的编码再保存</span>
+    </div>`;
+  box.scrollIntoView({ block: "nearest" });
 }
 async function deleteProduct(pid) {
   if (!confirm("确认删除该商品？其历史单据会一并删除，请谨慎。")) return;

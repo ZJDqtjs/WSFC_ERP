@@ -57,6 +57,9 @@ class ProductIn(BaseModel):
     # 商品已有库存流水/入库记录/库存时必须给（见 _rescale_base_unit_change）；没有历史数据时可省。
     unit_change_ratio: float | None = None
     is_active: bool = True
+    # 编码冲突时是否「替换」：True = 把占用该编码的原商品编码清空、改给当前商品（编码一对一）。
+    # 用户点前端弹出的「替换编码」按钮时传；不传就返回 409，让前端弹按钮。
+    code_takeover: bool = False
 
 
 def _last_in_map(db: Session) -> dict[int, dict]:
@@ -247,10 +250,40 @@ def list_products(db: Session = Depends(get_db), user: User = Depends(get_curren
     return [_to_dict(p, db, last_in) for p in rows]
 
 
+def _code_owner(db: Session, code: str, exclude_id: int | None = None) -> Product | None:
+    """占用该编码的其他商品（编码一对一：trim 后精确匹配；空编码不校验）。"""
+    code = (code or "").strip()
+    if not code:
+        return None
+    q = select(Product).where(func.trim(Product.code) == code)
+    if exclude_id:
+        q = q.where(Product.id != exclude_id)
+    return db.scalar(q)
+
+
+def _take_code(db: Session, code: str, exclude_id: int | None = None, takeover: bool = False) -> None:
+    """校验商品编码是否被别的商品占着（编码一对一）。
+
+    被占用且没点「替换」→ 409，detail 里带上占用方，前端据此弹「替换编码」按钮；
+    点了替换（takeover=True）→ 把原商品编码清空，编码改给当前商品。
+    """
+    owner = _code_owner(db, code, exclude_id)
+    if not owner:
+        return
+    code = (code or "").strip()
+    if not takeover:
+        raise HTTPException(409, detail={
+            "message": f"编码「{code}」已被商品「{owner.name}」使用（编码一对一）",
+            "code_conflict": {"id": owner.id, "name": owner.name, "code": code},
+        })
+    owner.code = ""   # 替换：原商品的编码清空，改给当前商品
+
+
 @router.post("/products")
 def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if db.scalar(select(Product).where(Product.name == data.name.strip())):
         raise HTTPException(400, f"商品「{data.name}」已存在")
+    _take_code(db, data.code, None, data.code_takeover)   # 编码一对一（冲突时 409 让前端弹「替换」）
     if data.product_type not in ("stock", "order"):
         raise HTTPException(400, "商品类型必须为 stock 或 order")
     stock_links = _validate_stock_links(db, data)
@@ -348,6 +381,9 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
     dup = db.scalar(select(Product).where(Product.name == data.name.strip(), Product.id != pid))
     if dup:
         raise HTTPException(400, f"商品「{data.name}」已存在")
+    # 编码一对一：只在「编码有变化」时校验（历史重复的编码不拦改名/改价，用户可点替换逐个理顺）
+    if data.code.strip() != (p.code or "").strip():
+        _take_code(db, data.code, pid, data.code_takeover)
     if data.product_type not in ("stock", "order"):
         raise HTTPException(400, "商品类型必须为 stock 或 order")
     if data.stock_links is not None:
