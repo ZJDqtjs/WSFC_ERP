@@ -3086,8 +3086,10 @@ function clearRemarkField(textareaId) {
 async function uploadRemarkFiles(textareaId, source) {
   let files;
   if (source && typeof source.files !== "undefined") {
-    source.value = "";            // 允许重复选择同一个文件
+    // ⚠️ 必须先取文件、再清空 value：给 input.value 赋空串会同时清空 FileList，
+    // 反过来的话取出的是空数组 → 直接 return，用户看到的就是「选了文件没反应」。
     files = Array.from(source.files || []);
+    source.value = "";            // 允许重复选择同一个文件（必须在取值之后清空）
   } else if (source && typeof source[Symbol.iterator] === "function") {
     files = Array.from(source);   // 粘贴：FileList / File[]
   } else {
