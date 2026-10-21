@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from ..auth import get_current_user
 from ..config import llm_config
 from ..database import get_db
-from ..models import Inbound, OutboundLine, Product, Unit, User
+from ..models import AiMemory, Inbound, OutboundLine, Product, Unit, User
 from ..services import build_order, get_or_create_express_product
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -1177,6 +1177,115 @@ def _user_msg(text: str) -> str:
     return f"今天是 {date.today().isoformat()}（务必以这个日期作为\"今天\"）。\n\n【用户描述】\n{text}"
 
 
+# =============== AI 记忆：用户说过的别名 / 装箱换算，自动记住并在之后的识别里带上 ===============
+AI_MEMORY_KEEP = 300      # 每个分仓最多保留多少条（超出删最旧的，避免无限增长）
+AI_MEMORY_INJECT = 60     # 每次识别最多注入多少条（防止提示词膨胀拖慢识别）
+
+_RULE_WORDS = ("就是", "->", "→", "统一叫", "统一转", "叫做", "又叫", "也叫", "别名", "等于", "＝")
+_PACK_WORDS = ("一件", "一箱", "一包", "一袋", "一筐", "每件", "每箱", "每包", "每袋")
+
+
+def _mem_norm(s) -> str:
+    """记忆去重键：去掉所有空白 + 忽略大小写（不改字，纯文本原样保留）。"""
+    return re.sub(r"\s+", "", str(s or "")).lower()
+
+
+def _mem_grams(t: str, n: int = 2) -> set[str]:
+    """中文没有空格，用 2-gram 判断「这条记忆和这次内容是否相关」（如「清芹」）。"""
+    s = re.sub(r"[\s\d\W_]+", "", str(t or ""))
+    return {s[i:i + n] for i in range(max(0, len(s) - n + 1))}
+
+
+def _looks_like_rule(text: str) -> bool:
+    """这句补充说明是不是「规则」（别名对应 / 装箱换算），值得长期记住。
+
+    只认规则型的句子；普通的业务描述（如「今天入库100斤木耳25一斤」）不记，
+    否则会把流水当规则注入，反而干扰识别。
+    """
+    t = (text or "").strip()
+    if len(t) < 4 or len(t) > 500:
+        return False
+    if any(w in t for w in _RULE_WORDS):
+        return True
+    # 「一件清芹就是13公斤水果西芹」这类装箱换算（即使没写"就是"）
+    if any(w in t for w in _PACK_WORDS) and re.search(
+            r"\d+(?:\.\d+)?\s*(?:kg|KG|公斤|千克|斤|克|个|袋|箱|包)", t):
+        return True
+    return False
+
+
+def _memory_kind(text: str) -> str:
+    """粗分类型：别名对应 / 装箱换算（只用于列表展示，不影响识别）。"""
+    t = text or ""
+    if any(w in t for w in _PACK_WORDS) or re.search(r"\d+(?:\.\d+)?\s*(?:kg|KG|公斤|千克|斤|克)", t):
+        return "unit"
+    return "alias"
+
+
+def _remember_note(db: Session, text: str, source: str = "image") -> dict | None:
+    """把用户这次说的「规则型补充说明」记下来（同一句只记一次）。
+
+    返回 {"text": ..., "added": bool} 供前端提示；不是规则或写库失败都返回 None（不影响识别）。
+    """
+    t = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not _looks_like_rule(t):
+        return None
+    norm = _mem_norm(t)
+    try:
+        row = db.query(AiMemory).filter(AiMemory.norm == norm).first()
+        if row:
+            if not row.is_active:      # 之前删掉过的规则，用户又说了一遍 → 恢复
+                row.is_active = True
+                row.updated_at = datetime.now()
+                db.commit()
+                return {"text": row.text, "added": False, "reactivated": True}
+            return {"text": row.text, "added": False}
+        db.add(AiMemory(text=t, norm=norm, kind=_memory_kind(t), source=source))
+        db.commit()
+        # 只保留最近 AI_MEMORY_KEEP 条
+        rows = db.query(AiMemory).order_by(AiMemory.id.desc()).all()
+        for old in rows[AI_MEMORY_KEEP:]:
+            db.delete(old)
+        if len(rows) > AI_MEMORY_KEEP:
+            db.commit()
+        log.info("已记住 AI 规则（%s）：%s", source, t[:120])
+        return {"text": t, "added": True}
+    except Exception as e:  # noqa: BLE001 - 记忆失败不该影响识别
+        log.warning("记录 AI 记忆失败：%s: %s", type(e).__name__, e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return None
+
+
+def _memory_block(db: Session, context_text: str = "") -> str:
+    """把本仓的 AI 记忆附到用户消息里，让模型沿用用户之前确认过的口径。
+
+    与当前内容字面相关的排在前面（例如这次提到「清芹」，就把清芹那条放最前），
+    其余按新旧排；最多 AI_MEMORY_INJECT 条，避免提示词无限变长。
+    """
+    try:
+        rows = [m for m in db.query(AiMemory).filter(AiMemory.is_active.is_(True)).all()]
+    except Exception as e:  # noqa: BLE001
+        log.warning("读取 AI 记忆失败（不影响识别）：%s: %s", type(e).__name__, e)
+        return ""
+    if not rows:
+        return ""
+    ctx_grams = _mem_grams(context_text)
+    if ctx_grams:
+        # 和这次内容有共同片段（如都提到「清芹」）的排前面，其余按新旧
+        rows.sort(key=lambda m: 0 if (_mem_grams(m.text) & ctx_grams) else 1)
+    rows = rows[:AI_MEMORY_INJECT]
+    lines = "\n".join(f"- {m.text}" for m in rows)
+    return (
+        "\n\n【历史约定（用户之前确认过的口径，务必沿用；优先级高于你的常识猜测）】\n"
+        + lines
+        + "\n（这些是长期有效的规则：商品名、包装/箱型、单位与装箱换算都按它们来；"
+          "与用户这次明确说的冲突时，以这次说的为准。）"
+    )
+
+
 # =============== AI 可调用的只读工具（把它当 agent 用） ===============
 # 票据上的名字常与商品档案不一致：票据写「哈斯」、规格 160-190，档案里是「哈斯牛油果大果」「哈斯牛油果3斤礼盒」。
 # 早前是把整个目录塞进提示词；现在改成给模型「接口 + 权限」：它自己按需查、用多少查多少。
@@ -1903,6 +2012,11 @@ def parse_stream(data: ParseIn, db: Session = Depends(get_db), user: User = Depe
 
     def gen():
         try:
+            # 记忆：这次说的若是「别名对应 / 装箱换算」这类规则，自动记下来（回执推给前端提示）
+            for _note, _src in ((text, "text"), (data.hint, "hint")):
+                _mem = _remember_note(db, _note, _src)
+                if _mem and (_mem.get("added") or _mem.get("reactivated")):
+                    yield event({"memory": _mem})
             # 追问（连续对话）时不走本地快速识别：用户要的是按他的要求重新识别，规则式解析满足不了
             if not (data.hint or "").strip():
                 quick = _quick_parse_text(text)
@@ -1917,7 +2031,7 @@ def parse_stream(data: ParseIn, db: Session = Depends(get_db), user: User = Depe
             yield event({"stage": "正在调用大模型识别…" if not (data.hint or "").strip()
                          else "正在按你的要求重新识别…"})
             buf = ""
-            user_msg = _user_msg(text) + _followup_block(data.prev, data.hint)
+            user_msg = _user_msg(text) + _memory_block(db, text) + _followup_block(data.prev, data.hint)
             # agent：模型可调只读工具查本仓商品资料（见 AI_TOOLS / _run_ai_tool 的权限边界）
             for kind, piece in _chat_stream_agent(cfg, SYSTEM_PROMPT, user_msg, db, max_tokens=1600):
                 if kind == "think":
@@ -2006,13 +2120,18 @@ async def parse_image_stream(
     # 补充说明里若有「别名 -> 正式名称」，额外列一遍并提示可类推，让模型少犯错
     # 追问（连续对话）时再带上「上一次结果 + 用户要求」，只改被指出的地方
     # 商品资料不再塞进提示词：改成给模型只读工具，让它自己查（见 AI_TOOLS / _run_ai_tool）
-    user_msg = _image_user_msg(text) + _followup_block(prev, hint)
+    user_msg = _image_user_msg(text) + _memory_block(db, text) + _followup_block(prev, hint)
 
     def event(obj: dict) -> str:
         return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
 
     def gen():
         try:
+            # 记忆：补充说明/追问里若是「别名对应 / 装箱换算」，自动记下来（回执推给前端提示）
+            for _note, _src in ((text, "image"), (hint, "hint")):
+                _mem = _remember_note(db, _note, _src)
+                if _mem and (_mem.get("added") or _mem.get("reactivated")):
+                    yield event({"memory": _mem})
             uri = _image_data_uri(data, file.filename or "invoice.jpg")
             yield event({"stage": "正在按你的要求重新识别票据…" if (hint or "").strip()
                          else "正在调用大模型识别票据…"})
@@ -2159,3 +2278,62 @@ def last_price(
 
 # 注：AI 盘点没有单独的接口——前端直接调用既有的 POST /api/adjust
 # （+/- 增减模式），与手工盘点完全同一套库存流水、FIFO 批次与成本口径，可在盘点记录里回退。
+
+
+# =============== AI 记忆（管理接口） ===============
+# 识别时用户在补充说明里说的「X就是Y」「一件X=13公斤」这类规则会自动记下（见 _remember_note），
+# 这里提供查看 / 手动添加 / 删除；只有本仓可见（db 会话本身就是当前分仓）。
+class MemoryIn(BaseModel):
+    text: str
+
+
+@router.get("/memories")
+def list_memories(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """本仓的 AI 记忆：识别时会自动带上，这里可查看与删除。"""
+    rows = db.query(AiMemory).filter(AiMemory.is_active.is_(True)).order_by(AiMemory.id.desc()).all()
+    return [{
+        "id": m.id,
+        "text": m.text,
+        "kind": m.kind,
+        "source": m.source,
+        "created_at": m.created_at.strftime("%Y-%m-%d %H:%M") if m.created_at else "",
+    } for m in rows]
+
+
+@router.post("/memories")
+def add_memory(data: MemoryIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """手动记住一条规则（同一句不会重复）。"""
+    t = re.sub(r"\s+", " ", (data.text or "")).strip()
+    if len(t) < 2:
+        raise HTTPException(400, "记忆内容太短")
+    if len(t) > 500:
+        raise HTTPException(400, "记忆内容太长（≤500 字）")
+    norm = _mem_norm(t)
+    row = db.query(AiMemory).filter(AiMemory.norm == norm).first()
+    if row:
+        row.is_active = True
+        row.updated_at = datetime.now()
+    else:
+        db.add(AiMemory(text=t, norm=norm, kind=_memory_kind(t), source="manual"))
+    db.commit()
+    log.info("手动新增 AI 规则：%s", t[:120])
+    return {"ok": True, "text": t}
+
+
+@router.delete("/memories/{mem_id}")
+def del_memory(mem_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """删除一条记忆（之后识别不再按它；历史单据不受影响）。"""
+    row = db.query(AiMemory).filter(AiMemory.id == mem_id).first()
+    if not row:
+        raise HTTPException(404, "记忆不存在")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/memories")
+def clear_memories(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """清空本仓的全部 AI 记忆。"""
+    db.query(AiMemory).delete()
+    db.commit()
+    return {"ok": True}

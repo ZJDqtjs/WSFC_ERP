@@ -1200,6 +1200,7 @@ function viewProductMv(pid) {
 /* =============== 工作台 =============== */
 async function loadDashboard() {
   refreshPayBadge();   // 侧边栏「待付款账单」角标
+  loadAiMemories(true);   // 工作台的 AI 记忆（别名 / 装箱换算）
   try {
     const d = await api("/api/dashboard");
     const now = new Date();
@@ -1377,6 +1378,12 @@ async function aiCollectStream(res, sink) {
         out.stage(obj.stage);              // 当前阶段提示
       } else if (obj.delta) {
         out.answer(obj.delta);             // 模型正式输出（中文思路 + JSON）
+      } else if (obj.memory) {
+        // 后端把这次说的「X就是Y / 一件X=13公斤」这类规则自动记下了：提示一下并刷新记忆列表
+        if (obj.memory.added || obj.memory.reactivated) {
+          toast(`🧠 已记住：${obj.memory.text}`);
+          if (typeof loadAiMemories === "function") loadAiMemories(true);
+        }
       } else if (obj.result) {
         if (!result || obj.source === "quick") result = obj.result;
       } else if (obj.error) {
@@ -1386,6 +1393,53 @@ async function aiCollectStream(res, sink) {
   }
   if (!result) throw new Error("识别未返回结果");
   return result;
+}
+/* ---------- AI 记忆：补充说明里说过的别名 / 装箱换算，自动记住并在之后的识别里带上 ---------- */
+let AI_MEM = [];
+async function loadAiMemories(silent) {
+  const box = $("aiMemList");
+  if (!box) return;
+  try {
+    AI_MEM = await api("/api/ai/memories");
+    renderAiMemories();
+  } catch (e) {
+    if (!silent) toast("读取 AI 记忆失败：" + e.message);
+    box.innerHTML = `<span class="muted">读取失败：${esc(e.message)}</span>`;
+  }
+}
+function renderAiMemories() {
+  const box = $("aiMemList");
+  if (!box) return;
+  const cnt = $("aiMemCount");
+  if (cnt) cnt.textContent = AI_MEM.length ? `　共 ${AI_MEM.length} 条` : "";
+  if (!AI_MEM.length) {
+    box.innerHTML = `<span class="muted">还没有记忆。识别时在补充说明里写「京东8号就是8号纸箱」「一件清芹就是13公斤」这类规则，会自动记下来（普通业务描述不会记）。</span>`;
+    return;
+  }
+  box.innerHTML = AI_MEM.map((m) => `<div class="ai-mem-item">
+      <span class="ai-mem-text">${esc(m.text)}</span>
+      <span class="muted ai-mem-meta">${m.source === "manual" ? "手动添加" : (m.source === "hint" ? "追问时记下" : "识别时自动记")}${m.created_at ? " · " + esc(m.created_at) : ""}</span>
+      <button class="btn secondary ai-mem-x" title="删除这条记忆（历史单据不受影响）" onclick="aiMemDel(${m.id})">✕</button>
+    </div>`).join("");
+}
+async function aiMemAdd() {
+  const el = $("aiMemText");
+  const t = ((el && el.value) || "").trim();
+  if (!t) { toast("先写一条要记住的规则，如「清芹就是水果西芹」"); return; }
+  try {
+    await api("/api/ai/memories", "POST", { text: t });
+    if (el) el.value = "";
+    toast("🧠 已记住，之后每次识别都会带上");
+    await loadAiMemories(true);
+  } catch (e) { toast("保存失败：" + e.message); }
+}
+async function aiMemDel(id) {
+  if (!confirm("删除这条记忆？删除后 AI 不再按它识别（历史单据不受影响）")) return;
+  try {
+    await api(`/api/ai/memories/${id}`, "DELETE");
+    await loadAiMemories(true);
+    toast("已删除这条记忆");
+  } catch (e) { toast("删除失败：" + e.message); }
 }
 /* 注：原来「识别完立刻弹确认框」的 aiParse / aiRecognizeOne 已由队列识别取代
    （见下方「AI 识别队列 · 待办处理」：入队 → 后台识别 → /eva 审核提交）。 */

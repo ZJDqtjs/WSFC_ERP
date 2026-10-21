@@ -453,3 +453,24 @@ class WarehouseIn(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     product: Mapped[WarehouseProduct | None] = relationship()
+
+
+class AiMemory(Base):
+    """AI 识别记忆：用户在补充说明里给出的「别名 / 换算口径」，之后每次识别自动带上。
+
+    例：「京东箱子就是纸箱：京东8号->8号纸箱」「清芹就是水果西芹」
+        「一件清芹就是13公斤水果西芹」（装箱换算）
+    只记"规则型"的句子（含 就是 / -> / → / 统一叫 等，或 一件X=13公斤 这类装箱换算），
+    不记普通的业务描述（如"今天入库100斤木耳25一斤"），避免把流水描述当规则。
+    """
+
+    __tablename__ = "ai_memories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    text: Mapped[str] = mapped_column(String(500), default="")               # 记忆原文（用户怎么说就怎么记）
+    norm: Mapped[str] = mapped_column(String(500), default="", unique=True, index=True)  # 去空白/大小写的去重键
+    kind: Mapped[str] = mapped_column(String(16), default="alias")           # alias 别名 / unit 装箱换算 / other
+    source: Mapped[str] = mapped_column(String(16), default="image")         # image / text / hint / manual
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)

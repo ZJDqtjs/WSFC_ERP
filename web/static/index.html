@@ -124,6 +124,16 @@
           <div id="aiPending" class="ai-pending" style="display:none;"></div>
           <!-- 队列状态：识别在后台逐条跑，结果进「待办处理」审核提交 -->
           <div id="aiQueueBar" class="ai-queue-bar" style="display:none;"></div>
+          <!-- AI 记忆：补充说明里说过的「X就是Y / 一件X=13公斤」这类规则会自动记住，之后每次识别自动带上 -->
+          <details class="ai-mem" id="aiMemBox">
+            <summary><b>🧠 AI 记忆</b><span class="muted" id="aiMemCount"></span><span class="muted">（说过的别名 / 装箱换算会自动记住，之后识别自动沿用；点开可查看、删除）</span></summary>
+            <div class="toolbar" style="margin-top:8px;">
+              <input id="aiMemText" placeholder="手动加一条：如「清芹就是水果西芹」「一件清芹就是13公斤水果西芹」" style="flex:1;min-width:240px;" onkeydown="if(event.key==='Enter')aiMemAdd()" />
+              <button class="btn secondary" onclick="aiMemAdd()">＋ 记住</button>
+              <button class="btn secondary" onclick="loadAiMemories()">刷新</button>
+            </div>
+            <div id="aiMemList" class="ai-mem-list"><span class="muted">加载中…</span></div>
+          </details>
           <div id="aiThinking" class="ai-thinking" style="display:none;">
             <div class="ai-think-head">
               <span class="ai-think-title"><svg class="ic"><use href="#i-ai"/></svg> <span id="aiThinkTitle">AI 思考中</span></span>
