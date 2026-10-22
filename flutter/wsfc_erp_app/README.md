@@ -99,7 +99,7 @@ static const String _defaultApiBaseUrl = String.fromEnvironment(
 地址怎么填：
 
 - 模拟器 / 桌面调试：`http://127.0.0.1:8000`（本机 uvicorn，只绑回环，仅本机可达）。
-- 手机真机 / 生产：填 nginx 地址，如 `http://47.108.13.20`（80 端口，nginx 把 `/api`、
+- 手机真机 / 生产：填 nginx 地址，如 `http://<服务器地址>`（80 端口，nginx 把 `/api`、
   `/uploads` 反代到后端）。**不要直连 `:8000`**——后端只监听 `127.0.0.1`，手机打不通。
 
 ```powershell

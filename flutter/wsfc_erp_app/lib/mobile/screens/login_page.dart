@@ -338,7 +338,7 @@ class _MobileLoginPageState extends State<MobileLoginPage> {
       ),
       child: const Text(
         '当前连的是本机回环地址，手机访问不到。请在 dart_defines.local.json 里填服务器地址'
-        '（如 http://47.108.13.20），并用 --dart-define-from-file=dart_defines.local.json 重新打包。',
+        '（如 http://<服务器地址>），并用 --dart-define-from-file=dart_defines.local.json 重新打包。',
         style: TextStyle(fontSize: 11, color: Color(0xFFB45309), height: 1.45),
       ),
     );
