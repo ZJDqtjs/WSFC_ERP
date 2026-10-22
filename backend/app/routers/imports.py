@@ -6,6 +6,7 @@ import re
 import uuid
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -212,6 +213,12 @@ def parse_pack_items(text: str, db: Session) -> list[dict]:
 
 
 # ---------------- 模板下载 ----------------
+def _content_disposition(filename: str) -> str:
+    """中文名不能直接进 Content-Disposition：Starlette 用 latin-1 编响应头，会 UnicodeEncodeError 500。
+    与 FileResponse 一致走 RFC 5987 —— ASCII 回退名 + filename*=UTF-8''百分号编码。"""
+    return "attachment; filename=\"template.xlsx\"; filename*=UTF-8''" + quote(filename, safe="")
+
+
 def _xlsx_response(wb, filename: str):
     buf = io.BytesIO()
     wb.save(buf)
@@ -219,7 +226,7 @@ def _xlsx_response(wb, filename: str):
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _content_disposition(filename)},
     )
 
 
