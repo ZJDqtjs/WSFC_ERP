@@ -177,24 +177,26 @@ Go 原先只移植了「建表 + 补列 + `seedUnits` + 新仓拷 users」，**�
 已定（2026-10-22）—— **分支口径：一条 `feature-go`，先 PR 非 Go 的部分，之后继续装 Go**：
 
 - 本分支从 dev tip `71eea8a` 直接分出，**没有 merge 提交**。前三个提交是与 Go 无关的修复，
-  **PR 就开到这里**（给 dev，dev 再并 main）：
+  已单独开过一次 PR（见下）：
   `c94262f` 模板中文文件名改走 RFC 5987 响应头（修 `/api/templates/products` 的 500）、
   `7f8242a` 三份 `backend/docs/*.xlsx` 入库、`8eb9f7a` `.gitignore` 收口
   （沙箱目录 `/_gosb/` 等 5 条 + `!backend/docs/*.xlsx`，**`/go/` 这条通配原样保留**）。这三个的净 diff 是 5 个文件、零 Go 内容。
-- PR 合掉之后，才是 `feature-go` 自己的东西：`36542f9`（112 个 `go/` 文件 + 把 `/go/` 换成本机产物细规则）+ 本文档。
-  **Go 不并回 dev**：dev 侧 `.gitignore` 里 `/go/` 仍是整目录忽略，所以 Go 永远不会被 dev 的 `git add -A` 顺手带上去。
+- **`36542f9`（112 个 `go/` 文件 + 把 `/go/` 换成本机产物细规则）+ 本文档属于 `feature-go` 自己，不并回 dev**：
+  dev 侧 `.gitignore` 里 `/go/` 仍是整目录忽略，所以 Go 永远不会被 dev 的 `git add -A` 顺手带上去。
   139 个接口对齐、开机数据层补齐、差分全绿这些结论都成立，只是它们属于这个分支。
-- **PR 已开：[#2](https://github.com/ZJDqtjs/WSFC_ERP/pull/2)（`feature-go` → `dev`，GitHub 判为可自动合并）**，
-  2026-10-22 提交，内容正是上面那三个提交：远端 `origin/feature-go` 就停在 `8eb9f7a`（用 `git push origin 8eb9f7a:feature-go` 只推这一段），
-  本地 `feature-go` 头是 `b910a09`，比远端多 `36542f9` + 本文档两个提交。**这两个提交在 PR 合掉之前不要 push。**
-- **一个 GitHub 的使用注意**：PR 跟着源分支的头走。如果你在 PR 还没合的时候就把 `36542f9` push 上去了，
-  Go 那 112 个文件会一起涌进同一个 PR。所以顺序要是：**先 push 到 `8eb9f7a` 开 PR（已做完，就是 #2）、合掉，再 push 后面的 Go 提交**。
-  合完 `dev` 后本地补一次 `git push origin feature-go`，远端 `feature-go` 才会跟上 Go 内容。
+- **闭环已经完成（2026-10-22）**：PR [#2](https://github.com/ZJDqtjs/WSFC_ERP/pull/2)（`feature-go` → `dev`，只到 `8eb9f7a`）
+  已由用户合掉 = dev 上的 merge 提交 `005789c`；之后 `git push origin feature-go` 把 Go 那几提交推上去，
+  之后 `git push origin feature-go` 把 Go 那几提交推上去，远端 `origin/feature-go` 与本地同头（含 112 个 `go/` 文件）。
+  本地分支 `go-port`（旧链 `d22e109`，方向走错的那条）已删。
+  **以后继续做 Go：在 `feature-go` 上提交、直接 `git push origin feature-go` 即可**，不会再影响已合掉的 PR。
+- **一条 GitHub 的使用注意（本轮就是这么排的，下次照做）**：PR 跟着源分支的头走。非 Go 的部分要先进 dev，
+  就得 **先 `git push origin <非Go收尾commit>:feature-go` 开 PR、合掉，再 push 后面的 Go 提交**；
+  顺序反了，Go 那 112 个文件会一起涌进同一个 PR。
 - **连带影响**：差分套件在 `go/_diff/`，跟着 `/go/` 一起不进 dev，所以**从 dev clone 出来的机器没有这套脚本**；
   要跑回归就切 `feature-go`，或把 `go/_diff/` + `_gosb/seed.sh` 手动带过去。同理，dev 上也没有本文档。
 - **`feature-go` 会落后于 dev。** backend 语义以后在 dev 上再变（新接口、口径修正），这个分支就跟着过期，
   真要再对齐得重做一次移植级核对，不是简单 merge。方向也别再反过来：上一轮那条 `d22e109`（dev → feature-go）是走错了，
-  已经废弃，旧链暂时留在本地分支 `go-port`（确认新分支没问题后可删）。
+  用户要的是「feature-go 保留 Go 特性 → 非 Go 改动 PR 给 dev → dev 再并 main」。
 - **开机数据层已补齐**（第 6 节）。
 
 还没定：
@@ -203,7 +205,7 @@ Go 原先只移植了「建表 + 补列 + `seedUnits` + 新仓拷 users」，**�
    `try_files $uri $uri/ /index.html`，`/mobile/` 走 PWA alias），后端只被反代 `/api` 和 `/uploads`，
    所以「只起 Go 打不开页面」不是移植缺口，是拓扑本来如此；Python 侧那个 `SERVE_STATIC` 开关默认也是 `0`，
    Go 只是没抄这个开发期便利用的开关。真要本机连页面一起起，跑 `web/` 的 dev server 或 `vite preview` 就行。
-2. 是否反向修掉 Python 侧那些与 Go 无关的老问题（模板中文文件名的 `Content-Disposition` 已经修了，就在本分支 `c94262f`，随 PR 进 dev）。
+2. 是否反向修掉 Python 侧那些与 Go 无关的老问题（模板中文文件名的 `Content-Disposition` 那条已经修完并进了 dev，`c94262f` → 随 PR #2 = `005789c`；剩下的还没盘过）。
 3. ~~`/docs/go_*.md` 要不要放开~~：**本篇留在 `feature-go`，不进 dev**（它整篇讲的都是 Go 侧，跟着 `/go/` 一起不进 dev 才对）；
    `docs/go_*.md` 那几篇早期过程文档也按原样忽略。dev 上想要一个指路条的话，另写一句 README 提示「Go 移植见 feature-go 分支」即可，别把全文塞进 dev。
 
