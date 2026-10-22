@@ -171,6 +171,17 @@
           <button class="seg-item" data-tab="st" onclick="evaTab('st')">盘点待办<span class="badge" id="evaTabSt"></span></button>
         </div>
 
+        <!-- AI 记忆：补充说明里说过的「X就是Y / 一件X=13公斤」这类规则会自动记住，之后每次识别自动带上 -->
+        <details class="ai-mem" id="aiMemBox">
+          <summary><b>🧠 AI 记忆</b><span class="muted" id="aiMemCount"></span><span class="muted">（说过的别名 / 装箱换算会自动记住，之后每次识别自动沿用；点开可查看、添加、删除）</span></summary>
+          <div class="toolbar" style="margin-top:8px;">
+            <input id="aiMemText" placeholder="手动加一条：如「清芹就是水果西芹」「一件清芹就是13公斤水果西芹」" style="flex:1;min-width:240px;" onkeydown="if(event.key==='Enter')aiMemAdd()" />
+            <button class="btn secondary" onclick="aiMemAdd()">＋ 记住</button>
+            <button class="btn secondary" onclick="loadAiMemories()">刷新</button>
+          </div>
+          <div id="aiMemList" class="ai-mem-list"><span class="muted">加载中…</span></div>
+        </details>
+
         <div class="stat-grid" id="evaStats"></div>
 
         <div class="card eva-panel" id="evaPanelAi">
@@ -546,7 +557,9 @@
               <option value="">全部类型</option><option value="stock" selected>库存商品</option><option value="order">订单商品</option>
             </select>
             <select id="prodCategory" class="searchable" onchange="renderProducts()"><option value="">全部分类</option></select>
-            <input id="prodSearch" placeholder="🔍 搜索商品 / 分类 / 规格 / 代发..." oninput="renderProducts()" />
+            <input id="prodSearch" placeholder="🔍 搜索商品 / 分类 / 规格 / 代发…（多关键词用「：」隔开）"
+                   title="支持多关键词：用「：」「:」、空格、逗号或竖线隔开，多个关键词需同时命中。例：牛油果：代发"
+                   oninput="renderProducts()" />
             <div class="grow"></div>
             <button class="btn secondary" onclick="openUnitsModal()"><svg class="ic"><use href="#i-ruler"/></svg> 计量单位管理</button>
             <button class="btn secondary" onclick="pdataDownload('products_stock')"><svg class="ic"><use href="#i-download"/></svg> 导出库存JSON</button>

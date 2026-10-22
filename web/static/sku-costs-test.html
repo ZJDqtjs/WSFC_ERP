@@ -99,14 +99,25 @@
 (function () {
   "use strict";
   var LS = "jd_sku_costs_token";
+  var LS_ERP = "jd_sku_costs_erp";
   var $ = function (id) { return document.getElementById(id); };
 
-  // 默认地址：固定指向 ERP 服务器。
-  // 不要用 location.origin 猜：本地预览/双击打开时它是 127.0.0.1 或 null，会把请求打到本地导致 404。
-  var ERP = "http://47.108.13.20";
+  // 默认地址：优先同源（页面由 ERP 服务器托管时 location.origin 就是后端地址），
+  // 其次用上次保存的地址，都没有则用相对路径。
+  // 不写死服务器地址——仓库是公开的，生产 IP 不进代码。
+  var ERP = "";
+  try {
+    if (location.protocol === "http:" || location.protocol === "https:") ERP = location.origin;
+  } catch (e) { /* 忽略 */ }
+  if (!ERP) { try { ERP = localStorage.getItem(LS_ERP) || ""; } catch (e) { /* 忽略 */ } }
   var DEF = ERP + "/api/open/sku-costs";
   $("url").value = DEF;
   try { $("token").value = localStorage.getItem(LS) || ""; } catch (e) { /* 隐私模式下忽略 */ }
+  // 手填过地址就记住，下次（含 file:// 打开）直接回填
+  $("url").addEventListener("change", function () {
+    var base = $("url").value.trim().replace(/\/api\/open\/sku-costs.*$/, "");
+    if (base) { try { localStorage.setItem(LS_ERP, base); } catch (e) { /* 忽略 */ } }
+  });
 
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -332,9 +343,10 @@ var rows = ids.map(function (id) {
     }
     var u = location.origin + "/api/open/sku-costs";
     if (!confirm("将把接口地址改成：\n" + u +
-      "\n\n只有当前页面本身就是从 ERP 服务器打开的（如 http://47.108.13.20/sku-costs-test.html）才应该这么改。" +
+      "\n\n只有当前页面本身就是从 ERP 服务器打开的（页面地址与 ERP 同源）才应该这么改。" +
       "\n若是本地预览/双击打开的，改了会 404。继续？")) return;
     $("url").value = u;
+    try { localStorage.setItem(LS_ERP, location.origin); } catch (e) { /* 忽略 */ }
   };
 
   $("clear").onclick = function () {

@@ -1528,6 +1528,27 @@ body.notice-on .login-mask { padding-top: 40px; }
   font-size: 12px; line-height: 20px; cursor: pointer;
 }
 .ai-pending-x:hover { background: rgba(0, 0, 0, .78); }
+/* AI 记忆（别名 / 装箱换算）：识别时说过的规则自动记下，工作台可查看与删除 */
+.ai-mem {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-soft, #fafafa);
+}
+.ai-mem > summary { cursor: pointer; font-size: 13px; color: var(--text-secondary); }
+.ai-mem > summary .muted { font-size: 12px; margin-left: 6px; }
+.ai-mem-list { margin-top: 6px; max-height: 220px; overflow: auto; }
+.ai-mem-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 0; font-size: 13px;
+  border-top: 1px dashed var(--border-light, var(--border));
+}
+.ai-mem-item:first-child { border-top: none; }
+.ai-mem-text { flex: 1; word-break: break-all; }
+.ai-mem-meta { font-size: 11px; white-space: nowrap; }
+.ai-mem-x { padding: 2px 7px !important; line-height: 1.2; }
+
 /* 连续对话：在确认框里让 AI 按补充要求重新识别 */
 .ai-followup {
   margin-top: 10px;

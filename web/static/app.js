@@ -232,9 +232,17 @@ async function api(path, method = "GET", body) {
   const res = await fetch(routePath(path), opt);
   if (res.status === 401) { showLogin(); throw new Error("请先登录"); }
   if (!res.ok) {
-    let msg = "请求失败";
-    try { const j = await res.json(); msg = j.detail || msg; } catch (e) {}
-    throw new Error(msg);
+    let msg = "请求失败", detail = null;
+    try {
+      const j = await res.json();
+      detail = j.detail;
+      // detail 可能是字符串，也可能是结构化对象（如编码冲突 {message, code_conflict}）
+      msg = typeof j.detail === "string" ? j.detail : (j.detail && j.detail.message) || msg;
+    } catch (e) {}
+    const err = new Error(msg);
+    err.status = res.status;
+    err.detail = detail;   // 调用方需要时自行判断（如 409 编码冲突弹「替换」）
+    throw err;
   }
   return res.json();
 }
@@ -325,6 +333,26 @@ function prodStockLinks(p) {
     name: l.name || (PRODUCTS.find((x) => x.id === l.product_id) || {}).name || "?",
     default_unit: l.default_unit || ((PRODUCTS.find((x) => x.id === l.product_id) || {}).default_unit || ""),
   }));
+}
+/* 商品的扣减方案清单：[{name, links:[{product_id, multiplier, name, default_unit, last_in_date}]}]。
+   没配多方案时，把现有 stock_links 当成「方案1」返回（老数据口径不变，界面照样能编辑）。
+   出库时会按各方案库存商品的「最近一次采购入库」日期自动选一套（后端 deduction_scheme）。 */
+function prodSchemes(p) {
+  const raw = (p && Array.isArray(p.stock_schemes)) ? p.stock_schemes.filter((s) => s && (s.links || []).length) : [];
+  if (raw.length) {
+    return raw.map((s, i) => ({
+      name: (s.name || "").trim() || `方案${i + 1}`,
+      links: (s.links || []).map((l) => ({
+        product_id: l.product_id,
+        multiplier: Number(l.multiplier) || 1,
+        name: l.name || (PRODUCTS.find((x) => x.id === l.product_id) || {}).name || "?",
+        default_unit: l.default_unit || ((PRODUCTS.find((x) => x.id === l.product_id) || {}).default_unit || ""),
+        last_in_date: l.last_in_date || "",
+      })),
+    }));
+  }
+  const links = prodStockLinks(p || {});
+  return links.length ? [{ name: "方案1", links }] : [];
 }
 function stockSortValue(p) {
   if (p.product_type === "order") {
@@ -1369,6 +1397,12 @@ async function aiCollectStream(res, sink) {
         out.stage(obj.stage);              // 当前阶段提示
       } else if (obj.delta) {
         out.answer(obj.delta);             // 模型正式输出（中文思路 + JSON）
+      } else if (obj.memory) {
+        // 后端把这次说的「X就是Y / 一件X=13公斤」这类规则自动记下了：提示一下并刷新记忆列表
+        if (obj.memory.added || obj.memory.reactivated) {
+          toast(`🧠 已记住：${obj.memory.text}`);
+          if (typeof loadAiMemories === "function") loadAiMemories(true);
+        }
       } else if (obj.result) {
         if (!result || obj.source === "quick") result = obj.result;
       } else if (obj.error) {
@@ -1378,6 +1412,53 @@ async function aiCollectStream(res, sink) {
   }
   if (!result) throw new Error("识别未返回结果");
   return result;
+}
+/* ---------- AI 记忆：补充说明里说过的别名 / 装箱换算，自动记住并在之后的识别里带上 ---------- */
+let AI_MEM = [];
+async function loadAiMemories(silent) {
+  const box = $("aiMemList");
+  if (!box) return;
+  try {
+    AI_MEM = await api("/api/ai/memories");
+    renderAiMemories();
+  } catch (e) {
+    if (!silent) toast("读取 AI 记忆失败：" + e.message);
+    box.innerHTML = `<span class="muted">读取失败：${esc(e.message)}</span>`;
+  }
+}
+function renderAiMemories() {
+  const box = $("aiMemList");
+  if (!box) return;
+  const cnt = $("aiMemCount");
+  if (cnt) cnt.textContent = AI_MEM.length ? `　共 ${AI_MEM.length} 条` : "";
+  if (!AI_MEM.length) {
+    box.innerHTML = `<span class="muted">还没有记忆。识别时在补充说明里写「京东8号就是8号纸箱」「一件清芹就是13公斤」这类规则，会自动记下来（普通业务描述不会记）。</span>`;
+    return;
+  }
+  box.innerHTML = AI_MEM.map((m) => `<div class="ai-mem-item">
+      <span class="ai-mem-text">${esc(m.text)}</span>
+      <span class="muted ai-mem-meta">${m.source === "manual" ? "手动添加" : (m.source === "hint" ? "追问时记下" : "识别时自动记")}${m.created_at ? " · " + esc(m.created_at) : ""}</span>
+      <button class="btn secondary ai-mem-x" title="删除这条记忆（历史单据不受影响）" onclick="aiMemDel(${m.id})">✕</button>
+    </div>`).join("");
+}
+async function aiMemAdd() {
+  const el = $("aiMemText");
+  const t = ((el && el.value) || "").trim();
+  if (!t) { toast("先写一条要记住的规则，如「清芹就是水果西芹」"); return; }
+  try {
+    await api("/api/ai/memories", "POST", { text: t });
+    if (el) el.value = "";
+    toast("🧠 已记住，之后每次识别都会带上");
+    await loadAiMemories(true);
+  } catch (e) { toast("保存失败：" + e.message); }
+}
+async function aiMemDel(id) {
+  if (!confirm("删除这条记忆？删除后 AI 不再按它识别（历史单据不受影响）")) return;
+  try {
+    await api(`/api/ai/memories/${id}`, "DELETE");
+    await loadAiMemories(true);
+    toast("已删除这条记忆");
+  } catch (e) { toast("删除失败：" + e.message); }
 }
 /* 注：原来「识别完立刻弹确认框」的 aiParse / aiRecognizeOne 已由队列识别取代
    （见下方「AI 识别队列 · 待办处理」：入队 → 后台识别 → /eva 审核提交）。 */
@@ -2742,8 +2823,12 @@ function evaTab(tab) {
   if (EVA_TAB !== "ai") { const c = $("evaLiveCard"); if (c) c.style.display = "none"; }
   else evaRenderLive();
 }
-function loadEva() { renderEva(); evaTab(EVA_TAB); }
-function evaRefresh() { renderEva(); refreshEvaBadge(); aiQueueTick(); }
+function loadEva() {
+  renderEva();
+  evaTab(EVA_TAB);
+  loadAiMemories(true);   // 待办页的「🧠 AI 记忆」（别名 / 装箱换算）
+}
+function evaRefresh() { renderEva(); refreshEvaBadge(); aiQueueTick(); loadAiMemories(true); }
 function evaRunQueue() {
   const waiting = AI_QUEUE.filter((j) => j.status === "waiting").length;
   toast(waiting ? `队列里还有 ${waiting} 项，继续识别…` : "队列已全部识别完");
@@ -3086,8 +3171,10 @@ function clearRemarkField(textareaId) {
 async function uploadRemarkFiles(textareaId, source) {
   let files;
   if (source && typeof source.files !== "undefined") {
-    source.value = "";            // 允许重复选择同一个文件
+    // ⚠️ 必须先取文件、再清空 value：给 input.value 赋空串会同时清空 FileList，
+    // 反过来的话取出的是空数组 → 直接 return，用户看到的就是「选了文件没反应」。
     files = Array.from(source.files || []);
+    source.value = "";            // 允许重复选择同一个文件（必须在取值之后清空）
   } else if (source && typeof source[Symbol.iterator] === "function") {
     files = Array.from(source);   // 粘贴：FileList / File[]
   } else {
@@ -4842,6 +4929,19 @@ function unitOptions(product, selected) {
   ).join("");
 }
 
+/** 把搜索框内容拆成多个关键词（小写）。分隔符：全/半角冒号、空格（含全角）、逗号、顿号、竖线。
+    多个关键词之间是「且」的关系：都要命中才算匹配。例：「牛油果：代发」→ ['牛油果','代发'] */
+function splitSearchKeywords(raw) {
+  return String(raw || "")
+    .toLowerCase()
+    .split(/[：:，,、\s|｜]+/)
+    .filter(Boolean);
+}
+/** 多关键词匹配：每个关键词都要在 hay（已小写的可搜索文本）里出现。关键词为空视为全部命中。 */
+function searchHit(hay, kws) {
+  const text = String(hay || "").toLowerCase();
+  return !kws || !kws.length || kws.every((k) => text.includes(k));
+}
 async function renderProducts() {
   if (!PRODUCTS.length) PRODUCTS = await api("/api/products");
   const EXCLUDED = ["包材", "人工", "快递"]; // 已独立成侧边栏入口的分类，商品页默认不显示
@@ -4879,23 +4979,28 @@ async function renderProducts() {
     cats.sort();
     catSel.insertAdjacentHTML("beforeend", cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join(""));
   }
-  const kw = ($("prodSearch")?.value || "").trim().toLowerCase();
-  const cat = forced ? "" : (catSel ? catSel.value : "");
-  const ptype = $("prodType")?.value || "";
-  // 关键词匹配：名称 / 分类 / 规格 / 编码 / 单位 / 出库方式（代发、扣减库存）/ 关联结算商品名
-  // 这样输入「代发」就能筛出未关联库存大类的订单商品。
-  const kwHit = (p) => {
-    if (!kw) return true;
-    if ((p.name || "").toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw)) return true;
-    // 代发的关键词刻意不含「库存」二字：这样搜「库存」只出库存/扣减库存的商品，搜「代发」只出代发商品
+  // 搜索词：支持多关键词（用「：」「:」、空格、逗号、顿号、竖线分隔），多个关键词需**同时**命中。
+  // 例：「牛油果：代发」= 名称/分类等含「牛油果」，且出库方式含「代发」。
+  const kws = splitSearchKeywords($("prodSearch")?.value);
+  // 单个商品的「可搜索文本」：名称 / 分类 / 规格 / 编码 / 单位 / 出库方式 / 关联结算商品名 / 随货包材。
+  // 代发这一档刻意不含「库存」二字：搜「库存」只出扣减库存的商品，搜「代发」只出代发商品。
+  const hayOf = (p) => {
+    const schemes = p.product_type === "order" ? prodSchemes(p) : [];
     const way = p.product_type === "order"
-      ? (prodStockLinks(p).length ? `订单 扣减库存 ${prodStockLinks(p).map((l) => l.name).join(" ")}` : "订单 代发 外发")
+      ? (schemes.length
+        // 方案名也进搜索文本：搜「四合一」能筛出用了这套方案的商品
+        ? `订单 扣减库存 ${schemes.map((s) => `${s.name} ${s.links.map((l) => l.name).join(" ")}`).join(" ")}`
+        : "订单 代发 外发")
       : "库存商品";
     const packs = (p.pack_items || [])
       .map((it) => (PRODUCTS.find((x) => x.id === it.product_id) || {}).name || "")
       .join(" ");
-    return [p.spec, p.code, p.unit, p.base_unit, way, packs].join(" ").toLowerCase().includes(kw);
+    return [p.name, p.category, p.spec, p.code, p.unit, p.base_unit, way, packs]
+      .join(" ").toLowerCase();
   };
+  const kwHit = (p) => searchHit(hayOf(p), kws);   // 多个关键词：全部命中才算匹配
+  const cat = forced ? "" : (catSel ? catSel.value : "");
+  const ptype = $("prodType")?.value || "";
   let rows = PRODUCTS.filter((p) =>
     kwHit(p) &&
     (!cat || p.category === cat) &&
@@ -4928,11 +5033,13 @@ async function renderProducts() {
       const typeBadge = p.product_type === "order"
         ? '<span class="badge income">订单</span>'
         : '<span class="badge adjust">库存</span>';
-      // linkInfo 允许含 HTML（代发徽章），所以文本分支这里自己先 esc，渲染时不能再 esc 一次
-      const links = p.product_type === "order" ? prodStockLinks(p) : [];
+      // linkInfo 允许含 HTML（代发徽章 / 方案名），所以文本分支这里自己先 esc，渲染时不能再 esc 一次
+      const schemes = p.product_type === "order" ? prodSchemes(p) : [];
       const linkInfo = p.product_type === "order"
-        ? (links.length
-          ? `扣减：${links.map((l) => `${esc(l.name)} ×${fmtNum(l.multiplier)}`).join("、")}`
+        ? (schemes.length
+          // 配了多套方案时把方案名标出来（如「四合一蔬菜 四合一蔬菜×2；方案1 西芹×0.5」）
+          ? `扣减：${schemes.map((s) => (schemes.length > 1 ? `<b>${esc(s.name)}</b> ` : "")
+            + s.links.map((l) => `${esc(l.name)} ×${fmtNum(l.multiplier)}`).join("、")).join("；")}`
           : '<span class="badge income">代发</span> <span class="muted">不扣库存，只统计代发数量/成本</span>')
         : esc(p.spec || "");
       const isLabor = p.category === "人工";
@@ -4955,7 +5062,12 @@ async function renderProducts() {
           <button class="btn sm secondary" onclick="openProductModal(${p.id})">编辑</button>
         </td></tr>`;
     }).join("") + `</tbody>`;
-  if (!rows.length) t.innerHTML = `<tr><td colspan="10" class="empty">暂无商品</td></tr>`;
+  if (!rows.length) {
+    // 空结果时把命中的关键词逐个写出来，方便发现「某个关键词打错了」
+    t.innerHTML = kws.length
+      ? `<tr><td colspan="10" class="empty">没有同时匹配 ${kws.map((k) => `「${esc(k)}」`).join(" ")} 的商品</td></tr>`
+      : `<tr><td colspan="10" class="empty">暂无商品</td></tr>`;
+  }
   t._rows = rows;
   t._render = renderProducts;
   updateBatchBar("prod");
@@ -5118,10 +5230,10 @@ async function openProductModal(pid = 0, prefillName = "") {
     </div>
     <div id="pStockBox" class="form-grid" style="margin-top:10px;display:${ptype === "order" ? "grid" : "none"};">
       <div class="field" style="grid-column:1/-1;">
-        <label>关联库存商品（可多个，出库时全部扣减）</label>
-        <div id="stockLinkRows"></div>
-        <button class="btn secondary sm" onclick="addStockLinkRow()">＋ 添加扣减库存商品</button>
-        <div class="field-hint">卖 1 单本商品时，从下面每个库存大类按其倍数扣减库存（可输入名称快速筛选）；如 礼盒 = 苹果1斤 + 梨1斤。一个都不填 = <b>代发</b>：本仓不扣任何库存，只统计代发数量与代发成本（按下面「参考成本」计）</div>
+        <label>关联库存商品（可配多套方案，出库时按「最近入库」自动选一套扣减）</label>
+        <div id="stockSchemeList"></div>
+        <button class="btn secondary sm" onclick="addStockScheme()">＋ 新增扣减方案</button>
+        <div class="field-hint">每套方案 = 若干「库存商品 × 倍数」，卖 1 单本商品时按选中的方案逐个扣减（可输入名称快速筛选），如 方案1 = 苹果1斤 + 梨1斤、方案2 = 四合一蔬菜×2。<b>出库时自动选</b>：比较各方案里库存商品「最近一次采购入库」的日期，谁最新用谁；都没入过库或日期相同 → 用第一套。一套都不配 = <b>代发</b>：本仓不扣库存，只统计代发数量与代发成本（按「参考成本」计）</div>
       </div>
     </div>
     <div class="field" style="margin-top:10px;"><label>规格说明</label><input id="pSpec" value="${esc(p?.spec || "")}" placeholder="如：每个约150克；或每袋5斤" /></div>
@@ -5142,14 +5254,14 @@ async function openProductModal(pid = 0, prefillName = "") {
   initProductUnitSelect(ptype, curUnit);
   updateProductPriceLabels(du0, f0, up0.base_unit);   // 价格字段标签/提示按默认单位显示
   updateUnitChangeBox(up0);                            // 跨类别换单位时显示「换算关系」输入框（初始=没换，隐藏）
-  // 加载库存商品（大类）列表，并渲染「扣减库存商品」多行（支持 + 号新增）
+  // 加载库存商品（大类）列表，并渲染「扣减方案」（每套方案多行，支持 + 号新增方案/扣减项）
   if (ptype === "order") {
     api("/api/stocks").then((stocks) => {
       STOCKS = stocks || [];
-      renderStockLinkRows(prodStockLinks(p || {}));
-    }).catch(() => { $("stockLinkRows").innerHTML = '<div class="muted">库存商品加载失败</div>'; });
+      renderStockSchemes(prodSchemes(p || {}));
+    }).catch(() => { $("stockSchemeList").innerHTML = '<div class="muted">库存商品加载失败</div>'; });
   } else {
-    $("stockLinkRows").innerHTML = "";
+    $("stockSchemeList").innerHTML = "";
   }
 }
 /* 商品表单的单位一律取自「计量单位管理」(/api/units)，用户新增的单位要能直接选到。
@@ -5280,12 +5392,13 @@ function pTypeChanged() {
   if (t === "order" && !STOCKS.length) {
     api("/api/stocks").then((stocks) => {
       STOCKS = stocks || [];
-      if ($("stockLinkRows") && !$("stockLinkRows").querySelector(".stock-link-row")) renderStockLinkRows([]);
+      const box = $("stockSchemeList");
+      if (box && !box.querySelector(".stock-scheme")) renderStockSchemes([]);   // 还没渲染过就补一套空方案
     });
   }
 }
 
-/* ---------- 订单商品「扣减库存商品」多行（支持 + 号新增多个） ---------- */
+/* ---------- 订单商品「扣减方案」多套（每套 = 若干 库存商品 × 倍数） ---------- */
 let STOCKS = [];   // 库存商品（大类）缓存，供关联行下拉使用
 function stockLinkOptions(selId) {
   const list = STOCKS.length ? STOCKS : PRODUCTS.filter((p) => p.is_active && p.product_type === "stock");
@@ -5294,32 +5407,67 @@ function stockLinkOptions(selId) {
     return `<option value="${s.id}" ${Number(selId) === s.id ? "selected" : ""}>${esc(s.name)}（${esc(s.category || "—")}${du ? "·单位" + esc(du) : ""}）</option>`;
   }).join("");
 }
-function stockLinkRowHtml(link) {
+/* ---------- 订单商品「扣减方案」多套（每套 = 若干 库存商品 × 倍数） ----------
+   出库时后端按各方案库存商品的「最近一次采购入库」日期自动选一套（都不/并列 → 第一套）。
+   这里只负责编辑：方案卡片可增删，卡片内扣减项可增删；名称留空自动叫「方案N」。 */
+function schemeLinkRowHtml(link) {
+  const hint = link && link.last_in_date
+    ? `<span class="muted" style="font-size:12px;white-space:nowrap;">最近入库 ${esc(link.last_in_date)}</span>` : "";
   return `<div class="stock-link-row">
     <select class="stock-link searchable">${stockLinkOptions(link && link.product_id)}</select>
     <input type="number" step="any" min="0" class="stock-mult" value="${link ? (Number(link.multiplier) || 1) : 1}" placeholder="倍数（1单=？库存单位）" />
+    ${hint}
     <button class="btn danger sm" onclick="this.closest('.stock-link-row').remove()">删</button>
   </div>`;
 }
-function renderStockLinkRows(links) {
-  const box = $("stockLinkRows");
+function schemeBlockHtml(scheme, idx) {
+  const links = (scheme && scheme.links) || [];
+  const lastDates = links.map((l) => l.last_in_date).filter(Boolean).sort();
+  const latest = lastDates.length ? lastDates[lastDates.length - 1] : "";
+  return `<div class="stock-scheme" style="border:1px solid var(--line,#e5e7eb);border-radius:8px;padding:8px;margin-bottom:8px;">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+      <input class="scheme-name" value="${esc((scheme && scheme.name) || `方案${idx + 1}`)}" placeholder="方案名，如 四合一蔬菜" style="max-width:220px;" />
+      <span class="muted" style="font-size:12px;">${latest ? `本方案最近入库 ${esc(latest)}` : "本方案暂无入库记录"}</span>
+      <button class="btn danger sm" style="margin-left:auto;" onclick="this.closest('.stock-scheme').remove()">删除方案</button>
+    </div>
+    <div class="scheme-links">${links.map((l) => schemeLinkRowHtml(l)).join("")}</div>
+    <button class="btn secondary sm" onclick="addSchemeLink(this)">＋ 添加扣减库存商品</button>
+  </div>`;
+}
+function renderStockSchemes(schemes) {
+  const box = $("stockSchemeList");
   if (!box) return;
-  box.innerHTML = (links || []).map((l) => stockLinkRowHtml(l)).join("");
+  const list = (schemes || []).length ? schemes : [{ name: "方案1", links: [] }];
+  box.innerHTML = list.map((s, i) => schemeBlockHtml(s, i)).join("");
   bindSearchable(box);
 }
-function addStockLinkRow() {
-  const box = $("stockLinkRows");
+function addStockScheme() {
+  const box = $("stockSchemeList");
   if (!box) return;
-  box.insertAdjacentHTML("beforeend", stockLinkRowHtml(null));
-  bindSearchable(box); // 新追加行的下拉也需支持输入筛选
+  const idx = box.querySelectorAll(".stock-scheme").length;
+  box.insertAdjacentHTML("beforeend", schemeBlockHtml({ name: `方案${idx + 1}`, links: [{}] }, idx));
+  bindSearchable(box);
 }
-function collectStockLinks() {
+function addSchemeLink(btn) {
+  const block = btn.closest(".stock-scheme");
+  if (!block) return;
+  block.querySelector(".scheme-links").insertAdjacentHTML("beforeend", schemeLinkRowHtml(null));
+  bindSearchable(block);
+}
+/** 收集多套方案 → [{name, links:[{product_id, multiplier}]}]（空方案/空行自动丢掉） */
+function collectStockSchemes() {
   const out = [];
-  document.querySelectorAll("#stockLinkRows .stock-link-row").forEach((row) => {
-    const sel = row.querySelector(".stock-link");
-    const pid = sel && sel.value ? +sel.value : null;
-    const mult = parseFloat(row.querySelector(".stock-mult").value);
-    if (pid && mult > 0) out.push({ product_id: pid, multiplier: mult });
+  document.querySelectorAll("#stockSchemeList .stock-scheme").forEach((block, i) => {
+    const links = [];
+    block.querySelectorAll(".stock-link-row").forEach((row) => {
+      const sel = row.querySelector(".stock-link");
+      const pid = sel && sel.value ? +sel.value : null;
+      const mult = parseFloat(row.querySelector(".stock-mult").value);
+      if (pid && mult > 0) links.push({ product_id: pid, multiplier: mult });
+    });
+    if (!links.length) return;      // 空方案不提交（后端也要求至少一项）
+    const name = (block.querySelector(".scheme-name").value || "").trim() || `方案${i + 1}`;
+    out.push({ name, links });
   });
   return out;
 }
@@ -5343,14 +5491,18 @@ function collectPacks() {
   });
   return out;
 }
-async function saveProduct(pid) {
+async function saveProduct(pid, opts) {
   const ptype = $("pType").value;
   const unit = $("pUnit") ? $("pUnit").value : "斤";
   const unitPayload = deriveUnitPayload(ptype, unit, PM_EDIT_P);
-  // 订单商品可关联多个扣减库存商品（stock_links）；stock_product_id/multiplier 保留首项以兼容旧逻辑（扣点分类等）
-  const stockLinks = ptype === "order" ? collectStockLinks() : [];
+  // 订单商品可配多套扣减方案（stock_schemes）；stock_links / stock_product_id / multiplier 仍写第一套
+  // 方案，兼容报表、移动端、需求预演算等只认单方案的旧消费方。
+  const schemes = ptype === "order" ? collectStockSchemes() : [];
+  const stockLinks = schemes.length ? schemes[0].links : [];
   const payload = {
     code: $("pCode").value,
+    // 编码冲突时点「替换编码」→ 传 true：把占用该编码的原商品编码清空，改给当前商品
+    code_takeover: !!(opts && opts.takeover),
     name: $("pName").value,
     category: $("pCategory").value,
     product_type: ptype,
@@ -5370,6 +5522,7 @@ async function saveProduct(pid) {
     stock_product_id: stockLinks.length ? stockLinks[0].product_id : null,
     multiplier: stockLinks.length ? stockLinks[0].multiplier : 1,
     stock_links: stockLinks,
+    stock_schemes: schemes,   // 多套扣减方案（[] = 清空，只剩上面的 stock_links）
     free_shipping: $("pFreeShip") ? $("pFreeShip").checked : false,
     is_active: $("pActive") ? $("pActive").checked : true,
   };
@@ -5386,10 +5539,36 @@ async function saveProduct(pid) {
     PRODUCTS = await api("/api/products");
     renderProducts();
   } catch (e) {
+    // 编码已被别的商品占用（编码一对一）：不关弹窗、不动已填内容，就地给「替换编码」按钮
+    const conflict = e.detail && e.detail.code_conflict;
+    if (e.status === 409 && conflict) { showCodeConflict(pid, conflict); return; }
     // 换单位的换算关系没填：后端消息是分行的说明，toast 看不全，用弹窗
     if (/换算关系/.test(e.message || "")) alert(e.message);
     else toast("保存失败：" + e.message);
   }
+}
+/** 编码冲突：在「商品编码」输入框下面挂一条提示 + 「替换编码」按钮（表单内容不丢）。
+    点替换 = 把占用该编码的商品编码清空、改给当前商品（后端 code_takeover=true 原子完成）。 */
+function showCodeConflict(pid, c) {
+  const input = $("pCode");
+  if (!input) { toast(`编码被「${c.name}」占用`); return; }
+  const field = input.closest(".field") || input.parentElement;
+  let box = $("pCodeWarn");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "pCodeWarn";
+    box.className = "alert warn";
+    box.style.marginTop = "8px";
+    field.appendChild(box);
+  }
+  box.innerHTML = `编码 <b>${esc(c.code)}</b> 已被商品「<b>${esc(c.name)}</b>」使用（编码一对一）。
+    <div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <button class="btn sm" onclick="saveProduct(${pid || 0}, {takeover: true})">
+        <svg class="ic"><use href="#i-check"/></svg> 替换编码（原商品改回空编码）
+      </button>
+      <span class="muted" style="font-size:12px;">或者自己换一个不重复的编码再保存</span>
+    </div>`;
+  box.scrollIntoView({ block: "nearest" });
 }
 async function deleteProduct(pid) {
   if (!confirm("确认删除该商品？其历史单据会一并删除，请谨慎。")) return;
