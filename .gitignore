@@ -330,9 +330,18 @@ google-services.json
 
 !/mobile/dist
 
-# Go 版后端（backend 的逐接口移植）。dev 只跑 Python，Go 不合并进来，
-# 源码、差分套件（go/_diff/）与 docs/go新后端.md 都在分支 feature-go 上，只从 dev 分出、不并回 dev。
-/go/
+# Go 版后端（backend 的逐接口移植，与 Python 平替，源码入库；差分套件在 go/_diff/）
+# 只在 feature-go 上追踪：dev 那边这一条仍是整目录 `/go/`，Go 不并回 dev。
+# 下面只挡本机产物与差分临时输出（里面是真实业务库的响应快照，勿提交）
+/go/*.exe
+/go/backend/
+/go/_gosb_bin/
+/go/_port/
+/go/*.log
+/go/_missing.txt
+/go/_py_routes.txt
+/go/_diff/last*.json
+/go/_diff/roundvecs.txt
 # Go 移植过程文档（README 保持 Python 口径，这些是过程记录）
 /docs/go_*.md
 
