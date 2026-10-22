@@ -213,7 +213,7 @@ Go 原先只移植了「建表 + 补列 + `seedUnits` + 新仓拷 users」，**�
 
 - 13 份 `backup_config.json` → `enabled=false`、`remote_enabled=false`、`remote_url=""`、`remote_token=""`。
   动机：`_gosb/{ai,imports,jst_auto,openfresh,product_data,report,warehouse_in}` 和 `_gosandbox`、`_port/backup/_scratch/data-snapshot`
-  里那些副本原本还是 `enabled=true + remote_enabled=true + remote_url=20.24.210.119:80/cloudback`，
+  里那些副本原本还是 `enabled=true + remote_enabled=true + remote_url=<备份服务器>/cloudback`（真实地址不写进公开仓库），
   一起沙箱、定时器一跑就把库推到**真实云备份**（历史上真发生过一次）。
 - 11 份 `config.local.json` → `llm.api_key=""`。这正是 `go/_diff/ai.mjs` 需要的状态（它断言的是无 key 走大模型时的
   400「未配置 LLM」，见 `ai.mjs:2`），所以置空之后 AI 差分反而能跑；反过来**要手工验证真识别链路时必须先把 key 填回
