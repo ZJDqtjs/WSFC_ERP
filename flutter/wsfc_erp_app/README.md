@@ -15,27 +15,26 @@
 
 ```
 lib/
-├── main.dart                 # 应用入口
-├── screens/                  # 页面
-│   ├── login_screen.dart     # 登录页
-│   ├── home_screen.dart      # 工作台
-│   ├── outbound_screen.dart  # 出库页
-│   ├── inbound_screen.dart   # 入库页
-│   ├── stock_screen.dart     # 库存页
-│   └── mine_screen.dart      # 我的
+├── main.dart                 # 应用入口（按平台分发桌面壳 / 移动壳）
+├── desktop/                  # 桌面端（Fluent 风格）
+│   ├── desktop_app.dart      #   桌面壳入口
+│   ├── desktop_shell.dart    #   导航栏 + 工具栏布局
+│   ├── desktop_login.dart    #   桌面登录页
+│   ├── screens/              #   工作台、出库、入库、库存、商品、报表、设置等
+│   └── widgets/              #   卡片、侧边栏、工具栏等桌面组件
+├── mobile/                   # 移动端（玻璃风格）
+│   ├── mobile_app.dart       #   移动壳入口
+│   ├── screens/              #   登录页、工作台、我的、AI 录入
+│   └── widgets/              #   标签栏、页面骨架、动效等移动组件
+├── screens/                  # 两端共用业务页：商品/出库/入库/库存/鲜货/开支/待付款/财务/规则
 ├── models/                   # 数据模型
-│   └── product.dart          # 商品模型
-├── services/                 # 服务层
-│   └── api_service.dart      # API 服务
-├── providers/                # 状态管理
-│   ├── auth_provider.dart    # 认证状态
-│   └── product_provider.dart # 商品状态
-└── widgets/                  # 可复用组件
+├── services/                 # API 服务、AI 提交
+└── providers/                # 状态管理（AuthProvider / ProductProvider）
 ```
 
 ## 技术栈
 
-- **Flutter SDK**: >=3.0.0 <4.0.0
+- **Flutter SDK**: 3.41+（实测 3.47.7；更低版本因 `solar_icons 0.2.0` 的 SDK 约束会解析失败）
 - **状态管理**: Provider
 - **路由**: GoRouter
 - **HTTP 请求**: Dio + CookieManager
@@ -72,7 +71,7 @@ lib/
 
 ## 运行步骤
 
-1. 安装 Flutter SDK (3.0+)
+1. 安装 Flutter SDK (3.41+，实测 3.47.7)
 2. 运行 `flutter pub get`
 3. 自建 `dart_defines.local.json`（见下），然后运行
    `flutter run --dart-define-from-file=dart_defines.local.json`
