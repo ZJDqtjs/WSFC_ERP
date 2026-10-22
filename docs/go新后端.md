@@ -184,9 +184,12 @@ Go 原先只移植了「建表 + 补列 + `seedUnits` + 新仓拷 users」，**�
 - PR 合掉之后，才是 `feature-go` 自己的东西：`36542f9`（112 个 `go/` 文件 + 把 `/go/` 换成本机产物细规则）+ 本文档。
   **Go 不并回 dev**：dev 侧 `.gitignore` 里 `/go/` 仍是整目录忽略，所以 Go 永远不会被 dev 的 `git add -A` 顺手带上去。
   139 个接口对齐、开机数据层补齐、差分全绿这些结论都成立，只是它们属于这个分支。
+- **PR 已开：[#2](https://github.com/ZJDqtjs/WSFC_ERP/pull/2)（`feature-go` → `dev`，GitHub 判为可自动合并）**，
+  2026-10-22 提交，内容正是上面那三个提交：远端 `origin/feature-go` 就停在 `8eb9f7a`（用 `git push origin 8eb9f7a:feature-go` 只推这一段），
+  本地 `feature-go` 头是 `b910a09`，比远端多 `36542f9` + 本文档两个提交。**这两个提交在 PR 合掉之前不要 push。**
 - **一个 GitHub 的使用注意**：PR 跟着源分支的头走。如果你在 PR 还没合的时候就把 `36542f9` push 上去了，
-  Go 那 112 个文件会一起涌进同一个 PR。所以顺序要是：**先 push 到 `8eb9f7a` 开 PR、合掉，再 push 后面的 Go 提交**
-  （`git push origin 8eb9f7a:feature-go` 就能只推这一段）。
+  Go 那 112 个文件会一起涌进同一个 PR。所以顺序要是：**先 push 到 `8eb9f7a` 开 PR（已做完，就是 #2）、合掉，再 push 后面的 Go 提交**。
+  合完 `dev` 后本地补一次 `git push origin feature-go`，远端 `feature-go` 才会跟上 Go 内容。
 - **连带影响**：差分套件在 `go/_diff/`，跟着 `/go/` 一起不进 dev，所以**从 dev clone 出来的机器没有这套脚本**；
   要跑回归就切 `feature-go`，或把 `go/_diff/` + `_gosb/seed.sh` 手动带过去。同理，dev 上也没有本文档。
 - **`feature-go` 会落后于 dev。** backend 语义以后在 dev 上再变（新接口、口径修正），这个分支就跟着过期，
