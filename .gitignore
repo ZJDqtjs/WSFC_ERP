@@ -219,6 +219,10 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 *.xlsx
+# 例外：backend/docs 下的批量导入模板要进版本库（模板下载接口是「该目录有同名文件就直发，
+# 没有就按代码动态生成」，忽略掉会导致换机器 clone 后模板只能靠代码生成、与人工维护的版本漂移）。
+# 只放开这一个目录，backend/data 里那些聚水潭导出 xlsx 仍然忽略。
+!backend/docs/*.xlsx
 
 # Flutter
 .dart_tool/
@@ -326,10 +330,18 @@ google-services.json
 
 !/mobile/dist
 
-# Go 版试验实现（测试目录，非生产代码；生产是 backend 的 Python 后端，勿提交、勿在此基础上改）
+# Go 版后端（backend 的逐接口移植）。dev 只跑 Python，Go 不合并进来，
+# 源码、差分套件（go/_diff/）与 docs/go新后端.md 都在分支 feature-go 上，只从 dev 分出、不并回 dev。
 /go/
-# Go 试验实现相关文档（同为试验产物，不入库）
+# Go 移植过程文档（README 保持 Python 口径，这些是过程记录）
 /docs/go_*.md
+
+# 差分沙箱：真实业务库的副本 + 本机私有配置，任何情况下都不进仓库
+/_gosb/
+/_gosb_bin/
+/_gosandbox/
+/_port/
+/_port2/
 
 # Flutter / JVM 堆转储与 AI 工具本机缓存（体积巨大，勿提交）
 *.hprof
