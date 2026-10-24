@@ -433,6 +433,9 @@ class WarehouseIn(Base):
     unit_price: Mapped[float] = mapped_column(Float, default=0.0)  # 采购价（元/袋）＝收入单价（扣点前）
     deduction_percent: Mapped[float] = mapped_column(Float, default=0.0)  # 采购价扣点%快照
     freight: Mapped[float] = mapped_column(Float, default=0.0)  # 运费（元/袋）
+    # 运费来源：'' = 按入仓品资料的「每袋运费」；'actual' = 按运输账单（运输转运费）里该采购单的
+    # 实际结算金额重算过（见 routers/warehouse_in.py 的 /freight/apply）
+    freight_source: Mapped[str] = mapped_column(String(16), default="")
     # 成本口径：收入 = 数量×采购价；商品成本 = 数量×每袋净重×库存单位成本；运费 = 数量×运费单价
     stock_product_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 关联库存商品
     bag_weight: Mapped[float] = mapped_column(Float, default=0.0)  # 每袋净重快照（基础单位）

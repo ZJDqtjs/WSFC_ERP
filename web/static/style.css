@@ -2032,6 +2032,30 @@ th[data-key] .sort-arrow {
   .agg-table tfoot td { background: rgba(255, 255, 255, 0.05); }
 }
 
+/* ============ 入仓：重算运费（运输账单预览） ============ */
+.fr-types {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  background: var(--primary-50);
+  font-size: 12.5px;
+}
+
+.fr-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 3px 14px 3px 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fr-type.off {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
 /* ============ 芳谊放单仓：逐单刷单结算（导入确认框） ============ */
 .brush-box {
   border: 1px solid var(--primary);

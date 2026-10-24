@@ -321,6 +321,8 @@ def _in_dict(db: Session, r: WarehouseIn) -> dict:
         "bag_cost": float(getattr(r, "bag_cost", 0.0) or 0.0)
         or round(float(r.bag_weight or 0) * float(r.unit_cost or 0), 4),
         "cogs": r.cogs, "amount": r.amount, "freight_total": r.freight_total, "profit": r.profit,
+        # 运费来源：'' 按入仓品资料每袋运费；'actual' 按运输账单实际结算（重算运费后）
+        "freight_source": (getattr(r, "freight_source", "") or ""),
         # 毛利率与每袋口径：成本类字段都是整单金额，除以袋数才是「每袋赚多少」
         "profit_rate": _profit_rate(r.profit, r.amount),
         "unit_revenue": round(float(r.amount or 0) / qty, 4) if qty else 0.0,   # 每袋结算收入（已扣点）
@@ -642,6 +644,7 @@ def _create_record(db: Session, payload: dict, operator: str, import_group: str 
         unit_price=unit_price,
         deduction_percent=deduction,
         freight=freight,
+        freight_source="",   # 新建 = 按入仓品资料的每袋运费（重算运费才会改成 actual）
         stock_product_id=sp.id if sp else None,
         bag_weight=bag_weight,
         unit_cost=unit_cost,
@@ -735,6 +738,7 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
     rec.box_spec = float(d.get("box_spec") or 0)
     rec.unit_price = float(d.get("unit_price") or 0)
     rec.freight = float(d.get("freight") or 0)
+    rec.freight_source = ""   # 手改运费 = 回到「按每袋运费」口径（实际运费请用「重算运费」重新结算）
     rec.date = (d.get("date") or rec.date).strip() or rec.date
     rec.remark = (d.get("remark") or "").strip()
     rec.pay_status = "unpaid" if (d.get("pay_status") or "").strip() == "unpaid" else "paid"
@@ -971,3 +975,190 @@ def import_confirm(data: ConfirmIn, db: Session = Depends(get_db), user: User = 
             failed.append({"row": it.product_name or it.purchase_no, "reason": str(e)})
     db.commit()
     return {"ok": True, "created": created, "failed": failed, "failed_count": len(failed), "group": group}
+
+
+# ---------------- 重算运费：按「运输转运费」账单里的实际结算金额 ----------------
+# 入仓记录的运费默认取「入仓品资料的每袋运费」（导入贴单时带出）。京东每月会出《运输转运费》账单，
+# 里面按「采购单号」逐行列出转运费 / 入仓服务费 / 保价 等费用及结算金额。这里的口径是：
+#   命中的采购单 → 该采购单的结算金额合计（可勾选费用类型）当作**实际运费**，
+#   同一采购单有多条入仓记录时按「袋数」分摊（尾差给袋数最多的一条，保证合计不差一分）。
+FREIGHT_ALIASES = {
+    "purchase_no": ["采购单号", "采购订单号", "采购编号"],
+    "amount": ["结算金额", "应付金额", "金额"],
+    "fee_type": ["费用类型", "费用名称", "费用项"],
+    "date": ["业务日期", "日期"],
+    "waybill": ["运单号", "业务单号"],
+}
+
+
+def _norm_pn(v) -> str:
+    """采购单号归一化：去空格；Excel 数字转字符串的 160014397501255.0 还原成整数串。"""
+    s = str(v or "").strip().replace(" ", "")
+    if s.endswith(".0") and s[:-2].isdigit():
+        s = s[:-2]
+    return s
+
+
+def _parse_freight_bill(wb) -> dict:
+    """读运输账单：按采购单号汇总「结算金额」，并统计费用类型。
+
+    - 只认含「采购单号 + 结算金额」表头的工作表（账单首页「汇总页」没有表头会自动跳过）；
+    - 一个采购单常有多行（转运费 / 入仓服务费 / 保价 / 退货…），逐行累加；
+    - 返回 {by_po: {单号: {total, by_type, waybills, dates}}, by_type, sheets, rows}。
+    """
+    by_po: dict[str, dict] = {}
+    by_type: dict[str, float] = {}
+    used: list[str] = []
+    row_count = 0
+    for name in wb.sheetnames:
+        rows = [list(r) for r in wb[name].iter_rows(values_only=True)]
+        mapping, start = _detect_header(rows, FREIGHT_ALIASES)
+        if not mapping.get("purchase_no") or "amount" not in mapping:
+            continue
+        used.append(name)
+        for row in rows[start:]:
+            pn = _norm_pn(_cell(row, mapping.get("purchase_no")))
+            if not pn:
+                continue
+            amt = _to_float(_cell(row, mapping.get("amount")), 0.0)
+            fee = _cell(row, mapping.get("fee_type")).strip() or "运费"
+            item = by_po.setdefault(pn, {"total": 0.0, "by_type": {}, "waybills": [], "dates": []})
+            item["total"] = round(item["total"] + amt, 2)
+            item["by_type"][fee] = round(item["by_type"].get(fee, 0.0) + amt, 2)
+            wb_no = _cell(row, mapping.get("waybill")).strip()
+            if wb_no and wb_no not in item["waybills"]:
+                item["waybills"].append(wb_no)
+            d = _cell(row, mapping.get("date"))[:10]
+            if d:
+                item["dates"].append(d)
+            by_type[fee] = round(by_type.get(fee, 0.0) + amt, 2)
+            row_count += 1
+    return {"by_po": by_po, "by_type": by_type, "sheets": used, "rows": row_count}
+
+
+def _bill_records_map(db: Session) -> dict[str, list[WarehouseIn]]:
+    """入仓记录按采购单号分组（只取有采购单号的）。"""
+    out: dict[str, list[WarehouseIn]] = {}
+    for r in db.execute(select(WarehouseIn)).scalars():
+        pn = _norm_pn(r.purchase_no)
+        if pn:
+            out.setdefault(pn, []).append(r)
+    return out
+
+
+@router.post("/freight/preview")
+def freight_preview(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """解析运输账单，按采购单号对上入仓记录，返回预览（含未命中清单与费用类型明细）。"""
+    wb = _load_workbook(file)
+    bill = _parse_freight_bill(wb)
+    if not bill["by_po"]:
+        raise HTTPException(400, "没在文件里找到「采购单号 + 结算金额」两列，请确认上传的是运输转运费账单")
+    by_pn = _bill_records_map(db)
+    matched, unmatched = [], []
+    for pn, info in sorted(bill["by_po"].items(), key=lambda kv: -kv[1]["total"]):
+        rs = by_pn.get(pn) or []
+        if not rs:
+            unmatched.append({
+                "purchase_no": pn, "total": round(info["total"], 2),
+                "by_type": info["by_type"], "waybills": info["waybills"][:3],
+            })
+            continue
+        bags = round(sum(float(r.quantity or 0) for r in rs), 4)
+        matched.append({
+            "purchase_no": pn,
+            "total": round(info["total"], 2),
+            "by_type": info["by_type"],
+            "waybills": info["waybills"][:3],
+            "record_count": len(rs),
+            "bags": bags,
+            "per_bag": round(info["total"] / bags, 4) if bags else 0.0,
+            "old_freight_total": round(sum(float(r.freight_total or 0) for r in rs), 2),
+            "records": [
+                {
+                    "id": r.id, "code": r.code, "date": r.date, "product_name": r.product_name,
+                    "quantity": r.quantity, "freight": r.freight,
+                    "old_freight_total": round(float(r.freight_total or 0), 2),
+                    "freight_source": (getattr(r, "freight_source", "") or ""),
+                }
+                for r in sorted(rs, key=lambda x: -float(x.quantity or 0))
+            ],
+        })
+    fee_types = [{"name": k, "amount": round(v, 2)} for k, v in sorted(bill["by_type"].items(), key=lambda kv: -kv[1])]
+    return {
+        "sheet": bill["sheets"][0] if bill["sheets"] else "",
+        "sheets": bill["sheets"],
+        "rows": bill["rows"],
+        "fee_types": fee_types,
+        "purchase_orders": matched,
+        "unmatched_excel": unmatched,
+        "unmatched_record_count": sum(1 for pn in by_pn if pn not in bill["by_po"]),
+        "totals": {
+            "purchase_orders": len(matched),
+            "records": sum(x["record_count"] for x in matched),
+            "bags": round(sum(x["bags"] for x in matched), 4),
+            "amount": round(sum(x["total"] for x in matched), 2),
+            "old_freight": round(sum(x["old_freight_total"] for x in matched), 2),
+            "unmatched_excel": len(unmatched),
+        },
+    }
+
+
+class FreightApplyItem(BaseModel):
+    purchase_no: str
+    total: float
+
+
+class FreightApplyIn(BaseModel):
+    items: list[FreightApplyItem] = []
+
+
+@router.post("/freight/apply")
+def freight_apply(data: FreightApplyIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """按账单金额重算命中采购单的运费：同一采购单多条记录按袋数分摊，尾差给袋数最多的一条。
+
+    只改命中的记录，未命中的保持「按入仓品资料每袋运费」不动；重算过的记录打上 freight_source='actual'。
+    """
+    if not data.items:
+        raise HTTPException(400, "没有可重算的采购单")
+    by_pn = _bill_records_map(db)
+    updated, orders = 0, 0
+    old_sum = new_sum = 0.0
+    detail = []
+    for it in data.items:
+        pn = _norm_pn(it.purchase_no)
+        rs = by_pn.get(pn) or []
+        if not rs:
+            continue
+        bags = sum(float(r.quantity or 0) for r in rs)
+        if bags <= 0:
+            continue
+        total = round(float(it.total or 0), 2)
+        alloc = [round(total * float(r.quantity or 0) / bags, 2) for r in rs]
+        diff = round(total - sum(alloc), 2)
+        if diff:   # 四舍五入的尾差补到袋数最多的一条，保证分摊合计 = 账单金额
+            k = max(range(len(rs)), key=lambda i: float(rs[i].quantity or 0))
+            alloc[k] = round(alloc[k] + diff, 2)
+        for r, amt in zip(rs, alloc):
+            old_sum += float(r.freight_total or 0)
+            r.freight_total = amt
+            r.freight = round(amt / float(r.quantity or 1), 6)
+            r.freight_source = "actual"
+            r.profit = round(float(r.amount or 0) - float(r.cogs or 0) - amt - float(r.pack_cost or 0), 2)
+            new_sum += amt
+            updated += 1
+        orders += 1
+        detail.append({"purchase_no": pn, "records": len(rs), "bags": round(bags, 4), "total": total})
+    if not updated:
+        raise HTTPException(400, "没有找到可重算的入仓记录（采购单号对不上）")
+    db.commit()
+    return {
+        "ok": True, "purchase_orders": orders, "records": updated,
+        "old_freight": round(old_sum, 2), "new_freight": round(new_sum, 2),
+        "freight_delta": round(new_sum - old_sum, 2),
+        "profit_delta": round(old_sum - new_sum, 2),
+        "detail": detail,
+    }

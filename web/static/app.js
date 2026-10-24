@@ -4151,7 +4151,8 @@ function renderWinRow(r) {
     <td class="num mono">${fmtNum(r.quantity)}</td>
     <td class="num mono">${fmtMoney(r.amount)}</td>
     <td class="num mono">${fmtMoney(r.cogs)}</td>
-    <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}</td>
+    <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}${r.freight_source === "actual"
+      ? ' <span class="badge income" title="按运输账单（运输转运费）里的实际结算金额重算">实际</span>' : ""}</td>
     <td class="num mono">${r.pack_cost ? fmtMoney(r.pack_cost) : "—"}</td>
     <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
     <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtNum(r.profit_rate || 0)}%</td>
@@ -4299,7 +4300,8 @@ function renderWinGroupPage() {
     <td class="num mono">${fmtMoney(r.unit_price)}</td>
     <td class="num mono">${fmtMoney(r.amount)}</td>
     <td class="num mono">${fmtMoney(r.cogs)}</td>
-    <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}</td>
+    <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}${r.freight_source === "actual"
+      ? ' <span class="badge income" title="按运输账单实际结算金额重算">实际</span>' : ""}</td>
     <td class="num mono">${r.pack_cost ? fmtMoney(r.pack_cost) : "—"}</td>
     <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
     <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtNum(r.profit_rate || 0)}%</td>
@@ -4683,6 +4685,178 @@ async function wImportConfirm() {
     closeModal();
     loadWarehouseIns();
   } catch (e) { toast("入仓失败：" + e.message); }
+}
+
+/* ---------- 重算运费：按京东《运输转运费》账单里的实际结算金额重算命中采购单 ----------
+   口径（与后端 routers/warehouse_in.py 的 /freight/* 一致）：
+   - 账单按「采购单号」对上入仓记录；命中的记录运费 = 该采购单在账单里的结算金额合计（可勾选费用类型）；
+   - 一个采购单有多条入仓记录时按「袋数」分摊（尾差由后端补到袋数最多的一条）；
+   - 未命中的记录保持「入仓品资料」的每袋运费不动；重算过的记录运费列显示「实际」徽标。 */
+let FR_DATA = null;        // 账单预览结果
+let FR_OFF = new Set();    // 被取消勾选的费用类型名（默认全部计入）
+
+function openFreightRecalc() {
+  FR_DATA = null; FR_OFF = new Set();
+  openModal(`
+    <h3>重算运费 <button class="close" onclick="closeModal()">✕</button></h3>
+    <p class="hint" style="margin-bottom:12px;">
+      上传京东《运输转运费》账单（含「采购单号 / 费用类型 / 结算金额」列）。
+      系统按<b>采购单号</b>对上入仓记录：命中的记录运费改成账单里的<b>实际结算金额</b>
+      （同一采购单有多条记录时按袋数分摊）；未命中的记录保持「入仓品资料」的每袋运费不动。
+    </p>
+    <div class="form-grid">
+      <div class="field"><label>运输账单 *</label><input type="file" id="frFile" accept=".xlsx" /></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="frParse()">解析预览</button>
+    </div>`);
+}
+
+async function frParse() {
+  const f = $("frFile")?.files[0];
+  if (!f) { toast("请先选择运输账单 Excel"); return; }
+  $("modalBox").classList.add("wide");
+  $("modalBox").innerHTML = `<h3>重算运费 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="alert ok">⏳ 正在解析账单…</div>`;
+  try {
+    const fd = new FormData();
+    fd.append("file", f);
+    const res = await fetch(routePath("/api/warehouse-in/freight/preview"), { method: "POST", body: fd });
+    if (res.status === 401) { showLogin(); return; }
+    if (!res.ok) { let m = "解析失败"; try { m = (await res.json()).detail || m; } catch (e) {} throw new Error(m); }
+    FR_DATA = await res.json();
+    FR_OFF = new Set();
+    renderFrPreview();
+  } catch (e) {
+    $("modalBox").innerHTML = `<h3>重算运费 <button class="close" onclick="closeModal()">✕</button></h3>
+      <div class="alert err">解析失败：${esc(e.message)}</div>
+      <div class="modal-foot"><button class="btn secondary" onclick="openFreightRecalc()">重新选择文件</button></div>`;
+  }
+}
+
+/** 某个采购单当前计入的实际运费（按勾选的费用类型累加） */
+function frPoTotal(po) {
+  let t = 0;
+  Object.entries(po.by_type || {}).forEach(([k, v]) => { if (!FR_OFF.has(k)) t += Number(v) || 0; });
+  return Math.round(t * 100) / 100;
+}
+function frToggleTypeByIdx(i, cb) {
+  const name = ((FR_DATA?.fee_types || [])[i] || {}).name;
+  if (!name) return;
+  if (cb.checked) FR_OFF.delete(name); else FR_OFF.add(name);
+  renderFrPreview();
+}
+function frTypeAll(on) {
+  FR_OFF = new Set();
+  if (!on) (FR_DATA?.fee_types || []).forEach((t) => FR_OFF.add(t.name));
+  renderFrPreview();
+}
+
+function renderFrPreview() {
+  const d = FR_DATA || {};
+  const po = d.purchase_orders || [];
+  const un = d.unmatched_excel || [];
+  const feeTypes = d.fee_types || [];
+  const typeRow = feeTypes.map((t, i) => `<label class="fr-type ${FR_OFF.has(t.name) ? "off" : ""}">
+      <input type="checkbox" ${FR_OFF.has(t.name) ? "" : "checked"} onchange="frToggleTypeByIdx(${i}, this)" />
+      ${esc(t.name)} <b>${fmtMoney(t.amount)}</b></label>`).join("");
+  const sumNew = po.reduce((s, x) => s + frPoTotal(x), 0);
+  const sumOld = po.reduce((s, x) => s + (x.old_freight_total || 0), 0);
+  const delta = sumNew - sumOld;
+  const rows = po.map((x) => {
+    const amt = frPoTotal(x);
+    const diff = amt - (x.old_freight_total || 0);
+    const records = (x.records || []).map((r) => `${esc(r.product_name)}×${fmtNum(r.quantity)}袋`).join("、");
+    return `<tr data-pn="${esc(x.purchase_no)}" data-old="${x.old_freight_total || 0}" data-bags="${x.bags || 0}">
+      <td class="mono">${esc(x.purchase_no)}${x.waybills && x.waybills.length
+        ? `<div class="muted" style="font-size:11px;">${esc(x.waybills[0])}</div>` : ""}</td>
+      <td class="num mono">${x.record_count}</td>
+      <td class="num mono">${fmtNum(x.bags)}</td>
+      <td class="num"><input class="fr-amt" type="number" step="0.01" min="0" value="${amt.toFixed(2)}" oninput="frRecalc()" style="width:104px;text-align:right;" /></td>
+      <td class="num mono fr-perbag">${x.bags ? fmtMoney(amt / x.bags) : "—"}</td>
+      <td class="num mono">${fmtMoney(x.old_freight_total)}</td>
+      <td class="num mono fr-diff" style="color:${diff >= 0 ? "var(--red)" : "var(--green)"}">${diff >= 0 ? "+" : ""}${fmtMoney(diff)}</td>
+      <td class="muted" style="font-size:11px;max-width:260px;">${records}</td>
+    </tr>`;
+  }).join("");
+  $("modalBox").innerHTML = `<h3>重算运费 — 账单预览 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="alert ${po.length ? "ok" : "err"}">
+      账单 <b>${esc(d.sheet || "")}</b>（${d.rows || 0} 行明细）· 命中 <b>${po.length}</b> 个采购单 /
+      <b>${(d.totals || {}).records || 0}</b> 条入仓记录 / <b>${fmtNum((d.totals || {}).bags || 0)}</b> 袋；
+      运费 <b>${fmtMoney(sumOld)}</b> → <b id="frSumNew">${fmtMoney(sumNew)}</b>
+      <span id="frSumDiff" style="color:${delta >= 0 ? "var(--red)" : "var(--green)"}">（${delta >= 0 ? "+" : ""}${fmtMoney(delta)}）</span>
+      ${un.length ? `<div class="muted" style="margin-top:4px;">
+        另有 <b>${un.length}</b> 个采购单在入仓记录里没找到：${un.slice(0, 6).map((x) => esc(x.purchase_no)).join("、")}${un.length > 6 ? " 等" : ""}
+        ${(d.unmatched_record_count || 0) ? `；入仓记录里还有 ${d.unmatched_record_count} 个采购单不在本账单（保持不变）` : ""}
+      </div>` : ""}
+    </div>
+    <div class="fr-types">
+      <div class="row wrap" style="gap:6px;align-items:center;">
+        <span class="muted">费用类型（勾选=计入实际运费）</span>
+        <button class="btn sm secondary" onclick="frTypeAll(true)">全选</button>
+        <button class="btn sm secondary" onclick="frTypeAll(false)">全不选</button>
+      </div>
+      <div style="margin-top:6px;">${typeRow || "—"}</div>
+    </div>
+    ${po.length ? `<div class="table-wrap" style="max-height:44vh;overflow:auto;">
+      <table class="subtable" id="frTable">
+        <thead><tr>
+          <th>采购单号</th><th class="num">记录</th><th class="num">袋数</th>
+          <th class="num">账单金额</th><th class="num">每袋</th><th class="num">原运费</th><th class="num">差额</th><th>入仓记录（按袋数分摊）</th>
+        </tr></thead><tbody>${rows}</tbody>
+      </table></div>`
+      : `<div class="alert warn">没有命中的采购单：账单里的「采购单号」和入仓记录对不上（按全部入仓记录匹配，不受页面筛选影响）。</div>`}
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="openFreightRecalc()">重新选择文件</button>
+      <button class="btn green" onclick="frApply()" ${po.length ? "" : "disabled"}>✓ 确认重算（${po.length} 个采购单）</button>
+    </div>`;
+}
+
+/** 手改某个采购单的账单金额后，重算「每袋 / 差额 / 合计」（分摊规则仍按袋数，由后端落库） */
+function frRecalc() {
+  let sumNew = 0, sumOld = 0;
+  document.querySelectorAll("#frTable tbody tr").forEach((tr) => {
+    const bags = parseFloat(tr.dataset.bags) || 0;
+    const amt = parseFloat(tr.querySelector(".fr-amt").value) || 0;
+    const old = parseFloat(tr.dataset.old) || 0;
+    const per = tr.querySelector(".fr-perbag");
+    if (per) per.textContent = bags ? fmtMoney(amt / bags) : "—";
+    const diff = amt - old;
+    const dc = tr.querySelector(".fr-diff");
+    if (dc) {
+      dc.textContent = (diff >= 0 ? "+" : "") + fmtMoney(diff);
+      dc.style.color = diff >= 0 ? "var(--red)" : "var(--green)";
+    }
+    sumNew += amt; sumOld += old;
+  });
+  const sn = $("frSumNew");
+  if (sn) sn.textContent = fmtMoney(sumNew);
+  const sd = $("frSumDiff");
+  if (sd) {
+    const delta = sumNew - sumOld;
+    sd.textContent = `（${delta >= 0 ? "+" : ""}${fmtMoney(delta)}）`;
+    sd.style.color = delta >= 0 ? "var(--red)" : "var(--green)";
+  }
+}
+
+async function frApply() {
+  const rows = [...document.querySelectorAll("#frTable tbody tr")];
+  const items = rows.map((tr) => ({
+    purchase_no: tr.dataset.pn,
+    total: Math.round((parseFloat(tr.querySelector(".fr-amt").value) || 0) * 100) / 100,
+  }));
+  if (!items.length) { toast("没有可重算的采购单"); return; }
+  const oldSum = rows.reduce((s, tr) => s + (parseFloat(tr.dataset.old) || 0), 0);
+  const newSum = items.reduce((s, x) => s + x.total, 0);
+  const delta = newSum - oldSum;
+  if (!confirm(`确认按账单重算 ${items.length} 个采购单的运费？\n运费合计：${fmtMoney(oldSum)} → ${fmtMoney(newSum)}（${delta >= 0 ? "+" : ""}${fmtMoney(delta)}）\n未命中的记录保持不变。`)) return;
+  try {
+    const r = await api("/api/warehouse-in/freight/apply", "POST", { items });
+    toast(`已重算 ${r.purchase_orders} 个采购单 / ${r.records} 条记录：运费 ${fmtMoney(r.old_freight)} → ${fmtMoney(r.new_freight)}`);
+    closeModal();
+    loadWarehouseIns();
+  } catch (e) { toast("重算失败：" + e.message); }
 }
 
 function loadImportPage() {}
