@@ -514,7 +514,8 @@ function costSplitText(p) {
   const material = split ? num(p.material_cogs) : 0
   const other = split ? num(p.other_cogs) : 0
   const isWi = isWarehouseIn(p)   // 入仓行：material/express 字段装的是「包材/运费」，标签要换
-  if (!(p.is_dropship || oldPack || express || labor || material || other)) return ''
+  const fixed = num(p.fixed_cogs)   // 入仓品固定成本（每袋打包费 / 难量化包材）
+  if (!(p.is_dropship || oldPack || express || labor || material || other || fixed)) return ''
   const goods = num(p.goods_cogs != null ? p.goods_cogs : p.cogs)
   const parts = [`${p.is_dropship ? '代发成本' : '商品成本'} ${fmtMoney(goods)}`]
   if (split) {
@@ -525,6 +526,7 @@ function costSplitText(p) {
     parts.push(`打包人工+耗材 ${fmtMoney(oldPack)}`)
   }
   if (express) parts.push(`${isWi ? '运费' : '快递费'} ${fmtMoney(express)}`)
+  if (fixed) parts.push(`固定成本 ${fmtMoney(fixed)}`)
   return parts.join(' ＋ ')
 }
 

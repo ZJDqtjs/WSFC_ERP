@@ -3800,7 +3800,7 @@ function renderWarehouseProducts() {
   t.innerHTML = `<thead><tr>
     <th>名称</th><th>类目</th><th class="num">箱规(袋/箱)</th><th class="num">每袋净重</th>
     <th class="num">采购价(收入/袋)</th>
-    <th class="num">运费(元/袋)</th><th class="num">每袋成本</th>
+    <th class="num">运费(元/袋)</th><th class="num">固定成本(元/袋)</th><th class="num">每袋成本</th>
     <th>关联库存商品</th><th>关联结算(随货包材)</th><th>保质期</th><th></th></tr></thead><tbody>` +
     rows.map((p) => `<tr>
       <td><b>${esc(p.name)}</b><div class="muted" style="font-size:12px;">${esc(p.sku) || "—"}${p.barcode ? ` · ${esc(p.barcode)}` : ""}</div></td>
@@ -3809,6 +3809,7 @@ function renderWarehouseProducts() {
       <td class="num mono">${wpNetText(p)}</td>
       <td class="num mono">${fmtMoney(p.purchase_price)}</td>
       <td class="num mono">${p.freight ? fmtMoney(p.freight) : "—"}</td>
+      <td class="num mono"${p.fixed_cost ? "" : ' style="color:var(--muted);"'}>${p.fixed_cost ? fmtMoney(p.fixed_cost) : "—"}</td>
       <td class="num mono">${p.bag_cost ? fmtMoney(p.bag_cost) : "—"}</td>
       <td>${p.stock_product_name ? esc(p.stock_product_name) : '<span class="muted">未关联（代发）</span>'}
         ${p.stock_product_id
@@ -3820,7 +3821,7 @@ function renderWarehouseProducts() {
         <button class="btn sm" onclick="wprodEdit(${p.id})">改</button>
         <button class="btn sm danger" onclick="wprodDelete(${p.id})">删</button>
       </td></tr>`).join("") + `</tbody>`;
-  if (!rows.length) t.innerHTML = `<tr><td colspan="11" class="empty">暂无入仓品，可点「新增入仓品」录入</td></tr>`;
+  if (!rows.length) t.innerHTML = `<tr><td colspan="12" class="empty">暂无入仓品，可点「新增入仓品」录入</td></tr>`;
 }
 function stockProductOptions(selId) {
   const list = (PRODUCTS || []).filter((p) => p.is_active && p.product_type === "stock" && !["人工", "快递"].includes(p.category));
@@ -3914,7 +3915,10 @@ function wprodEdit(id) {
       <div class="field"><label>69码</label><input id="wpBarcode" value="${esc(p.barcode || "")}" /></div>
       <div class="field"><label>箱规（袋/箱）</label><input id="wpBoxSpec" type="number" step="any" min="0" value="${p.box_spec || ""}" /></div>
       <div class="field"><label>采购价（元/袋，收入）</label><input id="wpPrice" type="number" step="any" min="0" value="${p.purchase_price || ""}" /></div>
-      <div class="field"><label>运费（元/袋）</label><input id="wpFreight" type="number" step="any" min="0" value="${p.freight || ""}" placeholder="可留空，后续维护" /></div>
+      <div class="field"><label>运费（元/袋）</label><input id="wpFreight" type="number" step="any" min="0" value="${p.freight || ""}" placeholder="可留空，后续维护" oninput="wprodCostHint()" /></div>
+      <div class="field"><label>固定成本（元/袋）</label><input id="wpFixedCost" type="number" step="any" min="0" value="${p.fixed_cost || ""}" placeholder="如 每袋打包费" oninput="wprodCostHint()" />
+        <div class="field-hint">每袋（每单）的打包费、不好量化的包材或额外费用。<b>会并入对外 <code>/api/open/sku-costs</code> 的 <code>package</code>（包材）口径</b>，并单独给 <code>fixed</code> 字段；不改入仓记录的毛利。</div>
+      </div>
       <div class="field"><label>关联库存商品（成本来源）</label><select id="wpStock" class="searchable">${stockProductOptions(p.stock_product_id)}</select></div>
       <div class="field"><label>代发成本（元/袋）</label><input id="wpDropshipCost" type="number" step="any" min="0" value="${p.dropship_cost || ""}" placeholder="不关联库存商品时填" oninput="wprodCostHint()" />
         <div class="field-hint">不关联库存商品（代发，本仓不持有该商品库存）时，商品成本 = 数量 × 这个值；关联了库存商品则按「净重 × 库存单位成本」自动算，此值忽略。</div>
@@ -3973,15 +3977,22 @@ function wprodCostHint() {
   } else {
     weightLine = "";
   }
+  // 每袋总成本：商品成本 ＋ 运费 ＋ 固定成本（固定成本只进对外 sku-costs 的包材口径，不进入仓毛利）
+  const fr = parseFloat($("wpFreight")?.value) || 0;
+  const fx = parseFloat($("wpFixedCost")?.value) || 0;
+  const goodsBag = sp ? bw * uc : dc;
+  const costTail = (fr || fx)
+    ? `<br>每袋总成本：商品 ${fmtMoney(goodsBag)} ＋ 运费 ${fmtMoney(fr)} ＋ 固定成本 ${fmtMoney(fx)} ＝ <b>${fmtMoney(goodsBag + fr + fx)}</b>`
+    : "";
   const hint = $("wpCostHint");
   if (!hint) return;
   if (!sp) {
     hint.innerHTML = dc
-      ? `未关联库存商品（代发）：商品成本 = 数量 × 代发成本 <b>${fmtMoney(dc)}/袋</b>${weightLine}`
-      : `未关联库存商品（代发）：请填「代发成本」，否则入仓时商品成本按 <b>0</b> 计（毛利会虚高）。${weightLine}`;
+      ? `未关联库存商品（代发）：商品成本 = 数量 × 代发成本 <b>${fmtMoney(dc)}/袋</b>${weightLine}${costTail}`
+      : `未关联库存商品（代发）：请填「代发成本」，否则入仓时商品成本按 <b>0</b> 计（毛利会虚高）。${weightLine}${costTail}`;
     return;
   }
-  hint.innerHTML = `库存单位成本 ${fmtMoney(uc)}/${esc(du)}（库存均价优先，无则用参考成本）；每袋成本 = ${fmtNum(bw)} × ${fmtMoney(uc)} = ${fmtMoney(bw * uc)}${weightLine}`;
+  hint.innerHTML = `库存单位成本 ${fmtMoney(uc)}/${esc(du)}（库存均价优先，无则用参考成本）；每袋成本 = ${fmtNum(bw)} × ${fmtMoney(uc)} = ${fmtMoney(bw * uc)}${weightLine}${costTail}`;
 }
 async function wprodSave(id) {
   const name = ($("wpName").value || "").trim();
@@ -3998,6 +4009,7 @@ async function wprodSave(id) {
     box_spec: parseFloat($("wpBoxSpec").value) || 0,
     purchase_price: parseFloat($("wpPrice").value) || 0,
     freight: parseFloat($("wpFreight").value) || 0,
+    fixed_cost: parseFloat($("wpFixedCost").value) || 0,
     stock_product_id: stockId,
     bag_weight: parseFloat($("wpBagWeight").value) || 0,
     bag_net_weight: parseFloat($("wpNetWeight").value) || 0,
@@ -4059,6 +4071,7 @@ function buildWinGroup(recs) {
     cogs: recs.reduce((s, r) => s + (r.cogs || 0), 0),
     freight: recs.reduce((s, r) => s + (r.freight_total || 0), 0),
     pack_cost: recs.reduce((s, r) => s + (r.pack_cost || 0), 0),
+    fixed: recs.reduce((s, r) => s + (r.fixed_total || 0), 0),
     profit: recs.reduce((s, r) => s + (r.profit || 0), 0),
     code: `批量 · ${recs.length}条`,
     date: dates[0] === dates[dates.length - 1] ? dates[0] : `${dates[0]} ~ ${dates[dates.length - 1]}`,
@@ -4089,11 +4102,13 @@ function renderWarehouseIns(d) {
   const sortable = rows.map((x) => x._group
     ? { _group: true, g: x.g, code: x.g.code, date: x.g.date, purchase_no: x.g.purchase_no,
         center: x.g.center, product: x.g.product, quantity: x.g.quantity, amount: x.g.amount,
-        cogs: x.g.cogs, freight: x.g.freight, pack_cost: x.g.pack_cost, profit: x.g.profit,
+        cogs: x.g.cogs, freight: x.g.freight, pack_cost: x.g.pack_cost,
+        fixed_total: x.g.fixed, profit: x.g.profit,
         profit_rate: x.g.profit_rate }
     : { _group: false, rec: x.rec, code: x.rec.code, date: x.rec.date, purchase_no: x.rec.purchase_no,
         center: x.rec.center, product: x.rec.product_name, quantity: x.rec.quantity, amount: x.rec.amount,
-        cogs: x.rec.cogs, freight: x.rec.freight_total, pack_cost: x.rec.pack_cost, profit: x.rec.profit,
+        cogs: x.rec.cogs, freight: x.rec.freight_total, pack_cost: x.rec.pack_cost,
+        fixed_total: x.rec.fixed_total, profit: x.rec.profit,
         profit_rate: x.rec.profit_rate });
   sortable.sort((a, b) => {
     if (t._sort) { const dd = compareVal(a[t._sort.key], b[t._sort.key]) * t._sort.dir; if (dd) return dd; }
@@ -4105,7 +4120,7 @@ function renderWarehouseIns(d) {
     $("wInSummary").innerHTML =
       `共 <b>${flat.length}</b> 条 · 数量 <b>${fmtNum(tot.quantity)}</b> 袋 · ` +
       `收入 <b>${fmtMoney(tot.amount)}</b> · 商品成本 <b>${fmtMoney(tot.cogs)}</b> · ` +
-      `运费 <b>${fmtMoney(tot.freight)}</b> · 包材 <b>${fmtMoney(tot.pack_cost)}</b> · ` +
+      `运费 <b>${fmtMoney(tot.freight)}</b> · 包材 <b>${fmtMoney(tot.pack_cost)}</b> · 固定成本 <b>${fmtMoney(tot.fixed || 0)}</b> · ` +
       `毛利 <b style="color:var(--green)">${fmtMoney(tot.profit)}</b> · 毛利率 <b style="color:var(--green)">${fmtNum(tot.profit_rate || 0)}%</b>`;
     $("wInSummary").style.display = flat.length ? "block" : "none";
   }
@@ -4121,11 +4136,12 @@ function renderWarehouseIns(d) {
     <th data-key="cogs" class="num">商品成本${sortArrow("wInTable", "cogs")}</th>
     <th data-key="freight" class="num">运费${sortArrow("wInTable", "freight")}</th>
     <th data-key="pack_cost" class="num">包材成本${sortArrow("wInTable", "pack_cost")}</th>
+    <th data-key="fixed_total" class="num">固定成本${sortArrow("wInTable", "fixed_total")}</th>
     <th data-key="profit" class="num">毛利${sortArrow("wInTable", "profit")}</th>
     <th data-key="profit_rate" class="num">毛利率${sortArrow("wInTable", "profit_rate")}</th>
     <th></th></tr></thead><tbody>` +
     sortable.map((x) => x._group ? renderWinGroupRow(x.g) : renderWinRow(x.rec)).join("") + `</tbody>`;
-  if (!rows.length) t.innerHTML = `<tr><td colspan="14" class="empty">该时间段暂无入仓记录，可点「导入${esc(WIN_SHEET)}」或「手动入仓」</td></tr>`;
+  if (!rows.length) t.innerHTML = `<tr><td colspan="15" class="empty">该时间段暂无入仓记录，可点「导入${esc(WIN_SHEET)}」或「手动入仓」</td></tr>`;
   t._rows = sortable;
   t._render = loadWarehouseIns;
   updateBatchBar("win");
@@ -4154,6 +4170,7 @@ function renderWinRow(r) {
     <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}${r.freight_source === "actual"
       ? ' <span class="badge income" title="按运输账单（运输转运费）里的实际结算金额重算">实际</span>' : ""}</td>
     <td class="num mono">${r.pack_cost ? fmtMoney(r.pack_cost) : "—"}</td>
+    <td class="num mono"${r.fixed_total ? "" : ' style="color:var(--muted);"'} title="${r.fixed_cost ? `每袋 ${fmtMoney(r.fixed_cost)} × ${fmtNum(r.quantity)} 袋` : "入仓品资料未维护固定成本"}">${r.fixed_total ? fmtMoney(r.fixed_total) : "—"}</td>
     <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
     <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtNum(r.profit_rate || 0)}%</td>
     <td style="white-space:nowrap;">
@@ -4176,6 +4193,7 @@ function renderWinGroupRow(g) {
     <td class="num mono">${fmtMoney(g.cogs)}</td>
     <td class="num mono">${g.freight ? fmtMoney(g.freight) : "—"}</td>
     <td class="num mono">${g.pack_cost ? fmtMoney(g.pack_cost) : "—"}</td>
+    <td class="num mono"${g.fixed ? "" : ' style="color:var(--muted);"'}>${g.fixed ? fmtMoney(g.fixed) : "—"}</td>
     <td class="num mono" style="color:${g.profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(g.profit)}</td>
     <td class="num mono" style="color:${g.profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtNum(g.profit_rate || 0)}%</td>
     <td style="white-space:nowrap;">
@@ -4283,6 +4301,7 @@ function renderWinGroupPage() {
     <th data-key="cogs" class="num">商品成本${sortArrow("wgTable", "cogs")}</th>
     <th data-key="freight_total" class="num">运费${sortArrow("wgTable", "freight_total")}</th>
     <th data-key="pack_cost" class="num">包材成本${sortArrow("wgTable", "pack_cost")}</th>
+    <th data-key="fixed_total" class="num">固定成本${sortArrow("wgTable", "fixed_total")}</th>
     <th data-key="profit" class="num">毛利${sortArrow("wgTable", "profit")}</th>
     <th data-key="profit_rate" class="num">毛利率${sortArrow("wgTable", "profit_rate")}</th>
     <th></th></tr></thead><tbody>` + rows.map((r) => `<tr>
@@ -4303,6 +4322,7 @@ function renderWinGroupPage() {
     <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}${r.freight_source === "actual"
       ? ' <span class="badge income" title="按运输账单实际结算金额重算">实际</span>' : ""}</td>
     <td class="num mono">${r.pack_cost ? fmtMoney(r.pack_cost) : "—"}</td>
+    <td class="num mono"${r.fixed_total ? "" : ' style="color:var(--muted);"'} title="${r.fixed_cost ? `每袋 ${fmtMoney(r.fixed_cost)} × ${fmtNum(r.quantity)} 袋` : "入仓品资料未维护固定成本"}">${r.fixed_total ? fmtMoney(r.fixed_total) : "—"}</td>
     <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
     <td class="num mono" style="color:${(r.profit || 0) >= 0 ? "var(--green)" : "var(--red)"}">${fmtNum(r.profit_rate || 0)}%</td>
     <td style="white-space:nowrap;">
@@ -4325,6 +4345,7 @@ function renderWinSummaryTable(t) {
     <th data-key="cogs" class="num">商品成本${sortArrow("wgTable", "cogs")}</th>
     <th data-key="freight_total" class="num">运费${sortArrow("wgTable", "freight_total")}</th>
     <th data-key="pack_cost" class="num">包材成本${sortArrow("wgTable", "pack_cost")}</th>
+    <th data-key="fixed_total" class="num">固定成本${sortArrow("wgTable", "fixed_total")}</th>
     <th data-key="profit" class="num">毛利${sortArrow("wgTable", "profit")}</th>
     <th data-key="profit_rate" class="num">毛利率${sortArrow("wgTable", "profit_rate")}</th>
     </tr></thead><tbody>` + rows.map((r) => `<tr>
@@ -4339,6 +4360,7 @@ function renderWinSummaryTable(t) {
     <td class="num mono">${fmtMoney(r.cogs)}</td>
     <td class="num mono">${r.freight_total ? fmtMoney(r.freight_total) : "—"}</td>
     <td class="num mono">${r.pack_cost ? fmtMoney(r.pack_cost) : "—"}</td>
+    <td class="num mono"${r.fixed_total ? "" : ' style="color:var(--muted);"'}>${r.fixed_total ? fmtMoney(r.fixed_total) : "—"}</td>
     <td class="num mono" style="color:${r.profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(r.profit)}</td>
     <td class="num mono" style="color:${r.profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtNum(r.profit_rate || 0)}%</td>
     </tr>`).join("") + `</tbody>`;
@@ -4390,6 +4412,8 @@ function wInFormModal(rec) {
       <div class="field"><label>商品成本</label><input id="wiCogs" readonly /></div>
       <div class="field"><label>运费合计</label><input id="wiFreightTotal" readonly /></div>
       <div class="field"><label>随货包材成本</label><input id="wiPackCost" readonly /></div>
+      <div class="field"><label>固定成本（元/袋）</label><input id="wiFixedPPB" readonly title="来自入仓品资料（每袋打包费 / 难量化的包材或额外费用）" /></div>
+      <div class="field"><label>固定成本合计</label><input id="wiFixedTotal" readonly /></div>
       <div class="field"><label>毛利</label><input id="wiProfit" readonly /></div>
       <div class="field" style="grid-column:1/-1;"><label>备注</label><input id="wiRemark" value="${esc(rec.remark || "")}" /></div>
       <div class="field" style="grid-column:1/-1;">
@@ -4405,12 +4429,14 @@ function wInFormModal(rec) {
   const sel = $("wiProduct");
   const p0 = (WPROD || []).find((x) => x.id === +sel.value);
   sel.dataset.uc = p0 ? (p0.stock_unit_cost || 0) : 0;
+  sel.dataset.fixed = p0 ? (p0.fixed_cost || 0) : 0;
   wInCalc();
 }
 function wInPickProduct() {
   const sel = $("wiProduct");
   const p = (WPROD || []).find((x) => x.id === +sel.value);
   sel.dataset.uc = p ? (p.stock_unit_cost || 0) : 0;
+  sel.dataset.fixed = p ? (p.fixed_cost || 0) : 0;
   if (!p) { wInCalc(); return; }
   $("wiName").value = p.name;
   $("wiPrice").value = p.purchase_price || "";
@@ -4456,11 +4482,16 @@ function wInCalc() {
   const cogs = qty * bagCost;   // 每袋商品成本 × 袋数（代发时即代发成本）
   const ft = qty * freight;
   const pe = wPackEstimate(p, qty);
+  // 固定成本（元/袋，来自入仓品资料）：合计 = 袋数 × 每袋
+  const fixedPPB = +(sel.dataset.fixed || (p ? p.fixed_cost : 0) || 0);
+  const fixedTotal = qty * fixedPPB;
   $("wiAmount").value = revenue.toFixed(2);
   $("wiCogs").value = cogs.toFixed(2);
   $("wiFreightTotal").value = ft.toFixed(2);
   if ($("wiPackCost")) $("wiPackCost").value = pe.cost.toFixed(2);
-  $("wiProfit").value = (revenue - cogs - ft - pe.cost).toFixed(2);
+  if ($("wiFixedPPB")) $("wiFixedPPB").value = fixedPPB.toFixed(2);
+  if ($("wiFixedTotal")) $("wiFixedTotal").value = fixedTotal.toFixed(2);
+  $("wiProfit").value = (revenue - cogs - ft - pe.cost - fixedTotal).toFixed(2);
   const hint = $("wiCostHint");
   if (hint) {
     const base = p && p.stock_product_id
@@ -4468,7 +4499,9 @@ function wInCalc() {
       : (p
         ? `扣点 ${fmtNum(pct)}%；未关联库存商品（代发）：每袋成本按入仓品的代发成本 ${fmtMoney(bagCost)}/袋 计`
         : `扣点 ${fmtNum(pct)}%；未选择入仓品：商品成本按 0 计。`);
-    hint.textContent = `${base}；随货包材：${pe.text}（预估成本 ${fmtMoney(pe.cost)}）`;
+    hint.textContent = `${base}；随货包材：${pe.text}（预估成本 ${fmtMoney(pe.cost)}）`
+      + `；固定成本 ${fmtMoney(fixedPPB)}/袋 × ${fmtNum(qty)} 袋 = ${fmtMoney(fixedTotal)}`
+      + `。毛利 = （收入单价 − 商品成本/袋 − 运费/袋 − 包材/袋 − 固定成本/袋）× 袋数`;
   }
 }
 async function openWarehouseInAdd() {
@@ -4587,9 +4620,9 @@ function renderWImportPreview(d, dateVal) {
       <table id="wiImportTable">
         <thead><tr>
           <th>商品名称（贴单）</th><th>入仓品</th><th class="num">箱数</th><th class="num">数量(袋)</th>
-          <th class="num">每袋净重</th><th class="num">采购价(收入)</th><th class="num">运费</th><th class="num">商品成本</th><th class="num">包材成本</th>
+          <th class="num">每袋净重</th><th class="num">采购价(收入)</th><th class="num">运费</th><th class="num">商品成本</th><th class="num">包材成本</th><th class="num">固定成本</th>
         </tr></thead>
-        <tbody>${rows.map((r, i) => `<tr data-i="${i}" data-uc="${r.unit_cost || 0}" data-pct="${r.deduction_percent || 0}" data-pid="${r.product_id || ""}">
+        <tbody>${rows.map((r, i) => `<tr data-i="${i}" data-uc="${r.unit_cost || 0}" data-pct="${r.deduction_percent || 0}" data-pid="${r.product_id || ""}" data-fx="${r.fixed_cost || 0}">
           <td>${esc(r.product_name)}
             <div class="muted" style="font-size:12px;">${esc(r.purchase_no) || "—"} · ${esc(r.center) || "—"}${r.matched_sku ? ` · SKU ${esc(r.matched_sku)}` : ""}</div>
           </td>
@@ -4603,6 +4636,7 @@ function renderWImportPreview(d, dateVal) {
           <td><input class="wi-freight" type="number" step="any" min="0" value="${r.freight || ""}" style="width:64px;" oninput="wImportCalc()" /></td>
           <td class="num mono wi-cogs">—</td>
           <td class="num mono wi-packcost">—</td>
+          <td class="num mono wi-fixedcost">—</td>
         </tr>`).join("")}</tbody>
       </table>
     </div>
@@ -4620,6 +4654,7 @@ function wImportPick(i) {
   const p = (WPROD || []).find((x) => x.id === +tr.querySelector(".wi-prod").value);
   tr.dataset.uc = p ? (p.stock_unit_cost || 0) : 0;
   tr.dataset.pid = p ? p.id : "";
+  tr.dataset.fx = p ? (p.fixed_cost || 0) : 0;
   if (p) {
     tr.querySelector(".wi-price").value = p.purchase_price || "";
     tr.querySelector(".wi-freight").value = p.freight || "";
@@ -4630,11 +4665,13 @@ function wImportPick(i) {
   wImportCalc();
 }
 function wImportCalc() {
-  let rev = 0, cogs = 0, ft = 0, packc = 0, qtySum = 0;
+  let rev = 0, cogs = 0, ft = 0, packc = 0, fxSum = 0, qtySum = 0;
   document.querySelectorAll("#wiImportTable tbody tr").forEach((tr) => {
     const q = parseFloat(tr.querySelector(".wi-qty").value) || 0;
     const pr = parseFloat(tr.querySelector(".wi-price").value) || 0;
     const fr = parseFloat(tr.querySelector(".wi-freight").value) || 0;
+    const fxPPB = parseFloat(tr.dataset.fx) || 0;   // 固定成本（元/袋，来自入仓品资料）
+    const fx = fxPPB * q;
     const bw = parseFloat(tr.querySelector(".wi-weight").value) || 0;
     const pct = +(tr.dataset.pct || 0);
     const pid = +tr.dataset.pid || null;
@@ -4645,12 +4682,14 @@ function wImportCalc() {
     if (cell) cell.textContent = fmtMoney(rowCogs);
     const pc = tr.querySelector(".wi-packcost");
     if (pc) pc.textContent = pe.cost ? fmtMoney(pe.cost) : "—";
+    const fc = tr.querySelector(".wi-fixedcost");
+    if (fc) fc.textContent = fx ? fmtMoney(fx) : "—";
     const packSub = tr.querySelector(".wi-pack");
     if (packSub) packSub.textContent = pe.text !== "—" ? `随货包材：${pe.text}` : "";
-    rev += q * pr * (1 - pct / 100); cogs += rowCogs; ft += q * fr; packc += pe.cost; qtySum += q;
+    rev += q * pr * (1 - pct / 100); cogs += rowCogs; ft += q * fr; packc += pe.cost; fxSum += fx; qtySum += q;
   });
   const el = $("wiImportTotal");
-  if (el) el.innerHTML = `数量 <b>${fmtNum(qtySum)}</b> 袋 · 收入 <b>${fmtMoney(rev)}</b> · 成本 <b>${fmtMoney(cogs)}</b> · 运费 <b>${fmtMoney(ft)}</b> · 包材 <b>${fmtMoney(packc)}</b> · 毛利 <b style="color:var(--green)">${fmtMoney(rev - cogs - ft - packc)}</b>`;
+  if (el) el.innerHTML = `数量 <b>${fmtNum(qtySum)}</b> 袋 · 收入 <b>${fmtMoney(rev)}</b> · 成本 <b>${fmtMoney(cogs)}</b> · 运费 <b>${fmtMoney(ft)}</b> · 包材 <b>${fmtMoney(packc)}</b> · 固定成本 <b>${fmtMoney(fxSum)}</b> · 毛利 <b style="color:var(--green)">${fmtMoney(rev - cogs - ft - packc - fxSum)}</b>`;
 }
 async function wImportConfirm() {
   if (!WIMPORT) { toast("请先解析预览"); return; }
@@ -7053,6 +7092,7 @@ function costSplitText(r) {
   const brushFee = Number(r.brush_fee_cogs) || 0;    // 刷单单手填的「快递+包装固定费」
   const brushCost = Number(r.brush_cost_cogs) || 0;  // 刷单单手填的「刷单成本」
   const isWi = !!r.is_warehouse_in;   // 入仓行：material/express 字段装的是「包材/运费」，标签要换
+  const fixed = Number(r.fixed_cogs) || 0;   // 入仓品固定成本（每袋打包费 / 难量化包材）
   if (brush) {
     // 刷单单：本仓不出货、不结转商品/包材/人工/快递，成本就是这两项手填值（口径见 app/brush.py）
     const items = [];
@@ -7060,7 +7100,7 @@ function costSplitText(r) {
     if (brushCost) items.push(`刷单成本 ${fmtMoney(brushCost)}`);
     return items.join(" ＋ ");
   }
-  if (!(r.is_dropship || oldPack || express || labor || material || other)) return "";
+  if (!(r.is_dropship || oldPack || express || labor || material || other || fixed)) return "";
   const parts = [`${r.is_dropship ? "代发成本" : "商品成本"} ${fmtMoney(goods)}`];
   if (split) {
     if (labor) parts.push(`打包人工 ${fmtMoney(labor)}`);
@@ -7070,6 +7110,7 @@ function costSplitText(r) {
     parts.push(`打包人工+耗材 ${fmtMoney(oldPack)}`);
   }
   if (express) parts.push(`${isWi ? "运费" : "快递费"} ${fmtMoney(express)}`);
+  if (fixed) parts.push(`固定成本 ${fmtMoney(fixed)}`);
   return parts.join(" ＋ ");
 }
 function outAggBy(rows, pool) {

@@ -461,6 +461,9 @@ _EXTRA_COLUMNS = {
         ("bag_cost", "FLOAT DEFAULT 0"),
         # 运费来源：'' 按入仓品资料的每袋运费；'actual' 按运输账单实际结算（重算运费）
         ("freight_source", "VARCHAR(16) DEFAULT ''"),
+        # 固定成本（元/袋）快照 + 合计（数量 × 每袋固定成本）；老记录默认 0，历史毛利不变
+        ("fixed_cost", "FLOAT DEFAULT 0"),
+        ("fixed_total", "FLOAT DEFAULT 0"),
     ),
     # 入仓品：关联结算（随货包材）清单，每袋用量；代发成本（不关联库存商品时手填的每袋商品成本）
     # bag_net_weight/bag_net_unit：每袋净重 + 单位（重量统计口径）—— 
@@ -470,6 +473,8 @@ _EXTRA_COLUMNS = {
         ("dropship_cost", "FLOAT DEFAULT 0"),
         ("bag_net_weight", "FLOAT DEFAULT 0"),
         ("bag_net_unit", "VARCHAR(8) DEFAULT '克'"),
+        # 固定成本（元/袋）：每袋打包费 / 难量化的包材或额外费用，计入对外 sku-costs 的包材口径
+        ("fixed_cost", "FLOAT DEFAULT 0"),
     ),
     # 出库行：代发标记（订单商品未关联库存大类 → 不扣库存，只记代发数量/成本）
     "outbound_lines": (("is_dropship", "BOOLEAN DEFAULT 0"),),

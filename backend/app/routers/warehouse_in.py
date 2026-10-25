@@ -1,10 +1,14 @@
 """入仓：按「袋」采购的备货商品（半加工等）入仓台账。
 
 口径：
-- 入仓品资料：名称 / 类目 / SKU / 69码 / 箱规 / 采购价(元/袋，即给「我」的收入单价) / 运费(元/袋)，
+- 入仓品资料：名称 / 类目 / SKU / 69码 / 箱规 / 采购价(元/袋，即给「我」的收入单价) / 运费(元/袋) /
+  固定成本(元/袋：每袋打包费、难量化的包材或额外费用)，
   并关联一个「库存商品(大类)」+ 每袋净重（库存管理的基础单位，通常克），用于成本核算。
 - 入仓记录：收入 = 数量 × 采购价；商品成本 = 数量 × 每袋净重 × 库存单位成本（库存均价优先，回退参考成本）；
-  运费 = 数量 × 运费单价；毛利 = 收入 − 商品成本 − 运费。
+  运费 = 数量 × 运费单价；固定成本 = 数量 × 每袋固定成本；
+  毛利 = （收入单价 − 商品成本/袋 − 运费/袋 − 包材/袋 − 固定成本/袋）× 袋数
+      = 收入 − 商品成本 − 运费 − 包材成本 − 固定成本。
+  老记录没有固定成本快照（默认 0），历史毛利口径不变。
 - 导入《入仓配送明细》贴单：表头「采购单号 / 商品名称 / 箱数 / 配送中心 / 数量 / 箱规」，
   工作表按分仓自动选（奥斯迪/昆明蔬菜仓=常温贴单，wh02=冷冻贴单），也可手动指定；
   采购单号为合并单元格时自动向下回填；每袋净重优先从商品名解析（净重2斤 / 228g / 1.2kg），
@@ -276,6 +280,8 @@ def _product_dict(db: Session, p: WarehouseProduct) -> dict:
         "barcode": p.barcode, "box_spec": p.box_spec,
         "purchase_price": p.purchase_price,
         "freight": p.freight,
+        # 固定成本（元/袋）：打包费 / 难量化的包材或额外费用（对外 sku-costs 的包材口径会带上）
+        "fixed_cost": round(float(getattr(p, "fixed_cost", 0.0) or 0.0), 4),
         "stock_product_id": p.stock_product_id,
         "stock_product_name": sp.name if sp else "",
         "stock_base_unit": (sp.base_unit if sp else ""),
@@ -332,6 +338,10 @@ def _in_dict(db: Session, r: WarehouseIn) -> dict:
         "unit_profit": round(float(r.profit or 0) / qty, 4) if qty else 0.0,      # 每袋毛利
         "pack_items": r.pack_items or [],  # 随货包材结算快照
         "pack_cost": r.pack_cost or 0.0,
+        # 固定成本（元/袋 + 合计）：入仓时从入仓品资料快照；老记录为 0（历史毛利不变）
+        "fixed_cost": round(float(getattr(r, "fixed_cost", 0.0) or 0.0), 4),
+        "fixed_total": round(float(getattr(r, "fixed_total", 0.0) or 0.0), 2),
+        "unit_fixed": round(float(getattr(r, "fixed_total", 0.0) or 0.0) / qty, 4) if qty else 0.0,
         "date": r.date, "operator": r.operator, "remark": r.remark,
         "import_group": r.import_group,
         "pay_status": getattr(r, "pay_status", "paid") or "paid",
@@ -357,6 +367,7 @@ def _by_product(rows: list[WarehouseIn]) -> list[dict]:
             "cogs": 0.0,
             "freight_total": 0.0,
             "pack_cost": 0.0,
+            "fixed_total": 0.0,
             "profit": 0.0,
             "last_date": "",
         })
@@ -366,6 +377,7 @@ def _by_product(rows: list[WarehouseIn]) -> list[dict]:
         b["cogs"] += float(r.cogs or 0)
         b["freight_total"] += float(r.freight_total or 0)
         b["pack_cost"] += float(r.pack_cost or 0)
+        b["fixed_total"] += float(getattr(r, "fixed_total", 0.0) or 0)
         b["profit"] += float(r.profit or 0)
         b["last_date"] = max(b["last_date"], r.date or "")
     out = []
@@ -375,6 +387,7 @@ def _by_product(rows: list[WarehouseIn]) -> list[dict]:
         b["cogs"] = round(b["cogs"], 2)
         b["freight_total"] = round(b["freight_total"], 2)
         b["pack_cost"] = round(b["pack_cost"], 2)
+        b["fixed_total"] = round(b["fixed_total"], 2)
         b["profit"] = round(b["profit"], 2)
         b["quantity"] = round(qty, 4)
         b["profit_rate"] = _profit_rate(b["profit"], b["amount"])
@@ -399,6 +412,9 @@ class ProductIn(BaseModel):
     box_spec: float = 0.0
     purchase_price: float = 0.0
     freight: float = 0.0
+    # 固定成本（元/袋）：每袋（每单）的打包费、不好量化的包材或额外费用。
+    # 只进成本口径（对外 /api/open/sku-costs 的包材部分），不参与入仓记录的毛利计算。
+    fixed_cost: float = 0.0
     stock_product_id: int | None = None
     bag_weight: float = 0.0
     # 每袋净重 + 单位（重量统计口径，选填）：报表「商品销售明细 → 重量(kg)」按 袋数 × 本值 算。
@@ -626,9 +642,14 @@ def _create_record(db: Session, payload: dict, operator: str, import_group: str 
     revenue = round(quantity * unit_price * (1 - deduction / 100), 2)
     cogs = round(quantity * bag_cost, 2)
     freight_total = round(quantity * freight, 2)
+    # 固定成本（元/袋，资料上维护的每袋打包费/难量化包材）：按袋快照到记录上。
+    # 口径 = （收入单价 − 商品成本/袋 − 运费/袋 − 包材/袋 − 固定成本/袋）× 袋数，
+    # 展开后就是 收入 − 商品成本 − 运费 − 包材 − 固定成本×袋数。
+    fixed_cost = float(getattr(product, "fixed_cost", 0.0) or 0.0) if product else 0.0
+    fixed_total = round(quantity * fixed_cost, 2)
     # 随货包材：每袋用量 × 袋数，成本按 FIFO 结转
     pack_items, pack_cost = _settle_pack_items(db, product, quantity)
-    profit = round(revenue - cogs - freight_total - pack_cost, 2)
+    profit = round(revenue - cogs - freight_total - pack_cost - fixed_total, 2)
 
     rec = WarehouseIn(
         code=_gen_code(db, date),
@@ -654,6 +675,8 @@ def _create_record(db: Session, payload: dict, operator: str, import_group: str 
         freight_total=freight_total,
         pack_items=pack_items,
         pack_cost=pack_cost,
+        fixed_cost=fixed_cost,
+        fixed_total=fixed_total,
         profit=profit,
         date=date,
         operator=(payload.get("operator") or "").strip() or operator,
@@ -689,6 +712,7 @@ def list_inbounds(
         "cogs": round(sum(r.cogs or 0 for r in rows), 2),      # 商品成本
         "freight": round(sum(r.freight_total or 0 for r in rows), 2),
         "pack_cost": round(sum(r.pack_cost or 0 for r in rows), 2),  # 随货包材成本
+        "fixed": round(sum(getattr(r, "fixed_total", 0.0) or 0 for r in rows), 2),  # 固定成本
         "profit": round(sum(r.profit or 0 for r in rows), 2),
         "quantity": round(sum(r.quantity or 0 for r in rows), 2),
     }
@@ -754,10 +778,13 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
     rec.amount = round(rec.quantity * rec.unit_price * (1 - (rec.deduction_percent or 0) / 100), 2)
     rec.cogs = round(rec.quantity * rec.bag_cost, 2)
     rec.freight_total = round(rec.quantity * rec.freight, 2)
+    # 固定成本：跟着入仓品资料的当前值走（没关联入仓品时保留原值）
+    rec.fixed_cost = float(getattr(product, "fixed_cost", 0.0) or 0.0) if product else (rec.fixed_cost or 0.0)
+    rec.fixed_total = round(rec.quantity * rec.fixed_cost, 2)
     # 随货包材：先清除旧结算流水，再按新入仓品/数量重算
     old_affected = _clear_pack_settlement(db, rec.id)
     rec.pack_items, rec.pack_cost = _settle_pack_items(db, product, quantity)
-    rec.profit = round(rec.amount - rec.cogs - rec.freight_total - rec.pack_cost, 2)
+    rec.profit = round(rec.amount - rec.cogs - rec.freight_total - rec.pack_cost - rec.fixed_total, 2)
     _apply_pack_settlement(db, rec)
     for pid in old_affected:  # 从清单里移除的旧包材也要重算回库存
         recompute_product(db, pid)
@@ -885,6 +912,9 @@ def import_preview(
         bag_cost = _goods_bag_cost(product, bag_weight, unit_cost)
         cogs = round(qty * bag_cost, 2)
         freight_total = round(qty * freight, 2)
+        # 固定成本（元/袋）：资料上维护的每袋打包费/难量化包材，按袋计入本次入仓成本
+        fixed_cost = float(getattr(product, "fixed_cost", 0.0) or 0.0) if product else 0.0
+        fixed_total = round(qty * fixed_cost, 2)
         items.append({
             "row": i + 1,
             "purchase_no": purchase_no,
@@ -901,6 +931,8 @@ def import_preview(
             "deduction_percent": deduction,
             "net_price": round(unit_price * (1 - deduction / 100), 4),
             "freight": freight,
+            "fixed_cost": fixed_cost,     # 固定成本（元/袋）
+            "fixed_total": fixed_total,   # 固定成本合计 = 数量 × 每袋
             "bag_weight": bag_weight,
             "unit_cost": unit_cost,
             "bag_cost": bag_cost,  # 每袋商品成本（未关联库存商品时为代发成本）
@@ -909,13 +941,14 @@ def import_preview(
             "revenue": revenue,
             "cogs": cogs,
             "freight_total": freight_total,
-            "profit": round(revenue - cogs - freight_total, 2),
+            "profit": round(revenue - cogs - freight_total - fixed_total, 2),
             "match_score": score,
         })
     totals = {
         "revenue": round(sum(it["revenue"] for it in items), 2),
         "cogs": round(sum(it["cogs"] for it in items), 2),
         "freight": round(sum(it["freight_total"] for it in items), 2),
+        "fixed": round(sum(it["fixed_total"] for it in items), 2),
         "profit": round(sum(it["profit"] for it in items), 2),
         "quantity": round(sum(it["quantity"] for it in items), 2),
     }

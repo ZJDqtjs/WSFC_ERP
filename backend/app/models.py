@@ -381,6 +381,9 @@ class WarehouseProduct(Base):
     box_spec: Mapped[float] = mapped_column(Float, default=0.0)  # 箱规（袋/箱）
     purchase_price: Mapped[float] = mapped_column(Float, default=0.0)  # 采购价（元/袋）＝给「我」的收入单价
     freight: Mapped[float] = mapped_column(Float, default=0.0)  # 运费（元/袋），暂空待维护
+    # 固定成本（元/袋）：每袋（每单）的打包费、不好量化的包材或额外费用。
+    # 只用在成本口径（对外 /api/open/sku-costs 的包材部分），不改入仓记录的毛利计算。
+    fixed_cost: Mapped[float] = mapped_column(Float, default=0.0)
     stock_product_id: Mapped[int | None] = mapped_column(
         ForeignKey("products.id"), nullable=True, index=True
     )  # 关联的库存商品（成本按库存管理的均价/参考成本计算）
@@ -449,7 +452,11 @@ class WarehouseIn(Base):
     # 随货包材结算快照 + 成本：pack_items=[{product_id,name,unit,quantity,quantity_base,cost}]，pack_cost 为合计
     pack_items: Mapped[list] = mapped_column(JSON, default=list)
     pack_cost: Mapped[float] = mapped_column(Float, default=0.0)
-    profit: Mapped[float] = mapped_column(Float, default=0.0)  # 毛利 = 收入 - 商品成本 - 运费 - 包材成本
+    # 固定成本（元/袋）+ 合计：入仓时从入仓品资料快照下来（每袋打包费 / 难量化包材 / 额外费用）。
+    # 老记录默认 0 → 口径不变；只有新建 / 编辑过的记录才带上。
+    fixed_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    fixed_total: Mapped[float] = mapped_column(Float, default=0.0)
+    profit: Mapped[float] = mapped_column(Float, default=0.0)  # 毛利 = 收入 - 商品成本 - 运费 - 包材成本 - 固定成本
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
     operator: Mapped[str] = mapped_column(String(32), default="")
     remark: Mapped[str] = mapped_column(String(255), default="")

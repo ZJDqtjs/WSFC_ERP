@@ -443,7 +443,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     wi_goods = round(sum(w.cogs or 0.0 for w in warehouse_ins), 2)
     wi_freight = round(sum(w.freight_total or 0.0 for w in warehouse_ins), 2)
     wi_pack = round(sum(w.pack_cost or 0.0 for w in warehouse_ins), 2)
-    wi_cogs = round(wi_goods + wi_freight + wi_pack, 2)
+    # 固定成本（每袋打包费/难量化包材）：新记录才有快照，老记录 0 → 历史数据口径不变
+    wi_fixed = round(sum(getattr(w, "fixed_total", 0.0) or 0.0 for w in warehouse_ins), 2)
+    wi_cogs = round(wi_goods + wi_freight + wi_pack + wi_fixed, 2)
 
     # 收入 = 销售收入 + 客户代收的关联结算（包材/人工/快递费）：与出库单「实收金额」同口径
     revenue = sum(_income_of(o) for o in outbounds) + wi_revenue
@@ -891,7 +893,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         b = wi_buckets.setdefault((nm, cat), {
             "product_id": w.product_id, "name": nm, "spec": cat, "unit": w.unit or "袋",
             "qty": 0.0, "amount": 0.0, "gross_sales": 0.0,
-            "goods": 0.0, "freight": 0.0, "pack": 0.0, "weight": 0.0,
+            "goods": 0.0, "freight": 0.0, "pack": 0.0, "fixed": 0.0, "weight": 0.0,
         })
         b["qty"] += w.quantity or 0.0
         b["weight"] += _wi_weight(w)
@@ -901,11 +903,13 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         b["goods"] += w.cogs or 0.0
         b["freight"] += w.freight_total or 0.0
         b["pack"] += w.pack_cost or 0.0
+        b["fixed"] += getattr(w, "fixed_total", 0.0) or 0.0
     for b in wi_buckets.values():
         goods = round(b["goods"], 2)
         freight = round(b["freight"], 2)
         pack = round(b["pack"], 2)
-        total_cogs = round(goods + freight + pack, 2)
+        fixed = round(b["fixed"], 2)
+        total_cogs = round(goods + freight + pack + fixed, 2)
         amount = round(b["amount"], 2)
         gross_sales = round(b["gross_sales"], 2)
         gp = round(amount - total_cogs, 2)
@@ -930,6 +934,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             "material_cogs": pack,
             "other_cogs": 0.0,
             "express_cogs": freight,
+            # 固定成本（每袋打包费/难量化包材，老记录为 0）——成本构成小字里单独列出
+            "fixed_cogs": fixed,
             "brush_cogs": 0.0,
             "settle_income": 0.0,
             "total_cogs": total_cogs,
@@ -1209,7 +1215,7 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
     # 入仓品要单独成行，不能和同名同规格的出库商品合并（否则「出库方式」就没法区分了）
     num_fields = ("qty", "weight_kg", "amount", "gross_sales", "goods_cogs", "pack_cogs",
                   "labor_cogs", "material_cogs", "other_cogs", "express_cogs", "brush_cogs",
-                  "settle_income")
+                  "fixed_cogs", "settle_income")
     buckets: dict[tuple, dict] = {}
     for p in parts:
         for r in p.get("by_product") or []:
@@ -1232,7 +1238,8 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
         pack = round(d["pack_cogs"], 2)
         express = round(d["express_cogs"], 2)
         brush = round(d["brush_cogs"], 2)   # 芳谊放单仓刷单结算（与单仓口径一致）
-        total_cogs = round(goods + pack + express + brush, 2)
+        fixed = round(d.get("fixed_cogs", 0.0), 2)   # 入仓品固定成本（老记录为 0）
+        total_cogs = round(goods + pack + express + brush + fixed, 2)
         amount = round(d["amount"], 2)
         gross_sales = round(d["gross_sales"], 2)
         settle = round(d.get("settle_income", 0.0), 2)   # 客户代收的关联结算（与单仓口径一致）

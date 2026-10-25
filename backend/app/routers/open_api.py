@@ -7,7 +7,8 @@ SKU 口径（两边靠这个对上）：
 - **订单商品**：``products.code`` 存的就是京东 skuId。单件结算收入 = 出库明细 ``amount``
   （卖家实收，即京东结算给我们的钱）÷ 件数。
 - **入仓品**：``warehouse_products.sku`` 也是京东 skuId，入仓单的收入就是京东向我们下的
-  采购单，毛利 = 收入 − 商品成本 − 运费 − 随货包材成本。
+  采购单，毛利 = 收入 − 商品成本 − 运费 − 随货包材成本；对外输出时 ``package`` = 随货包材
+  + 资料上的**固定成本**（每袋打包费 / 难量化的包材或额外费用），并另给 ``fixed`` 字段便于核对。
 
 分仓：对方不需要感知分仓，这里跨全部分仓合并后按 skuId 汇总（分仓是各自独立的账套，
 但同一 SKU 的结算口径一致，合并后覆盖面更全）。
@@ -207,6 +208,10 @@ def _sku_rows_warehouse(db: Session) -> dict:
             func.coalesce(func.sum(WarehouseIn.unit_price * WarehouseIn.quantity), 0.0),  # 扣点前采购价
             func.coalesce(func.sum(WarehouseIn.freight_total), 0.0),
             func.coalesce(func.sum(WarehouseIn.pack_cost), 0.0),
+            # 固定成本（元/袋）：取入仓品资料上的**当前值** × 该条入仓记录的袋数（没关联资料按 0）。
+            # 它是一项按袋设置的成本（不是逐单结算），所以老记录也按现在的资料口径带上；
+            # 入仓记录自己的毛利用的是入库当时的快照（fixed_total），历史不变。
+            func.coalesce(func.sum(WarehouseProduct.fixed_cost * WarehouseIn.quantity), 0.0),
             func.coalesce(func.sum(WarehouseIn.cogs), 0.0),
             func.coalesce(func.sum(WarehouseIn.profit), 0.0),
             func.max(WarehouseIn.deduction_percent),
@@ -219,7 +224,7 @@ def _sku_rows_warehouse(db: Session) -> dict:
         .group_by(WarehouseProduct.sku)
     ).all()
     out: dict = {}
-    for sku, qty, amount, gross, freight, pack, cogs, profit, ded, name, last in rows:
+    for sku, qty, amount, gross, freight, pack, fixed, cogs, profit, ded, name, last in rows:
         code = str(sku or "").strip()
         if not code or not float(qty or 0):
             continue  # 没维护 sku 的入仓品无法与京东 SKU 对应
@@ -229,6 +234,7 @@ def _sku_rows_warehouse(db: Session) -> dict:
             "_gross": float(gross or 0),
             "_freight": float(freight or 0),
             "_pack": float(pack or 0),
+            "_fixed": float(fixed or 0),
             "_cogs": float(cogs or 0),
             "_profit": float(profit or 0),
             "_deduction": round(float(ded or 0) / 100, 6),
@@ -256,6 +262,7 @@ def _sku_rows_warehouse(db: Session) -> dict:
             "_gross": gross,
             "_freight": float(wp.freight or 0),
             "_pack": float(pack_cost or 0),
+            "_fixed": float(getattr(wp, "fixed_cost", 0.0) or 0.0),   # 固定成本（元/袋）
             "_cogs": 0.0,                                  # 没有实际入仓，商品成本无从得知
             "_profit": 0.0,
             "_deduction": round(ded, 6),
@@ -354,6 +361,8 @@ def _sale_item(cost: dict, period: str, rq: float, ra: float, tq: float, ta: flo
         "price": None,
         "shipping": _r(cost["_express"] / qty),
         "package": _r(cost["_material"] / qty),
+        # 出库商品没有「固定成本」这个口径（只有入仓品资料上维护），给 0 保持字段结构一致
+        "fixed": 0.0,
         "labor": _r(cost["_labor"] / qty),
         # 导入时已按店铺扣点从销售额里扣掉，这里反推真实扣点比例
         "platformRate": _r((gross - amount) / gross, 6) if gross else None,
@@ -375,16 +384,24 @@ def _sale_item(cost: dict, period: str, rq: float, ra: float, tq: float, ta: flo
 
 
 def _warehouse_item(d: dict) -> dict:
-    """入仓品 → 对方成本表的一行。"""
+    """入仓品 → 对方成本表的一行。
+
+    固定成本（入仓品资料上的「每袋打包费 / 难量化的包材或额外费用」）并入 ``package``，
+    这样对方用 package 算保本 ROI 时自动带上；同时单独给一个 ``fixed`` 便于核对。
+    """
     qty = d["_qty"]
     spec_only = bool(d.get("_specOnly"))
+    fixed = float(d.get("_fixed") or 0)
     return {
         # 入仓品的采购价就是京东向我们下的采购单单价（入仓收入 ÷ 袋数，已扣入仓品扣点）
         "supply": _r(d["_amount"] / qty),
         "supplyGross": _r(d["_gross"] / qty),
         "price": None,
         "shipping": _r(d["_freight"] / qty),
-        "package": _r(d["_pack"] / qty),
+        # package = 随货包材 + 固定成本（每件），两者都是「随货的耗材/打包类」成本
+        "package": _r((d["_pack"] + fixed) / qty),
+        # 单独给出固定成本（每件），已包含在上面的 package 里，别重复相加
+        "fixed": _r(fixed / qty),
         "labor": 0.0,          # 入仓品没有出库时的打包人工
         "platformRate": _r(d["_deduction"], 6),
         "returnRate": None,
@@ -499,7 +516,9 @@ def sku_costs(
                     "_period=range 成本取自所选区间，=all 区间内没卖用全量历史兜底，"
                     "=spec 入仓品只有资料、还没录入仓记录（用的是资料上的采购价）；"
                     "_qty/_turnover 是区间内销量，_totalQty/_totalTurnover 是全量历史（判断样本大小用）；"
-                    "入仓品不按区间过滤，看 _lastDate 判断采购价日期",
+                    "入仓品不按区间过滤，看 _lastDate 判断采购价日期；"
+                    "入仓品的 package 已并入「固定成本」（资料上的每袋打包费/难量化包材），"
+                    "同时单独给出 fixed 字段，两者不要重复相加",
         },
     }
     _CACHE[ck] = (datetime.now(), payload)
