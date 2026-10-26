@@ -217,6 +217,8 @@ def _sku_rows_warehouse(db: Session) -> dict:
             func.max(WarehouseIn.deduction_percent),
             func.max(WarehouseProduct.name),
             func.max(WarehouseIn.date),
+            # 资料上的每袋运费：入仓记录的运费被《运输转运费》账单重算成 0 时，用它兜底
+            func.max(WarehouseProduct.freight),
         )
         .select_from(WarehouseIn)
         .join(WarehouseProduct, WarehouseProduct.id == WarehouseIn.product_id, isouter=True)
@@ -224,7 +226,7 @@ def _sku_rows_warehouse(db: Session) -> dict:
         .group_by(WarehouseProduct.sku)
     ).all()
     out: dict = {}
-    for sku, qty, amount, gross, freight, pack, fixed, cogs, profit, ded, name, last in rows:
+    for sku, qty, amount, gross, freight, pack, fixed, cogs, profit, ded, name, last, fb_freight in rows:
         code = str(sku or "").strip()
         if not code or not float(qty or 0):
             continue  # 没维护 sku 的入仓品无法与京东 SKU 对应
@@ -233,6 +235,7 @@ def _sku_rows_warehouse(db: Session) -> dict:
             "_amount": float(amount or 0),
             "_gross": float(gross or 0),
             "_freight": float(freight or 0),
+            "_freightFallback": float(fb_freight or 0),  # 资料上的每袋运费（记录运费为 0 时的兜底）
             "_pack": float(pack or 0),
             "_fixed": float(fixed or 0),
             "_cogs": float(cogs or 0),
@@ -388,16 +391,26 @@ def _warehouse_item(d: dict) -> dict:
 
     固定成本（入仓品资料上的「每袋打包费 / 难量化的包材或额外费用」）并入 ``package``，
     这样对方用 package 算保本 ROI 时自动带上；同时单独给一个 ``fixed`` 便于核对。
+
+    运费统一规则（与出库商品口径一致：每 1 件的运费）：
+    1. 入仓记录的运费合计 ÷ 袋数（真实结算，来自《运输转运费》账单重算）；
+    2. 记录运费为 0（账单没命中/没录）→ 退用入仓品资料上的每袋运费；
+    3. 两者都没有 → ``null``，对方回落 ``default.shipping``，**绝不给 0** ——
+       0 会被当成「包邮」压低保本线，而入仓品运费为 0 只可能是没维护。
     """
     qty = d["_qty"]
     spec_only = bool(d.get("_specOnly"))
     fixed = float(d.get("_fixed") or 0)
+    # 运费：记录优先，其次资料，都没有 → None（回落 default）
+    fr_total = float(d.get("_freight") or 0)
+    fb = float(d.get("_freightFallback") or 0)
+    ship = fr_total / qty if fr_total > 0 else (fb if fb > 0 else None)
     return {
         # 入仓品的采购价就是京东向我们下的采购单单价（入仓收入 ÷ 袋数，已扣入仓品扣点）
         "supply": _r(d["_amount"] / qty),
         "supplyGross": _r(d["_gross"] / qty),
         "price": None,
-        "shipping": _r(d["_freight"] / qty),
+        "shipping": None if ship is None else _r(ship),
         # package = 随货包材 + 固定成本（每件），两者都是「随货的耗材/打包类」成本
         "package": _r((d["_pack"] + fixed) / qty),
         # 单独给出固定成本（每件），已包含在上面的 package 里，别重复相加
@@ -472,16 +485,22 @@ def sku_costs(
         skus[code] = _warehouse_item(d)
     sale_codes = set(full["sale"]) | set(rng["sale"])
     period_count = {"range": 0, "all": 0}
-    for code in sale_codes:
-        in_range = code in rng["sale"]
-        cost = rng["sale"][code] if in_range else full["sale"][code]
-        tq, ta = full["sale"][code]["_qty"], full["sale"][code]["_amount"]
-        if in_range:
-            rq, ra = rng["sale"][code]["_qty"], rng["sale"][code]["_amount"]
-            period = "range"
+    for code in sorted(sale_codes):
+        # rng（区间）与 full（全量）是两次独立汇总，中间数据被删改时可能出现
+        # 「区间里有、全量里没有」的 sku —— 全部用 .get 防御，任何组合都不能 500（曾因此 KeyError）。
+        rd = rng["sale"].get(code)
+        fd = full["sale"].get(code)
+        if rd is not None:
+            # 区间内有出库 → 成本取区间口径；全量里已没有（数据刚被改）就用区间值补样本数
+            cost, period = rd, "range"
+            rq, ra = rd["_qty"], rd["_amount"]
+            tq = fd["_qty"] if fd is not None else rd["_qty"]
+            ta = fd["_amount"] if fd is not None else rd["_amount"]
         else:
-            rq = ra = 0.0        # 区间内一件没卖，销量如实记 0
-            period = "all"
+            # 区间内一件没卖，销量如实记 0，成本用全量历史兜底
+            cost, period = fd, "all"
+            rq = ra = 0.0
+            tq, ta = fd["_qty"], fd["_amount"]
         period_count[period] += 1
         # 同码时出库口径覆盖入仓品口径
         skus[code] = _sale_item(cost, period, rq, ra, tq, ta)
@@ -518,7 +537,10 @@ def sku_costs(
                     "_qty/_turnover 是区间内销量，_totalQty/_totalTurnover 是全量历史（判断样本大小用）；"
                     "入仓品不按区间过滤，看 _lastDate 判断采购价日期；"
                     "入仓品的 package 已并入「固定成本」（资料上的每袋打包费/难量化包材），"
-                    "同时单独给出 fixed 字段，两者不要重复相加",
+                    "同时单独给出 fixed 字段，两者不要重复相加；"
+                    "shipping 统一为每件运费：出库取快递结算÷件数，入仓取运费账单重算÷袋数"
+                    "（账单没命中退用资料运费），两者都没有时给 null 请回落 default.shipping，"
+                    "出库商品的 0 是真实的「无快递结算/包邮」",
         },
     }
     _CACHE[ck] = (datetime.now(), payload)
