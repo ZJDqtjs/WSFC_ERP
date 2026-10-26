@@ -345,24 +345,34 @@ def _r(v, n: int = 4):
     return round(float(v), n)
 
 
-def _sale_item(cost: dict, period: str, rq: float, ra: float, tq: float, ta: float) -> dict:
+def _sale_item(cost: dict, period: str, rq: float, ra: float, tq: float, ta: float,
+               hist_express: float = 0.0, hist_qty: float = 0.0) -> dict:
     """订单商品 → 对方成本表的一行。
 
     参数说明（方案 B：区间内没卖的商品也要有成本，否则对方回落全店口径算歪保本线）：
     - ``cost``：算单件单价用的那份汇总——区间内有出库就是区间那份，否则是全量历史兜底那份；
     - ``rq`` / ``ra``：**区间内**销量与结算额（区间内没卖就是 0，不能拿全量数顶替，否则会误读成「卖得好」）；
-    - ``tq`` / ``ta``：全量历史销量与成交额，给对方判断这个成本样本有多大。
+    - ``tq`` / ``ta``：全量历史销量与成交额，给对方判断这个成本样本有多大；
+    - ``hist_express`` / ``hist_qty``：全量历史的快递结算额与销量 —— **shipping 按它的均值算**
+      （快递费与重量/目的地相关，单期波动大，用历史均值才是「这个 SKU 算好了的」口径；
+      历史也是 0 才退用当前口径的值，仍为 0 则给 null 让对方回落 default.shipping）。
     """
     qty = cost["_qty"]
     amount = cost["_amount"]
     gross = cost["_gross"] or amount
+    # shipping：历史记录算好了的（全量均值）优先；历史没有退当前口径；都没有 → None
+    ship = None
+    if hist_qty and hist_express > 0:
+        ship = hist_express / hist_qty
+    elif qty and cost["_express"] > 0:
+        ship = cost["_express"] / qty
     return {
         # 京东结算给我们的单件金额（卖家实收 ÷ 件数）——对方口径里的「真实供货价」
         "supply": _r(amount / qty),
         "supplyGross": _r(gross / qty),
         # 单件扣点前售价：对方留空则继续用它报表里的真实客单价
         "price": None,
-        "shipping": _r(cost["_express"] / qty),
+        "shipping": None if ship is None else _r(ship),
         "package": _r(cost["_material"] / qty),
         # 出库商品没有「固定成本」这个口径（只有入仓品资料上维护），给 0 保持字段结构一致
         "fixed": 0.0,
@@ -502,8 +512,10 @@ def sku_costs(
             rq = ra = 0.0
             tq, ta = fd["_qty"], fd["_amount"]
         period_count[period] += 1
-        # 同码时出库口径覆盖入仓品口径
-        skus[code] = _sale_item(cost, period, rq, ra, tq, ta)
+        # shipping 按该 SKU 的历史记录（全量）均值：区间里快递费波动大，历史均值才是「算好了的」
+        hist = fd if fd is not None else rd
+        skus[code] = _sale_item(cost, period, rq, ra, tq, ta,
+                                hist["_express"], hist["_qty"])
 
     wh_spec = sum(1 for d in full["warehouse"].values() if d.get("_specOnly"))
     range_dates = sorted({v.get("_lastDate") or "" for v in rng["sale"].values() if v.get("_lastDate")})
@@ -538,9 +550,9 @@ def sku_costs(
                     "入仓品不按区间过滤，看 _lastDate 判断采购价日期；"
                     "入仓品的 package 已并入「固定成本」（资料上的每袋打包费/难量化包材），"
                     "同时单独给出 fixed 字段，两者不要重复相加；"
-                    "shipping 统一为每件运费：出库取快递结算÷件数，入仓取运费账单重算÷袋数"
-                    "（账单没命中退用资料运费），两者都没有时给 null 请回落 default.shipping，"
-                    "出库商品的 0 是真实的「无快递结算/包邮」",
+                    "shipping 统一为每件运费：出库商品**按该 SKU 的历史记录均值**（不随所选区间变，"
+                    "历史无快递结算才退用区间值，仍无则 null 回落 default.shipping），"
+                    "入仓取运费账单重算÷袋数（账单没命中退用资料运费），两者都没有时给 null",
         },
     }
     _CACHE[ck] = (datetime.now(), payload)

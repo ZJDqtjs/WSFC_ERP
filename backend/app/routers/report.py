@@ -688,14 +688,17 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
 
     # 老流水没写 line_id（2026-09 及以前的一部分）：只在「该单只有一条销售行」时按单归属，
     # 多行单据不猜（那种单会退化成用订单商品自身净重），避免把别的商品的重量摊到它头上。
-    single_line_out = [
-        oid for oid, cnt in db.execute(
-            select(OutboundLine.outbound_id, func.count())
-            .select_from(OutboundLine).join(Outbound, Outbound.id == OutboundLine.outbound_id)
-            .where(OutboundLine.line_type == "sale", *line_conds, paid_out)
-            .group_by(OutboundLine.outbound_id)
-        ).all() if cnt == 1
-    ]
+    # 「单行单」用子查询表达 —— 旧实现把几万个单据 id 拼进 IN(...)，全量历史在昆明蔬菜仓
+    # 这种大仓直接超 SQLite 999 参数上限（too many SQL variables，接口 500）。
+    single_line_ids = (
+        select(OutboundLine.outbound_id)
+        .select_from(OutboundLine).join(Outbound, Outbound.id == OutboundLine.outbound_id)
+        .where(OutboundLine.line_type == "sale", *line_conds, paid_out)
+        .group_by(OutboundLine.outbound_id)
+        .having(func.count() == 1)
+    )
+    has_single_line = Outbound.id.in_(single_line_ids.scalar_subquery())
+    no_single_line = ~has_single_line
     # ⚠️ 性能红线：不要把「按 line_id 归属」与「按 ref_id 归属」合并成一条带 OR 的 JOIN——
     # SQLite 会退化成从 stock_movements 全表驱动、逐行回查（实测 13 天区间 104 秒，接口超时 499）。
     # 拆成「各自单条件」的分段查询，每段都能走索引（line_id / (ref_type,ref_id)），秒级完成。
@@ -720,20 +723,18 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     ).all())
 
     # ①-B 旧流水（line_id 为空）：仅「该单只有一条销售行」时按整单归属（走 ref 索引）
-    if single_line_out:
-        _add_kg(db.execute(
-            select(OutboundLine.product_id, spec_expr, dr_expr,
-                   func.coalesce(func.sum(-StockMovement.quantity_base * _kg_per_base(sm)), 0.0))
-            .select_from(OutboundLine)
-            .join(Outbound, Outbound.id == OutboundLine.outbound_id)
-            .join(StockMovement, and_(StockMovement.ref_type == "outbound",
-                                      StockMovement.line_id.is_(None),
-                                      StockMovement.ref_id == Outbound.id))
-            .join(sm, sm.id == StockMovement.product_id, isouter=True)
-            .where(OutboundLine.line_type == "sale", *line_conds, paid_out,
-                   Outbound.id.in_(single_line_out))
-            .group_by(OutboundLine.product_id, spec_expr, dr_expr)
-        ).all())
+    _add_kg(db.execute(
+        select(OutboundLine.product_id, spec_expr, dr_expr,
+               func.coalesce(func.sum(-StockMovement.quantity_base * _kg_per_base(sm)), 0.0))
+        .select_from(OutboundLine)
+        .join(Outbound, Outbound.id == OutboundLine.outbound_id)
+        .join(StockMovement, and_(StockMovement.ref_type == "outbound",
+                                  StockMovement.line_id.is_(None),
+                                  StockMovement.ref_id == Outbound.id))
+        .join(sm, sm.id == StockMovement.product_id, isouter=True)
+        .where(OutboundLine.line_type == "sale", *line_conds, paid_out, has_single_line)
+        .group_by(OutboundLine.product_id, spec_expr, dr_expr)
+    ).all())
 
     # ② 完全没有扣减流水的销售行（代发等）：回退用订单商品自身单件净重
     #    等价于原「LEFT JOIN 流水 WHERE 流水为空」：不存在按 line_id 的流水，且（非单行单 或 不存在按单的旧流水）
@@ -741,15 +742,12 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         StockMovement.ref_type == "outbound",
         StockMovement.line_id == OutboundLine.id,
     )
-    if single_line_out:
-        _no_ref_mv = ~exists().where(
-            StockMovement.ref_type == "outbound",
-            StockMovement.line_id.is_(None),
-            StockMovement.ref_id == Outbound.id,
-        )
-        _no_mv = and_(_no_line_mv, or_(~Outbound.id.in_(single_line_out), _no_ref_mv))
-    else:
-        _no_mv = _no_line_mv
+    _no_ref_mv = ~exists().where(
+        StockMovement.ref_type == "outbound",
+        StockMovement.line_id.is_(None),
+        StockMovement.ref_id == Outbound.id,
+    )
+    _no_mv = and_(_no_line_mv, or_(no_single_line, _no_ref_mv))
     _add_kg(db.execute(
         select(OutboundLine.product_id, spec_expr, dr_expr,
                func.coalesce(func.sum(OutboundLine.quantity_base * _kg_per_base(op)), 0.0))
