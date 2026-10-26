@@ -5256,7 +5256,8 @@ async function renderProducts() {
           : '<span class="badge income">代发</span> <span class="muted">不扣库存，只统计代发数量/成本</span>')
         : esc(p.spec || "");
       const isLabor = p.category === "人工";
-      const stockShown = p.product_type === "order" && links.length
+      // 订单商品：配了扣减方案（关联了库存商品）就不在这里重复显示库存，标「经库存商品」
+      const stockShown = p.product_type === "order" && schemes.length
         ? `<span class="muted">经库存商品</span>`
         : isLabor
           ? `<span class="badge income">工作量 ${fmtNum(p.workload)} 单</span>`
