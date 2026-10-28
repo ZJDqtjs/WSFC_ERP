@@ -218,7 +218,16 @@ document.addEventListener("click", (e) => {
 
 /* ---------- 工具 ---------- */
 const $ = (id) => document.getElementById(id);
-const ROUTES = { api: "/api", uploads: "/uploads" };
+
+/* 子路径挂载支持：整套前端可能被反向代理挂在 /jdfenxi/ 这类前缀下，
+   以当前页面所在目录为根拼出 BASE（根路径部署时为空串，行为与原来一致）。 */
+const BASE = (() => {
+  const p = location.pathname;
+  const i = p.lastIndexOf("/");
+  return i > 0 ? p.slice(0, i) : "";
+})();
+
+const ROUTES = { api: BASE + "/api", uploads: BASE + "/uploads" };
 
 function routePath(path) {
   if (path.startsWith("/api")) return ROUTES.api + path.slice(4);
@@ -10512,8 +10521,12 @@ function startMaintenanceWatch() {
 /* ---------- 初始化 ---------- */
 (async function init() {
   try {
-    const cfg = await fetch("/config.json", { cache: "no-store" }).then((r) => r.json());
-    Object.assign(ROUTES, cfg.routes || {});
+    // config.json 同样按 BASE 取（子路径挂载时走 /jdfenxi/config.json）；
+    // 只把接口前缀补上 BASE，不能直接 Object.assign，否则会抹掉前缀。
+    const cfg = await fetch(BASE + "/config.json", { cache: "no-store" }).then((r) => r.json());
+    const routes = cfg.routes || {};
+    if (routes.api) ROUTES.api = BASE + String(routes.api).replace(/\/+$/, "");
+    if (routes.uploads) ROUTES.uploads = BASE + String(routes.uploads).replace(/\/+$/, "");
   } catch (e) {}
   startMaintenanceWatch(); // 停服公告 / 系统维护页：先于登录检测，维护中不暴露登录界面
   showLogin();

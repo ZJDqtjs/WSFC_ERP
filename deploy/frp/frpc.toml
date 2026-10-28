@@ -1,0 +1,17 @@
+# frp 客户端（本地机器，即跑着 http://192.168.1.117:8011 的那台）
+# 启动方式：frpc.exe -c frpc.toml   （Windows 可用 nssm / 任务计划注册为开机自启）
+
+serverAddr = "47.108.13.20"
+serverPort = 7000
+
+# 与公网 frps.toml 保持一致
+auth.token = "REPLACE_WITH_RANDOM_TOKEN"
+
+[[proxies]]
+name = "erp-dev"
+type = "tcp"
+# frpc 与 8011 服务在同一台机器时用 127.0.0.1；
+# 若 frpc 跑在局域网其它机器上，改成 192.168.1.117
+localIP = "127.0.0.1"
+localPort = 8011
+remotePort = 18011
