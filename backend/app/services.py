@@ -556,6 +556,7 @@ def purge_inbounds(db: Session, ids: list[int]) -> tuple[int, int, set[int]]:
         _bulk_delete_ref(db, FinanceRecord, "inbound", part)
         _bulk_delete_ref(db, OtherExpense, "inbound", part)  # 金额调整带出的其他开支一并删除
         _bulk_delete_ref(db, OtherExpense, INBOUND_FEE_REF, part)  # 运费/装卸费镜像行一并删除
+        _bulk_delete_ref(db, OtherExpense, INBOUND_COMP_REF, part)  # 供应商补偿镜像行一并删除
         db.execute(delete(Inbound).where(Inbound.id.in_(part)).execution_options(synchronize_session=False))
     db.flush()
     for pid in affected:
@@ -754,6 +755,41 @@ def sync_inbound_fee_expenses(db: Session, rec: "Inbound", product_name: str, pa
             ))
 
 
+# 入库「供应商补偿」镜像行的 ref_type（与金额调整 "inbound"、运费装卸 "inbound_fee" 区分）
+INBOUND_COMP_REF = "inbound_comp"
+COMP_CATEGORY = "供应商补偿"
+
+
+def sync_compensation_expense(db: Session, rec: "Inbound") -> None:
+    """维护入库单「供应商补偿」的其他开支镜像行：补偿 >0 记一笔**负数**其他开支，清零则删除。
+
+    供应商退的钱 / 赔偿不冲减货款与批次成本（FIFO），而是记成负数的期间费用：
+    报表「其他开支 → 供应商补偿」为负 → 期间费用减少 → 净利增加，与实际收到的钱一致。
+    付款状态恒为已付款（钱是收进来的），不走单据的收付款状态，避免出现负数的待付款账单；
+    日期随入库单日期（改单时同步）。
+    """
+    amt = round(float(getattr(rec, "compensation", 0.0) or 0.0), 2)
+    existing = list(db.execute(
+        select(OtherExpense).where(OtherExpense.ref_type == INBOUND_COMP_REF, OtherExpense.ref_id == rec.id)
+    ).scalars())
+    for stale in existing[1:]:
+        db.delete(stale)
+    if amt <= 0:
+        for e in existing[:1]:
+            db.delete(e)
+        return
+    remark = f"入库 {rec.code} 供应商补偿{(' · ' + (rec.supplier or '')) if rec.supplier else ''}"
+    if existing:
+        e = existing[0]
+        e.amount, e.date, e.remark, e.operator = -amt, rec.date, remark, rec.operator
+    else:
+        db.add(OtherExpense(
+            category=COMP_CATEGORY, amount=-amt, date=rec.date, remark=remark,
+            operator=rec.operator, ref_type=INBOUND_COMP_REF, ref_id=rec.id,
+            pay_status="paid", paid_at=rec.date,
+        ))
+
+
 def sync_dropship_bills(db: Session, rec: "Outbound", sale_lines: list) -> None:
     """按出库单的代发销售行重建「代发」应付账单（待付款 → 代发页签）。
 
@@ -904,6 +940,7 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
         operator=op,
         date=date,
         remark=(payload.get("remark") or "").strip(),
+        compensation=round(float(payload.get("compensation") or 0), 2),
         **pay,
     )
     db.add(rec)
@@ -937,6 +974,7 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     )
     sync_adjust_expense(db, "inbound", rec.id, rec.code, date, op, adjust, pay_link)
     sync_inbound_fee_expenses(db, rec, product.name, pay_link)
+    sync_compensation_expense(db, rec)
     recompute_product(db, product.id)
     db.flush()
     return rec

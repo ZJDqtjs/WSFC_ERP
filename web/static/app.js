@@ -6605,7 +6605,7 @@ async function loadInbounds() {
       <td><b>${esc(r.product_name)}</b></td>
       <td>${fmtNum(r.quantity)} ${r.unit}</td>
       <td class="num mono">${fmtMoney(r.unit_price)}/${r.unit}</td>
-      <td class="num mono">${fmtMoney(r.final_amount != null ? r.final_amount : r.total_amount)}${r.adjust_amount ? `<div class="muted" style="font-size:11px;">调整 ${r.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(r.adjust_amount))}</div>` : ""}${(r.freight || r.handling) ? `<div class="muted" style="font-size:11px;" title="已计入批次成本（体现在该品毛利），并同步「其他开支」备查">${r.freight ? "运费 " + fmtMoney(r.freight) : ""}${r.freight && r.handling ? " · " : ""}${r.handling ? "装卸 " + fmtMoney(r.handling) : ""}</div>` : ""}${r.pay_status === "partial" ? `<div class="muted" style="font-size:11px;" title="应付合计 ${fmtMoney(r.due_amount)}">已付 ${fmtMoney(r.paid_amount)} · 未付 ${fmtMoney(r.unpaid_amount)}</div>` : ""}</td>
+      <td class="num mono">${fmtMoney(r.final_amount != null ? r.final_amount : r.total_amount)}${r.adjust_amount ? `<div class="muted" style="font-size:11px;">调整 ${r.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(r.adjust_amount))}</div>` : ""}${(r.freight || r.handling) ? `<div class="muted" style="font-size:11px;" title="已计入批次成本（体现在该品毛利），并同步「其他开支」备查">${r.freight ? "运费 " + fmtMoney(r.freight) : ""}${r.freight && r.handling ? " · " : ""}${r.handling ? "装卸 " + fmtMoney(r.handling) : ""}</div>` : ""}${r.pay_status === "partial" ? `<div class="muted" style="font-size:11px;" title="应付合计 ${fmtMoney(r.due_amount)}">已付 ${fmtMoney(r.paid_amount)} · 未付 ${fmtMoney(r.unpaid_amount)}</div>` : ""}${r.compensation ? `<div class="muted" style="font-size:11px;" title="供应商补偿：已记「其他开支 → 供应商补偿」负数行，冲减期间费用、计入财务报表净利">补偿 -${fmtMoney(r.compensation)}</div>` : ""}</td>
       <td>${esc(r.supplier) || "—"}</td>
       <td>${esc(r.operator) || "—"}</td>
       <td>${r.date}</td>
@@ -6644,6 +6644,11 @@ function editInbound(id) {
         <input id="edInHandling" type="number" min="0" step="any" value="${r.handling || ""}" placeholder="0.00" oninput="edInCalc(${r.total_amount || 0})" />
         <div class="field-hint">选填；日期随入库单日期，清零即删掉对应的「其他开支」</div>
       </div>
+      <div class="field">
+        <label>供应商补偿</label>
+        <input id="edInComp" type="number" min="0" step="any" value="${r.compensation || ""}" placeholder="0.00" oninput="edInCompHint()" />
+        <div class="field-hint" id="edInCompHint"></div>
+      </div>
       <div class="field" style="grid-column:1/-1;">
         <label>付款状态</label>
         ${inboundPayRadios("edInPay", r.pay_status, r.paid_amount || 0,
@@ -6658,6 +6663,17 @@ function editInbound(id) {
       <button class="btn green" onclick="saveInboundEdit(${id})">✓ 保存</button>
     </div>`);
   edInCalc(Number(r.total_amount) || 0);
+  edInCompHint();
+}
+
+/** 供应商补偿的实时说明：记一笔负数的其他开支，冲减期间费用、计入报表净利 */
+function edInCompHint() {
+  const el = $("edInCompHint");
+  if (!el) return;
+  const v = parseFloat($("edInComp")?.value) || 0;
+  el.innerHTML = v > 0
+    ? `保存后自动记一笔「其他开支 → 供应商补偿 <b class="mono">-¥${fmtMoney(v)}</b>」（日期=入库日期，已付款），冲减期间费用、计入财务报表净利；不改货款与批次成本`
+    : "选填：供应商退的钱 / 赔偿。保存后自动记一笔负数的其他开支计入财务报表；填 0 或清空即取消";
 }
 
 /** 改单时实时显示「货款 + 运费 + 装卸 = 批次到岸成本」，避免改完不知道成本变成多少 */
@@ -6681,6 +6697,8 @@ async function saveInboundEdit(id) {
   const freight = parseFloat($("edInFreight").value) || 0;
   const handling = parseFloat($("edInHandling").value) || 0;
   if (freight < 0 || handling < 0) { toast("运费 / 装卸费不能为负数"); return; }
+  const compensation = round2(parseFloat($("edInComp")?.value) || 0);
+  if (compensation < 0) { toast("供应商补偿不能为负数"); return; }
   // 部分付款：已付金额要大于 0 且小于应付合计
   const payStatus = payOf("edInPay");
   const partBox = document.querySelector("#modalBox .pay-part");
@@ -6693,10 +6711,13 @@ async function saveInboundEdit(id) {
   }
   try {
     await api(`/api/inbounds/${id}`, "PUT", {
-      supplier: $("edInSupplier").value, date, pay_status: payStatus, paid_amount: paidAmount, freight, handling,
+      supplier: $("edInSupplier").value, date, pay_status: payStatus, paid_amount: paidAmount,
+      freight, handling, compensation,
     });
     closeModal();
-    toast(`已保存，操作员记为 ${operatorName()}${freight + handling > 0 ? `；运费/装卸 ${fmtMoney(freight + handling)} 已计入成本` : ""}`);
+    toast(`已保存，操作员记为 ${operatorName()}`
+      + (freight + handling > 0 ? `；运费/装卸 ${fmtMoney(freight + handling)} 已计入成本` : "")
+      + (compensation > 0 ? `；供应商补偿 ¥${fmtMoney(compensation)} 已计入财务报表` : ""));
     loadInbounds();
     loadStock();   // 成本变了，库存列表的均价/货值跟着刷新
   } catch (e) { toast("保存失败：" + e.message); }

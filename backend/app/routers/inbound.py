@@ -14,6 +14,7 @@ from ..services import (
     pay_due,
     purge_inbounds,
     recompute_product,
+    sync_compensation_expense,
     sync_doc_edit,
     sync_inbound_fee_expenses,
 )
@@ -45,10 +46,12 @@ class InboundIn(BaseModel):
     # 并自动在「其他开支」生成镜像行供查询（ref_type="inbound_fee"，报表期间费用不重复扣）
     freight: float = 0.0
     handling: float = 0.0
+    # 供应商补偿（选填，≥0）：供应商退的钱/赔偿，自动记「其他开支 → 供应商补偿」负数行冲减期间费用
+    compensation: float = 0.0
 
 
 class InboundUpdate(BaseModel):
-    """手动修改入库单：可改 供应商 / 日期 / 付款状态 / 运费 / 装卸费（数量、单价须删除重建）。"""
+    """手动修改入库单：可改 供应商 / 日期 / 付款状态 / 运费 / 装卸费 / 供应商补偿（数量、单价须删除重建）。"""
 
     supplier: str = ""
     date: str
@@ -59,6 +62,8 @@ class InboundUpdate(BaseModel):
     # 并同步「其他开支」镜像行（日期随入库单日期）。
     freight: float | None = None
     handling: float | None = None
+    # 供应商补偿（选填，≥0）：None = 不修改；填了/清零会同步「其他开支 → 供应商补偿」镜像行
+    compensation: float | None = None
 
 
 class InboundBatchIn(BaseModel):
@@ -101,6 +106,8 @@ def _to_dict(r: Inbound) -> dict:
         "date": r.date,
         "remark": r.remark,
         "pay_status": status,
+        # 供应商补偿：供应商退的钱/赔偿（镜像记「其他开支 → 供应商补偿」负数行，冲减期间费用）
+        "compensation": round(getattr(r, "compensation", 0.0) or 0.0, 2),
         # 应付合计 / 已付 / 未付（部分付款看未付余额，待付款账单与报表也用这一组数）
         "due_amount": due,
         "paid_amount": paid_amount,
@@ -192,6 +199,13 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
     rec.freight, rec.handling = freight, handling
     new_fee = round(freight + handling, 2)
 
+    # 供应商补偿：不传 = 保持原值；传了就按新值记（≥0）
+    if data.compensation is not None:
+        comp = round(float(data.compensation), 2)
+        if comp < 0:
+            raise HTTPException(400, "供应商补偿不能为负数")
+        rec.compensation = comp
+
     # 付款状态（含部分付款）：已付金额按新的应付合计收口
     due = pay_due(rec.total_amount, getattr(rec, "adjust_amount", 0.0), freight, handling)
     cur_status = getattr(rec, "pay_status", "paid") or "paid"
@@ -222,6 +236,7 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
         recompute_product(db, rec.product_id)
     # 每项 >0 生成一行镜像、清零则删除（日期=入库单日期），幂等
     sync_inbound_fee_expenses(db, rec, rec.product.name if rec.product else "", pay_link)
+    sync_compensation_expense(db, rec)   # 供应商补偿：负数其他开支（冲减期间费用），清零则删
     db.commit()
     db.refresh(rec)
     return _to_dict(rec)

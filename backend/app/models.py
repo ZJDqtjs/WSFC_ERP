@@ -110,6 +110,10 @@ class Inbound(Base):
     # （应付合计 = 货款 + 金额调整 + 运费 + 装卸，与「待付款账单」的应付口径一致）。
     # 已付部分进报表、未付部分进待付款账单；paid/unpaid 时它统一记全额/0，方便报表直接取用。
     paid_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    # 供应商补偿（元，正数=供应商补给我们的钱，如破损赔偿/返利）：
+    # 保存后镜像记一笔「其他开支 → 供应商补偿」负数行（ref_type=inbound_comp），冲减期间费用、计入报表净利。
+    # 不冲减货款/应付合计，也不影响批次成本（FIFO）。
+    compensation: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     product: Mapped[Product] = relationship()

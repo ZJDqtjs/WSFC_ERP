@@ -441,6 +441,8 @@ _EXTRA_COLUMNS = {
         ("handling", "FLOAT DEFAULT 0"),
         # 部分付款：pay_status="partial" 时已付的金额（老库默认 0，历史单据口径不变）
         ("paid_amount", "FLOAT DEFAULT 0"),
+        # 供应商补偿：供应商退的钱/赔偿，镜像记「其他开支 → 供应商补偿」负数行冲减期间费用
+        ("compensation", "FLOAT DEFAULT 0"),
     ),
     "outbounds": _PAY_COLUMNS + (
         ("adjust_amount", "FLOAT DEFAULT 0"),
