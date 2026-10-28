@@ -192,7 +192,11 @@ def _sku_rows_sale(db: Session, date_from: str, date_to: str, key: str) -> dict:
 
 # ---------------- 入仓品 ----------------
 def _sku_rows_warehouse(db: Session) -> dict:
-    """按入仓品 sku 汇总 → 每袋结算收入（京东采购价）/ 运费 / 包材 / 毛利率。
+    """按入仓品 sku 汇总 → 每袋结算收入（京东采购价）/ 资料运费 / 包材 / 固定成本 / 毛利率。
+
+    注：``_freight``（实际结算运费）只留作内部参考；对外 shipping 取 ``_freightFallback``
+    （入仓品资料上的「运费(元/袋)」），见 ``_warehouse_item``。
+    
 
     两条来源（缺一不可，否则「只建了入仓品资料、还没录入仓记录」的仓会查不到任何东西）：
     1. **入仓记录**（``warehouse_ins``）：真实结算，带扣点/运费/包材快照，优先；
@@ -217,7 +221,8 @@ def _sku_rows_warehouse(db: Session) -> dict:
             func.max(WarehouseIn.deduction_percent),
             func.max(WarehouseProduct.name),
             func.max(WarehouseIn.date),
-            # 资料上的每袋运费：入仓记录的运费被《运输转运费》账单重算成 0 时，用它兜底
+            # 资料上的每袋运费（元/袋）：对外 shipping 只认这个口径
+            # （《运输转运费》账单重算出来的实际运费波动太大，不对外用）
             func.max(WarehouseProduct.freight),
         )
         .select_from(WarehouseIn)
@@ -234,8 +239,8 @@ def _sku_rows_warehouse(db: Session) -> dict:
             "_qty": float(qty or 0),
             "_amount": float(amount or 0),
             "_gross": float(gross or 0),
-            "_freight": float(freight or 0),
-            "_freightFallback": float(fb_freight or 0),  # 资料上的每袋运费（记录运费为 0 时的兜底）
+            "_freight": float(freight or 0),             # 实际结算运费合计（仅内部参考，不对外）
+            "_freightFallback": float(fb_freight or 0),  # 资料上的每袋运费（对外 shipping 就用它）
             "_pack": float(pack or 0),
             "_fixed": float(fixed or 0),
             "_cogs": float(cogs or 0),
@@ -402,19 +407,17 @@ def _warehouse_item(d: dict) -> dict:
     固定成本（入仓品资料上的「每袋打包费 / 难量化的包材或额外费用」）并入 ``package``，
     这样对方用 package 算保本 ROI 时自动带上；同时单独给一个 ``fixed`` 便于核对。
 
-    运费统一规则（与出库商品口径一致：每 1 件的运费）：
-    1. 入仓记录的运费合计 ÷ 袋数（真实结算，来自《运输转运费》账单重算）；
-    2. 记录运费为 0（账单没命中/没录）→ 退用入仓品资料上的每袋运费；
-    3. 两者都没有 → ``null``，对方回落 ``default.shipping``，**绝不给 0** ——
-       0 会被当成「包邮」压低保本线，而入仓品运费为 0 只可能是没维护。
+    运费口径：**一律取入仓品资料上维护的「运费(元/袋)」**（换算成每 1 件的运费）。
+    不再用《运输转运费》账单重算出来的实际运费 —— 账单是按「采购单」结算再摊到每袋的，
+    摊下来波动很大，对方做保本核算时不可用。资料没维护（0）→ ``null``，对方回落
+    ``default.shipping``，**绝不给 0**：0 会被当成「包邮」压低保本线。
     """
     qty = d["_qty"]
     spec_only = bool(d.get("_specOnly"))
     fixed = float(d.get("_fixed") or 0)
-    # 运费：记录优先，其次资料，都没有 → None（回落 default）
-    fr_total = float(d.get("_freight") or 0)
+    # 运费：只用资料上维护的每袋运费；没维护 → None（回落 default.shipping）
     fb = float(d.get("_freightFallback") or 0)
-    ship = fr_total / qty if fr_total > 0 else (fb if fb > 0 else None)
+    ship = fb if fb > 0 else None
     return {
         # 入仓品的采购价就是京东向我们下的采购单单价（入仓收入 ÷ 袋数，已扣入仓品扣点）
         "supply": _r(d["_amount"] / qty),
@@ -552,7 +555,8 @@ def sku_costs(
                     "同时单独给出 fixed 字段，两者不要重复相加；"
                     "shipping 统一为每件运费：出库商品**按该 SKU 的历史记录均值**（不随所选区间变，"
                     "历史无快递结算才退用区间值，仍无则 null 回落 default.shipping），"
-                    "入仓取运费账单重算÷袋数（账单没命中退用资料运费），两者都没有时给 null",
+                    "入仓品**一律取「入仓品资料」里维护的运费(元/袋)**（不再用运输账单重算的实际运费，那个按单摊到每袋波动太大），"
+                    "资料没维护时给 null 回落 default.shipping",
         },
     }
     _CACHE[ck] = (datetime.now(), payload)
