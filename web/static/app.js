@@ -1040,6 +1040,8 @@ function inPayToggle(el) {
   const on = el.value === "partial";
   box.style.display = on ? "" : "none";
   if (on) applyPartialPay(box);
+  // 入库行换了付款状态 → 本单小计与底部合计的口径（实付/应付/未付）跟着重算
+  if (box.closest(".in-block")) calcInboundBlock(el);
 }
 
 /** 部分付款的应付合计：弹窗里用固定 data-due；入库行按 货款 + 调整 + 运费 + 装卸 实时算 */
@@ -1080,6 +1082,9 @@ function partialPayInput(el, kind) {
   if (kind === "ratio") paid = round2(due * Math.min(Math.max(val, 0), 100) / 100);
   else if (kind === "unpaid") paid = round2(due - val);
   applyPartialPay(box, paid);
+  // 已付金额变了 → 本单小计与底部合计跟着改（不重算这块面板，避免打断输入）
+  const blk = box.closest(".in-block");
+  if (blk) { renderInboundSum(blk); updateInboundTotal(); }
 }
 
 /** 应付合计变了（改数量/单价/调整/运费装卸）：已付金额不动，比例与未付跟着重算 */
@@ -6249,11 +6254,51 @@ function syncInboundBlocks() {
   updateInboundTotal();
 }
 
+/** 这一行的付款情况：应付 = 货款＋调整＋运费装卸；已付按付款状态取（部分付款取弹开的已付金额） */
+function inPaySummary(block) {
+  const due = payDueOf(block);
+  const status = payOf("inPay_" + (block.dataset.idx || "")) || "paid";
+  let paid = due;
+  if (status === "unpaid") paid = 0;
+  else if (status === "partial") {
+    const box = block.querySelector(".pay-part");
+    const v = parseFloat(((box && box.querySelector(".pp-paid")) || {}).value) || 0;
+    paid = Math.min(Math.max(v, 0), due);
+  }
+  return { due: round2(due), paid: round2(paid), unpaid: round2(due - paid), status };
+}
+
+/** 单行小计：已付款→实付；部分付款→应付/已付/未付；待付款→应付（进待付款账单） */
+function renderInboundSum(b) {
+  const sum = b.querySelector(".in-block-sum");
+  if (!sum) return;
+  const p = PRODUCTS.find((x) => x.id === +(b.dataset.pid || 0));
+  if (!p) { sum.textContent = ""; return; }
+  const unit = (b.querySelector(".in-unit") || {}).value || "";
+  const qty = parseFloat((b.querySelector(".in-qty") || {}).value) || 0;
+  const price = parseFloat((b.querySelector(".in-price") || {}).value) || 0;
+  const base = qty * price;
+  const adj = parseFloat((b.querySelector(".in-adjust") || {}).value) || 0;
+  const fee = (parseFloat((b.querySelector(".in-freight") || {}).value) || 0)
+    + (parseFloat((b.querySelector(".in-handling") || {}).value) || 0);
+  const info = inPaySummary(b);
+  let tail = ` ＝ 实付 ${fmtMoney(info.due)}`;
+  if (info.status === "partial") {
+    tail = ` ＝ 应付 ${fmtMoney(info.due)}（已付 ${fmtMoney(info.paid)}，未付 ${fmtMoney(info.unpaid)} 进待付款账单）`;
+  } else if (info.status === "unpaid") {
+    tail = ` ＝ 应付 ${fmtMoney(info.due)}（待付款，进待付款账单）`;
+  }
+  sum.textContent = `本单：${fmtNum(qty)}${unit} × ${unit ? fmtMoney(price) : ""} = 货款 ${fmtMoney(base)}`
+    + (fee ? ` ＋ 运费/装卸 ${fmtMoney(fee)}` : "")
+    + (adj ? ` ${adj > 0 ? "＋" : "－"} 调整 ${fmtMoney(Math.abs(adj))}` : "")
+    + tail;
+}
+
 /** 底部合计（只统计选了商品且填了数量的行） */
 function updateInboundTotal() {
   const el = $("inTotal");
   if (!el) return;
-  let n = 0, goods = 0, fee = 0, adj = 0;
+  let n = 0, goods = 0, fee = 0, adj = 0, due = 0, paid = 0, unpaid = 0;
   inboundBlocks().forEach((b) => {
     if (!+(b.dataset.pid || 0)) return;
     const qty = parseFloat((b.querySelector(".in-qty") || {}).value) || 0;
@@ -6263,14 +6308,20 @@ function updateInboundTotal() {
     fee += (parseFloat((b.querySelector(".in-freight") || {}).value) || 0)
       + (parseFloat((b.querySelector(".in-handling") || {}).value) || 0);
     adj += parseFloat((b.querySelector(".in-adjust") || {}).value) || 0;
+    const info = inPaySummary(b);
+    due += info.due;
+    paid += info.paid;
+    unpaid += info.unpaid;
   });
   if (!n) { el.style.display = "none"; el.innerHTML = ""; return; }
-  const pay = goods + fee + adj;
   el.style.display = "block";
   el.innerHTML = `本次填了 <b>${n}</b> 张入库单：货款 <b>¥${goods.toFixed(2)}</b>`
     + (fee ? ` ＋ 运费/装卸 <b>¥${fee.toFixed(2)}</b>` : "")
     + (adj ? ` ${adj > 0 ? "＋" : "－"} 调整 <b>¥${Math.abs(adj).toFixed(2)}</b>` : "")
-    + ` ＝ 实付 <b>¥${pay.toFixed(2)}</b> <span class="muted">（没选商品或没填数量的行不会入库）</span>`;
+    + (unpaid > 0.005
+      ? ` ＝ 应付 <b>¥${due.toFixed(2)}</b>，其中已付 <b>¥${paid.toFixed(2)}</b>、未付 <b>¥${unpaid.toFixed(2)}</b>（进待付款账单）`
+      : ` ＝ 实付 <b>¥${due.toFixed(2)}</b>`)
+    + ` <span class="muted">（没选商品或没填数量的行不会入库）</span>`;
 }
 
 /** 换单位：价格要跟着换算，所以按新单位重填一次（用户改过就保留） */
@@ -6303,16 +6354,8 @@ function calcInboundBlock(el) {
     : "计入该批次成本 → 体现在这个品的毛利；并自动记入「其他开支」备查");
   const factor = p && unit ? (p.conversions || {})[unit] : null;
   setHint(".in-unit-hint", factor ? `1${esc(unit)} = ${fmtNum(factor)} ${esc(p.base_unit)}` : "");
-  const sum = b.querySelector(".in-block-sum");
-  if (sum) {
-    sum.textContent = p
-      ? `本单：${fmtNum(qty)}${unit} × ${unit ? fmtMoney(price) : ""} = 货款 ${fmtMoney(base)}`
-        + (fee ? ` ＋ 运费/装卸 ${fmtMoney(fee)}` : "")
-        + (adj ? ` ${adj > 0 ? "＋" : "－"} 调整 ${fmtMoney(Math.abs(adj))}` : "")
-        + ` ＝ 实付 ${fmtMoney(base + fee + adj)}`
-      : "";
-  }
-  syncPartialPay(b);   // 应付合计变了：部分付款的比例 / 未付跟着重算
+  syncPartialPay(b);   // 应付合计变了：部分付款的比例 / 未付跟着重算（要先算，下面小计才读得到已付）
+  renderInboundSum(b); // 本单小计：已付款=实付；部分付款=应付/已付/未付
   updateInboundTotal();
 }
 /* 入库商品选择器（二级弹层：搜索 + 分类 + 卡片列表）；选好后填到对应的那一行 */
