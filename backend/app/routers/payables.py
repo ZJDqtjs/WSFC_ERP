@@ -26,6 +26,7 @@ from ..models import (
     User,
     WarehouseIn,
 )
+from ..services import pay_due
 
 router = APIRouter(prefix="/api", tags=["payables"])
 
@@ -57,6 +58,9 @@ SOURCE_PAGE = {
 }
 DROPSHIP_KIND = "dropship"                  # 按出库单整单结算（账单列表里的代发行）
 DROPSHIP_ITEM_KIND = "dropship_item"        # 按「商品+规格+日期」的账单行结算（代发页签按天分行后的行）
+
+# 未结清的付款状态：unpaid 一分没付 / partial 部分付款（只有未付的余额还挂在账单上）
+PENDING_STATUSES = ("unpaid", "partial")
 
 
 class PayIn(BaseModel):
@@ -100,7 +104,7 @@ def _dropship_formula(b: "DropshipBill") -> str:
 
 def _row(kind: str, rid: int, date: str, title: str, sub: str, amount: float,
          direction: str, pay_status: str, paid_at: str, operator: str, remark: str,
-         code: str = "") -> dict:
+         code: str = "", due_amount: float = 0.0, paid_amount: float = 0.0) -> dict:
     return {
         "kind": kind,
         "source": SOURCE_NAME[kind],
@@ -116,6 +120,11 @@ def _row(kind: str, rid: int, date: str, title: str, sub: str, amount: float,
         "paid_at": paid_at or "",
         "operator": operator or "",
         "remark": remark or "",
+        # 部分付款才有意义：应付合计 / 已付（amount 是还没付的余额）
+        "due_amount": round(float(due_amount or 0), 2),
+        "paid_amount": round(float(paid_amount or 0), 2),
+        # 部分付款标记（pay_status 对外仍报 unpaid，兼容只认两档的老客户端）
+        "partial": False,
     }
 
 
@@ -123,19 +132,19 @@ def _pay_filter(model, include_paid: bool, cutoff: str):
     """付款状态过滤（下推到 SQL）。
 
     pay_status 为空的历史数据按「已付款」看待（与 report._is_paid 同一口径）；
-    默认只取「待付款」，勾选「含已结清」时再带上最近 cutoff 之后结清的。
+    默认只取「待付款 / 部分付款」，勾选「含已结清」时再带上最近 cutoff 之后结清的。
 
     以前是整表加载后按 pay_status 在内存里筛——几千张出库单连同明细全部 ORM 实例化，
     实测单仓近 1 秒（线上 4 秒+），而真正要展示的常常只有几条。
     """
-    unpaid = func.coalesce(model.pay_status, "paid") == "unpaid"
+    pending = func.coalesce(model.pay_status, "paid").in_(PENDING_STATUSES)
     if not include_paid:
-        return unpaid
+        return pending
     settled_recent = and_(
-        func.coalesce(model.pay_status, "paid") != "unpaid",
+        func.coalesce(model.pay_status, "paid").notin_(PENDING_STATUSES),
         func.coalesce(func.nullif(model.paid_at, ""), model.date) >= cutoff,
     )
-    return or_(unpaid, settled_recent)
+    return or_(pending, settled_recent)
 
 
 def _outbound_titles(db: Session, ids: list[int]) -> dict[int, tuple[str, float, str, int]]:
@@ -174,15 +183,31 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
         .where(_pay_filter(Inbound, include_paid, cutoff))
     ).scalars():
         name = r.product.name if r.product else ""
-        rows.append(_row(
+        # 应付 = 实付（含抹零/凑整调整 + 运费/装卸费；后两者的「其他开支」镜像行不单独列为待办）
+        due = round((r.total_amount or 0.0) + (getattr(r, "adjust_amount", 0.0) or 0.0)
+                    + (getattr(r, "freight", 0.0) or 0.0) + (getattr(r, "handling", 0.0) or 0.0), 2)
+        status = (getattr(r, "pay_status", "paid") or "paid")
+        paid_amount = round(getattr(r, "paid_amount", 0.0) or 0.0, 2)
+        sub = "供应商 " + r.supplier if r.supplier else "采购入库"
+        if status == "partial":
+            # 部分付款：账单上只留没付的余额，已付多少写在副标题上，方便核对
+            paid_amount = max(0.0, min(paid_amount, due))
+            sub += f" · 部分付款：应付 ¥{due:.2f}，已付 ¥{paid_amount:.2f}"
+        else:
+            paid_amount = due if status != "unpaid" else 0.0
+        row = _row(
             "inbound", r.id, r.date,
             f"{name} × {_qty(r.quantity)}{r.unit or ''}".strip(),
-            "供应商 " + r.supplier if r.supplier else "采购入库",
-            # 应付 = 实付（含抹零/凑整调整 + 运费/装卸费；后两者的「其他开支」镜像行不单独列为待办）
-            r.total_amount + (getattr(r, "adjust_amount", 0.0) or 0.0)
-            + (getattr(r, "freight", 0.0) or 0.0) + (getattr(r, "handling", 0.0) or 0.0),
-            "out", r.pay_status, r.paid_at, r.operator, r.remark, r.code,
-        ))
+            sub,
+            round(due - paid_amount, 2),
+            # 部分付款对外仍报「待付款」：老客户端（手机 App）只认 已付/待付 两档，
+            # 报 partial 会被它当成都结清了；前端用 partial 标记显示「部分付款」徽标
+            "out", "unpaid" if status == "partial" else status,
+            r.paid_at, r.operator, r.remark, r.code,
+            due_amount=due, paid_amount=paid_amount,
+        )
+        row["partial"] = status == "partial"
+        rows.append(row)
 
     for r in db.execute(
         select(WarehouseIn).where(_pay_filter(WarehouseIn, include_paid, cutoff))
@@ -199,8 +224,10 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
 
     # 「含最近已结清」时最近 30 天可能上万张单（wh01 实测 1.9 万）：按日期倒序只取最近一批，
     # 免得接口要 1.5 秒、浏览器拉 2MB 备注渲染几千行（未结清的单不受影响，一笔都不会少）。
+    # 销售退货（红冲）不进账单：它的金额已在原单收入里净掉，也不存在「待客户支付」这回事
     ob_q = (
-        select(Outbound).where(_pay_filter(Outbound, include_paid, cutoff))
+        select(Outbound)
+        .where(_pay_filter(Outbound, include_paid, cutoff), func.coalesce(Outbound.is_return, 0) == 0)
         .order_by(Outbound.date.desc(), Outbound.id.desc())
     )
     if include_paid:
@@ -282,8 +309,8 @@ def list_payables(
     cutoff = (_date.today() - timedelta(days=max(1, days))).isoformat()
     # 过滤已下推到 SQL：默认只查「待付款」的少量单据，不再把整库单据+明细拉进内存
     all_rows = _collect(db, include_paid=bool(include_paid), cutoff=cutoff)
-    unpaid = [r for r in all_rows if r["pay_status"] == "unpaid"]
-    paid: list[dict] = [r for r in all_rows if r["pay_status"] != "unpaid"]
+    unpaid = [r for r in all_rows if r["pay_status"] in PENDING_STATUSES]
+    paid: list[dict] = [r for r in all_rows if r["pay_status"] not in PENDING_STATUSES]
     unpaid.sort(key=lambda r: r["date"], reverse=True)
     paid.sort(key=lambda r: (r["paid_at"] or r["date"]), reverse=True)
 
@@ -491,6 +518,13 @@ def _mark_paid(db: Session, kind: str, rid: int, paid: bool) -> tuple[str, str]:
     if not rec:
         raise HTTPException(404, "账单不存在")
     rec.pay_status, rec.paid_at = status, paid_at
+    # 入库单还有「已付金额」：点已支付即整单结清（已付 = 应付合计），撤销则清零；
+    # 部分付款的单据结清后不再留在待付款账单里
+    if kind == "inbound" and hasattr(rec, "paid_amount"):
+        rec.paid_amount = pay_due(
+            rec.total_amount, getattr(rec, "adjust_amount", 0.0),
+            getattr(rec, "freight", 0.0), getattr(rec, "handling", 0.0),
+        ) if paid else 0.0
     # 入库/出库会自动生成财务流水（采购支出 / 销售收入 / 人工打包费），状态要跟着走
     if kind in ("inbound", "outbound"):
         for f in db.execute(

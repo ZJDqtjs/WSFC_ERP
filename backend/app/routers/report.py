@@ -138,10 +138,15 @@ def _income_of(o) -> float:
     return (o.total_amount or 0.0) + (getattr(o, "settle_income", 0.0) or 0.0)
 
 
+def _not_return(model):
+    """单数口径：退货单（红冲）不计一单。金额/成本侧不用它 —— 退货单本身记负数，加法即净额。"""
+    return case((model.is_return == True, 0), else_=1)  # noqa: E712 - 生成 SQL 的 = 1，NULL 归为普通单
+
+
 def _pending_stats(inbounds: list, outbounds: list, others: list, finances: list,
                    warehouse_ins: list | None = None) -> dict:
     """未计入本报表的待付款/待收款汇总（按来源单据算，避免自动流水重复计数）。"""
-    payables = [i.total_amount or 0.0 for i in inbounds]                    # 入库（采购）
+    payables = [_inbound_unpaid(i) for i in inbounds]                       # 入库（采购，部分付款只算未付余额）
     payables += [e.amount or 0.0 for e in others]                           # 其他开支
     payables += [f.amount or 0.0 for f in finances if f.type == "expense" and f.ref_type == "manual"]
     receivables = [_income_of(o) for o in outbounds]                         # 出库（销售，含客户代收的包材等）
@@ -235,7 +240,8 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
         """
         paid_o = func.coalesce(Outbound.pay_status, PAID) != "unpaid"
         orders, revenue, cogs, brush = db.execute(
-            select(func.count(),
+            # 单数不含退货单（退货是红冲，金额已按负数净额，不该再算一单）
+            select(func.coalesce(func.sum(_not_return(Outbound)), 0),
                    # 收入口径 = 销售收入 + 客户代收的关联结算（包材/人工/快递费），见 _income_expr
                    func.coalesce(func.sum(_income_expr()), 0),
                    func.coalesce(func.sum(Outbound.total_cogs), 0),
@@ -401,8 +407,28 @@ def summary(
 
 
 def _inbound_landed(i) -> float:
-    """入库实际支出 = 货款 + 运费 + 装卸费（运费/装卸已计入批次成本，故期间费用不重复扣）。"""
-    return round((i.total_amount or 0.0) + (getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0), 2)
+    """入库实际支出 = 货款 + 运费 + 装卸费（运费/装卸已计入批次成本，故期间费用不重复扣）。
+
+    部分付款时只算已经付掉的那部分：已付金额按应付合计（含调整/运费/装卸）记，
+    这里按「货款 + 运费 + 装卸」封顶（金额调整另走「其他开支」，不计入采购桶）。
+    """
+    landed = round((i.total_amount or 0.0) + (getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0), 2)
+    if (getattr(i, "pay_status", PAID) or PAID) == "partial":
+        return round(max(0.0, min(getattr(i, "paid_amount", 0.0) or 0.0, landed)), 2)
+    return landed
+
+
+def _inbound_due(i) -> float:
+    """入库单应付合计 = 货款 + 金额调整 + 运费 + 装卸（与「待付款账单」页的应付口径一致）。"""
+    return round((i.total_amount or 0.0) + (getattr(i, "adjust_amount", 0.0) or 0.0)
+                 + (getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0), 2)
+
+
+def _inbound_unpaid(i) -> float:
+    """还没付的余额（报表「待付款」口径）：部分付款 = 应付合计 - 已付；待付款沿用原口径（货款）。"""
+    if (getattr(i, "pay_status", PAID) or PAID) == "partial":
+        return round(max(_inbound_due(i) - (getattr(i, "paid_amount", 0.0) or 0.0), 0.0), 2)
+    return round(i.total_amount or 0.0, 2)
 
 
 def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_other: bool = False) -> dict:
@@ -427,6 +453,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     inbounds, unpaid_inbounds = _split_paid(
         list(db.execute(scope(Inbound).options(selectinload(Inbound.product))).scalars())
     )
+    # 部分付款：已付的那部分算进报表（_inbound_landed 按 paid_amount 计），
+    # 没付的余额仍算「待付款」（跟着 unpaid_inbounds 一起进 pending）
+    partial_inbounds = [i for i in inbounds if (getattr(i, "pay_status", PAID) or PAID) == "partial"]
     finances, unpaid_finances = _split_paid(list(db.execute(scope(FinanceRecord)).scalars()))
     others, unpaid_others = _split_paid(list(db.execute(scope(OtherExpense)).scalars()))
     # 入库「运费/装卸费」镜像行已计入批次到岸成本（FIFO 结转随销量扣减，体现在该品毛利上），
@@ -1048,6 +1077,12 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             if getattr(i, "handling", 0.0):
                 parts.append(f"装卸费 ¥{round(i.handling, 2)}")
             note = (note + " · " if note else "") + "、".join(parts) + "（已计入成本）"
+        if (getattr(i, "pay_status", PAID) or PAID) == "partial":
+            # 部分付款：这里只列已付部分，未付余额在「待付款账单」里
+            note = (note + " · " if note else "") + (
+                f"部分付款：已付 ¥{_inbound_landed(i):.2f} / 应付 ¥{_inbound_due(i):.2f}"
+                f"（未付 ¥{_inbound_unpaid(i):.2f} 见待付款账单）"
+            )
         expense_items.append({
             "date": i.date, "source": "采购", "category": "采购支出",
             "item": _inbound_label(i), "amount": _inbound_landed(i),
@@ -1097,9 +1132,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         # 本报表是哪个分仓的（单仓总览可切换分仓查看）
         "warehouse": {"key": key, "name": current_warehouse_name(key)},
         "is_current": key == resolve_key(""),
-        # 以下金额一律只含「已付款」单据（待付款的在 pending 里，点「已支付」后自动转入）
-        "pending": _pending_stats(unpaid_inbounds, unpaid_outbounds, unpaid_others, unpaid_finances,
-                                  unpaid_warehouse_ins),
+        # 以下金额一律只含「已付款」单据（待付款 / 部分付款的未付余额在 pending 里，点「已支付」后自动转入）
+        "pending": _pending_stats(unpaid_inbounds + partial_inbounds, unpaid_outbounds, unpaid_others,
+                                  unpaid_finances, unpaid_warehouse_ins),
         "revenue": round(revenue, 2),
         # 其中：客户随货款一起付的关联结算（包材/人工/快递费）——只在勾了「实收含关联结算」的单据上
         "settle_income": round(sum(float(getattr(o, "settle_income", 0.0) or 0.0) for o in outbounds), 2),
@@ -1392,16 +1427,18 @@ def _sales_by_spec_of(db: Session, date_from: str, date_to: str, key: str) -> di
     def _sums():
         """销售行的分组聚合（日期×规格、规格两个粒度共用）。"""
         return (
-            func.count(func.distinct(Outbound.id)),
+            # 单数：退货单（红冲）不算一单，但它的数量/金额仍按负数参与合计
+            func.count(func.distinct(case((Outbound.is_return == True, None), else_=Outbound.id))),  # noqa: E712
             func.coalesce(func.sum(OutboundLine.quantity), 0.0),
             func.coalesce(func.sum(OutboundLine.amount), 0.0),
             func.coalesce(func.sum(case((dropship, OutboundLine.quantity), else_=0.0)), 0.0),
             func.coalesce(func.sum(case((dropship, OutboundLine.cogs), else_=0.0)), 0.0),
         )
 
-    # 每天的总单数：含没有销售行的单（与原实现一致，days 也会包含这些日期）
+    # 每天的总单数：含没有销售行的单（与原实现一致，days 也会包含这些日期）；退货单不计单数
     day_orders = dict(db.execute(
-        select(Outbound.date, func.count()).where(*conds).group_by(Outbound.date)
+        select(Outbound.date, func.coalesce(func.sum(_not_return(Outbound)), 0))
+        .where(*conds).group_by(Outbound.date)
     ).all())
     days: dict[str, dict] = {d: {"date": d, "cells": {}} for d in day_orders}
 
@@ -1602,7 +1639,9 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
         return int(cnt), float(amt or 0)
 
     orders, revenue, cogs, brush, settle_total = db.execute(
-        select(func.count(), func.coalesce(func.sum(_income_expr()), 0),
+        # 单数不含退货单（红冲单）
+        select(func.coalesce(func.sum(_not_return(Outbound)), 0),
+               func.coalesce(func.sum(_income_expr()), 0),
                func.coalesce(func.sum(Outbound.total_cogs), 0),
                # 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差），与 /report/summary 同口径
                func.coalesce(func.sum(brush_adjust_sql(Outbound)), 0),
@@ -1640,14 +1679,18 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
                # 运费/装卸镜像行已计入批次成本，期间费用不重复扣（「其他开支」页仍可查）
                func.coalesce(OtherExpense.ref_type, "") != INBOUND_FEE_REF)
     ).scalar() or 0.0), 2)
+    # 部分付款：已付部分算本期进货，未付余额算待付款（与 /report/summary 同口径）
+    inbound_landed = (Inbound.total_amount + func.coalesce(Inbound.freight, 0)
+                      + func.coalesce(Inbound.handling, 0))
+    inbound_due = inbound_landed + func.coalesce(Inbound.adjust_amount, 0)
+    inbound_paid = func.coalesce(Inbound.paid_amount, 0)
+    inb_partial = func.coalesce(Inbound.pay_status, PAID) == "partial"
     inb_cnt, purchase = db.execute(
         select(
             func.count(),
             # 本期进货 = 货款 + 入库运费/装卸费（与「支出」分区采购口径、支出合计一致）
             func.coalesce(func.sum(
-                Inbound.total_amount
-                + func.coalesce(Inbound.freight, 0)
-                + func.coalesce(Inbound.handling, 0)
+                case((inb_partial & (inbound_paid < inbound_landed), inbound_paid), else_=inbound_landed)
             ), 0),
         )
         .where(*_date_conds(Inbound), paid(Inbound))
@@ -1662,6 +1705,13 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
 
     # 待付款/待收款：与 _pending_stats 同口径（按来源单据算，避免自动流水重复计）
     ib_c, ib_a = unpaid_count_sum(Inbound, Inbound.total_amount)
+    # 部分付款：未付余额（应付合计 - 已付）也计进待付款
+    pb_c, pb_a = db.execute(
+        select(func.count(), func.coalesce(func.sum(
+            case((inbound_due > inbound_paid, inbound_due - inbound_paid), else_=0)
+        ), 0)).where(*_date_conds(Inbound), inb_partial)
+    ).one()
+    ib_c, ib_a = ib_c + int(pb_c), ib_a + float(pb_a or 0)
     oe_c, oe_a = unpaid_count_sum(OtherExpense, OtherExpense.amount)
     fi_out_c, fi_out_a = unpaid_count_sum(FinanceRecord, FinanceRecord.amount,
                                           (FinanceRecord.type == "expense", FinanceRecord.ref_type == "manual"))

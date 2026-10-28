@@ -983,7 +983,7 @@ function payOf(name) {
 }
 /** 回填付款状态（编辑时） */
 function setPay(name, value) {
-  const v = value === "unpaid" ? "unpaid" : "paid";
+  const v = ["paid", "unpaid", "partial"].includes(value) ? value : "paid";
   document.querySelectorAll(`input[name="${name}"]`).forEach((b) => {
     b.checked = b.value === v;
     if (b.checked) payRadioSync(b);
@@ -991,7 +991,108 @@ function setPay(name, value) {
 }
 /** 待付款标记（列表里提示该笔还没结清） */
 function payTag(status) {
-  return (status || "paid") === "unpaid" ? '<span class="pay-tag">待付款</span>' : "";
+  const s = status || "paid";
+  if (s === "partial") return '<span class="pay-tag part">部分付款</span>';
+  return s === "unpaid" ? '<span class="pay-tag">待付款</span>' : "";
+}
+
+/* ---------- 部分付款（入库单专用）：已付 / 未付 / 比例 三个输入联动 ---------- */
+function round2(v) { return Math.round((+v || 0) * 100) / 100; }
+
+/** 只写数值有变化的输入框（避免打断用户正在输入的光标） */
+function setNum(el, v) {
+  if (!el) return;
+  const nv = round2(v);
+  const cur = parseFloat(el.value);
+  if (!(Math.abs(cur - nv) < 0.005)) el.value = nv ? String(nv) : "";
+}
+
+/** 入库单「付款状态」单选：比其它单据多一个「部分付款」，选中后展开金额/比例输入 */
+function inboundPayRadios(name, current, paidAmount = 0, hint = "", dueFixed = null) {
+  const cur = ["paid", "unpaid", "partial"].includes(current) ? current : "paid";
+  const radios = [["paid", "已付款"], ["partial", "部分付款"], ["unpaid", "待付款"]].map(([v, label]) =>
+    `<label class="pay-radio${cur === v ? " on" : ""}"><input type="radio" name="${name}" value="${v}"${cur === v ? " checked" : ""} onchange="payRadioSync(this); inPayToggle(this)" /> ${label}</label>`
+  ).join("");
+  const shown = cur === "partial";
+  return `<div class="pay-radios">${radios}</div>
+    <div class="pay-part"${dueFixed !== null ? ` data-due="${round2(dueFixed)}"` : ""}${shown ? "" : ' style="display:none;"'}>
+      <div class="pay-part-row">
+        <label>已付</label>
+        <input class="pp-paid" type="number" min="0" step="any" placeholder="0.00" value="${cur === "partial" && paidAmount > 0 ? round2(paidAmount) : ""}" oninput="partialPayInput(this,'paid')" />
+        <span class="pp-unit">元</span>
+        <label>比例</label>
+        <input class="pp-ratio" type="number" min="0" max="100" step="any" placeholder="%" oninput="partialPayInput(this,'ratio')" />
+        <span class="pp-unit">%</span>
+        <label>未付</label>
+        <input class="pp-unpaid" type="number" min="0" step="any" placeholder="0.00" oninput="partialPayInput(this,'unpaid')" />
+        <span class="pp-unit">元</span>
+      </div>
+      <div class="field-hint pp-hint"></div>
+    </div>` + (hint ? `<div class="field-hint">${hint}</div>` : "");
+}
+
+/** 选中 / 离开「部分付款」：展开那块输入，并按当前应付合计补上默认值 */
+function inPayToggle(el) {
+  const field = el.closest(".field");
+  if (!field) return;
+  const box = field.querySelector(".pay-part");
+  if (!box) return;
+  const on = el.value === "partial";
+  box.style.display = on ? "" : "none";
+  if (on) applyPartialPay(box);
+}
+
+/** 部分付款的应付合计：弹窗里用固定 data-due；入库行按 货款 + 调整 + 运费 + 装卸 实时算 */
+function partialDueOf(box) {
+  const fixed = box.dataset.due;
+  if (fixed !== undefined && fixed !== "") return round2(parseFloat(fixed) || 0);
+  const b = box.closest(".in-block");
+  return b ? payDueOf(b) : 0;
+}
+
+/** 按「已付金额」重算比例/未付并刷新提示（已付是唯一真相，另两个只是快捷输入） */
+function applyPartialPay(box, paidInput) {
+  if (!box) return;
+  const due = partialDueOf(box);
+  const paidEl = box.querySelector(".pp-paid");
+  const ratioEl = box.querySelector(".pp-ratio");
+  const unpaidEl = box.querySelector(".pp-unpaid");
+  let paid = paidInput === undefined ? parseFloat((paidEl || {}).value) : paidInput;
+  if (!(paid >= 0)) paid = 0;
+  paid = Math.min(round2(paid), due);
+  const unpaid = round2(due - paid);
+  setNum(paidEl, paid);
+  setNum(ratioEl, due > 0 ? round2(paid / due * 100) : 0);
+  setNum(unpaidEl, unpaid);
+  const hint = box.querySelector(".pp-hint");
+  if (hint) hint.innerHTML = `应付合计 <b>¥${fmtMoney(due)}</b>（货款 + 调整 + 运费/装卸）：`
+    + `已付 <b>¥${fmtMoney(paid)}</b>，未付 <b>¥${fmtMoney(unpaid)}</b>`
+    + (paid > 0 && unpaid > 0 ? "" : "（已付填 0 按「待付款」记，填满应付按「已付款」记）");
+}
+
+/** 三个输入互相带动：改哪个都换算成「已付金额」再同步另外两个 */
+function partialPayInput(el, kind) {
+  const box = el.closest(".pay-part");
+  if (!box) return;
+  const due = partialDueOf(box);
+  const val = parseFloat(el.value) || 0;
+  let paid = val;
+  if (kind === "ratio") paid = round2(due * Math.min(Math.max(val, 0), 100) / 100);
+  else if (kind === "unpaid") paid = round2(due - val);
+  applyPartialPay(box, paid);
+}
+
+/** 应付合计变了（改数量/单价/调整/运费装卸）：已付金额不动，比例与未付跟着重算 */
+function syncPartialPay(block) {
+  const box = block ? block.querySelector(".pay-part") : null;
+  if (!box || box.style.display === "none") return;
+  applyPartialPay(box);
+}
+
+/** 入库行应付合计 = 货款 + 金额调整 + 运费 + 装卸（与后端「实付」口径一致） */
+function payDueOf(block) {
+  const v = (sel) => parseFloat((block.querySelector(sel) || {}).value) || 0;
+  return round2(v(".in-qty") * v(".in-price") + v(".in-adjust") + v(".in-freight") + v(".in-handling"));
 }
 
 /* =============== 库存 =============== */
@@ -6093,9 +6194,10 @@ function inboundBlockHtml(idx) {
       <div class="field"><label>供应商</label><input class="in-supplier" placeholder="供应商名称" /></div>
       <div class="field"><label>日期 *</label><input class="in-date" type="date" /></div>
       <div class="field"><label>操作员</label><input class="in-operator" readonly title="默认当前登录账号，不可修改" /></div>
-      <div class="field">
+      <div class="field in-pay-field">
         <label>付款状态</label>
-        ${payRadios("inPay_" + idx, "paid", "待付款：先进「待付款账单」，点「已支付」后才计入财务报表")}
+        ${inboundPayRadios("inPay_" + idx, "paid", 0,
+          "待付款：先进「待付款账单」，点「已支付」后才计入财务报表；部分付款：已付部分计入报表，未付余额留在待付款账单")}
       </div>
     </div>
     <div class="field" style="margin-top:12px;">
@@ -6210,6 +6312,7 @@ function calcInboundBlock(el) {
         + ` ＝ 实付 ${fmtMoney(base + fee + adj)}`
       : "";
   }
+  syncPartialPay(b);   // 应付合计变了：部分付款的比例 / 未付跟着重算
   updateInboundTotal();
 }
 /* 入库商品选择器（二级弹层：搜索 + 分类 + 卡片列表）；选好后填到对应的那一行 */
@@ -6341,12 +6444,22 @@ async function submitInbound() {
     if (!date) { bad.push(`第 ${no} 行没选日期`); return; }
     if (freight < 0 || handling < 0) { bad.push(`第 ${no} 行运费/装卸费不能为负`); return; }
     const idx = b.dataset.idx || no;
+    // 部分付款：已付金额必须大于 0 且小于应付合计（等于 0 / 填满都该选「待付款」/「已付款」）
+    const payStatus = payOf("inPay_" + idx);
+    const due = payDueOf(b);
+    let paidAmount = 0;
+    if (payStatus === "partial") {
+      paidAmount = round2(parseFloat((b.querySelector(".pp-paid") || {}).value) || 0);
+      if (!(paidAmount > 0)) { bad.push(`第 ${no} 行选了「部分付款」，请填已付金额（应付 ¥${due.toFixed(2)}）`); return; }
+      if (paidAmount >= due - 0.005) { bad.push(`第 ${no} 行已付金额已够 ¥${due.toFixed(2)}，付款状态请选「已付款」`); return; }
+    }
     items.push({
       product_id: pid, unit, quantity: qty, unit_price: price,
       supplier: ((b.querySelector(".in-supplier") || {}).value || "").trim(),
       operator: ((b.querySelector(".in-operator") || {}).value || "").trim() || operatorName(),
       date, remark: remarkValue("inRemark_" + idx),
-      pay_status: payOf("inPay_" + idx), adjust_amount: adjust, freight, handling,
+      pay_status: payStatus, paid_amount: paidAmount,
+      adjust_amount: adjust, freight, handling,
     });
     picked.push({ block: b, idx, pay_name: "inPay_" + idx });
   });
@@ -6364,6 +6477,7 @@ async function submitInbound() {
     if (r.created) tips.push(`已入库 ${r.created} 张单（货款 ¥${goods.toFixed(2)}${fee ? ` + 运费/装卸 ¥${fee.toFixed(2)}` : ""}${adj ? ` ${adj > 0 ? "+" : "-"} 调整 ¥${Math.abs(adj).toFixed(2)}` : ""}）`);
     if (r.failed_count) tips.push(`${r.failed_count} 行失败`);
     if (items.some((it) => it.pay_status === "unpaid")) tips.push("待付款已进「待付款账单」");
+    if (items.some((it) => it.pay_status === "partial")) tips.push("部分付款的未付余额已进「待付款账单」");
     toast(tips.join("，") || "已提交");
     if (r.failed_count) {
       const box = $("inAlert");
@@ -6386,6 +6500,11 @@ async function submitInbound() {
         });
         clearRemarkField("inRemark_" + p.idx);
         setPay(p.pay_name, "paid");   // 回到默认「已付款」
+        const part = b.querySelector(".pay-part");   // 部分付款那组输入也收起来、清空
+        if (part) {
+          part.style.display = "none";
+          part.querySelectorAll("input").forEach((x) => { x.value = ""; });
+        }
         calcInboundBlock(b);
       });
       // 清完的空行（没商品、没数量）收掉，只留一行空的
@@ -6424,7 +6543,7 @@ async function loadInbounds() {
       <td><b>${esc(r.product_name)}</b></td>
       <td>${fmtNum(r.quantity)} ${r.unit}</td>
       <td class="num mono">${fmtMoney(r.unit_price)}/${r.unit}</td>
-      <td class="num mono">${fmtMoney(r.final_amount != null ? r.final_amount : r.total_amount)}${r.adjust_amount ? `<div class="muted" style="font-size:11px;">调整 ${r.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(r.adjust_amount))}</div>` : ""}${(r.freight || r.handling) ? `<div class="muted" style="font-size:11px;" title="已计入批次成本（体现在该品毛利），并同步「其他开支」备查">${r.freight ? "运费 " + fmtMoney(r.freight) : ""}${r.freight && r.handling ? " · " : ""}${r.handling ? "装卸 " + fmtMoney(r.handling) : ""}</div>` : ""}</td>
+      <td class="num mono">${fmtMoney(r.final_amount != null ? r.final_amount : r.total_amount)}${r.adjust_amount ? `<div class="muted" style="font-size:11px;">调整 ${r.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(r.adjust_amount))}</div>` : ""}${(r.freight || r.handling) ? `<div class="muted" style="font-size:11px;" title="已计入批次成本（体现在该品毛利），并同步「其他开支」备查">${r.freight ? "运费 " + fmtMoney(r.freight) : ""}${r.freight && r.handling ? " · " : ""}${r.handling ? "装卸 " + fmtMoney(r.handling) : ""}</div>` : ""}${r.pay_status === "partial" ? `<div class="muted" style="font-size:11px;" title="应付合计 ${fmtMoney(r.due_amount)}">已付 ${fmtMoney(r.paid_amount)} · 未付 ${fmtMoney(r.unpaid_amount)}</div>` : ""}</td>
       <td>${esc(r.supplier) || "—"}</td>
       <td>${esc(r.operator) || "—"}</td>
       <td>${r.date}</td>
@@ -6440,9 +6559,11 @@ async function deleteInbound(id) {
   catch (e) { toast("删除失败：" + e.message); }
 }
 /* 手动修改入库单：可改 供应商 / 入库日期 / 付款状态 / 运费 / 装卸费；保存后操作员记为修改人 */
+let ED_IN_ADJUST = 0;   // 改单弹窗里的金额调整（应付合计 = 货款 + 调整 + 运费 + 装卸）
 function editInbound(id) {
   const r = ($("inTable")._rows || []).find((x) => x.id === id);
   if (!r) { toast("未找到该入库单，请刷新列表"); return; }
+  ED_IN_ADJUST = Number(r.adjust_amount) || 0;
   openModal(`
     <h3>修改入库单 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="muted" style="margin-bottom:12px;">
@@ -6463,7 +6584,9 @@ function editInbound(id) {
       </div>
       <div class="field" style="grid-column:1/-1;">
         <label>付款状态</label>
-        ${payRadios("edInPay", r.pay_status, "待付款：先进「待付款账单」，点「已支付」后才计入财务报表")}
+        ${inboundPayRadios("edInPay", r.pay_status, r.paid_amount || 0,
+          "待付款：先进「待付款账单」，点「已支付」后才计入财务报表；部分付款：已付部分计入报表，未付余额留在待付款账单",
+          round2((r.total_amount || 0) + (r.adjust_amount || 0) + (r.freight || 0) + (r.handling || 0)))}
       </div>
     </div>
     <p class="hint" id="edInHint"></p>
@@ -6483,6 +6606,12 @@ function edInCalc(total) {
   el.innerHTML = fee > 0
     ? `批次成本 = 货款 ${fmtMoney(total)} + 运费/装卸 ${fmtMoney(fee)} = <b>${fmtMoney(total + fee)}</b>（按 FIFO 随销量扣减，同步更新该品毛利与「其他开支」）`
     : "不填=没有运费/装卸费（对应「其他开支」里的运费、装卸费记录会一并清掉）";
+  // 运费/装卸费改了，部分付款的应付合计跟着变（已付金额不动，未付/比例重算）
+  const box = document.querySelector("#modalBox .pay-part");
+  if (box) {
+    box.dataset.due = String(round2(total + ED_IN_ADJUST + fee));
+    if (box.style.display !== "none") applyPartialPay(box);
+  }
 }
 async function saveInboundEdit(id) {
   const date = $("edInDate").value;
@@ -6490,9 +6619,19 @@ async function saveInboundEdit(id) {
   const freight = parseFloat($("edInFreight").value) || 0;
   const handling = parseFloat($("edInHandling").value) || 0;
   if (freight < 0 || handling < 0) { toast("运费 / 装卸费不能为负数"); return; }
+  // 部分付款：已付金额要大于 0 且小于应付合计
+  const payStatus = payOf("edInPay");
+  const partBox = document.querySelector("#modalBox .pay-part");
+  const due = round2(partBox && partBox.dataset.due ? parseFloat(partBox.dataset.due) : 0);
+  let paidAmount = 0;
+  if (payStatus === "partial") {
+    paidAmount = round2(parseFloat((partBox.querySelector(".pp-paid") || {}).value) || 0);
+    if (!(paidAmount > 0)) { toast(`部分付款请填已付金额（应付 ¥${due.toFixed(2)}）`); return; }
+    if (paidAmount >= due - 0.005) { toast(`已付金额已够 ¥${due.toFixed(2)}，付款状态请选「已付款」`); return; }
+  }
   try {
     await api(`/api/inbounds/${id}`, "PUT", {
-      supplier: $("edInSupplier").value, date, pay_status: payOf("edInPay"), freight, handling,
+      supplier: $("edInSupplier").value, date, pay_status: payStatus, paid_amount: paidAmount, freight, handling,
     });
     closeModal();
     toast(`已保存，操作员记为 ${operatorName()}${freight + handling > 0 ? `；运费/装卸 ${fmtMoney(freight + handling)} 已计入成本` : ""}`);
@@ -6983,7 +7122,7 @@ function renderOutRow(o) {
   const checked = outSel.has(o.id) ? "checked" : "";
   return `<tr>
       <td class="cb-col"><input type="checkbox" value="${o.id}" ${checked} onchange="toggleSel('out',${o.id},this.checked)" /></td>
-      <td class="mono">${o.code}${payTag(o.pay_status)}${o.has_dropship ? ' <span class="badge income">含代发</span>' : ""}</td>
+      <td class="mono">${o.code}${payTag(o.pay_status)}${o.is_return ? ' <span class="badge expense">退货</span>' : ""}${o.has_dropship ? ' <span class="badge income">含代发</span>' : ""}</td>
       <td>${esc(o.customer) || "—"}</td>
       <td><button class="detail-toggle" onclick="toggleOutDetail(${o.id})">▸ 查看明细</button></td>
       <td class="num mono">${fmtMoney(o.final_amount != null ? o.final_amount : o.total_amount)}${o.adjust_amount ? `<div class="muted" style="font-size:11px;">调整 ${o.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(o.adjust_amount))}</div>` : ""}${o.settle_income ? `<div class="muted" style="font-size:11px;" title="客户随货款一起付的关联结算（${esc(settleCatsLabel(o.settle_cats))}）：成本里已含包材/快递，这里是客户付回来的那部分">含代收 ${fmtMoney(o.settle_income)}</div>` : ""}</td>
@@ -6992,11 +7131,11 @@ function renderOutRow(o) {
       <td class="num mono" style="color:${o.net_profit >= 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(o.net_profit)}</td>
       <td>${o.date}</td>
       <td class="muted" style="max-width:140px;">${renderRemarkHtml(o.remark)}</td>
-      <td style="white-space:nowrap;"><button class="btn sm secondary" onclick="editOutbound(${o.id})">改</button> <button class="btn sm danger" onclick="deleteOutbound(${o.id})">删</button></td></tr>
+      <td style="white-space:nowrap;">${o.is_return ? "" : `<button class="btn sm secondary" onclick="returnOutbound(${o.id})" title="把客户退回的货按原成本红冲回来">退货</button> `}<button class="btn sm secondary" onclick="editOutbound(${o.id})">改</button> <button class="btn sm danger" onclick="deleteOutbound(${o.id})">删</button></td></tr>
       <tr id="od-${o.id}" style="display:none;"><td colspan="11"><div class="subtable"><table>` +
       o.lines.map((l) => `<tr>
         <td>${esc(l.product_name)}${l.is_dropship ? ' <span class="badge income">代发</span>' : ""}${l.spec ? `<div class="muted" style="font-size:11px;">规格 ${esc(l.spec)}</div>` : ""}</td>
-        <td>${l.line_type === "sale" ? '<span class="badge out">销售</span>' : '<span class="badge pack">包装消耗</span>'}</td>
+        <td>${o.is_return ? '<span class="badge expense">退货</span>' : (l.line_type === "sale" ? '<span class="badge out">销售</span>' : '<span class="badge pack">包装消耗</span>')}</td>
         <td>${fmtNum(l.quantity)} ${l.unit}</td>
         <td>= ${fmtNum(l.quantity_base)} ${l.base_unit || ""}</td>
         <td class="num">${fmtMoney(l.amount)}</td>
@@ -7004,6 +7143,98 @@ function renderOutRow(o) {
         <td class="num">${l.pack_fee ? "费 " + fmtMoney(l.pack_fee) : ""}</td>
       </tr>`).join("") + `</table></div></td></tr>`;
 }
+/* ---------- 销售退货（红冲）：退回的货按原单结转成本回补库存，收入/成本反向冲减 ---------- */
+let RT_INFO = null;   // 当前退货弹窗的原单信息（行 + 已退 / 还能退）
+
+async function returnOutbound(id) {
+  let info;
+  try { info = await api(`/api/outbounds/${id}/returnable`); }
+  catch (e) { toast("读取可退信息失败：" + e.message); return; }
+  const lines = info.lines || [];
+  if (!lines.length) { toast("这张单没有可退货的销售行"); return; }
+  RT_INFO = info;
+  const rows = lines.map((l) => `
+    <tr>
+      <td>${esc(l.product_name)}${l.is_dropship ? ' <span class="badge income">代发</span>' : ""}${l.spec ? `<div class="muted" style="font-size:11px;">规格 ${esc(l.spec)}</div>` : ""}</td>
+      <td class="num mono">${fmtNum(l.quantity)} ${esc(l.unit)}</td>
+      <td class="num mono">${fmtMoney(l.unit_price)}</td>
+      <td class="num mono">${l.returned ? fmtNum(l.returned) : "—"}</td>
+      <td class="num mono">${fmtNum(l.remaining)} ${esc(l.unit)}</td>
+      <td style="width:130px;"><input class="rt-qty" data-line="${l.line_id}" type="number" min="0" step="any"
+          placeholder="0" oninput="rtCalc()" ${l.remaining <= 0 ? "disabled" : ""} /></td>
+      <td class="num mono rt-amt" data-line="${l.line_id}">0.00</td>
+    </tr>`).join("");
+  const oldReturns = (info.returns || []).length
+    ? `<div class="muted" style="font-size:12px;margin-top:6px;">已生成退货单：${info.returns.map((r) => `${esc(r.code)}（${esc(r.date)}，${fmtMoney(r.total_amount)}）`).join("、")}</div>`
+    : "";
+  openModal(`
+    <h3>销售退货 · 红冲 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="muted" style="margin-bottom:10px;">
+      原单 ${esc(info.code)} · 客户 ${esc(info.customer) || "—"} · ${esc(info.date)}<br>
+      退回的货按原单结转成本重新入库；收入与成本按数量比例反向冲减，财务报表自动净额（收入减少、成本减少、库存回来）。
+    </div>
+    ${oldReturns}
+    <div class="subtable" style="margin-top:8px;"><table>
+      <thead><tr><th>商品</th><th class="num">原数量</th><th class="num">原单价</th><th class="num">已退</th><th class="num">还能退</th><th>本次退货</th><th class="num">退货金额</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div class="form-grid" style="margin-top:12px;">
+      <div class="field"><label>退货日期 *</label><input id="rtDate" type="date" value="${today()}" /></div>
+      <div class="field"><label>备注 / 原因</label><input id="rtRemark" placeholder="如：客户用剩退回 / 质量问题" /></div>
+    </div>
+    <p class="hint" id="rtHint"></p>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn danger" onclick="submitReturn(${id})">✓ 确认退货</button>
+    </div>`);
+  $("modalBox").classList.add("wide");
+  rtCalc();
+}
+
+/** 退货数量变化 → 实时算退货金额 / 冲减成本（成本按原行 FIFO 结转单价折算） */
+function rtCalc() {
+  if (!RT_INFO) return;
+  let amt = 0, cogs = 0;
+  document.querySelectorAll("#modalBox .rt-qty").forEach((el) => {
+    const lid = Number(el.dataset.line);
+    const l = (RT_INFO.lines || []).find((x) => x.line_id === lid);
+    if (!l) return;
+    let q = parseFloat(el.value) || 0;
+    if (q < 0) q = 0;
+    if (q > l.remaining + 1e-9) { q = l.remaining; el.value = String(q); }
+    const ratio = l.quantity ? q / l.quantity : 0;
+    const a = (l.amount || 0) * ratio;
+    const c = (l.cogs || 0) * ratio;
+    amt += a; cogs += c;
+    const cell = el.closest("tr").querySelector(".rt-amt");
+    if (cell) cell.textContent = fmtMoney(a);
+  });
+  const hint = $("rtHint");
+  if (hint) hint.innerHTML = `合计：退货金额 <b>¥${fmtMoney(amt)}</b>，冲减成本 <b>¥${fmtMoney(cogs)}</b>`
+    + `（按原单结转成本），毛利反向 <b>¥${fmtMoney(amt - cogs)}</b>`;
+}
+
+async function submitReturn(id) {
+  const date = $("rtDate").value;
+  if (!date) { toast("请选择退货日期"); return; }
+  const items = [];
+  document.querySelectorAll("#modalBox .rt-qty").forEach((el) => {
+    const q = parseFloat(el.value) || 0;
+    if (q > 0) items.push({ line_id: Number(el.dataset.line), quantity: q });
+  });
+  if (!items.length) { toast("请填写要退货的数量"); return; }
+  try {
+    const r = await api(`/api/outbounds/${id}/return`, "POST",
+      { items, date, remark: ($("rtRemark").value || "").trim() });
+    RT_INFO = null;
+    closeModal();
+    toast(`已退货，生成红冲单 ${r.code}：收入 ${fmtMoney(r.total_amount)}，成本 ${fmtMoney(r.total_cogs)}`
+      + `（库存已按原成本回补）`, 4200);
+    loadOutbounds(); loadStock();
+    if (typeof loadReport === "function") loadReport();
+  } catch (e) { toast("退货失败：" + e.message); }
+}
+
 function buildOutGroup(recs) {
   const ids = recs.map((r) => r.id);
   const customers = [...new Set(recs.map((r) => r.customer).filter(Boolean))];
@@ -7385,15 +7616,15 @@ function editOutboundInGroup(groupKey) {
   if (!recs.length) { toast("未找到该批次单据，请刷新列表"); return; }
   openModal(`
     <h3>选择要修改的出库单 <button class="close" onclick="closeModal()">✕</button></h3>
-    <div class="muted" style="margin-bottom:10px;">批次 ${esc(groupKey)} · 共 ${recs.length} 单（只能改 客户 / 出库日期 / 付款状态）</div>
+    <div class="muted" style="margin-bottom:10px;">批次 ${esc(groupKey)} · 共 ${recs.length} 单（可改 客户 / 出库日期 / 付款状态，或对某单做销售退货）</div>
     <div style="max-height:50vh;overflow:auto;">
       <table class="table"><thead><tr><th>单号</th><th>客户</th><th class="num">金额</th><th>日期</th><th></th></tr></thead><tbody>
       ${recs.map((o) => `<tr>
-        <td class="mono">${esc(o.code)}${payTag(o.pay_status)}</td>
+        <td class="mono">${esc(o.code)}${payTag(o.pay_status)}${o.is_return ? ' <span class="badge expense">退货</span>' : ""}</td>
         <td>${esc(o.customer) || "—"}</td>
         <td class="num mono">${fmtMoney(o.final_amount != null ? o.final_amount : o.total_amount)}</td>
         <td>${esc(o.date)}</td>
-        <td><button class="btn sm secondary" onclick="editOutbound(${o.id})">改</button></td>
+        <td style="white-space:nowrap;">${o.is_return ? "" : `<button class="btn sm secondary" onclick="returnOutbound(${o.id})">退货</button> `}<button class="btn sm secondary" onclick="editOutbound(${o.id})">改</button></td>
       </tr>`).join("")}
       </tbody></table>
     </div>
@@ -8759,14 +8990,14 @@ function renderPayables() {
     </tr></thead><tbody>` +
     (rows.length
       ? rows.map((r) => {
-        const paid = r.pay_status !== "unpaid";
+        const paid = (r.pay_status || "paid") === "paid";   // 部分付款还没结清，仍按待办展示
         const color = r.direction === "in" ? "var(--green, #16a34a)" : "var(--danger, #dc2626)";
         const money = `${r.direction === "in" ? "应收" : "应付"} ${fmtMoney(r.amount)}`;
         return `<tr${paid ? ' style="opacity:.55;"' : ""}>
           <td><input type="checkbox" class="pay-pick" value="${esc(r.kind)}|${r.id}" /></td>
           <td class="mono">${esc(r.date)}</td>
           <td><span class="badge ${PAY_SRC_BADGE[r.source] || "adjust"}">${esc(r.source)}</span></td>
-          <td><b>${esc(r.title)}</b>${r.code ? ` <span class="muted">${esc(r.code)}</span>` : ""}
+          <td><b>${esc(r.title)}</b>${r.code ? ` <span class="muted">${esc(r.code)}</span>` : ""}${payTag(r.partial ? "partial" : r.pay_status)}
             <div class="muted" style="font-size:12px;">${esc(r.sub)}${r.remark ? " · " + renderRemarkHtml(r.remark, { compact: true }) : ""}</div></td>
           <td class="num mono"><b style="color:${color};">${money}</b></td>
           <td>${esc(r.operator) || "—"}</td>

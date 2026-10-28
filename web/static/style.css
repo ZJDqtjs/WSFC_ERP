@@ -2298,6 +2298,56 @@ tr.draft-off {
   margin: 0;
 }
 
+/* 部分付款（入库单）：已付金额 / 比例 / 未付金额 三个输入联动 */
+/* 付款状态这一格要放得下三个输入 + 提示，占两列（窄屏再退回一列） */
+.in-block .in-pay-field {
+  grid-column: span 2;
+}
+
+@media (max-width: 720px) {
+  .in-block .in-pay-field {
+    grid-column: auto;
+  }
+}
+
+.pay-part {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border, #e5e7eb);
+  border-radius: 8px;
+  background: var(--primary-50, #f8fafc);
+}
+
+.pay-part-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.pay-part-row label {
+  color: var(--text-muted, #6b7280);
+  white-space: nowrap;
+}
+
+.pay-part-row input {
+  width: 92px;
+  padding: 4px 8px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.pp-unit {
+  color: var(--text-muted, #6b7280);
+  margin-right: 6px;
+}
+
+.pay-part .field-hint {
+  margin-top: 4px;
+}
+
 /* 待付款标记（列表里提示该笔还没结清） */
 .pay-tag {
   display: inline-block;
@@ -2308,6 +2358,13 @@ tr.draft-off {
   color: #f97316;
   border: 1px solid #fed7aa;
   margin-left: 6px;
+}
+
+/* 部分付款标记：已付一部分，余额还在待付款账单里 */
+.pay-tag.part {
+  background: #eff6ff;
+  color: #2563eb;
+  border-color: #bfdbfe;
 }
 
 /* 待付款账单：金额左、按钮右 */

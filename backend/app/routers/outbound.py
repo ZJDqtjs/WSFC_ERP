@@ -1,4 +1,5 @@
 import re
+from datetime import date as _date
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -12,11 +13,13 @@ from ..models import DropshipBill, FinanceRecord, OtherExpense, Outbound, Outbou
 from ..services import (
     build_order,
     create_outbound,
+    create_sales_return,
     normalize_settle_cats,
     pack_settle_cat,
     pay_fields,
     purge_outbounds,
     recompute_product,
+    returned_qty_by_line,
     sync_doc_edit,
     sync_settle_income_record,
 )
@@ -84,6 +87,20 @@ class BatchIds(BaseModel):
     ids: list[int]
 
 
+class ReturnLineIn(BaseModel):
+    """一行退货：line_id = 原销售行，quantity = 退货数量（按原行的单位，如 公斤）。"""
+
+    line_id: int
+    quantity: float
+
+
+class SalesReturnIn(BaseModel):
+    items: list[ReturnLineIn] = Field(default=[])
+    date: str = ""
+    remark: str = ""
+    operator: str = ""
+
+
 def _to_dict(o: Outbound) -> dict:
     remark = o.remark or ""
     is_multi = "一单多货" in remark
@@ -139,6 +156,9 @@ def _to_dict(o: Outbound) -> dict:
         "brush_profit": round(brush_final - brush_fee_of(o) - float(getattr(o, "brush_cost", 0.0) or 0.0), 2),
         # 是否含代发行（订单商品未关联库存大类：不扣库存，只记代发数量/成本）
         "has_dropship": any(bool(getattr(l, "is_dropship", False)) for l in o.lines),
+        # 销售退货（红冲单）：金额/数量/成本都是负数，库存已按原单成本回补
+        "is_return": bool(getattr(o, "is_return", False)),
+        "return_of_id": getattr(o, "return_of_id", None),
         "lines": [
             {
                 "product_id": l.product_id,
@@ -158,6 +178,8 @@ def _to_dict(o: Outbound) -> dict:
                 "pack_fee": l.pack_fee,
                 "category": l.product.category if l.product else "",
                 "is_labor": bool(l.product and (l.product.category == "人工" or (l.product.name or "").strip().endswith("打包"))),
+                # 退货行：指向被冲减的原销售行（列表里把「已退」算在原来那一行上）
+                "src_line_id": getattr(l, "src_line_id", None),
             }
             for l in o.lines
         ],
@@ -204,6 +226,69 @@ def create_outbound_api(data: OutboundIn, db: Session = Depends(get_db), user: U
     return {"order": _to_dict(rec), "warnings": warnings}
 
 
+@router.get("/{oid}/returnable")
+def returnable(oid: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """销售退货弹窗的数据源：原单各销售行 + 已退多少 + 还能退多少（已退按 src_line_id 汇总）。"""
+    o = db.get(Outbound, oid)
+    if not o:
+        raise HTTPException(404, "出库单不存在")
+    if getattr(o, "is_return", False):
+        raise HTTPException(400, "退货单不能再退货")
+    lines = [l for l in o.lines if l.line_type == "sale"]
+    done = returned_qty_by_line(db, [l.id for l in lines])
+    returns = list(db.execute(
+        select(Outbound).where(Outbound.return_of_id == oid).order_by(Outbound.id)
+    ).scalars())
+    return {
+        "id": o.id,
+        "code": o.code,
+        "customer": o.customer or "",
+        "date": o.date,
+        "lines": [
+            {
+                "line_id": l.id,
+                "product_id": l.product_id,
+                "product_name": l.product.name if l.product else "",
+                "spec": l.spec or "",
+                "unit": l.unit,
+                "quantity": float(l.quantity or 0.0),
+                "returned": round(done.get(l.id, 0.0), 6),
+                "remaining": round(float(l.quantity or 0.0) - done.get(l.id, 0.0), 6),
+                "unit_price": float(l.unit_price or 0.0),
+                "amount": float(l.amount or 0.0),
+                "cogs": float(l.cogs or 0.0),
+                "is_dropship": bool(getattr(l, "is_dropship", False)),
+            }
+            for l in lines
+        ],
+        "returns": [
+            {"id": r.id, "code": r.code, "date": r.date,
+             "total_amount": round(float(r.total_amount or 0.0), 2)}
+            for r in returns
+        ],
+    }
+
+
+@router.post("/{oid}/return")
+def create_return(oid: int, data: SalesReturnIn, db: Session = Depends(get_db),
+                  user: User = Depends(get_current_user)):
+    """销售退货（红冲）：收入/成本按原结转成本反向冲减，退回的货按原成本回补库存。"""
+    day = (data.date or "").strip() or _date.today().isoformat()
+    if not DATE_RE.match(day):
+        raise HTTPException(400, "日期格式应为 YYYY-MM-DD")
+    try:
+        rec = create_sales_return(
+            db, oid, [it.model_dump() for it in data.items], day,
+            operator=(data.operator or "").strip() or user.name,
+            remark=data.remark,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    db.refresh(rec)
+    return _to_dict(rec)
+
+
 @router.put("/{oid}")
 def update_outbound(oid: int, data: OutboundUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """手动修改出库单：只允许改 客户 / 日期 / 付款状态；操作员记为本次修改人。"""
@@ -238,11 +323,23 @@ def update_outbound(oid: int, data: OutboundUpdate, db: Session = Depends(get_db
     return _to_dict(rec)
 
 
+def _return_codes_of(db: Session, ids: list[int]) -> list[str]:
+    """这几张出库单下面挂着的退货单号（有退货单就不许直接删原单，否则库存会重复计）。"""
+    if not ids:
+        return []
+    return [c for c in db.execute(
+        select(Outbound.code).where(Outbound.return_of_id.in_(ids))
+    ).scalars() if c]
+
+
 @router.delete("/{oid}")
 def delete_outbound(oid: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     rec = db.get(Outbound, oid)
     if not rec:
         raise HTTPException(404, "出库单不存在")
+    rets = _return_codes_of(db, [oid])
+    if rets:
+        raise HTTPException(400, f"这张单有退货单（{('、'.join(rets))}），请先删除退货单再删原单")
     affected = set()
     for l in rec.lines:
         affected.add(l.product_id)
@@ -266,6 +363,19 @@ def delete_outbound(oid: int, db: Session = Depends(get_db), user: User = Depend
 
 @router.post("/batch-delete")
 def batch_delete_outbounds(data: BatchIds, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    deleted, missing, _affected = purge_outbounds(db, data.ids)
+    # 勾选里既有原单和它的退货单时，退货单要一起删（否则库存会重复计）；只勾了原单则拦下来
+    ids = list(data.ids or [])
+    rets = []
+    if ids:
+        rets = list(db.execute(
+            select(Outbound.id, Outbound.code, Outbound.return_of_id)
+            .where(Outbound.return_of_id.in_(ids))
+        ).all())
+    missing_ret = {int(r.id) for r in rets} - set(ids)
+    if missing_ret:
+        codes = [r.code for r in rets if int(r.id) in missing_ret]
+        raise HTTPException(400, f"有出库单还挂着退货单（{('、'.join(codes))}），请把退货单一起勾选删除")
+    ids += [int(r.id) for r in rets]
+    deleted, missing, _affected = purge_outbounds(db, ids)
     db.commit()
     return {"ok": True, "deleted": deleted, "missing": missing}

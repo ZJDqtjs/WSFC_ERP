@@ -103,9 +103,13 @@ class Inbound(Base):
     operator: Mapped[str] = mapped_column(String(32), default="")
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
     remark: Mapped[str] = mapped_column(String(255), default="")
-    # 付款状态：paid 已付款（默认，直接进报表）/ unpaid 待付款（先进「待付款账单」，点「已支付」后才进报表）
+    # 付款状态：paid 已付款（默认，直接进报表）/ partial 部分付款 / unpaid 待付款（先进「待付款账单」，点「已支付」后才进报表）
     pay_status: Mapped[str] = mapped_column(String(8), default="paid")
     paid_at: Mapped[str] = mapped_column(String(10), default="")  # 标记已支付那天（YYYY-MM-DD）
+    # 部分付款（pay_status="partial"）时已付的那部分：0 < paid_amount < 应付合计
+    # （应付合计 = 货款 + 金额调整 + 运费 + 装卸，与「待付款账单」的应付口径一致）。
+    # 已付部分进报表、未付部分进待付款账单；paid/unpaid 时它统一记全额/0，方便报表直接取用。
+    paid_amount: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     product: Mapped[Product] = relationship()
@@ -148,6 +152,10 @@ class Outbound(Base):
     # 付款状态：paid 已付款/已回款（默认，整单进报表）/ unpaid 待付款（未回款，整单先进待付款账单，不进报表）
     pay_status: Mapped[str] = mapped_column(String(8), default="paid")
     paid_at: Mapped[str] = mapped_column(String(10), default="")
+    # 销售退货单（红冲单）：金额/数量/成本都是负数，库存按原单结转成本回补（见 services.create_sales_return）。
+    # 复用出库表是为了让报表的收入/成本/商品明细直接按加法净额，不用到处改口径。
+    is_return: Mapped[bool] = mapped_column(Boolean, default=False)
+    return_of_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 退货对应的原出库单 id
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     lines: Mapped[list["OutboundLine"]] = relationship(
@@ -177,6 +185,8 @@ class OutboundLine(Base):
     pack_fee: Mapped[float] = mapped_column(Float, default=0.0)  # 该行固定费用(sale 行)
     # 代发（订单商品未关联库存大类）：不扣任何库存，只记代发数量与代发成本
     is_dropship: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 退货行专用：指向被冲减的原销售行 id（累计已退数量按它校验，见 services.create_sales_return）
+    src_line_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
 
     outbound: Mapped[Outbound] = relationship(back_populates="lines")
     product: Mapped[Product] = relationship()

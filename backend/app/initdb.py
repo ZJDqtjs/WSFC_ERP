@@ -439,9 +439,14 @@ _EXTRA_COLUMNS = {
         ("adjust_amount", "FLOAT DEFAULT 0"),
         ("freight", "FLOAT DEFAULT 0"),
         ("handling", "FLOAT DEFAULT 0"),
+        # 部分付款：pay_status="partial" 时已付的金额（老库默认 0，历史单据口径不变）
+        ("paid_amount", "FLOAT DEFAULT 0"),
     ),
     "outbounds": _PAY_COLUMNS + (
         ("adjust_amount", "FLOAT DEFAULT 0"),
+        # 销售退货（红冲单）：金额/数量/成本记负数，库存按原单结转成本回补
+        ("is_return", "BOOLEAN DEFAULT 0"),
+        ("return_of_id", "INTEGER"),
         # 芳谊放单仓刷单结算：刷单成本 / 结算固定费（快递+包装） / 系统自动固定费快照
         ("brush_cost", "FLOAT DEFAULT 0"),
         ("brush_fee", "FLOAT DEFAULT 0"),
@@ -477,7 +482,8 @@ _EXTRA_COLUMNS = {
         ("fixed_cost", "FLOAT DEFAULT 0"),
     ),
     # 出库行：代发标记（订单商品未关联库存大类 → 不扣库存，只记代发数量/成本）
-    "outbound_lines": (("is_dropship", "BOOLEAN DEFAULT 0"),),
+    # src_line_id：退货行指向被冲减的原销售行（累计退货数量按它校验）
+    "outbound_lines": (("is_dropship", "BOOLEAN DEFAULT 0"), ("src_line_id", "INTEGER")),
     # 商品：关联的库存商品清单（订单商品关联多个库存商品扣减 / 成本回写用）
     # ⚠️ 新增列必须登记在这里：非默认分仓启动时只跑 ensure_schema（即本表），不跑 migrate()。
     #    这两列当初只加在 migrate() 里，导致 wh01 等分仓缺列，/api/products 等接口 500（表现为"数据全没了"）。
@@ -495,6 +501,10 @@ _EXTRA_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_stock_movements_ref ON stock_movements(ref_type, ref_id)",
     "CREATE INDEX IF NOT EXISTS idx_finance_records_ref ON finance_records(ref_type, ref_id)",
     "CREATE INDEX IF NOT EXISTS idx_outbound_lines_outbound ON outbound_lines(outbound_id)",
+    # 退货行按原销售行汇总已退数量（services.returned_qty_by_line）
+    "CREATE INDEX IF NOT EXISTS idx_outbound_lines_src ON outbound_lines(src_line_id)",
+    # 退货单按原单反查（列表/详情显示「已退」用）
+    "CREATE INDEX IF NOT EXISTS idx_outbounds_return_of ON outbounds(return_of_id)",
     "CREATE INDEX IF NOT EXISTS idx_other_expenses_ref ON other_expenses(ref_type, ref_id)",
     # 报表「重量(kg)」按出库行的库存流水反推扣减量：line_id 是 ALTER 补加的列，模型里的
     # index=True 对老库不生效 → 缺这个索引时重量查询会退化成全表扫描（实测 13 天区间 104 秒）。
