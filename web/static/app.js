@@ -9415,21 +9415,36 @@ function dsPickedBillIds() {
     .flatMap((g) => g.bill_ids || []);
 }
 
-/** 标记某款商品规格（可能跨多张出库单）的代发成本已付/撤销 */
-async function dsMarkPaid(idx, paid) {
-  const g = DS_ROWS[idx];
-  if (!g) return;
-  const label = `${g.product_name}${g.spec ? " · " + g.spec : ""}（${g.order_count} 单，代发成本 ${fmtMoney(g.amount)}）`;
-  if (!confirm(`${paid ? "确认这批代发成本已付清？" : "确认撤销已付标记？"}\n${label}\n（只影响代发付款核对，不影响财务报表）`)) return;
+/** 代发成本付款提交（账单行可能跨多张出库单）：手续费 >0 时后端自动记一笔「其他开支 → 手续费」 */
+async function submitDropshipPay(ids, paid, fee, date, okText) {
   try {
-    await api("/api/payables/pay-batch", "POST", { kind: "dropship_item", ids: g.bill_ids || [], paid });
-    toast(paid ? "已标记代发成本已支付" : "已撤销");
+    const r = await api("/api/payables/pay-batch", "POST",
+      { kind: "dropship_item", ids, paid, fee, date });
+    const tail = r && r.fee ? `；手续费 ¥${fmtMoney(r.fee)} 已记「其他开支」` : "";
+    toast((paid ? (okText || "已标记代发成本已支付") : "已撤销") + tail);
     await loadDropshipBills();
     await loadPayablesPage();
   } catch (e) { toast("操作失败：" + e.message); }
 }
 
-/** 批量标记勾选的商品规格 */
+/** 标记某款商品规格（可能跨多张出库单）的代发成本已付/撤销：已支付弹窗可填转账手续费 */
+async function dsMarkPaid(idx, paid) {
+  const g = DS_ROWS[idx];
+  if (!g) return;
+  const plain = `${g.product_name}${g.spec ? " · " + g.spec : ""}（${g.order_count} 单，代发成本 ${fmtMoney(g.amount)}）`;
+  if (!paid) {
+    if (!confirm(`确认撤销已付标记？\n${plain}\n（只影响代发付款核对，不影响财务报表）`)) return;
+    return submitDropshipPay(g.bill_ids || [], false, 0, "");
+  }
+  openPayModal({
+    title: "代发成本已支付",
+    label: `<b>${esc(g.product_name)}</b>${g.spec ? " · " + esc(g.spec) : ""}（${g.order_count} 单，代发成本 <b class="mono">${fmtMoney(g.amount)}</b>）`,
+    note: "只影响代发付款核对，不影响报表的收入成本；手续费照常记入「其他开支」。",
+    onOk: (fee, day) => submitDropshipPay(g.bill_ids || [], true, fee, day),
+  });
+}
+
+/** 批量标记勾选的商品规格：已支付弹窗可填转账手续费（整批只记一笔） */
 async function dsBatchPay(paid) {
   const picked = [...document.querySelectorAll("#dsTable .ds-pick")].filter((x) => x.checked)
     .map((x) => DS_ROWS[Number(x.value)]).filter(Boolean);
@@ -9437,13 +9452,16 @@ async function dsBatchPay(paid) {
   if (!ids.length) { toast("请先勾选要处理的商品规格"); return; }
   const amount = picked.reduce((a, g) => a + (g.amount || 0), 0);
   const orders = picked.reduce((a, g) => a + (g.order_count || 0), 0);
-  if (!confirm(`${paid ? "批量标记已支付" : "批量撤销"}：${picked.length} 款商品规格 / ${orders} 张出库单，代发成本合计 ${fmtMoney(amount)}？\n（只影响代发付款核对，不影响财务报表）`)) return;
-  try {
-    const r = await api("/api/payables/pay-batch", "POST", { kind: "dropship_item", ids, paid });
-    toast(`已处理 ${r.updated ?? ids.length} 行${r.missing ? `，${r.missing} 行已不存在` : ""}`);
-    await loadDropshipBills();
-    await loadPayablesPage();
-  } catch (e) { toast("批量操作失败：" + e.message); }
+  if (!paid) {
+    if (!confirm(`批量撤销：${picked.length} 款商品规格 / ${orders} 张出库单，代发成本合计 ${fmtMoney(amount)}？\n（只撤销付款核对标记，不影响财务报表）`)) return;
+    return submitDropshipPay(ids, false, 0, "");
+  }
+  openPayModal({
+    title: "批量标记代发成本已支付",
+    label: `<b>${picked.length}</b> 款商品规格 / <b>${orders}</b> 张出库单，代发成本合计 <b class="mono">${fmtMoney(amount)}</b>`,
+    note: "只影响代发付款核对，不影响报表的收入成本；整批只记一笔手续费。",
+    onOk: (fee, day) => submitDropshipPay(ids, true, fee, day),
+  });
 }
 
 /** 侧边栏角标：待结清笔数 */
