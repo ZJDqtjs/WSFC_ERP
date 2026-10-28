@@ -755,10 +755,19 @@
 
       <!-- 其他收支 -->
       <section id="page-otherexp" class="page">
+        <!-- 页级切换：其他支出 / 其他收入 —— 登记表单、统计、明细整页跟随 -->
+        <div class="card oe-page-head">
+          <div class="seg" id="oeScopeSeg">
+            <button class="seg-item active" data-scope="expense" onclick="oeScope(this)">其他支出</button>
+            <button class="seg-item" data-scope="income" onclick="oeScope(this)">其他收入</button>
+          </div>
+          <div class="grow"></div>
+          <span class="hint" id="oeScopeHint"></span>
+        </div>
         <div class="card">
           <div class="card-head">
             <h3><svg class="ic"><use href="#i-wallet"/></svg> <span id="oeFormTitle">登记其他支出</span></h3>
-            <span class="hint">仓库/经营中的零散支出与收入：网线费、安装费、机器费、样品费、供应商补偿等。保存后计入财务报表「期间费用」（收入为负数冲减），并影响净利（无需再到「手动记账」重复登记）。登记收入请先把下方明细切到「其他收入」</span>
+            <span class="hint">仓库/经营中的零散支出与收入：网线费、安装费、机器费、样品费、供应商补偿等。保存后计入财务报表「期间费用」（收入为负数冲减），并影响净利（无需再到「手动记账」重复登记）</span>
           </div>
           <div class="form-grid">
             <div class="field">
@@ -829,10 +838,6 @@
           <div class="card-head">
             <h3>收支明细</h3><span class="hint" id="oeListHint"></span>
             <div class="grow"></div>
-            <div class="seg" id="oeScopeSeg">
-              <button class="seg-item active" data-scope="expense" onclick="oeScope(this)">其他支出</button>
-              <button class="seg-item" data-scope="income" onclick="oeScope(this)">其他收入</button>
-            </div>
             <button class="btn secondary" onclick="loadOtherExpensePage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
           </div>
           <div class="toolbar">

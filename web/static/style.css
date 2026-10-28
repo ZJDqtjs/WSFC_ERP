@@ -431,6 +431,24 @@ hr {
   border: 1px solid var(--border-light);
 }
 
+/* 其他收支页级切换条：其他支出 / 其他收入，整页（登记/统计/明细）跟随 */
+.oe-page-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 24px;
+}
+
+.oe-page-head .seg {
+  margin-bottom: 0;
+}
+
+@media (max-width: 720px) {
+  .oe-page-head {
+    flex-wrap: wrap;
+  }
+}
+
 @media (prefers-color-scheme: dark) {
   .seg { background: rgba(255, 255, 255, 0.05); }
 }

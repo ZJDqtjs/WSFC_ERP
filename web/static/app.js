@@ -8738,13 +8738,15 @@ let OE_EDIT_ID = null;  // 正在修改的记录 id；null = 新增
 let OE_SCOPE = "expense";  // 当前页签：expense 其他支出 / income 其他收入（登记与列表都跟随它）
 let oeInited = false;
 
-/** 切「其他支出 / 其他收入」页签：列表按正负过滤，登记表单也跟着变成登记支出/收入 */
+/** 切「其他支出 / 其他收入」页签（页面顶部）：登记表单、统计、明细整页跟随 */
 function oeScope(btn) {
   $("oeScopeSeg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
-  OE_SCOPE = btn.dataset.scope === "income" ? "income" : "expense";
+  const next = btn.dataset.scope === "income" ? "income" : "expense";
+  if (next === OE_SCOPE) return;
+  OE_SCOPE = next;
   if (OE_EDIT_ID) oeResetForm();   // 换页签时若正在编辑，先收起（避免支出表单改成收入记录）
   oeApplyScope();
-  renderOtherExpenseList();
+  loadOtherExpensePage();          // 后端按支出/收入分别返回，统计与明细整页跟随
 }
 
 /** 登记表单跟随页签：标题 / 保存按钮文案 / 付款状态（收入立即到账，不进待付款账单） */
@@ -8758,6 +8760,10 @@ function oeApplyScope() {
   if (payField) payField.style.display = income ? "none" : "";
   const cat = $("oeCategory");
   if (cat) cat.placeholder = income ? "如：供应商补偿 / 返利 / 赔偿" : "如：网线费";
+  const hint = $("oeScopeHint");
+  if (hint) hint.textContent = income
+    ? "当前：其他收入 —— 下方登记 / 统计 / 明细都只看收入（含入库单带出的供应商补偿）"
+    : "当前：其他支出 —— 下方登记 / 统计 / 明细都只看支出";
 }
 
 function lastMonthRange() {
@@ -8777,10 +8783,11 @@ async function loadOtherExpensePage() {
   }
   if ($("oeOperator")) $("oeOperator").value = operatorName();
   const from = $("oeDateFrom").value, to = $("oeDateTo").value;
+  const kindQ = `&kind=${OE_SCOPE}`;   // expense/income：后端按口径过滤并计算，整页只看一边
   try {
     const [rows, stats] = await Promise.all([
-      api(`/api/other-expenses?date_from=${from || ""}&date_to=${to || ""}`),
-      api(`/api/other-expenses/stats?date_from=${from || ""}&date_to=${to || ""}`),
+      api(`/api/other-expenses?date_from=${from || ""}&date_to=${to || ""}${kindQ}`),
+      api(`/api/other-expenses/stats?date_from=${from || ""}&date_to=${to || ""}${kindQ}`),
     ]);
     OE_ROWS = rows;
     OE_STATS = stats;
@@ -8808,68 +8815,77 @@ function oeSwitchSeg(btn) {
 }
 
 function renderOeStats(s) {
+  const income = OE_SCOPE === "income";
+  const label = income ? "收入" : "支出";
   const top = (s.by_category || [])[0];
   $("oeStats").innerHTML = `
-    <div class="stat red"><div class="label">今日合计</div><div class="value">${fmtMoney(s.today_total)}</div><div class="sub">${esc(s.today)} · 支出−收入</div></div>
-    <div class="stat red"><div class="label">本月合计</div><div class="value">${fmtMoney(s.month_total)}</div><div class="sub">${esc(s.month)} 月 · 支出−收入</div></div>
-    <div class="stat amber"><div class="label">区间净合计</div><div class="value">${fmtMoney(s.range_total)}</div><div class="sub">${s.range_count} 笔 · 日均 ${fmtMoney(s.range_daily_avg)}</div></div>
+    <div class="stat ${income ? "green" : "red"}"><div class="label">今日${label}</div><div class="value">${fmtMoney(s.today_total)}</div><div class="sub">${esc(s.today)}</div></div>
+    <div class="stat ${income ? "green" : "red"}"><div class="label">本月${label}</div><div class="value">${fmtMoney(s.month_total)}</div><div class="sub">${esc(s.month)} 月合计</div></div>
+    <div class="stat amber"><div class="label">区间${label}合计</div><div class="value">${fmtMoney(s.range_total)}</div><div class="sub">${s.range_count} 笔 · 日均 ${fmtMoney(s.range_daily_avg)}</div></div>
     <div class="stat"><div class="label">区间天数</div><div class="value">${s.range_days || 0}</div><div class="sub">最大类型：${top ? esc(top.category) + " " + fmtMoney(top.amount) : "—"}</div></div>`;
   const scope = `统计区间 ${s.date_from || "最早"} ~ ${s.date_to || "至今"}`;
-  $("oeStatsHint").textContent = `${scope}（合计 = 支出 − 收入；供应商补偿等其他收入为负数参与冲减）`;
-  $("oeListHint").textContent = `${scope} · 净合计 ${fmtMoney(s.range_total)}`;
+  $("oeStatsHint").textContent = income
+    ? `${scope} · 仅统计其他收入（含入库单带出的供应商补偿；支出请切到顶部「其他支出」）`
+    : `${scope} · 仅统计其他支出（其他收入请切到顶部「其他收入」）`;
+  $("oeListHint").textContent = `${scope} · ${label}合计 ${fmtMoney(s.range_total)}`;
 }
 
 function renderOeTables(s) {
-  // 按日：柱状图（红=支出，绿=收入）+ 明细表
+  const income = OE_SCOPE === "income";
+  const label = income ? "收入" : "支出";
+  const color = income ? "var(--green)" : "var(--red)";
+  const barCls = income ? "up" : "down";       // 收入柱绿色、支出柱红色
+  const empty = `该区间暂无${label}`;
+  // 按日：柱状图 + 明细表
   const days = s.by_day || [];
   const box = $("oeChart");
   if (!days.length) {
-    box.innerHTML = `<div class="mv-chart-title">该区间暂无收支</div>`;
+    box.innerHTML = `<div class="mv-chart-title">${empty}</div>`;
   } else {
     const max = Math.max(1, ...days.map((d) => Math.abs(d.amount)));
     const ordered = [...days].reverse();  // 图表按时间正序
-    box.innerHTML = `<div class="mv-chart-title">每日净额（元 = 支出 − 收入，共 ${days.length} 天有记录）</div><div class="mv-chart">` +
+    box.innerHTML = `<div class="mv-chart-title">每日${label}（元，共 ${days.length} 天有${label}）</div><div class="mv-chart">` +
       ordered.map((d) => `<div class="mv-col" title="${d.date}：${fmtMoney(d.amount)}（${d.count} 笔）">
         <span class="mv-val">${Math.round(d.amount)}</span>
-        <div class="mv-track"><div class="mv-bar ${(d.amount || 0) < 0 ? "up" : "down"}" style="height:${Math.max(2, Math.round((Math.abs(d.amount) / max) * 100))}%"></div></div>
+        <div class="mv-track"><div class="mv-bar ${barCls}" style="height:${Math.max(2, Math.round((Math.abs(d.amount) / max) * 100))}%"></div></div>
         <div class="mv-x">${d.date.slice(5)}</div></div>`).join("") + `</div>`;
   }
   const dt = $("oeDayTable");
-  dt.innerHTML = `<thead><tr><th>日期</th><th class="num">笔数</th><th class="num">净额</th></tr></thead><tbody>` +
+  dt.innerHTML = `<thead><tr><th>日期</th><th class="num">笔数</th><th class="num">金额</th></tr></thead><tbody>` +
     (days.length
       ? days.map((d) => `<tr><td class="mono">${d.date}</td><td class="num mono">${d.count}</td>
-          <td class="num mono" style="color:${(d.amount || 0) < 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(d.amount)}</td></tr>`).join("") +
+          <td class="num mono" style="color:${color}">${fmtMoney(d.amount)}</td></tr>`).join("") +
         `<tr><td><b>合计</b></td><td class="num mono"><b>${s.range_count}</b></td><td class="num mono"><b>${fmtMoney(s.range_total)}</b></td></tr>`
-      : `<tr><td colspan="3" class="empty">该区间暂无收支</td></tr>`) + `</tbody>`;
+      : `<tr><td colspan="3" class="empty">${empty}</td></tr>`) + `</tbody>`;
 
   const months = s.by_month || [];
   const mt = $("oeMonthTable");
-  mt.innerHTML = `<thead><tr><th>月份</th><th class="num">笔数</th><th class="num">净额</th><th class="num">环比</th></tr></thead><tbody>` +
+  // 环比颜色：支出涨=红（花得多），收入涨=绿（收得多）
+  const upColor = income ? "var(--green)" : "var(--red)";
+  const downColor = income ? "var(--red)" : "var(--green)";
+  mt.innerHTML = `<thead><tr><th>月份</th><th class="num">笔数</th><th class="num">金额</th><th class="num">环比</th></tr></thead><tbody>` +
     (months.length
       ? months.map((m, i) => {
         const prev = months[i + 1];  // 倒序排列，下一项即上一个月
         const delta = prev && prev.amount ? ((m.amount - prev.amount) / Math.abs(prev.amount)) * 100 : null;
         const txt = delta == null ? "—" : `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}%`;
-        const color = delta == null ? "var(--muted)" : delta >= 0 ? "var(--red)" : "var(--green)";
+        const dcolor = delta == null ? "var(--muted)" : delta >= 0 ? upColor : downColor;
         return `<tr><td class="mono">${m.month}</td><td class="num mono">${m.count}</td>
-          <td class="num mono" style="color:${(m.amount || 0) < 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(m.amount)}</td>
-          <td class="num mono" style="color:${color}">${txt}</td></tr>`;
+          <td class="num mono" style="color:${color}">${fmtMoney(m.amount)}</td>
+          <td class="num mono" style="color:${dcolor}">${txt}</td></tr>`;
       }).join("") +
         `<tr><td><b>合计</b></td><td class="num mono"><b>${s.range_count}</b></td><td class="num mono"><b>${fmtMoney(s.range_total)}</b></td><td></td></tr>`
-      : `<tr><td colspan="4" class="empty">该区间暂无收支</td></tr>`) + `</tbody>`;
+      : `<tr><td colspan="4" class="empty">${empty}</td></tr>`) + `</tbody>`;
 
   const cats = s.by_category || [];
   const pct = (v) => (s.range_total ? (v / s.range_total) * 100 : 0);
   const ct = $("oeCatTable");
-  ct.innerHTML = `<thead><tr><th>费用类型</th><th class="num">笔数</th><th class="num">净额</th><th class="num">占比</th></tr></thead><tbody>` +
+  ct.innerHTML = `<thead><tr><th>${income ? "收入类型" : "费用类型"}</th><th class="num">笔数</th><th class="num">金额</th><th class="num">占比</th></tr></thead><tbody>` +
     (cats.length
-      ? cats.map((c) => {
-        const neg = (c.amount || 0) < 0;
-        return `<tr><td><span class="badge ${neg ? "income" : "expense"}">${esc(c.category)}</span></td><td class="num mono">${c.count}</td>
-          <td class="num mono" style="color:${neg ? "var(--green)" : "var(--red)"}">${fmtMoney(c.amount)}</td><td class="num mono">${pct(c.amount).toFixed(1)}%</td></tr>`;
-      }).join("") +
+      ? cats.map((c) => `<tr><td><span class="badge ${income ? "income" : "expense"}">${esc(c.category)}</span></td><td class="num mono">${c.count}</td>
+          <td class="num mono" style="color:${color}">${fmtMoney(c.amount)}</td><td class="num mono">${pct(c.amount).toFixed(1)}%</td></tr>`).join("") +
         `<tr><td><b>合计</b></td><td class="num mono"><b>${s.range_count}</b></td><td class="num mono"><b>${fmtMoney(s.range_total)}</b></td><td class="num mono">100%</td></tr>`
-      : `<tr><td colspan="4" class="empty">该区间暂无收支</td></tr>`) + `</tbody>`;
+      : `<tr><td colspan="4" class="empty">${empty}</td></tr>`) + `</tbody>`;
 }
 
 /** 类型下拉建议 = 后端预设 + 已用过的自定义类型 */
