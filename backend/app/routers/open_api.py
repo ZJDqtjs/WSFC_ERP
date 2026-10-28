@@ -269,6 +269,8 @@ def _sku_rows_warehouse(db: Session) -> dict:
             "_amount": round(gross * (1 - ded), 6),
             "_gross": gross,
             "_freight": float(wp.freight or 0),
+            # 资料价分支没有结算记录：对外 shipping 取的就是资料上的每袋运费，这里必须一起给
+            "_freightFallback": float(wp.freight or 0),
             "_pack": float(pack_cost or 0),
             "_fixed": float(getattr(wp, "fixed_cost", 0.0) or 0.0),   # 固定成本（元/袋）
             "_cogs": 0.0,                                  # 没有实际入仓，商品成本无从得知
@@ -302,6 +304,10 @@ def _merge_into(dst: dict, src: dict) -> dict:
                 continue
             if k == "_lastDate":
                 cur[k] = max(cur.get(k) or "", v or "")
+                continue
+            # 每袋运费是「单价」不是金额：多仓同 SKU 时不能相加，取较大值
+            if k == "_freightFallback":
+                cur[k] = max(float(cur.get(k) or 0), float(v or 0))
                 continue
             cur[k] = float(cur.get(k) or 0) + float(v or 0)
     return dst
