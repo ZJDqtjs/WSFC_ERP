@@ -1509,6 +1509,9 @@ async function aiCollectStream(res, sink) {
           toast(`🧠 已记住：${obj.memory.text}`);
           if (typeof loadAiMemories === "function") loadAiMemories(true);
         }
+      } else if (obj.image_url) {
+        // 后端一开始就把「已存下的票据地址」回执过来：识别中途失败/重试时靠它取回原图
+        if (out.image_url) out.image_url(obj.image_url);
       } else if (obj.result) {
         if (!result || obj.source === "quick") result = obj.result;
       } else if (obj.error) {
@@ -2525,16 +2528,19 @@ function aiConfirmPrevJson() {
   }
   return JSON.stringify(o);
 }
-/** 追问重识别用的原图：优先内存里的 File（当次粘贴的），没了就用识别时存下的票据地址取回来 */
+/** 重识别/追问用的原图：优先内存里的 File（当次粘贴的），没了就用识别时存下的票据地址取回来。
+    识别成功后原图 File 会被释放（省内存），此时靠 result.image_url 再取一次，所以「重试」不会丢图。 */
 async function aiJobImageFile(job) {
   const f = AI_QUEUE_FILES.get(job.id);
   if (f) return f;
-  const url = (job.result && job.result.image_url) || "";
+  const url = job.image_url || (job.result && job.result.image_url) || "";
   if (!url) throw new Error("原图已丢失，请回到工作台重新粘贴这张图片");
   const res = await fetch(routePath(url));
   if (!res.ok) throw new Error("取回原图失败（HTTP " + res.status + "）");
   const blob = await res.blob();
-  return new File([blob], job.image_name || "invoice.jpg", { type: blob.type || "image/jpeg" });
+  const file = new File([blob], job.image_name || "invoice.jpg", { type: blob.type || "image/jpeg" });
+  AI_QUEUE_FILES.set(job.id, file);   // 缓存回来：再点一次重试不用重新下载
+  return file;
 }
 /** 连续对话：按用户这次的要求重新识别，结果直接更新到这条待办（可连续追问） */
 async function aiFollowup() {
@@ -2760,6 +2766,7 @@ function aiQueueSave() {
   try {
     const items = AI_QUEUE.slice(-AI_QUEUE_MAX).map((j) => ({
       id: j.id, kind: j.kind, text: j.text || "", image_name: j.image_name || "", source: j.source || "",
+      image_url: j.image_url || "",      // 原图地址：File 释放/刷新后仍能重试
       status: j.status, result: j.result || null, error: j.error || "",
       think: (j.think || "").slice(-AI_QUEUE_THINK_KEEP), answer: (j.answer || "").slice(-4000),
       created_at: j.created_at, finished_at: j.finished_at || "", submitted_at: j.submitted_at || "",
@@ -2789,8 +2796,10 @@ function aiQueueLoad() {
   } catch (e) { AI_QUEUE = []; }
   AI_QUEUE.forEach((j) => {
     if (j.status === "running") j.status = "waiting";            // 上次没跑完 → 重新排队
-    if (j.kind === "image" && ["waiting", "running"].includes(j.status)) {
-      j.status = "error";                                        // 原图只在内存里，刷新后无法续跑
+    // 图片任务：原图 File 只在内存里，但后端存下的票据地址（image_url）能让它续跑/重试；
+    // 连地址都没有（还没开始就刷新了）才算丢图
+    if (j.kind === "image" && ["waiting", "running"].includes(j.status) && !j.image_url) {
+      j.status = "error";
       j.error = "页面刷新后原图已丢失，请回到工作台重新粘贴这张图片";
     }
   });
@@ -2800,6 +2809,7 @@ function aiQueueLoad() {
 function aiQueueAdd(job) {
   const j = {
     id: aiQueueUid(), kind: job.kind, text: job.text || "", image_name: job.image_name || "",
+    image_url: "",                    // 后端存下的票据地址（识别一开始就回执，重试靠它取回原图）
     source: job.source || "", status: "waiting", result: null, error: "", think: "", answer: "",
     created_at: new Date().toISOString(), finished_at: "", submitted_at: "", elapsed: 0,
   };
@@ -2835,6 +2845,8 @@ async function aiQueueTick() {
       evaRenderLive();
     },
     stage: (s) => { job.stage = s; aiSetStage(s); evaRenderLive(); },
+    // 后端存好图就回执地址：即使这次识别失败，重试也能凭它取回原图
+    image_url: (u) => { job.image_url = u; aiQueueSave(); },
     answer: (s) => {
       job.answer = (job.answer + s).slice(-4000);
       aiAppendAnswer(s);
@@ -2844,8 +2856,8 @@ async function aiQueueTick() {
   try {
     let result;
     if (job.kind === "image") {
-      const f = AI_QUEUE_FILES.get(job.id);
-      if (!f) throw new Error("页面刷新后原图已丢失，请重新粘贴/选择这张图片");
+      // 内存里的 File 没了（识别成功后已释放 / 页面刷新过）→ 用识别时存下的票据地址取回原图
+      const f = await aiJobImageFile(job);
       const fd = new FormData();
       fd.append("file", f);
       if (job.text) fd.append("text", job.text);
@@ -2860,6 +2872,7 @@ async function aiQueueTick() {
     }
     job.status = "done";
     job.result = result;
+    if (result && result.image_url) job.image_url = result.image_url;   // 兜底：早期回执没收到也补上
     job.finished_at = new Date().toISOString();
     job.elapsed = Math.round((Date.now() - started) / 1000);
     aiFinishThinking("队列识别完成");
@@ -3028,7 +3041,13 @@ function evaDelete(id) {
 function evaRetry(id) {
   const j = AI_QUEUE.find((x) => x.id === id);
   if (!j) return;
-  if (j.kind === "image" && !AI_QUEUE_FILES.has(j.id)) { toast("原图已丢失，请回到工作台重新粘贴这张图片"); return; }
+  if (j.status === "running") { toast("这条正在识别中，等这次跑完再重试"); return; }
+  // 原图：内存里的 File 优先；识别成功后会释放，此时用当时存下的票据地址（result.image_url）再取回来
+  const savedUrl = j.image_url || (j.result && j.result.image_url) || "";
+  if (j.kind === "image" && !AI_QUEUE_FILES.has(j.id) && !savedUrl) {
+    toast("原图已丢失（没存下票据地址），请回到工作台重新粘贴这张图片");
+    return;
+  }
   j.status = "waiting"; j.error = ""; j.think = ""; j.answer = "";
   aiQueueSave(); renderEva(); refreshEvaBadge(); aiQueueTick();
 }
