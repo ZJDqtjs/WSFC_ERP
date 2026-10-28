@@ -392,7 +392,7 @@ function daysAgo(n) {
 const PAGE_TITLES = {
   home: "工作台", stock: "库存管理",   inbound: "入库", outbound: "出库 / 销售",
   "warehouse-in": "入仓", "wingroup": "入仓批次明细", eva: "待办处理",
-  products: "商品", report: "财务报表", otherexp: "其他开支", payables: "待付款账单",
+  products: "商品", report: "财务报表", otherexp: "其他收支", payables: "待付款账单",
   import: "批量导入", jushuitan: "聚水潭关联",
   backup: "备份与恢复",
 };
@@ -965,7 +965,7 @@ function closeModal() {
 $("modalMask").addEventListener("click", (e) => { if (e.target.id === "modalMask") closeModal(); });
 
 /* ---------- 付款状态（已付款 / 待付款，默认已付款）---------- */
-/** 一组单选：用于弹窗表单（入库/入仓/出库/其他开支/手动记账统一用它） */
+/** 一组单选：用于弹窗表单（入库/入仓/出库/其他收支/手动记账统一用它） */
 function payRadios(name, current, hint) {
   const cur = current === "unpaid" ? "unpaid" : "paid";
   return `<div class="pay-radios">` + [["paid", "已付款"], ["unpaid", "待付款"]].map(([v, label]) =>
@@ -1336,7 +1336,7 @@ async function loadDashboard() {
     $("dashStats").innerHTML = `
       <div class="stat accent"><div class="label">今日收入</div><div class="value">${fmtMoney(t.revenue)}</div><div class="sub">${t.orders} 单</div></div>
       <div class="stat success"><div class="label">本月毛利</div><div class="value">${fmtMoney(m.gross)}</div><div class="sub">本月净利 ${fmtMoney(m.net)}</div></div>
-      <div class="stat red"><div class="label">本月其他开支</div><div class="value">${fmtMoney(m.other_expense || 0)}</div><div class="sub">今日 ${fmtMoney(t.other_expense || 0)} · 已计入净利</div></div>
+      <div class="stat red"><div class="label">本月其他收支</div><div class="value">${fmtMoney(m.other_expense || 0)}</div><div class="sub">今日 ${fmtMoney(t.other_expense || 0)} · 已计入净利</div></div>
       <div class="stat"><div class="label">本月收入</div><div class="value">${fmtMoney(m.revenue)}</div><div class="sub">${m.orders} 单</div></div>
       <div class="stat accent"><div class="label">当前库存总值</div><div class="value">${fmtMoney(d.stock_value)}</div><div class="sub">${d.product_count} 种商品</div></div>
       <div class="stat ${d.low_stock.length ? "danger" : "success"}"><div class="label">缺货商品</div><div class="value">${d.low_stock.length}</div><div class="sub">${d.low_stock.length ? "需要及时补货" : "库存充足"}</div></div>`;
@@ -3662,7 +3662,7 @@ function finRowHtml(id) {
     <td><input class="in-qty" type="number" min="0" step="any" placeholder="0" value="${esc(val("qty"))}" oninput="finRowCalc(this)" style="width:84px;" /></td>
     <td><input class="in-price" type="number" min="0" step="any" placeholder="0.00" value="${esc(val("price"))}" oninput="finRowCalc(this)" style="width:92px;" /></td>
     <td class="num in-amount-cell">—</td>
-    <td><input class="in-freight" type="number" min="0" step="any" placeholder="留空" value="${esc(val("freight"))}" oninput="finRowCalc(this)" style="width:74px;" title="运费（默认空，选填）：计入这行的批次成本，并同步「其他开支」备查" /></td>
+    <td><input class="in-freight" type="number" min="0" step="any" placeholder="留空" value="${esc(val("freight"))}" oninput="finRowCalc(this)" style="width:74px;" title="运费（默认空，选填）：计入这行的批次成本，并同步「其他收支」备查" /></td>
     <td><input class="in-handling" type="number" min="0" step="any" placeholder="留空" value="${esc(val("handling"))}" oninput="finRowCalc(this)" style="width:74px;" title="装卸费（默认空，选填）：同运费" /></td>
     <td class="fin-remark-cell">
       <textarea id="finRemark_${id}" class="fin-remark" rows="1" placeholder="备注（可 Ctrl+V 粘贴图片）" oninput="finRemember(this)" onpaste="pasteRemarkFiles('finRemark_${id}', event)"></textarea>
@@ -6203,17 +6203,17 @@ function inboundBlockHtml(idx) {
       <div class="field">
         <label>调整（抹零 / 凑整）</label>
         <input class="in-adjust" type="number" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" />
-        <div class="field-hint in-adjust-hint">正=多付，负=少付；差额自动记「金额调整」其他开支，商品成本不变</div>
+        <div class="field-hint in-adjust-hint">正=多付，负=少付；差额自动记「金额调整」其他收支，商品成本不变</div>
       </div>
       <div class="field">
         <label>运费（选填）</label>
         <input class="in-freight" type="number" min="0" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" />
-        <div class="field-hint in-freight-hint">计入该批次成本 → 体现在这个品的毛利；并自动记入「其他开支」备查</div>
+        <div class="field-hint in-freight-hint">计入该批次成本 → 体现在这个品的毛利；并自动记入「其他收支」备查</div>
       </div>
       <div class="field">
         <label>装卸费（选填）</label>
         <input class="in-handling" type="number" min="0" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" />
-        <div class="field-hint">同运费：入成本、进「其他开支」，不强制填</div>
+        <div class="field-hint">同运费：入成本、进「其他收支」，不强制填</div>
       </div>
       <div class="field"><label>供应商</label><input class="in-supplier" placeholder="供应商名称" /></div>
       <div class="field"><label>日期 *</label><input class="in-date" type="date" /></div>
@@ -6366,11 +6366,11 @@ function calcInboundBlock(el) {
   if (amt) amt.value = base.toFixed(2);
   const setHint = (sel, html) => { const e = b.querySelector(sel); if (e) e.innerHTML = html; };
   setHint(".in-adjust-hint", adj
-    ? `实付 ¥${(base + adj).toFixed(2)}（商品金额 ¥${base.toFixed(2)} ${adj > 0 ? "+" : "-"} ${Math.abs(adj).toFixed(2)}）· 差额记「金额调整」其他开支`
-    : "正=多付，负=少付；差额自动记「金额调整」其他开支，商品成本不变");
+    ? `实付 ¥${(base + adj).toFixed(2)}（商品金额 ¥${base.toFixed(2)} ${adj > 0 ? "+" : "-"} ${Math.abs(adj).toFixed(2)}）· 差额记「金额调整」其他收支`
+    : "正=多付，负=少付；差额自动记「金额调整」其他收支，商品成本不变");
   setHint(".in-freight-hint", fee > 0
-    ? `批次成本 ¥${(base + fee).toFixed(2)}（商品 ${base.toFixed(2)} + 运费/装卸 ${fee.toFixed(2)}）· 毛利随销量扣减，并同步记入「其他开支」`
-    : "计入该批次成本 → 体现在这个品的毛利；并自动记入「其他开支」备查");
+    ? `批次成本 ¥${(base + fee).toFixed(2)}（商品 ${base.toFixed(2)} + 运费/装卸 ${fee.toFixed(2)}）· 毛利随销量扣减，并同步记入「其他收支」`
+    : "计入该批次成本 → 体现在这个品的毛利；并自动记入「其他收支」备查");
   const factor = p && unit ? (p.conversions || {})[unit] : null;
   setHint(".in-unit-hint", factor ? `1${esc(unit)} = ${fmtNum(factor)} ${esc(p.base_unit)}` : "");
   syncPartialPay(b);   // 应付合计变了：部分付款的比例 / 未付跟着重算（要先算，下面小计才读得到已付）
@@ -6605,7 +6605,7 @@ async function loadInbounds() {
       <td><b>${esc(r.product_name)}</b></td>
       <td>${fmtNum(r.quantity)} ${r.unit}</td>
       <td class="num mono">${fmtMoney(r.unit_price)}/${r.unit}</td>
-      <td class="num mono">${fmtMoney(r.final_amount != null ? r.final_amount : r.total_amount)}${r.adjust_amount ? `<div class="muted" style="font-size:11px;">调整 ${r.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(r.adjust_amount))}</div>` : ""}${(r.freight || r.handling) ? `<div class="muted" style="font-size:11px;" title="已计入批次成本（体现在该品毛利），并同步「其他开支」备查">${r.freight ? "运费 " + fmtMoney(r.freight) : ""}${r.freight && r.handling ? " · " : ""}${r.handling ? "装卸 " + fmtMoney(r.handling) : ""}</div>` : ""}${r.pay_status === "partial" ? `<div class="muted" style="font-size:11px;" title="应付合计 ${fmtMoney(r.due_amount)}">已付 ${fmtMoney(r.paid_amount)} · 未付 ${fmtMoney(r.unpaid_amount)}</div>` : ""}${r.compensation ? `<div class="muted" style="font-size:11px;" title="供应商补偿：已记「其他开支 → 供应商补偿」负数行，冲减期间费用、计入财务报表净利">补偿 -${fmtMoney(r.compensation)}</div>` : ""}</td>
+      <td class="num mono">${fmtMoney(r.final_amount != null ? r.final_amount : r.total_amount)}${r.adjust_amount ? `<div class="muted" style="font-size:11px;">调整 ${r.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(r.adjust_amount))}</div>` : ""}${(r.freight || r.handling) ? `<div class="muted" style="font-size:11px;" title="已计入批次成本（体现在该品毛利），并同步「其他收支」备查">${r.freight ? "运费 " + fmtMoney(r.freight) : ""}${r.freight && r.handling ? " · " : ""}${r.handling ? "装卸 " + fmtMoney(r.handling) : ""}</div>` : ""}${r.pay_status === "partial" ? `<div class="muted" style="font-size:11px;" title="应付合计 ${fmtMoney(r.due_amount)}">已付 ${fmtMoney(r.paid_amount)} · 未付 ${fmtMoney(r.unpaid_amount)}</div>` : ""}${r.compensation ? `<div class="muted" style="font-size:11px;" title="供应商补偿：已记「其他收支 → 供应商补偿」负数行，冲减期间费用、计入财务报表净利">补偿 -${fmtMoney(r.compensation)}</div>` : ""}</td>
       <td>${esc(r.supplier) || "—"}</td>
       <td>${esc(r.operator) || "—"}</td>
       <td>${r.date}</td>
@@ -6637,12 +6637,12 @@ function editInbound(id) {
       <div class="field">
         <label>运费</label>
         <input id="edInFreight" type="number" min="0" step="any" value="${r.freight || ""}" placeholder="0.00" oninput="edInCalc(${r.total_amount || 0})" />
-        <div class="field-hint">选填；计入该批次成本（体现在这个品的毛利），并同步记入「其他开支」</div>
+        <div class="field-hint">选填；计入该批次成本（体现在这个品的毛利），并同步记入「其他收支」</div>
       </div>
       <div class="field">
         <label>装卸费</label>
         <input id="edInHandling" type="number" min="0" step="any" value="${r.handling || ""}" placeholder="0.00" oninput="edInCalc(${r.total_amount || 0})" />
-        <div class="field-hint">选填；日期随入库单日期，清零即删掉对应的「其他开支」</div>
+        <div class="field-hint">选填；日期随入库单日期，清零即删掉对应的「其他收支」</div>
       </div>
       <div class="field">
         <label>供应商补偿</label>
@@ -6666,14 +6666,14 @@ function editInbound(id) {
   edInCompHint();
 }
 
-/** 供应商补偿的实时说明：记一笔负数的其他开支，冲减期间费用、计入报表净利 */
+/** 供应商补偿的实时说明：记一笔负数的其他收支，冲减期间费用、计入报表净利 */
 function edInCompHint() {
   const el = $("edInCompHint");
   if (!el) return;
   const v = parseFloat($("edInComp")?.value) || 0;
   el.innerHTML = v > 0
-    ? `保存后自动记一笔「其他开支 → 供应商补偿 <b class="mono">-¥${fmtMoney(v)}</b>」（日期=入库日期，已付款），冲减期间费用、计入财务报表净利；不改货款与批次成本`
-    : "选填：供应商退的钱 / 赔偿。保存后自动记一笔负数的其他开支计入财务报表；填 0 或清空即取消";
+    ? `保存后自动记一笔「其他收支 → 供应商补偿 <b class="mono">-¥${fmtMoney(v)}</b>」（日期=入库日期，已付款），冲减期间费用、计入财务报表净利；不改货款与批次成本`
+    : "选填：供应商退的钱 / 赔偿。保存后自动记一笔负数的其他收支计入财务报表；填 0 或清空即取消";
 }
 
 /** 改单时实时显示「货款 + 运费 + 装卸 = 批次到岸成本」，避免改完不知道成本变成多少 */
@@ -6682,8 +6682,8 @@ function edInCalc(total) {
   if (!el) return;
   const fee = (parseFloat($("edInFreight")?.value) || 0) + (parseFloat($("edInHandling")?.value) || 0);
   el.innerHTML = fee > 0
-    ? `批次成本 = 货款 ${fmtMoney(total)} + 运费/装卸 ${fmtMoney(fee)} = <b>${fmtMoney(total + fee)}</b>（按 FIFO 随销量扣减，同步更新该品毛利与「其他开支」）`
-    : "不填=没有运费/装卸费（对应「其他开支」里的运费、装卸费记录会一并清掉）";
+    ? `批次成本 = 货款 ${fmtMoney(total)} + 运费/装卸 ${fmtMoney(fee)} = <b>${fmtMoney(total + fee)}</b>（按 FIFO 随销量扣减，同步更新该品毛利与「其他收支」）`
+    : "不填=没有运费/装卸费（对应「其他收支」里的运费、装卸费记录会一并清掉）";
   // 运费/装卸费改了，部分付款的应付合计跟着变（已付金额不动，未付/比例重算）
   const box = document.querySelector("#modalBox .pay-part");
   if (box) {
@@ -7095,7 +7095,7 @@ function calcOutboundTotals() {
   const adjust = parseFloat($("outAdjust")?.value) || 0;   // 抹零/凑整：正=加收，负=抹零
   // 客户随货款一起付的关联结算（包材/人工/快递费，按上面的勾选）→ 计入实收金额与毛利
   const settleIn = settleIncomeLocal();
-  const finalAmount = amount + settleIn + adjust;           // 实收金额（差额记「金额调整」其他开支）
+  const finalAmount = amount + settleIn + adjust;           // 实收金额（差额记「金额调整」其他收支）
   $("otAmount").textContent = fmtMoney(amount);
   if ($("otFinal")) {
     $("otFinal").innerHTML = fmtMoney(finalAmount) + (settleIn
@@ -7103,7 +7103,7 @@ function calcOutboundTotals() {
   }
   $("otCogs").textContent = fmtMoney(cogs);
   $("otGross").textContent = fmtMoney(amount + settleIn - cogs);
-  // 净利按实收口径：抹零/凑整的差额已计入其他开支，这里同步扣掉，与报表口径一致
+  // 净利按实收口径：抹零/凑整的差额已计入其他收支，这里同步扣掉，与报表口径一致
   $("otNet").textContent = fmtMoney(finalAmount - cogs - fee);
   const hint = $("settleHint");
   if (hint) {
@@ -7138,7 +7138,7 @@ async function submitOutbound() {
     });
     const warns = (r.warnings || []).length ? "\n⚠ " + r.warnings.join("；") : "";
     const settleTip = settleIn ? `（实收含${settleCatsLabel(settleCats())} ${fmtMoney(settleIn)}）` : "";
-    toast("出库成功" + (adjust ? `（调整 ${adjust > 0 ? "+" : "-"}${Math.abs(adjust).toFixed(2)}，已记其他开支）` : "") + settleTip + (payStatus === "unpaid" ? "（待付款，已进待付款账单）" : "") + warns, 3800);
+    toast("出库成功" + (adjust ? `（调整 ${adjust > 0 ? "+" : "-"}${Math.abs(adjust).toFixed(2)}，已记其他收支）` : "") + settleTip + (payStatus === "unpaid" ? "（待付款，已进待付款账单）" : "") + warns, 3800);
     $("outSaleBody").innerHTML = ""; outSaleRowId = 0; addSaleRow();
     clearPreview();
     $("outCustomer").value = "";
@@ -7843,13 +7843,13 @@ async function batchDeleteOutbounds() {
 
 /* =============== 报表 =============== */
 /* 报表两级视图：全仓总览（所有分仓合计）/ 单仓总览（默认当前分仓，可切换查看其他分仓） */
-/* =============== 报表口径：排除其他开支（默认开启） ===============
-   开启后财务报表不计入「其他开支」（经营分析 → 其他开支）的款项，只看商品售卖利润。
+/* =============== 报表口径：排除其他收支（默认开启） ===============
+   开启后财务报表不计入「其他收支」（经营分析 → 其他收支）的款项，只看商品售卖利润。
    偏好存在本机，web 端与 PWA 端共用同一个 localStorage key。 */
 const EXCLUDE_OTHER_KEY = "erp_exclude_other_expense";
 let EXCLUDE_OTHER = localStorage.getItem(EXCLUDE_OTHER_KEY) !== "0";   // 无记录时默认开启
 
-/** 报表请求附加的口径参数（前后端都默认含其他开支，所以这里总是显式声明） */
+/** 报表请求附加的口径参数（前后端都默认含其他收支，所以这里总是显式声明） */
 const excludeOtherQs = () => (EXCLUDE_OTHER ? "&exclude_other=1" : "&exclude_other=0");
 
 /** 把本机偏好回显到报表页的口径开关（初始化时调用） */
@@ -7863,7 +7863,7 @@ function toggleExcludeOther(chk) {
   EXCLUDE_OTHER = !!chk.checked;
   localStorage.setItem(EXCLUDE_OTHER_KEY, EXCLUDE_OTHER ? "1" : "0");
   syncExcludeOtherHint();
-  toast(EXCLUDE_OTHER ? "已排除其他开支：只看商品售卖利润" : "已计入其他开支：含全部期间费用");
+  toast(EXCLUDE_OTHER ? "已排除其他收支：只看商品售卖利润" : "已计入其他收支：含全部期间费用");
   loadReport();
 }
 
@@ -8020,10 +8020,10 @@ async function loadReport() {
   }
   const rh = $("repRangeHint");
   if (rh) {
-    // 口径：明确「其他开支」算没算进来，避免和「其他开支」页的数字对不上
+    // 口径：明确「其他收支」算没算进来，避免和「其他收支」页的数字对不上
     const caliber = rep.exclude_other_expense
-      ? `已排除其他开支 ${fmtMoney(rep.excluded_other_expense)}`
-      : `含其他开支 ${fmtMoney(rep.excluded_other_expense)}`;
+      ? `已排除其他收支 ${fmtMoney(rep.excluded_other_expense)}`
+      : `含其他收支 ${fmtMoney(rep.excluded_other_expense)}`;
     rh.textContent = `统计区间 ${from || "最早"} ~ ${to || "最新"}`
       + (all
         ? ` · 全仓合计${rep.warehouse_count ? `（${rep.warehouse_count} 个分仓）` : ""}`
@@ -8053,7 +8053,7 @@ async function loadReport() {
     <div class="stat amber"><div class="label">${pre}结转成本</div><div class="value">${fmtMoney(rep.cogs)}</div><div class="sub">含关联结算 ${fmtMoney(packTotal)}${wiCogs ? ` · 含入仓 ${fmtMoney(wiCogs)}` : ""}</div></div>
     ${rep.brush_cost ? `<div class="stat red"><div class="label">${pre}刷单成本</div><div class="value">${fmtMoney(rep.brush_cost)}</div><div class="sub">芳谊放单仓 · 已从毛利扣减</div></div>` : ""}
     <div class="stat green"><div class="label">${pre}毛利</div><div class="value">${fmtMoney(rep.gross_profit)}</div><div class="sub">${rep.revenue ? ((rep.gross_profit / rep.revenue) * 100).toFixed(1) + "%" : "—"}</div></div>
-    <div class="stat red"><div class="label">${pre}期间费用</div><div class="value">${fmtMoney(rep.expense)}</div><div class="sub">其他开支 ${fmtMoney(rep.other_expense)} · 手工记账 ${fmtMoney(rep.manual_expense)}</div></div>
+    <div class="stat red"><div class="label">${pre}期间费用</div><div class="value">${fmtMoney(rep.expense)}</div><div class="sub">其他收支 ${fmtMoney(rep.other_expense)} · 手工记账 ${fmtMoney(rep.manual_expense)}</div></div>
     <div class="stat ${rep.net_profit >= 0 ? "green" : "red"}"><div class="label">${pre}净利润</div><div class="value">${fmtMoney(rep.net_profit)}</div></div>
     <div class="stat"><div class="label">${pre}本期进货</div><div class="value">${fmtMoney(rep.purchase)}</div></div>
     <div class="stat red"><div class="label">${pre}本期总支出</div><div class="value">${fmtMoney(rep.total_expense)}</div><div class="sub">含采购 ${fmtMoney(rep.purchase)} · 期间费用 ${fmtMoney(rep.expense)}</div></div>
@@ -8326,8 +8326,8 @@ function repTab(btn) {
 }
 /* 支出下钻（二级页面）：点「按日/按月」表里的日期或金额，展开该时段该来源的逐笔构成。
    数据直接用当前区间已加载的 REP_EXP_ITEMS，不再请求接口；key 为空表示整个查询区间（合计行）。 */
-const REP_DRILL_SRC = { purchase: "采购", other: "其他开支", manual: "手工记账", brush: "刷单成本" };
-const REP_SRC_TABS = [["", "全部来源"], ["采购", "采购（进货）"], ["其他开支", "其他开支"],
+const REP_DRILL_SRC = { purchase: "采购", other: "其他收支", manual: "手工记账", brush: "刷单成本" };
+const REP_SRC_TABS = [["", "全部来源"], ["采购", "采购（进货）"], ["其他收支", "其他收支"],
                       ["手工记账", "手工记账"], ["刷单成本", "刷单成本"]];
 let REP_DRILL = null;
 
@@ -8407,7 +8407,7 @@ function repDrillToItems() {
   if (t) t.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
-/* 支出统计（按日 / 按月）：其他开支 + 手工记账支出，合计即「期间费用」；不含采购支出 */
+/* 支出统计（按日 / 按月）：其他收支 + 手工记账支出，合计即「期间费用」；不含采购支出 */
 function repExpSwitch(btn) {
   $("repExpSeg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
   const p = btn.dataset.panel;
@@ -8417,7 +8417,7 @@ function renderExpenseTables(rep) {
   const days = rep.expense_by_day || [];
   const months = rep.expense_by_month || [];
   const purchase = rep.purchase || 0;                                  // 采购 / 进货
-  const other = rep.other_expense || 0;                                // 其他开支
+  const other = rep.other_expense || 0;                                // 其他收支
   const manual = rep.manual_expense || 0;                              // 手工记账
   const period = rep.expense || 0;                                     // 期间费用（从毛利中扣减）
   const brush = rep.brush_cost || 0;                                   // 刷单成本（放单仓刷单单）
@@ -8428,7 +8428,7 @@ function renderExpenseTables(rep) {
   const hint = $("repExpHint");
   if (hint) {
     hint.textContent = total
-      ? `按日 / 按月列出各项支出，合计 ${fmtMoney(total)} ＝ 采购 ＋ 其他开支 ＋ 手工记账 ＋ 刷单成本`
+      ? `按日 / 按月列出各项支出，合计 ${fmtMoney(total)} ＝ 采购 ＋ 其他收支 ＋ 手工记账 ＋ 刷单成本`
         + " · 点日期或金额可展开该日/该月的构成明细"
       : "本期无支出";
     if (days.length > MAX_DAYS) hint.textContent += ` · 按日仅列最近 ${MAX_DAYS} 天`;
@@ -8471,7 +8471,7 @@ function renderExpenseTables(rep) {
     : `<td class="num mono" style="color:${color}">—</td>`);
   const amountCells = (r) =>
     cell(r.purchase, "#1989fa", keyOf(r), "purchase", "展开采购支出构成") +
-    cell(r.other_expense, "#f97316", keyOf(r), "other", "展开其他开支构成") +
+    cell(r.other_expense, "#f97316", keyOf(r), "other", "展开其他收支构成") +
     cell(r.manual_expense, "#6366f1", keyOf(r), "manual", "展开手工记账构成") +
     cell(r.brush_expense, "#e11d48", keyOf(r), "brush", "展开刷单成本构成（放单仓刷单单）") +
     `<td class="num mono"><b>${r.total ? drill(keyOf(r), "", fmtMoney(r.total), "展开全部支出明细") : "—"}</b></td>`;
@@ -8479,7 +8479,7 @@ function renderExpenseTables(rep) {
   const totalCells = (label, rows) =>
     `<tr><td><b>${label}</b></td>` +
     `<td class="num mono" style="color:#1989fa"><b>${drill("", "purchase", fmtMoney(purchase), "展开本期采购构成")}</b></td>` +
-    `<td class="num mono" style="color:#f97316"><b>${drill("", "other", fmtMoney(other), "展开本期其他开支构成")}</b></td>` +
+    `<td class="num mono" style="color:#f97316"><b>${drill("", "other", fmtMoney(other), "展开本期其他收支构成")}</b></td>` +
     `<td class="num mono" style="color:#6366f1"><b>${drill("", "manual", fmtMoney(manual), "展开本期手工记账构成")}</b></td>` +
     `<td class="num mono" style="color:#e11d48"><b>${drill("", "brush", fmtMoney(brush), "展开本期刷单成本明细")}</b></td>` +
     `<td class="num mono"><b>${drill("", "", fmtMoney(total), "展开本期全部支出明细")}</b></td>` +
@@ -8489,7 +8489,7 @@ function renderExpenseTables(rep) {
   const dt = $("repExpDayTable");
   const dayRows = days.slice(0, MAX_DAYS);
   dt.innerHTML = `<thead><tr>
-    <th>日期</th><th class="num">采购支出</th><th class="num">其他开支</th><th class="num">手工记账</th>
+    <th>日期</th><th class="num">采购支出</th><th class="num">其他收支</th><th class="num">手工记账</th>
     <th class="num">刷单成本</th>
     <th class="num">支出合计</th><th class="num">占比</th><th class="num">笔数</th></tr></thead><tbody>` +
     (dayRows.length
@@ -8504,7 +8504,7 @@ function renderExpenseTables(rep) {
   // 按月（多一列环比：与上个月比）
   const mt = $("repExpMonthTable");
   mt.innerHTML = `<thead><tr>
-    <th>月份</th><th class="num">采购支出</th><th class="num">其他开支</th><th class="num">手工记账</th>
+    <th>月份</th><th class="num">采购支出</th><th class="num">其他收支</th><th class="num">手工记账</th>
     <th class="num">刷单成本</th>
     <th class="num">支出合计</th><th class="num">环比</th><th class="num">笔数</th></tr></thead><tbody>` +
     (months.length
@@ -8523,8 +8523,8 @@ function renderExpenseTables(rep) {
     (months.length ? `<tfoot>${totalCells(`合计（${months.length} 个月 · ${sumCount(months)} 笔）`, months)}</tfoot>` : "");
 }
 
-/* 支出逐笔明细：采购 / 其他开支 / 手工记账 / 刷单成本，逐条列出（与「支出合计」同口径） */
-const REP_EXP_SRC_COLORS = { "采购": "#1989fa", "其他开支": "#f97316", "手工记账": "#6366f1", "刷单成本": "#e11d48" };
+/* 支出逐笔明细：采购 / 其他收支 / 手工记账 / 刷单成本，逐条列出（与「支出合计」同口径） */
+const REP_EXP_SRC_COLORS = { "采购": "#1989fa", "其他收支": "#f97316", "手工记账": "#6366f1", "刷单成本": "#e11d48" };
 let REP_EXP_ITEMS = [];
 let REP_EXP_API_OK = true;
 let REP_EXP_WITH_WH = false;   // 全仓总览：逐笔明细来自多个分仓，需要显示来源分仓列
@@ -8535,11 +8535,11 @@ function renderExpenseItems(rep) {
   REP_EXP_WITH_WH = !!rep.is_all;
   const sel = $("repExpItemSrc");
   if (sel) sel.value = "";   // 换区间后重置筛选，避免"看不到数据"的困惑
-  // 已排除其他开支时，逐笔明细里不会有该来源，把筛选项置灰并说明原因
-  const optOther = sel ? sel.querySelector('option[value="其他开支"]') : null;
+  // 已排除其他收支时，逐笔明细里不会有该来源，把筛选项置灰并说明原因
+  const optOther = sel ? sel.querySelector('option[value="其他收支"]') : null;
   if (optOther) {
     optOther.disabled = !!rep.exclude_other_expense;
-    optOther.textContent = rep.exclude_other_expense ? "其他开支（已排除）" : "其他开支";
+    optOther.textContent = rep.exclude_other_expense ? "其他收支（已排除）" : "其他收支";
   }
   const kw = $("repExpItemSearch");
   if (kw) kw.value = "";
@@ -8595,7 +8595,7 @@ function renderExpenseItemRows() {
       : "");
 }
 
-/* 支出汇总：采购（进货）+ 其他开支 + 手工记账 = 全部支出；期间费用才是从毛利中扣减的部分 */
+/* 支出汇总：采购（进货）+ 其他收支 + 手工记账 = 全部支出；期间费用才是从毛利中扣减的部分 */
 function renderExpenseSummary(rep) {
   const box = $("repExpSummary");
   if (!box) return;
@@ -8613,7 +8613,7 @@ function renderExpenseSummary(rep) {
   const brushInput = rep.brush_input_cost || 0; // 其中「我填的刷单成本」原值
   const rows = [
     { name: "采购支出（进货）", value: purchase, color: "#1989fa", desc: "入库 / 进货金额（与「本期进货」同源，含入库运费/装卸费），已计入结转成本" },
-    { name: "其他开支", value: other, color: "#f97316", desc: "网线费 / 安装费 / 机器费 / 样品费等（构成见下表）" },
+    { name: "其他收支", value: other, color: "#f97316", desc: "网线费 / 安装费 / 机器费 / 样品费等（构成见下表）" },
     { name: "手工记账", value: manual, color: "#6366f1", desc: "财务流水里登记的支出（构成见下表）" },
     { name: "刷单成本", value: brush, color: "#e11d48", desc: "芳谊放单仓刷单单：快递+包装固定费 ＋ 刷单成本（逐单见「支出明细 / 来源=刷单成本」），已从毛利扣减，不重复计入期间费用" },
   ];
@@ -8629,12 +8629,12 @@ function renderExpenseSummary(rep) {
         <td><b>支出合计</b></td>
         <td class="num mono"><b>${fmtMoney(total)}</b></td>
         <td class="num mono"><b>100.0%</b></td>
-        <td class="muted">＝ 采购 ＋ 其他开支 ＋ 手工记账 ＋ 刷单成本</td></tr>
+        <td class="muted">＝ 采购 ＋ 其他收支 ＋ 手工记账 ＋ 刷单成本</td></tr>
       <tr>
         <td>其中：期间费用</td>
         <td class="num mono">${fmtMoney(period)}</td>
         <td class="num mono">${pctOf(period).toFixed(1)}%</td>
-        <td class="muted">其他开支 ＋ 手工记账；<b>毛利 − 期间费用 = 净利</b>（采购已计入结转成本、刷单成本已在毛利里扣过，都不重复扣）</td></tr>
+        <td class="muted">其他收支 ＋ 手工记账；<b>毛利 − 期间费用 = 净利</b>（采购已计入结转成本、刷单成本已在毛利里扣过，都不重复扣）</td></tr>
       ${brush ? `<tr>
         <td>其中：刷单成本</td>
         <td class="num mono">${fmtMoney(brush)}</td>
@@ -8643,7 +8643,7 @@ function renderExpenseSummary(rep) {
     </tfoot>`;
 }
 
-/* 期间费用构成明细：其他开支（按类型）+ 手工记账（按类别） */
+/* 期间费用构成明细：其他收支（按类型）+ 手工记账（按类别） */
 function renderFeeBreakdown(rep) {
   const box = $("repFeeBreak");
   if (!box) return;
@@ -8656,19 +8656,19 @@ function renderFeeBreakdown(rep) {
   const total = rep.expense != null ? rep.expense : otherTotal + manualTotal;
 
   const rows = [
-    ...Object.entries(others).map(([name, v]) => ({ name, value: Number(v) || 0, src: "其他开支" })),
+    ...Object.entries(others).map(([name, v]) => ({ name, value: Number(v) || 0, src: "其他收支" })),
     ...Object.entries(manuals).map(([name, v]) => ({ name, value: Number(v) || 0, src: "手工记账" })),
   ].sort((a, b) => b.value - a.value);
 
   if (!rows.length) {
     box.innerHTML = `<div class="block-title">期间费用构成（从毛利中扣减）</div>
-      <div class="empty">本期无期间费用。其他开支请到「经营分析 → 其他开支」登记；手工记账见「流水」tab 的「＋ 手动记账」</div>`;
+      <div class="empty">本期无期间费用。其他收支请到「经营分析 → 其他收支」登记；手工记账见「流水」tab 的「＋ 手动记账」</div>`;
     return;
   }
   const pctOf = (v) => (total ? (v / total) * 100 : 0);
-  const COLORS = { "其他开支": "#f97316", "手工记账": "#6366f1" };
+  const COLORS = { "其他收支": "#f97316", "手工记账": "#6366f1" };
   box.innerHTML = `
-    <div class="block-title">期间费用构成（其他开支 ＋ 手工记账，从毛利中扣减）</div>
+    <div class="block-title">期间费用构成（其他收支 ＋ 手工记账，从毛利中扣减）</div>
     <div class="cost-stack">
       ${rows.filter((r) => r.value > 0).map((r) =>
         `<span title="${esc(r.name)} ${fmtMoney(r.value)}" style="width:${pctOf(r.value)}%;background:${COLORS[r.src]};"></span>`).join("")}
@@ -8683,7 +8683,7 @@ function renderFeeBreakdown(rep) {
       </tr>`).join("")}</tbody>
       <tfoot><tr>
         <td><b>期间费用合计</b></td>
-        <td class="muted">其他开支 ${fmtMoney(otherTotal)} + 手工记账 ${fmtMoney(manualTotal)}</td>
+        <td class="muted">其他收支 ${fmtMoney(otherTotal)} + 手工记账 ${fmtMoney(manualTotal)}</td>
         <td class="num mono"><b>${fmtMoney(total)}</b></td>
         <td class="num mono">100%</td>
       </tr></tfoot>
@@ -8729,11 +8729,36 @@ async function deleteFinance(id) {
   catch (e) { toast("失败：" + e.message); }
 }
 
-/* =============== 其他开支（仓库零散支出：网线费 / 安装费 / 机器费 / 样品费 …） =============== */
-let OE_ROWS = [];       // 当前区间的开支明细
-let OE_STATS = null;    // 当前区间的统计（今日/本月/区间/按日/按月/按类型）
+/* =============== 其他收支（仓库零散支出/收入：网线费 / 安装费 / 供应商补偿 …） ===============
+   数据上收入 = 负数的 OtherExpense（如入库单「供应商补偿」镜像行、手工登记的其他收入），
+   页面用「其他支出 / 其他收入」两个页签按正负分开看；报表期间费用按净额扣减。 */
+let OE_ROWS = [];       // 当前区间的收支明细
+let OE_STATS = null;    // 当前区间的统计（今日/本月/区间/按日/按月/按类型，净额）
 let OE_EDIT_ID = null;  // 正在修改的记录 id；null = 新增
+let OE_SCOPE = "expense";  // 当前页签：expense 其他支出 / income 其他收入（登记与列表都跟随它）
 let oeInited = false;
+
+/** 切「其他支出 / 其他收入」页签：列表按正负过滤，登记表单也跟着变成登记支出/收入 */
+function oeScope(btn) {
+  $("oeScopeSeg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
+  OE_SCOPE = btn.dataset.scope === "income" ? "income" : "expense";
+  if (OE_EDIT_ID) oeResetForm();   // 换页签时若正在编辑，先收起（避免支出表单改成收入记录）
+  oeApplyScope();
+  renderOtherExpenseList();
+}
+
+/** 登记表单跟随页签：标题 / 保存按钮文案 / 付款状态（收入立即到账，不进待付款账单） */
+function oeApplyScope() {
+  const income = OE_SCOPE === "income";
+  const title = $("oeFormTitle");
+  if (title) title.textContent = income ? "登记其他收入" : "登记其他支出";
+  const btn = $("oeSaveBtn");
+  if (btn) btn.textContent = income ? "✓ 保存收入" : "✓ 保存开支";
+  const payField = $("oePayField");
+  if (payField) payField.style.display = income ? "none" : "";
+  const cat = $("oeCategory");
+  if (cat) cat.placeholder = income ? "如：供应商补偿 / 返利 / 赔偿" : "如：网线费";
+}
 
 function lastMonthRange() {
   const n = new Date();
@@ -8763,7 +8788,7 @@ async function loadOtherExpensePage() {
     renderOeTables(stats);
     oeFillCategories(stats);
     renderOtherExpenseList();
-  } catch (e) { toast("加载其他开支失败：" + e.message); }
+  } catch (e) { toast("加载其他收支失败：" + e.message); }
 }
 
 function oeQuick(kind) {
@@ -8785,63 +8810,66 @@ function oeSwitchSeg(btn) {
 function renderOeStats(s) {
   const top = (s.by_category || [])[0];
   $("oeStats").innerHTML = `
-    <div class="stat red"><div class="label">今日开支</div><div class="value">${fmtMoney(s.today_total)}</div><div class="sub">${esc(s.today)}</div></div>
-    <div class="stat red"><div class="label">本月开支</div><div class="value">${fmtMoney(s.month_total)}</div><div class="sub">${esc(s.month)} 月合计</div></div>
-    <div class="stat amber"><div class="label">所选区间合计</div><div class="value">${fmtMoney(s.range_total)}</div><div class="sub">${s.range_count} 笔 · 日均 ${fmtMoney(s.range_daily_avg)}</div></div>
+    <div class="stat red"><div class="label">今日合计</div><div class="value">${fmtMoney(s.today_total)}</div><div class="sub">${esc(s.today)} · 支出−收入</div></div>
+    <div class="stat red"><div class="label">本月合计</div><div class="value">${fmtMoney(s.month_total)}</div><div class="sub">${esc(s.month)} 月 · 支出−收入</div></div>
+    <div class="stat amber"><div class="label">区间净合计</div><div class="value">${fmtMoney(s.range_total)}</div><div class="sub">${s.range_count} 笔 · 日均 ${fmtMoney(s.range_daily_avg)}</div></div>
     <div class="stat"><div class="label">区间天数</div><div class="value">${s.range_days || 0}</div><div class="sub">最大类型：${top ? esc(top.category) + " " + fmtMoney(top.amount) : "—"}</div></div>`;
   const scope = `统计区间 ${s.date_from || "最早"} ~ ${s.date_to || "至今"}`;
-  $("oeStatsHint").textContent = `${scope}（日均按区间天数计算）`;
-  $("oeListHint").textContent = `${scope} · 合计 ${fmtMoney(s.range_total)}`;
+  $("oeStatsHint").textContent = `${scope}（合计 = 支出 − 收入；供应商补偿等其他收入为负数参与冲减）`;
+  $("oeListHint").textContent = `${scope} · 净合计 ${fmtMoney(s.range_total)}`;
 }
 
 function renderOeTables(s) {
-  // 按日：柱状图（红=支出）+ 明细表
+  // 按日：柱状图（红=支出，绿=收入）+ 明细表
   const days = s.by_day || [];
   const box = $("oeChart");
   if (!days.length) {
-    box.innerHTML = `<div class="mv-chart-title">该区间暂无开支</div>`;
+    box.innerHTML = `<div class="mv-chart-title">该区间暂无收支</div>`;
   } else {
-    const max = Math.max(1, ...days.map((d) => d.amount));
+    const max = Math.max(1, ...days.map((d) => Math.abs(d.amount)));
     const ordered = [...days].reverse();  // 图表按时间正序
-    box.innerHTML = `<div class="mv-chart-title">每日开支（元，共 ${days.length} 天有支出）</div><div class="mv-chart">` +
+    box.innerHTML = `<div class="mv-chart-title">每日净额（元 = 支出 − 收入，共 ${days.length} 天有记录）</div><div class="mv-chart">` +
       ordered.map((d) => `<div class="mv-col" title="${d.date}：${fmtMoney(d.amount)}（${d.count} 笔）">
         <span class="mv-val">${Math.round(d.amount)}</span>
-        <div class="mv-track"><div class="mv-bar down" style="height:${Math.max(2, Math.round((d.amount / max) * 100))}%"></div></div>
+        <div class="mv-track"><div class="mv-bar ${(d.amount || 0) < 0 ? "up" : "down"}" style="height:${Math.max(2, Math.round((Math.abs(d.amount) / max) * 100))}%"></div></div>
         <div class="mv-x">${d.date.slice(5)}</div></div>`).join("") + `</div>`;
   }
   const dt = $("oeDayTable");
-  dt.innerHTML = `<thead><tr><th>日期</th><th class="num">笔数</th><th class="num">金额</th></tr></thead><tbody>` +
+  dt.innerHTML = `<thead><tr><th>日期</th><th class="num">笔数</th><th class="num">净额</th></tr></thead><tbody>` +
     (days.length
       ? days.map((d) => `<tr><td class="mono">${d.date}</td><td class="num mono">${d.count}</td>
-          <td class="num mono" style="color:var(--red)">${fmtMoney(d.amount)}</td></tr>`).join("") +
+          <td class="num mono" style="color:${(d.amount || 0) < 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(d.amount)}</td></tr>`).join("") +
         `<tr><td><b>合计</b></td><td class="num mono"><b>${s.range_count}</b></td><td class="num mono"><b>${fmtMoney(s.range_total)}</b></td></tr>`
-      : `<tr><td colspan="3" class="empty">该区间暂无开支</td></tr>`) + `</tbody>`;
+      : `<tr><td colspan="3" class="empty">该区间暂无收支</td></tr>`) + `</tbody>`;
 
   const months = s.by_month || [];
   const mt = $("oeMonthTable");
-  mt.innerHTML = `<thead><tr><th>月份</th><th class="num">笔数</th><th class="num">金额</th><th class="num">环比</th></tr></thead><tbody>` +
+  mt.innerHTML = `<thead><tr><th>月份</th><th class="num">笔数</th><th class="num">净额</th><th class="num">环比</th></tr></thead><tbody>` +
     (months.length
       ? months.map((m, i) => {
         const prev = months[i + 1];  // 倒序排列，下一项即上一个月
-        const delta = prev && prev.amount ? ((m.amount - prev.amount) / prev.amount) * 100 : null;
+        const delta = prev && prev.amount ? ((m.amount - prev.amount) / Math.abs(prev.amount)) * 100 : null;
         const txt = delta == null ? "—" : `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}%`;
         const color = delta == null ? "var(--muted)" : delta >= 0 ? "var(--red)" : "var(--green)";
         return `<tr><td class="mono">${m.month}</td><td class="num mono">${m.count}</td>
-          <td class="num mono" style="color:var(--red)">${fmtMoney(m.amount)}</td>
+          <td class="num mono" style="color:${(m.amount || 0) < 0 ? "var(--green)" : "var(--red)"}">${fmtMoney(m.amount)}</td>
           <td class="num mono" style="color:${color}">${txt}</td></tr>`;
       }).join("") +
         `<tr><td><b>合计</b></td><td class="num mono"><b>${s.range_count}</b></td><td class="num mono"><b>${fmtMoney(s.range_total)}</b></td><td></td></tr>`
-      : `<tr><td colspan="4" class="empty">该区间暂无开支</td></tr>`) + `</tbody>`;
+      : `<tr><td colspan="4" class="empty">该区间暂无收支</td></tr>`) + `</tbody>`;
 
   const cats = s.by_category || [];
   const pct = (v) => (s.range_total ? (v / s.range_total) * 100 : 0);
   const ct = $("oeCatTable");
-  ct.innerHTML = `<thead><tr><th>费用类型</th><th class="num">笔数</th><th class="num">金额</th><th class="num">占比</th></tr></thead><tbody>` +
+  ct.innerHTML = `<thead><tr><th>费用类型</th><th class="num">笔数</th><th class="num">净额</th><th class="num">占比</th></tr></thead><tbody>` +
     (cats.length
-      ? cats.map((c) => `<tr><td><span class="badge expense">${esc(c.category)}</span></td><td class="num mono">${c.count}</td>
-          <td class="num mono" style="color:var(--red)">${fmtMoney(c.amount)}</td><td class="num mono">${pct(c.amount).toFixed(1)}%</td></tr>`).join("") +
+      ? cats.map((c) => {
+        const neg = (c.amount || 0) < 0;
+        return `<tr><td><span class="badge ${neg ? "income" : "expense"}">${esc(c.category)}</span></td><td class="num mono">${c.count}</td>
+          <td class="num mono" style="color:${neg ? "var(--green)" : "var(--red)"}">${fmtMoney(c.amount)}</td><td class="num mono">${pct(c.amount).toFixed(1)}%</td></tr>`;
+      }).join("") +
         `<tr><td><b>合计</b></td><td class="num mono"><b>${s.range_count}</b></td><td class="num mono"><b>${fmtMoney(s.range_total)}</b></td><td class="num mono">100%</td></tr>`
-      : `<tr><td colspan="4" class="empty">该区间暂无开支</td></tr>`) + `</tbody>`;
+      : `<tr><td colspan="4" class="empty">该区间暂无收支</td></tr>`) + `</tbody>`;
 }
 
 /** 类型下拉建议 = 后端预设 + 已用过的自定义类型 */
@@ -8856,28 +8884,35 @@ function oeFillCategories(s) {
 }
 
 function renderOtherExpenseList() {
+  const income = OE_SCOPE === "income";
   const cat = $("oeFilterCat").value;
   const kw = ($("oeSearch").value || "").trim().toLowerCase();
-  let rows = OE_ROWS;
+  // 支出页签看正数（开支），收入页签看负数（供应商补偿 / 手工登记的其他收入，显示为正数金额）
+  let rows = OE_ROWS.filter((r) => (income ? (Number(r.amount) || 0) < 0 : (Number(r.amount) || 0) >= 0));
   if (cat) rows = rows.filter((r) => r.category === cat);
   if (kw) rows = rows.filter((r) => [r.category, r.remark, r.operator, r.date].join(" ").toLowerCase().includes(kw));
   const t = $("oeTable");
   t.innerHTML = `<thead><tr>
     <th>日期</th><th>费用类型</th><th class="num">金额</th><th>操作员</th><th>备注</th><th style="width:120px;"></th></tr></thead><tbody>` +
     (rows.length
-      ? rows.map((r) => `<tr>
+      ? rows.map((r) => {
+        const neg = (Number(r.amount) || 0) < 0;    // 收入行（存负数）
+        const amt = neg ? -Number(r.amount) : Number(r.amount);
+        const badge = neg ? "income" : "expense";
+        return `<tr>
         <td class="mono">${esc(r.date)}</td>
-        <td><span class="badge expense">${esc(r.category)}</span>${payTag(r.pay_status)}${r.ref_type ? ` <span class="badge${r.ref_type === "inbound_fee" ? " pack" : ""}" title="${r.ref_type === "inbound_fee" ? "入库单带出的运费/装卸费：已计入该批次成本（随销量在毛利中扣减），这里留档备查，报表期间费用不再重复扣" : "单据自动带出的金额调整，只影响开支、不改成本"}">来自${r.ref_type === "inbound_fee" ? "入库单·成本" : r.ref_type === "inbound" ? "入库单" : "出库单"}</span>` : ""}</td>
-        <td class="num mono" style="color:var(--red)">${fmtMoney(r.amount)}</td>
+        <td><span class="badge ${badge}">${esc(r.category)}</span>${payTag(r.pay_status)}${r.ref_type ? ` <span class="badge${r.ref_type === "inbound_fee" ? " pack" : ""}" title="${r.ref_type === "inbound_fee" ? "入库单带出的运费/装卸费：已计入该批次成本（随销量在毛利中扣减），这里留档备查，报表期间费用不再重复扣" : r.ref_type === "inbound_comp" ? "入库单带出的供应商补偿：冲减期间费用、计入财务报表净利" : "单据自动带出的金额调整，只影响开支、不改成本"}">来自${r.ref_type === "inbound_fee" ? "入库单·成本" : r.ref_type === "inbound_comp" ? "入库单·补偿" : r.ref_type === "inbound" ? "入库单" : "出库单"}</span>` : ""}</td>
+        <td class="num mono" style="color:${neg ? "var(--green)" : "var(--red)"}">${neg ? "+" : ""}${fmtMoney(amt)}</td>
         <td>${esc(r.operator) || "—"}</td>
         <td class="muted" style="max-width:260px;">${renderRemarkHtml(r.remark)}</td>
         <td>${r.ref_type
           ? `<span class="muted" style="font-size:12px;">随单据自动维护</span>`
           : `<button class="btn sm secondary" onclick="oeEdit(${r.id})">改</button>
-             <button class="btn sm danger" onclick="oeDelete(${r.id})">删</button>`}</td></tr>`).join("")
-      : `<tr><td colspan="6" class="empty">该区间暂无开支，先在上方登记一笔</td></tr>`) + `</tbody>`;
-  const sum = rows.reduce((a, r) => a + (Number(r.amount) || 0), 0);
-  $("oeListSum").textContent = `共 ${rows.length} 笔 · 合计 ${fmtMoney(sum)}`;
+             <button class="btn sm danger" onclick="oeDelete(${r.id})">删</button>`}</td></tr>`;
+      }).join("")
+      : `<tr><td colspan="6" class="empty">${income ? "该区间暂无其他收入（入库单的「供应商补偿」会自动出现在这里）" : "该区间暂无支出，先在上方登记一笔"}</td></tr>`) + `</tbody>`;
+  const sum = rows.reduce((a, r) => a + Math.abs(Number(r.amount) || 0), 0);
+  $("oeListSum").textContent = `共 ${rows.length} 笔 · ${income ? "收入" : "支出"}合计 ${fmtMoney(sum)}`;
 }
 
 function oeAlertMsg(msg) {
@@ -8894,7 +8929,7 @@ function oeResetForm() {
   $("oeDate").value = today();
   setPay("oePay", "paid");
   clearRemarkField("oeRemark");
-  $("oeSaveBtn").textContent = "✓ 保存开支";
+  oeApplyScope();
   oeAlertMsg("");
 }
 
@@ -8902,13 +8937,17 @@ function oeEdit(id) {
   const r = OE_ROWS.find((x) => x.id === id);
   if (!r) return;
   OE_EDIT_ID = id;
+  // 收入行（负数）编辑时自动切到「其他收入」页签，金额按正数填
+  OE_SCOPE = (Number(r.amount) || 0) < 0 ? "income" : "expense";
+  $("oeScopeSeg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x.dataset.scope === OE_SCOPE));
   $("oeCategory").value = r.category;
-  $("oeAmount").value = r.amount;
+  $("oeAmount").value = Math.abs(Number(r.amount) || 0);
   $("oeDate").value = r.date;
   setRemarkValue("oeRemark", r.remark);   // 已有附件拆到标签区，文本框只留纯文本
   setPay("oePay", r.pay_status);
+  oeApplyScope();
   $("oeSaveBtn").textContent = "✓ 保存修改";
-  oeAlertMsg(`正在修改 ${r.date}「${r.category}」${fmtMoney(r.amount)}（保存后覆盖原记录）`);
+  oeAlertMsg(`正在修改 ${r.date}「${r.category}」${fmtMoney(Math.abs(Number(r.amount) || 0))}（保存后覆盖原记录）`);
   $("oeCategory").focus();
 }
 
@@ -8916,11 +8955,12 @@ async function oeSubmit() {
   const category = ($("oeCategory").value || "").trim();
   const amount = +$("oeAmount").value;
   const date = $("oeDate").value;
-  if (!category) { oeAlertMsg("请填写费用类型（如 网线费 / 安装费 / 机器费 / 样品费）"); return; }
+  const income = OE_SCOPE === "income";
+  if (!category) { oeAlertMsg(income ? "请填写收入类型（如 供应商补偿 / 返利）" : "请填写费用类型（如 网线费 / 安装费 / 机器费 / 样品费）"); return; }
   if (!(amount > 0)) { oeAlertMsg("金额必须大于 0"); return; }
   if (!date) { oeAlertMsg("请选择日期"); return; }
-  const payStatus = payOf("oePay");
-  const body = { category, amount, date, remark: remarkValue("oeRemark"), pay_status: payStatus };
+  const payStatus = income ? "paid" : payOf("oePay");
+  const body = { category, amount, date, remark: remarkValue("oeRemark"), pay_status: payStatus, kind: OE_SCOPE };
   const editing = !!OE_EDIT_ID;
   try {
     if (editing) await api("/api/other-expenses/" + OE_EDIT_ID, "PUT", body);
@@ -8928,8 +8968,8 @@ async function oeSubmit() {
     // 若该日期不在当前统计区间内，自动把区间扩到能看见它（避免"保存了却看不到"）
     if ($("oeDateFrom").value && date < $("oeDateFrom").value) $("oeDateFrom").value = date;
     if ($("oeDateTo").value && date > $("oeDateTo").value) $("oeDateTo").value = date;
-    const tail = payStatus === "unpaid" ? "（待付款，已进待付款账单）" : "";
-    toast((editing ? "已保存修改" : `已登记 ${category} ${fmtMoney(amount)}`) + tail);
+    const tail = (!income && payStatus === "unpaid") ? "（待付款，已进待付款账单）" : "";
+    toast((editing ? "已保存修改" : `已登记${income ? "收入" : "开支"} ${category} ${fmtMoney(amount)}`) + tail);
     oeResetForm();
     await loadOtherExpensePage();
   } catch (e) { oeAlertMsg("保存失败：" + e.message); }
@@ -8949,7 +8989,7 @@ async function oeDelete(id) {
 /* =============== 待付款账单（各处勾了「待付款」的单据汇总） =============== */
 let PAY_ROWS = [];       // 当前列表（待结清 ± 最近已结清）
 let PAY_VIEW = "unpaid"; // unpaid 只看待结清 / all 含最近已结清
-const PAY_SRC_BADGE = { "入库": "in", "入仓": "income", "出库": "out", "其他开支": "expense", "手动记账": "adjust", "代发": "pack" };
+const PAY_SRC_BADGE = { "入库": "in", "入仓": "income", "出库": "out", "其他收支": "expense", "手动记账": "adjust", "代发": "pack" };
 
 async function loadPayablesPage() {
   try {
@@ -9109,7 +9149,7 @@ function renderPayables() {
   renderPaySum(rows, undated, active, f);
 }
 
-/* ---------- 已支付确认弹窗（可顺手记一笔转账手续费 → 其他开支） ---------- */
+/* ---------- 已支付确认弹窗（可顺手记一笔转账手续费 → 其他收支） ---------- */
 let PAY_MODAL_OK = null;   // 当前弹窗「确认」后要执行的动作（fee, date）=> Promise
 
 function openPayModal({ title, label, note, onOk }) {
@@ -9122,7 +9162,7 @@ function openPayModal({ title, label, note, onOk }) {
       <div class="field">
         <label>转账手续费（选填）</label>
         <input id="payFee" type="number" min="0" step="any" placeholder="0.00" oninput="payFeeCalc()" />
-        <div class="field-hint">部分转款会产生手续费：填了会自动记一笔「其他开支 → 手续费」（已付款），计入财务报表期间费用</div>
+        <div class="field-hint">部分转款会产生手续费：填了会自动记一笔「其他收支 → 手续费」（已付款），计入财务报表期间费用</div>
       </div>
       <div class="field">
         <label>手续费入账日期</label>
@@ -9147,7 +9187,7 @@ function payFeeCalc() {
   const fee = parseFloat(($("payFee") || {}).value) || 0;
   const day = ($("payFeeDate") || {}).value || today();
   tip.innerHTML = fee > 0
-    ? `将自动记一笔其他开支：<b>手续费 ¥${fmtMoney(fee)}</b>（${esc(day)}，已付款）`
+    ? `将自动记一笔其他收支：<b>手续费 ¥${fmtMoney(fee)}</b>（${esc(day)}，已付款）`
     : "不收手续费就留空，不影响记账。";
 }
 
@@ -9176,7 +9216,7 @@ async function payBill(kind, id, paid) {
     title: "确认已支付",
     label,
     note: isDs
-      ? "代发成本只做付款核对、不影响报表的收入成本；手续费照常记入「其他开支」。"
+      ? "代发成本只做付款核对、不影响报表的收入成本；手续费照常记入「其他收支」。"
       : "确认后这笔将按原日期计入财务报表。",
     onOk: (fee, day) => submitPayDoc({ kind, id, paid: true, fee, date: day }),
   });
@@ -9186,7 +9226,7 @@ async function submitPayDoc({ kind, id, paid, fee, date }) {
   const isDs = kind === "dropship" || kind === "dropship_item";
   try {
     const r = await api("/api/payables/pay", "POST", { kind, id, paid, fee, date });
-    const tail = r && r.fee ? `；手续费 ¥${fmtMoney(r.fee)} 已记「其他开支」` : "";
+    const tail = r && r.fee ? `；手续费 ¥${fmtMoney(r.fee)} 已记「其他收支」` : "";
     toast((paid
       ? (isDs ? "已标记代发成本已支付" : "已标记已支付，已按原日期计入财务报表")
       : (isDs ? "已撤销付款标记" : "已撤销，已移出财务报表")) + tail);
@@ -9251,7 +9291,7 @@ async function submitPayBatch(picked, paid, fee, date) {
   let updated = 0, missing = 0, feeTotal = 0, feeLeft = fee;
   try {
     for (const [kind, ids] of byKind) {
-      // 手续费只随第一组提交一次（后端每收到一次就记一笔其他开支，避免按来源重复记）
+      // 手续费只随第一组提交一次（后端每收到一次就记一笔其他收支，避免按来源重复记）
       const r = await api("/api/payables/pay-batch", "POST", { kind, ids, paid, fee: feeLeft, date });
       feeLeft = 0;
       updated += r.updated || 0;
@@ -9259,7 +9299,7 @@ async function submitPayBatch(picked, paid, fee, date) {
       feeTotal += r.fee || 0;
     }
     toast(`已处理 ${updated} 笔${missing ? `，${missing} 笔已不存在` : ""}`
-      + (feeTotal ? `；手续费 ¥${fmtMoney(feeTotal)} 已记「其他开支」` : ""));
+      + (feeTotal ? `；手续费 ¥${fmtMoney(feeTotal)} 已记「其他收支」` : ""));
     await loadPayablesPage();
     if (DS_LOADED) loadDropshipBills();
   } catch (e) { toast("批量操作失败：" + e.message); }
@@ -9283,7 +9323,7 @@ function payTab(btn) {
   const hint = $("payTabHint");
   if (hint) hint.textContent = panel === "pay-panel-dropship"
     ? "代发：按「商品 + 规格 + 出库日期」分行，按天核对「单价 × 单量 = 代发成本」"
-    : "账单：入库 / 出库 / 其他开支 / 手动记账的待结清项；代发应付在「代发」页签里单独看";
+    : "账单：入库 / 出库 / 其他收支 / 手动记账的待结清项；代发应付在「代发」页签里单独看";
   if (panel === "pay-panel-dropship") loadDropshipBills();
 }
 
@@ -9436,12 +9476,12 @@ function dsPickedBillIds() {
     .flatMap((g) => g.bill_ids || []);
 }
 
-/** 代发成本付款提交（账单行可能跨多张出库单）：手续费 >0 时后端自动记一笔「其他开支 → 手续费」 */
+/** 代发成本付款提交（账单行可能跨多张出库单）：手续费 >0 时后端自动记一笔「其他收支 → 手续费」 */
 async function submitDropshipPay(ids, paid, fee, date, okText) {
   try {
     const r = await api("/api/payables/pay-batch", "POST",
       { kind: "dropship_item", ids, paid, fee, date });
-    const tail = r && r.fee ? `；手续费 ¥${fmtMoney(r.fee)} 已记「其他开支」` : "";
+    const tail = r && r.fee ? `；手续费 ¥${fmtMoney(r.fee)} 已记「其他收支」` : "";
     toast((paid ? (okText || "已标记代发成本已支付") : "已撤销") + tail);
     await loadDropshipBills();
     await loadPayablesPage();
@@ -9460,7 +9500,7 @@ async function dsMarkPaid(idx, paid) {
   openPayModal({
     title: "代发成本已支付",
     label: `<b>${esc(g.product_name)}</b>${g.spec ? " · " + esc(g.spec) : ""}（${g.order_count} 单，代发成本 <b class="mono">${fmtMoney(g.amount)}</b>）`,
-    note: "只影响代发付款核对，不影响报表的收入成本；手续费照常记入「其他开支」。",
+    note: "只影响代发付款核对，不影响报表的收入成本；手续费照常记入「其他收支」。",
     onOk: (fee, day) => submitDropshipPay(g.bill_ids || [], true, fee, day),
   });
 }
@@ -10492,7 +10532,7 @@ function startMaintenanceWatch() {
   } catch (e) {}
   try { bindSearchable(document); } catch (e) {}
   applyNavVisibility();     // 侧边栏按本机偏好显隐（设置 → 模块显示）
-  syncExcludeOtherHint();   // 报表页「排除其他开支」开关按本机偏好回显（默认开启）
+  syncExcludeOtherHint();   // 报表页「排除其他收支」开关按本机偏好回显（默认开启）
   loadDashboard();
   aiQueueLoad();    // AI 识别队列（待办处理）：恢复上次未处理完的识别结果，并继续跑排队中的任务
   aiQueueTick();
@@ -11192,12 +11232,12 @@ function renderInboundReview(kind, r) {
       <td><input class="draft-qty" type="number" step="any" value="${it.quantity}" oninput="draftLineCalc(this)" style="width:80px;" /></td>
       <td><input class="draft-price" type="number" step="any" value="${it.unit_price}" oninput="draftLineCalc(this)" style="width:90px;" /></td>
       <td class="draft-amt">${fmtMoney(it.quantity * it.unit_price)}</td>
-      <td><input class="draft-freight" type="number" step="any" min="0" value="${it.freight || ""}" placeholder="0" title="运费（选填）：计入批次成本，体现在该品毛利，并同步记入「其他开支」" style="width:64px;" /></td>
+      <td><input class="draft-freight" type="number" step="any" min="0" value="${it.freight || ""}" placeholder="0" title="运费（选填）：计入批次成本，体现在该品毛利，并同步记入「其他收支」" style="width:64px;" /></td>
       <td><input class="draft-handling" type="number" step="any" min="0" value="${it.handling || ""}" placeholder="0" title="装卸费（选填）：同运费" style="width:64px;" /></td>
       <td class="muted">${esc(it.supplier || "—")} · ${esc(it.date)}</td>
     </tr>`).join("");
   $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} — 确认入库 <button class="close" onclick="closeModal()">✕</button></h3>
-    <div class="alert ok">解析出 <b>${items.length}</b> 行。可勾选、修改数量/单价/运费/装卸后点击「确认入库」；运费与装卸费会计入批次成本并同步「其他开支」。</div>
+    <div class="alert ok">解析出 <b>${items.length}</b> 行。可勾选、修改数量/单价/运费/装卸后点击「确认入库」；运费与装卸费会计入批次成本并同步「其他收支」。</div>
     ${warn}
     <table class="subtable" style="width:100%;">
       <thead><tr><th style="width:34px;"><input type="checkbox" checked onchange="toggleDraftAll(this)" /></th><th>商品</th><th>单位</th><th>数量</th><th>单价</th><th>金额</th><th>运费</th><th>装卸</th><th>供应商 · 日期</th></tr></thead>

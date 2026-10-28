@@ -91,10 +91,10 @@ class Inbound(Base):
     unit_price: Mapped[float] = mapped_column(Float)  # 所选单位的单价
     total_amount: Mapped[float] = mapped_column(Float)  # 商品金额（数量×单价），= 批次成本，不随金额调整变化
     # 金额调整（抹零/凑整）：正=多付给供应商，负=少付。实付金额 = total_amount + adjust_amount；
-    # 商品成本仍按 total_amount（不变），差额自动记一笔「金额调整」的其他开支（见 services.create_inbound）
+    # 商品成本仍按 total_amount（不变），差额自动记一笔「金额调整」的其他收支（见 services.create_inbound）
     adjust_amount: Mapped[float] = mapped_column(Float, default=0.0)
     # 入库运费 / 装卸费（选填）：计入该批次的到岸成本（StockMovement.amount = 商品金额 + 这两项），
-    # FIFO 结转后自动体现在该品的毛利与库存均价上；同时在「其他开支」生成 ref_type="inbound_fee"
+    # FIFO 结转后自动体现在该品的毛利与库存均价上；同时在「其他收支」生成 ref_type="inbound_fee"
     # 的镜像行供查询（报表期间费用会排除镜像行，避免与成本口径重复扣减，见 services/报告聚合）。
     # 与金额调整不同：调整差额不改成本、只记开支；运费/装卸费改成本、镜像行不重复进期间费用。
     freight: Mapped[float] = mapped_column(Float, default=0.0)
@@ -111,7 +111,7 @@ class Inbound(Base):
     # 已付部分进报表、未付部分进待付款账单；paid/unpaid 时它统一记全额/0，方便报表直接取用。
     paid_amount: Mapped[float] = mapped_column(Float, default=0.0)
     # 供应商补偿（元，正数=供应商补给我们的钱，如破损赔偿/返利）：
-    # 保存后镜像记一笔「其他开支 → 供应商补偿」负数行（ref_type=inbound_comp），冲减期间费用、计入报表净利。
+    # 保存后镜像记一笔「其他收支 → 供应商补偿」负数行（ref_type=inbound_comp），冲减期间费用、计入报表净利。
     # 不冲减货款/应付合计，也不影响批次成本（FIFO）。
     compensation: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
@@ -135,7 +135,7 @@ class Outbound(Base):
     remark: Mapped[str] = mapped_column(String(255), default="")
     total_amount: Mapped[float] = mapped_column(Float, default=0.0)  # 销售收入（商品原价）
     # 金额调整（给客户抹零/凑整）：正=加收，负=抹零。实收金额 = total_amount + adjust_amount；
-    # 商品成本（total_cogs）不受影响，差额自动记一笔「金额调整」的其他开支（见 services.create_outbound）
+    # 商品成本（total_cogs）不受影响，差额自动记一笔「金额调整」的其他收支（见 services.create_outbound）
     adjust_amount: Mapped[float] = mapped_column(Float, default=0.0)
     total_cogs: Mapped[float] = mapped_column(Float, default=0.0)  # 商品成本+包装材料成本
     total_fee: Mapped[float] = mapped_column(Float, default=0.0)  # 人工/打包等固定费用
@@ -269,7 +269,7 @@ class FinanceRecord(Base):
     remark: Mapped[str] = mapped_column(String(255), default="")
     ref_type: Mapped[str] = mapped_column(String(16), default="")
     ref_id: Mapped[int] = mapped_column(Integer, nullable=True)
-    # 付款状态：由来源单据（入库/出库/其他开支）带过来，或有手动记账时自己设
+    # 付款状态：由来源单据（入库/出库/其他收支）带过来，或有手动记账时自己设
     pay_status: Mapped[str] = mapped_column(String(8), default="paid")
     paid_at: Mapped[str] = mapped_column(String(10), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
@@ -278,7 +278,7 @@ class FinanceRecord(Base):
 
 
 class OtherExpense(Base):
-    """其他开支：仓库/经营中发生的零散支出（网线费、安装费、机器费、样品费等）。
+    """其他收支：仓库/经营中发生的零散支出（网线费、安装费、机器费、样品费等）。
 
     独立于 FinanceRecord（财务流水）：这里只按「费用类型 + 日期」记账，用于经营分析页的
     按日/按月/按类型统计；财务报表把它并入「期间费用」，从毛利中扣减得到净利。

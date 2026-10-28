@@ -517,7 +517,7 @@ def purge_outbounds(db: Session, ids: list[int]) -> tuple[int, int, set[int]]:
     for part in _chunks(existing):
         _bulk_delete_ref(db, StockMovement, "outbound", part)
         _bulk_delete_ref(db, FinanceRecord, "outbound", part)
-        _bulk_delete_ref(db, OtherExpense, "outbound", part)  # 金额调整带出的其他开支一并删除
+        _bulk_delete_ref(db, OtherExpense, "outbound", part)  # 金额调整带出的其他收支一并删除
         # 代发应付账单（按 outbound_id 挂着）一并删除
         db.execute(
             delete(DropshipBill).where(DropshipBill.outbound_id.in_(part)).execution_options(synchronize_session=False)
@@ -554,7 +554,7 @@ def purge_inbounds(db: Session, ids: list[int]) -> tuple[int, int, set[int]]:
     for part in _chunks(existing):
         _bulk_delete_ref(db, StockMovement, "inbound", part)
         _bulk_delete_ref(db, FinanceRecord, "inbound", part)
-        _bulk_delete_ref(db, OtherExpense, "inbound", part)  # 金额调整带出的其他开支一并删除
+        _bulk_delete_ref(db, OtherExpense, "inbound", part)  # 金额调整带出的其他收支一并删除
         _bulk_delete_ref(db, OtherExpense, INBOUND_FEE_REF, part)  # 运费/装卸费镜像行一并删除
         _bulk_delete_ref(db, OtherExpense, INBOUND_COMP_REF, part)  # 供应商补偿镜像行一并删除
         db.execute(delete(Inbound).where(Inbound.id.in_(part)).execution_options(synchronize_session=False))
@@ -680,12 +680,12 @@ def inbound_pay_fields(payload: dict, due: float, date: str = "") -> dict:
     }
 
 
-ADJUST_CATEGORY = "金额调整"  # 抹零/凑整等金额调整自动生成的其他开支类型
+ADJUST_CATEGORY = "金额调整"  # 抹零/凑整等金额调整自动生成的其他收支类型
 
 
 def sync_adjust_expense(db: Session, kind: str, ref_id: int, code: str, date: str,
                         operator: str, adjust: float, pay: dict) -> None:
-    """维护单据「金额调整」对应的其他开支：调整额为 0 则删除，否则新建/更新为 |调整额|。
+    """维护单据「金额调整」对应的其他收支：调整额为 0 则删除，否则新建/更新为 |调整额|。
 
     单据金额与商品成本都按商品原价不变，抹零/凑整的差额在这里单独记一笔支出——
     这样报表口径 = 实收/实付，而商品成本（FIFO 批次）不受影响。
@@ -714,16 +714,16 @@ def sync_adjust_expense(db: Session, kind: str, ref_id: int, code: str, date: st
     ))
 
 
-# 入库「运费 / 装卸费」带出的其他开支镜像行的 ref_type（与金额调整的 "inbound" 区分，互不误伤）
+# 入库「运费 / 装卸费」带出的其他收支镜像行的 ref_type（与金额调整的 "inbound" 区分，互不误伤）
 INBOUND_FEE_REF = "inbound_fee"
 INBOUND_FEE_CATEGORIES = (("freight", "运费"), ("handling", "装卸费"))
 
 
 def sync_inbound_fee_expenses(db: Session, rec: "Inbound", product_name: str, pay: dict) -> None:
-    """维护入库单「运费 / 装卸费」对应的其他开支镜像行：每项 >0 各生成一行，清零则删除。
+    """维护入库单「运费 / 装卸费」对应的其他收支镜像行：每项 >0 各生成一行，清零则删除。
 
     这两项费用已计入批次到岸成本（FIFO 结转随销量扣减，体现在该品毛利上）；这里的镜像行
-    只供「其他开支」页按类型/日期查询，报表的期间费用聚合一律排除 ref_type="inbound_fee"
+    只供「其他收支」页按类型/日期查询，报表的期间费用聚合一律排除 ref_type="inbound_fee"
     （见 routers/report.py），避免「成本 + 期间费用」重复扣减。日期/付款状态随单据
     同步维护（sync_doc_edit / pay_bill / 删除级联）。
     """
@@ -761,10 +761,10 @@ COMP_CATEGORY = "供应商补偿"
 
 
 def sync_compensation_expense(db: Session, rec: "Inbound") -> None:
-    """维护入库单「供应商补偿」的其他开支镜像行：补偿 >0 记一笔**负数**其他开支，清零则删除。
+    """维护入库单「供应商补偿」的其他收支镜像行：补偿 >0 记一笔**负数**其他收支，清零则删除。
 
     供应商退的钱 / 赔偿不冲减货款与批次成本（FIFO），而是记成负数的期间费用：
-    报表「其他开支 → 供应商补偿」为负 → 期间费用减少 → 净利增加，与实际收到的钱一致。
+    报表「其他收支 → 供应商补偿」为负 → 期间费用减少 → 净利增加，与实际收到的钱一致。
     付款状态恒为已付款（钱是收进来的），不走单据的收付款状态，避免出现负数的待付款账单；
     日期随入库单日期（改单时同步）。
     """
@@ -869,7 +869,7 @@ def _product_name(db: Session, pid: int) -> str:
 
 
 def sync_doc_edit(db: Session, kind: str, ref_id: int, date: str, operator: str, pay: dict) -> None:
-    """单据被手动修改（供应商/客户、日期、付款状态）后，同步它带出的库存流水/财务流水/其他开支。
+    """单据被手动修改（供应商/客户、日期、付款状态）后，同步它带出的库存流水/财务流水/其他收支。
 
     - 操作员统一记为本次修改人（后端强制取登录账号，忽略前端传值）；
     - 改日期时三类关联记录的日期一起改，保证报表按日期统计口径一致；
@@ -884,7 +884,7 @@ def sync_doc_edit(db: Session, kind: str, ref_id: int, date: str, operator: str,
     ).scalars():
         f.date, f.operator = date, operator
         f.pay_status, f.paid_at = pay["pay_status"], pay["paid_at"]
-    # 其他开支带出行：金额调整(ref_type=kind) + 入库的运费/装卸费镜像行(ref_type=inbound_fee)
+    # 其他收支带出行：金额调整(ref_type=kind) + 入库的运费/装卸费镜像行(ref_type=inbound_fee)
     fee_types = [kind] + ([INBOUND_FEE_REF] if kind == "inbound" else [])
     for e in db.execute(
         select(OtherExpense).where(OtherExpense.ref_type.in_(fee_types), OtherExpense.ref_id == ref_id)
@@ -922,7 +922,7 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
 
     # 应付合计（表单上的「实付」）= 货款 + 金额调整 + 运费 + 装卸：部分付款的已付金额按它收口
     pay = inbound_pay_fields(payload, pay_due(amount, adjust, freight, handling), date)
-    # 关联的财务流水 / 其他开支没有「已付金额」，付款状态原样跟随单据（partial 时它们也只作标记，
+    # 关联的财务流水 / 其他收支没有「已付金额」，付款状态原样跟随单据（partial 时它们也只作标记，
     # 报表的入库口径由入库单自身按 paid_amount 计，待付款账单也只算入库单的未付余额）
     pay_link = {k: pay[k] for k in ("pay_status", "paid_at")}
     rec = Inbound(

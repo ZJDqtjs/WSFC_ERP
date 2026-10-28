@@ -40,13 +40,13 @@ class InboundIn(BaseModel):
     pay_status: str = "paid"  # paid 已付款（默认）/ partial 部分付款 / unpaid 待付款（先进「待付款账单」）
     # 部分付款时已付的金额（按 应付合计 = 货款 + 调整 + 运费 + 装卸 收口，0 < paid_amount < 应付）
     paid_amount: float = 0.0
-    # 金额调整（抹零/凑整）：正=多付给供应商，负=少付。商品成本按原价不变，差额自动记「金额调整」其他开支
+    # 金额调整（抹零/凑整）：正=多付给供应商，负=少付。商品成本按原价不变，差额自动记「金额调整」其他收支
     adjust_amount: float = 0.0
     # 运费 / 装卸费（选填，≥0）：计入该批次到岸成本（体现在这个品的毛利上），
-    # 并自动在「其他开支」生成镜像行供查询（ref_type="inbound_fee"，报表期间费用不重复扣）
+    # 并自动在「其他收支」生成镜像行供查询（ref_type="inbound_fee"，报表期间费用不重复扣）
     freight: float = 0.0
     handling: float = 0.0
-    # 供应商补偿（选填，≥0）：供应商退的钱/赔偿，自动记「其他开支 → 供应商补偿」负数行冲减期间费用
+    # 供应商补偿（选填，≥0）：供应商退的钱/赔偿，自动记「其他收支 → 供应商补偿」负数行冲减期间费用
     compensation: float = 0.0
 
 
@@ -59,10 +59,10 @@ class InboundUpdate(BaseModel):
     # 部分付款时的已付金额：None = 沿用单据上已有的已付金额（改其它字段时不至于把已付清空）
     paid_amount: float | None = None
     # 运费 / 装卸费（选填，≥0）：None = 不修改；填了会重算批次到岸成本与该品均价/毛利，
-    # 并同步「其他开支」镜像行（日期随入库单日期）。
+    # 并同步「其他收支」镜像行（日期随入库单日期）。
     freight: float | None = None
     handling: float | None = None
-    # 供应商补偿（选填，≥0）：None = 不修改；填了/清零会同步「其他开支 → 供应商补偿」镜像行
+    # 供应商补偿（选填，≥0）：None = 不修改；填了/清零会同步「其他收支 → 供应商补偿」镜像行
     compensation: float | None = None
 
 
@@ -97,7 +97,7 @@ def _to_dict(r: Inbound) -> dict:
         "total_amount": r.total_amount,
         "adjust_amount": adjust,
         "final_amount": round((r.total_amount or 0.0) + adjust, 2),
-        # 运费/装卸费：已计入批次到岸成本（landed_amount = 货款 + 这两项），并在「其他开支」留有镜像行
+        # 运费/装卸费：已计入批次到岸成本（landed_amount = 货款 + 这两项），并在「其他收支」留有镜像行
         "freight": freight,
         "handling": handling,
         "landed_amount": round((r.total_amount or 0.0) + freight + handling, 2),
@@ -106,7 +106,7 @@ def _to_dict(r: Inbound) -> dict:
         "date": r.date,
         "remark": r.remark,
         "pay_status": status,
-        # 供应商补偿：供应商退的钱/赔偿（镜像记「其他开支 → 供应商补偿」负数行，冲减期间费用）
+        # 供应商补偿：供应商退的钱/赔偿（镜像记「其他收支 → 供应商补偿」负数行，冲减期间费用）
         "compensation": round(getattr(r, "compensation", 0.0) or 0.0, 2),
         # 应付合计 / 已付 / 未付（部分付款看未付余额，待付款账单与报表也用这一组数）
         "due_amount": due,
@@ -177,7 +177,7 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
 
     运费/装卸费改动要连带三件事（口径见 services.create_inbound）：
     ① 批次到岸成本 = 货款 + 运费 + 装卸 → 同步库存流水金额，并重算该品均价/库存货值/毛利；
-    ② 「其他开支」镜像行金额跟着改（日期、付款状态随入库单）；
+    ② 「其他收支」镜像行金额跟着改（日期、付款状态随入库单）；
     ③ 报表「本期进货 / 支出明细 / 逐日支出」按到岸成本取值，自然跟着变。
     """
     rec = db.get(Inbound, rid)
@@ -236,7 +236,7 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
         recompute_product(db, rec.product_id)
     # 每项 >0 生成一行镜像、清零则删除（日期=入库单日期），幂等
     sync_inbound_fee_expenses(db, rec, rec.product.name if rec.product else "", pay_link)
-    sync_compensation_expense(db, rec)   # 供应商补偿：负数其他开支（冲减期间费用），清零则删
+    sync_compensation_expense(db, rec)   # 供应商补偿：负数其他收支（冲减期间费用），清零则删
     db.commit()
     db.refresh(rec)
     return _to_dict(rec)
@@ -252,7 +252,7 @@ def delete_inbound(rid: int, db: Session = Depends(get_db), user: User = Depends
         db.delete(m)
     for f in db.execute(select(FinanceRecord).where(FinanceRecord.ref_type == "inbound", FinanceRecord.ref_id == rid)).scalars():
         db.delete(f)
-    # 金额调整 / 运费装卸镜像行带出的其他开支一并删除，避免删单后报表或「其他开支」还挂着这些记录
+    # 金额调整 / 运费装卸镜像行带出的其他收支一并删除，避免删单后报表或「其他收支」还挂着这些记录
     for e in db.execute(
         select(OtherExpense).where(
             OtherExpense.ref_type.in_(["inbound", "inbound_fee"]), OtherExpense.ref_id == rid

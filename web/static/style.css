@@ -219,7 +219,7 @@ body {
   margin-top: 8px;
 }
 
-/* ============ 报表口径开关：排除其他开支（报表页标题旁） ============ */
+/* ============ 报表口径开关：排除其他收支（报表页标题旁） ============ */
 .rep-switch {
   display: inline-flex;
   align-items: center;

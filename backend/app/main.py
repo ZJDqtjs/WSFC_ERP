@@ -204,7 +204,7 @@ app.include_router(outbound.router)
 app.include_router(inventory.router)
 app.include_router(jst_auto.router)  # 自动出库设置（聚水潭销售出库单定时导出并导入）
 app.include_router(others.router)
-app.include_router(payables.router)   # 待付款账单（入库/入仓/出库/其他开支/手动记账 汇总）
+app.include_router(payables.router)   # 待付款账单（入库/入仓/出库/其他收支/手动记账 汇总）
 app.include_router(pack_rules.router)
 app.include_router(deductions.router)
 app.include_router(express.router)

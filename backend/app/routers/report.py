@@ -147,7 +147,7 @@ def _pending_stats(inbounds: list, outbounds: list, others: list, finances: list
                    warehouse_ins: list | None = None) -> dict:
     """未计入本报表的待付款/待收款汇总（按来源单据算，避免自动流水重复计数）。"""
     payables = [_inbound_unpaid(i) for i in inbounds]                       # 入库（采购，部分付款只算未付余额）
-    payables += [e.amount or 0.0 for e in others]                           # 其他开支
+    payables += [e.amount or 0.0 for e in others]                           # 其他收支
     payables += [f.amount or 0.0 for f in finances if f.type == "expense" and f.ref_type == "manual"]
     receivables = [_income_of(o) for o in outbounds]                         # 出库（销售，含客户代收的包材等）
     # 入仓（入仓品卖到京东）也是销售渠道：未回款的同样算「待收」
@@ -251,7 +251,7 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
         ).one()
         revenue, cogs, brush = float(revenue), float(cogs), round(float(brush), 2)
 
-        # 期间费用 = 财务流水里手工登记的支出（不含采购支出，采购已计入库存成本）+ 其他开支
+        # 期间费用 = 财务流水里手工登记的支出（不含采购支出，采购已计入库存成本）+ 其他收支
         manual_expense = float(db.execute(
             select(func.coalesce(func.sum(FinanceRecord.amount), 0))
             .where(FinanceRecord.date >= f, FinanceRecord.date <= t,
@@ -262,7 +262,7 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
             select(func.coalesce(func.sum(OtherExpense.amount), 0))
             .where(OtherExpense.date >= f, OtherExpense.date <= t,
                    func.coalesce(OtherExpense.pay_status, PAID) != "unpaid",
-                   # 运费/装卸镜像行已计入批次成本，期间费用不重复扣（「其他开支」页仍可查）
+                   # 运费/装卸镜像行已计入批次成本，期间费用不重复扣（「其他收支」页仍可查）
                    func.coalesce(OtherExpense.ref_type, "") != INBOUND_FEE_REF)
         ).scalar() or 0.0), 2)
 
@@ -278,7 +278,7 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
             key = _pack_cost_category_of(cat, name)
             packs[key] = round(packs.get(key, 0.0) + float(amt or 0.0), 2)
 
-        fee = round(manual_expense + other_fee, 2)  # 期间费用含「其他开支」（与报表口径一致）
+        fee = round(manual_expense + other_fee, 2)  # 期间费用含「其他收支」（与报表口径一致）
         return {
             "revenue": round(revenue, 2),
             # 毛利 = 收入 − 商品/关联成本 − 刷单结算（芳谊放单仓的刷单成本与固定费）
@@ -385,7 +385,7 @@ def summary(
     date_from: str = "",
     date_to: str = "",
     wh: str = "",   # 可选：指定查看哪个分仓（单仓总览手动切换用），缺省=本登录会话的分仓；wh=all = 全仓合计
-    exclude_other: int = 0,   # 1 = 排除「其他开支」，报表只看商品售卖利润（默认 0：含其他开支）
+    exclude_other: int = 0,   # 1 = 排除「其他收支」，报表只看商品售卖利润（默认 0：含其他收支）
     db: Session = Depends(get_db_wh),
     user: User = Depends(get_current_user),
 ):
@@ -410,7 +410,7 @@ def _inbound_landed(i) -> float:
     """入库实际支出 = 货款 + 运费 + 装卸费（运费/装卸已计入批次成本，故期间费用不重复扣）。
 
     部分付款时只算已经付掉的那部分：已付金额按应付合计（含调整/运费/装卸）记，
-    这里按「货款 + 运费 + 装卸」封顶（金额调整另走「其他开支」，不计入采购桶）。
+    这里按「货款 + 运费 + 装卸」封顶（金额调整另走「其他收支」，不计入采购桶）。
     """
     landed = round((i.total_amount or 0.0) + (getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0), 2)
     if (getattr(i, "pay_status", PAID) or PAID) == "partial":
@@ -434,7 +434,7 @@ def _inbound_unpaid(i) -> float:
 def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_other: bool = False) -> dict:
     """单个分仓的经营汇总（「单仓总览」各分区的数据源）。
 
-    exclude_other=True 时不计入「其他开支」（other_expenses 表）：期间费用只剩手工记账支出，
+    exclude_other=True 时不计入「其他收支」（other_expenses 表）：期间费用只剩手工记账支出，
     净利润即「只看商品售卖」的利润；被排除的金额仍以 excluded_other_expense 返回，供前端提示。
     """
     def scope(model):
@@ -487,9 +487,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     # 其中「快递+包装固定费」：逐单手填（默认 3.6），与刷单成本一起构成刷单单的全部成本
     brush_fee_total = round(sum(brush_fee_of(o) for o in outbounds), 2)
     gross = round(revenue - cogs - brush_total, 2)
-    # 期间费用 = 财务流水里手工登记的支出（不含采购支出，采购已计入库存成本）+ 其他开支
+    # 期间费用 = 财务流水里手工登记的支出（不含采购支出，采购已计入库存成本）+ 其他收支
     manual_expense = sum(f.amount for f in finances if f.type == "expense" and f.category != "采购支出")
-    # 其他开支原始金额始终统计，便于前端提示「已排除多少」；口径关闭时不计入任何支出/净利计算
+    # 其他收支原始金额始终统计，便于前端提示「已排除多少」；口径关闭时不计入任何支出/净利计算
     other_raw = round(sum(e.amount or 0.0 for e in others), 2)
     others_in = [] if exclude_other else others
     other_total = 0.0 if exclude_other else other_raw
@@ -997,12 +997,12 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             continue
         manual_fees[f.category] = round(manual_fees.get(f.category, 0.0) + f.amount, 2)
 
-    # 其他开支（网线费/安装费/机器费/样品费…），按费用类型归集（口径关闭时为空）
+    # 其他收支（网线费/安装费/机器费/样品费…），按费用类型归集（口径关闭时为空）
     other_fees: dict[str, float] = {}
     for e in others_in:
         other_fees[e.category] = round(other_fees.get(e.category, 0.0) + (e.amount or 0.0), 2)
 
-    # 逐日 / 逐月支出：四类合计——采购进货 + 其他开支 + 手工记账 + 刷单成本。
+    # 逐日 / 逐月支出：四类合计——采购进货 + 其他收支 + 手工记账 + 刷单成本。
     # 注意口径：total 是"全部支出"（含采购与刷单成本），period_expense 才是从毛利中扣减的「期间费用」；
     # 采购已计入结转成本（COGS）、刷单成本已在毛利里扣过，两者都不进期间费用，净利仍按期间费用计算。
     exp_day: dict[str, dict] = {}
@@ -1035,7 +1035,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         _add_expense(exp_month, (o.date or "")[:7], "brush", adj)
 
     def _expense_rows(bucket: dict, label: str) -> list[dict]:
-        """按日期/月份倒序的支出明细：采购 / 其他开支 / 手工记账 / 刷单成本 / 合计 / 笔数。"""
+        """按日期/月份倒序的支出明细：采购 / 其他收支 / 手工记账 / 刷单成本 / 合计 / 笔数。"""
         return [
             {
                 label: k,
@@ -1044,17 +1044,17 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "manual_expense": round(v["manual"], 2),
                 # 刷单成本＝快递+包装固定费＋刷单成本（已从毛利扣减，不重复计入期间费用）
                 "brush_expense": round(v["brush"], 2),
-                # 期间费用＝其他开支＋手工记账（真正从毛利中扣减的部分）
+                # 期间费用＝其他收支＋手工记账（真正从毛利中扣减的部分）
                 "period_expense": round(v["other"] + v["manual"], 2),
-                # 全部支出＝采购＋其他开支＋手工记账＋刷单成本
+                # 全部支出＝采购＋其他收支＋手工记账＋刷单成本
                 "total": round(v["purchase"] + v["other"] + v["manual"] + v["brush"], 2),
                 "count": v["count"],
             }
             for k, v in sorted(bucket.items(), reverse=True)
         ]
 
-    # 逐笔支出明细：与「支出合计」完全同口径（采购进货 + 其他开支 + 手工记账），
-    # 供报表「支出」分区逐条核对。「流水」分区只列财务流水，不含其他开支与采购，故这里单独拆出。
+    # 逐笔支出明细：与「支出合计」完全同口径（采购进货 + 其他收支 + 手工记账），
+    # 供报表「支出」分区逐条核对。「流水」分区只列财务流水，不含其他收支与采购，故这里单独拆出。
     def _fmt_qty(v: float) -> str:
         s = f"{float(v or 0):.4f}".rstrip("0").rstrip(".")
         return s or "0"
@@ -1091,7 +1091,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         })
     for e in others_in:
         expense_items.append({
-            "date": e.date, "source": "其他开支", "category": e.category,
+            "date": e.date, "source": "其他收支", "category": e.category,
             "item": e.category, "amount": round(e.amount or 0.0, 2),
             "operator": e.operator or "", "remark": e.remark or "",
             "ref": "", "auto": False,
@@ -1123,7 +1123,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             "operator": o.operator or "", "remark": o.remark or "",
             "ref": o.code or "", "auto": False,
         })
-    # 日期倒序；同一天保持「采购 → 其他开支 → 手工记账」顺序（稳定排序）
+    # 日期倒序；同一天保持「采购 → 其他收支 → 手工记账」顺序（稳定排序）
     expense_items.sort(key=lambda r: r["date"], reverse=True)
 
     return {
@@ -1153,16 +1153,16 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         "brush_input_cost": brush_cost,   # 其中「我填的刷单成本」原值合计（展示用）
         "brush_fee_cost": brush_fee_total,  # 其中「快递+包装固定费」合计（逐单手填，默认 3.6）
         "gross_profit": gross,
-        # 期间费用 = 手工记账支出 + 其他开支，从毛利中扣减得到净利
+        # 期间费用 = 手工记账支出 + 其他收支，从毛利中扣减得到净利
         "expense": expense,
         "manual_expense": round(manual_expense, 2),
         "other_expense": other_total,
-        # 报表口径开关：exclude_other_expense=True = 已排除其他开支（只看商品售卖利润）
+        # 报表口径开关：exclude_other_expense=True = 已排除其他收支（只看商品售卖利润）
         "exclude_other_expense": bool(exclude_other),
-        "excluded_other_expense": other_raw,   # 被排除掉的其他开支金额（仅供提示）
+        "excluded_other_expense": other_raw,   # 被排除掉的其他收支金额（仅供提示）
         "net_profit": net,
         "purchase": round(purchase_db, 2),
-        # 全部支出 = 采购（进货）+ 其他开支 + 手工记账 + 刷单成本；仅用于"支出"展示口径
+        # 全部支出 = 采购（进货）+ 其他收支 + 手工记账 + 刷单成本；仅用于"支出"展示口径
         # （采购已进结转成本、刷单成本已在毛利里扣过，都不进期间费用，净利不受影响）
         "total_expense": round(purchase_db + expense + brush_total, 2),
         "stock_value": stock_value,
@@ -1174,9 +1174,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         "pack_cost_total": pack_total,
         # 账外手工登记费用（不含采购支出），会额外从毛利中扣减得到净利
         "manual_fees": manual_fees,
-        # 其他开支明细（按费用类型），同样计入期间费用
+        # 其他收支明细（按费用类型），同样计入期间费用
         "other_expenses": other_fees,
-        # 逐日 / 逐月支出明细（采购 + 其他开支 + 手工记账）
+        # 逐日 / 逐月支出明细（采购 + 其他收支 + 手工记账）
         "expense_by_day": _expense_rows(exp_day, "date"),
         "expense_by_month": _expense_rows(exp_month, "month"),
         # 逐笔支出明细（同上口径，逐条列出：日期/来源/项目/金额/操作员/备注）
@@ -1295,7 +1295,7 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
         })
     product_rows.sort(key=lambda x: -x["amount"])
 
-    # ---- 支出：按日 / 按月归并（采购 + 其他开支 + 手工记账）----
+    # ---- 支出：按日 / 按月归并（采购 + 其他收支 + 手工记账）----
     def merge_expense_rows(field: str, label: str) -> list[dict]:
         acc: dict[str, dict] = {}
         for p in parts:
@@ -1367,7 +1367,7 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
         "expense": s("expense"),
         "manual_expense": s("manual_expense"),
         "other_expense": s("other_expense"),
-        # 全仓口径开关：任一分仓标记为「排除其他开支」即视为同一口径
+        # 全仓口径开关：任一分仓标记为「排除其他收支」即视为同一口径
         "exclude_other_expense": any(bool(p.get("exclude_other_expense")) for p in parts),
         "excluded_other_expense": s("excluded_other_expense"),
         "net_profit": s("net_profit"),
@@ -1611,7 +1611,7 @@ def _sales_by_spec_all(date_from: str, date_to: str) -> dict:
 def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str, exclude_other: bool = False) -> dict:
     """单个分仓的「收入 / 支出 / 利润」总览（口径与 /report/summary 完全一致：只含已付款单据）。
 
-    exclude_other=True 时不计入其他开支（只看商品售卖利润）。
+    exclude_other=True 时不计入其他收支（只看商品售卖利润）。
 
     全部走 SQL 聚合：全仓总览要为每个分仓各算一遍，以前每仓都把区间内所有单据
     （出库/入库/流水/开支）实例化成 ORM 对象再在 Python 里求和，几秒钟就是这么攒出来的。
@@ -1676,7 +1676,7 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
     other_raw = round(float(db.execute(
         select(func.coalesce(func.sum(OtherExpense.amount), 0))
         .where(*_date_conds(OtherExpense), paid(OtherExpense),
-               # 运费/装卸镜像行已计入批次成本，期间费用不重复扣（「其他开支」页仍可查）
+               # 运费/装卸镜像行已计入批次成本，期间费用不重复扣（「其他收支」页仍可查）
                func.coalesce(OtherExpense.ref_type, "") != INBOUND_FEE_REF)
     ).scalar() or 0.0), 2)
     # 部分付款：已付部分算本期进货，未付余额算待付款（与 /report/summary 同口径）
@@ -1740,7 +1740,7 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
         "exclude_other_expense": bool(exclude_other),
         "excluded_other_expense": other_raw,
         "purchase": round(purchase, 2),
-        # 全部支出 = 采购 + 其他开支 + 手工记账 + 刷单成本（与单仓 /report/summary 同口径）
+        # 全部支出 = 采购 + 其他收支 + 手工记账 + 刷单成本（与单仓 /report/summary 同口径）
         "total_expense": round(purchase + expense + brush, 2),
         "net_profit": round(revenue - cogs - brush - expense, 2),
         "orders": int(orders),
@@ -1760,7 +1760,7 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
 def all_warehouses(
     date_from: str = "",
     date_to: str = "",
-    exclude_other: int = 0,   # 1 = 排除「其他开支」（与 /report/summary 同口径）
+    exclude_other: int = 0,   # 1 = 排除「其他收支」（与 /report/summary 同口径）
     user: User = Depends(get_current_user),
 ):
     """全仓总览：把所有分仓的收入 / 支出 / 利润汇总成一张表 + 合计。"""

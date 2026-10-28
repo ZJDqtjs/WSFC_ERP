@@ -1,6 +1,6 @@
 """待付款账单：把各处的「待付款」单据聚合成一张待办账单。
 
-- 来源：入库（采购）/ 入仓 / 出库（销售回款）/ 其他开支 / 手动记账；
+- 来源：入库（采购）/ 入仓 / 出库（销售回款）/ 其他收支 / 手动记账；
 - 各处录入表单默认「已付款」→ 直接进财务报表；勾「待付款」→ 先落到这张账单；
 - 点「已支付」→ 标记该单据已结清（入库/出库会同步它自动生成的财务流水），
   随后按原日期纳入财务报表（收入/支出同时计入，避免只算一头导致毛利失真）。
@@ -45,7 +45,7 @@ SOURCE_NAME = {
     "inbound": "入库",
     "warehouse_in": "入仓",
     "outbound": "出库",
-    "otherexp": "其他开支",
+    "otherexp": "其他收支",
     "finance": "手动记账",
     "dropship": "代发",
     "dropship_item": "代发",
@@ -70,7 +70,7 @@ class PayIn(BaseModel):
     kind: str
     id: int
     paid: bool = True  # True=已支付（转入报表），False=撤销为待付款
-    # 转账手续费（元）：>0 时自动记一笔「其他开支 → 手续费」，计入财务报表期间费用
+    # 转账手续费（元）：>0 时自动记一笔「其他收支 → 手续费」，计入财务报表期间费用
     fee: float = 0.0
     date: str = ""     # 手续费的入账日期（空=今天）
 
@@ -84,14 +84,14 @@ class PayBatchIn(BaseModel):
     date: str = ""
 
 
-PAY_FEE_CATEGORY = "手续费"     # 其他开支里的费用类型
+PAY_FEE_CATEGORY = "手续费"     # 其他收支里的费用类型
 
 
 def _record_pay_fee(db: Session, amount: float, day: str, operator: str, remark: str) -> float:
-    """把转账手续费记一笔「其他开支」（已付款），返回实际入账金额。
+    """把转账手续费记一笔「其他收支」（已付款），返回实际入账金额。
 
-    手续费是真实的期间费用，报表「其他开支 → 期间费用」直接扣减，不像入库运费那样已经在成本里，
-    所以不需要镜像排除。ref_type 留空 = 手工登记行：用户可以在「其他开支」页改/删（填错了能自己修）。
+    手续费是真实的期间费用，报表「其他收支 → 期间费用」直接扣减，不像入库运费那样已经在成本里，
+    所以不需要镜像排除。ref_type 留空 = 手工登记行：用户可以在「其他收支」页改/删（填错了能自己修）。
     """
     try:
         amt = round(float(amount or 0.0), 2)
@@ -230,7 +230,7 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
         .where(_pay_filter(Inbound, include_paid, cutoff))
     ).scalars():
         name = r.product.name if r.product else ""
-        # 应付 = 实付（含抹零/凑整调整 + 运费/装卸费；后两者的「其他开支」镜像行不单独列为待办）
+        # 应付 = 实付（含抹零/凑整调整 + 运费/装卸费；后两者的「其他收支」镜像行不单独列为待办）
         due = round((r.total_amount or 0.0) + (getattr(r, "adjust_amount", 0.0) or 0.0)
                     + (getattr(r, "freight", 0.0) or 0.0) + (getattr(r, "handling", 0.0) or 0.0), 2)
         status = (getattr(r, "pay_status", "paid") or "paid")
@@ -298,7 +298,7 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
             "in", r.pay_status, r.paid_at, r.operator, r.remark, r.code,
         ))
 
-    # 只列手工登记的其他开支：入库/出库金额调整自动生成的记录随主单结算，不单独作为待办
+    # 只列手工登记的其他收支：入库/出库金额调整自动生成的记录随主单结算，不单独作为待办
     for r in db.execute(
         select(OtherExpense).where(
             func.coalesce(OtherExpense.ref_type, "") == "",
@@ -306,7 +306,7 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
         )
     ).scalars():
         rows.append(_row(
-            "otherexp", r.id, r.date, r.category, "其他开支",
+            "otherexp", r.id, r.date, r.category, "其他收支",
             r.amount, "out", r.pay_status, r.paid_at, r.operator, r.remark,
         ))
 
@@ -379,8 +379,8 @@ def list_payables(
 def pay_bill(data: PayIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """标记已支付（转入财务报表）或撤销（改回待付款，从报表移出）。
 
-    可选：带上转账手续费 fee > 0，会自动记一笔「其他开支 → 手续费」（日期=付款日期，已付款），
-    计入财务报表的期间费用；撤销时不会自动删掉手续费（钱确实被银行收了），需要的话到「其他开支」删。
+    可选：带上转账手续费 fee > 0，会自动记一笔「其他收支 → 手续费」（日期=付款日期，已付款），
+    计入财务报表的期间费用；撤销时不会自动删掉手续费（钱确实被银行收了），需要的话到「其他收支」删。
     """
     kind = (data.kind or "").strip()
     if float(data.fee or 0) < 0:
@@ -563,7 +563,7 @@ def _mark_paid(db: Session, kind: str, rid: int, paid: bool) -> tuple[str, str]:
     """把一张账单标记为已支付/撤销，返回 (pay_status, paid_at)。
 
     代发（dropship）按出库单批量更新它名下的规格明细；其余 kind 更新单据自身，
-    入库/出库还要把自动生成的财务流水与其他开支（金额调整 / 运费装卸）一起跟着走。
+    入库/出库还要把自动生成的财务流水与其他收支（金额调整 / 运费装卸）一起跟着走。
     """
     status = "paid" if paid else "unpaid"
     paid_at = _date.today().isoformat() if paid else ""
@@ -601,7 +601,7 @@ def _mark_paid(db: Session, kind: str, rid: int, paid: bool) -> tuple[str, str]:
             select(FinanceRecord).where(FinanceRecord.ref_type == kind, FinanceRecord.ref_id == rec.id)
         ).scalars():
             f.pay_status, f.paid_at = rec.pay_status, rec.paid_at
-        # 单据带出的其他开支同样随主单结算：金额调整(ref_type=kind) + 入库运费/装卸镜像行
+        # 单据带出的其他收支同样随主单结算：金额调整(ref_type=kind) + 入库运费/装卸镜像行
         exp_types = [kind] + (["inbound_fee"] if kind == "inbound" else [])
         for e in db.execute(
             select(OtherExpense).where(OtherExpense.ref_type.in_(exp_types), OtherExpense.ref_id == rec.id)
