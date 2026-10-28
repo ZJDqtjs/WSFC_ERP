@@ -5,6 +5,7 @@
 - 点「已支付」→ 标记该单据已结清（入库/出库会同步它自动生成的财务流水），
   随后按原日期纳入财务报表（收入/支出同时计入，避免只算一头导致毛利失真）。
 """
+import re
 from datetime import date as _date
 from datetime import timedelta
 
@@ -29,6 +30,8 @@ from ..models import (
 from ..services import pay_due
 
 router = APIRouter(prefix="/api", tags=["payables"])
+
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # kind → 模型（前端按 kind 提交「已支付」）。dropship 例外：按出库单聚合，见 pay_bill。
 MODEL_OF = {
@@ -67,12 +70,56 @@ class PayIn(BaseModel):
     kind: str
     id: int
     paid: bool = True  # True=已支付（转入报表），False=撤销为待付款
+    # 转账手续费（元）：>0 时自动记一笔「其他开支 → 手续费」，计入财务报表期间费用
+    fee: float = 0.0
+    date: str = ""     # 手续费的入账日期（空=今天）
 
 
 class PayBatchIn(BaseModel):
     kind: str
     ids: list[int]
     paid: bool = True
+    # 整批只记一笔手续费（不是每单都收），前端只在第一组提交时带上
+    fee: float = 0.0
+    date: str = ""
+
+
+PAY_FEE_CATEGORY = "手续费"     # 其他开支里的费用类型
+
+
+def _record_pay_fee(db: Session, amount: float, day: str, operator: str, remark: str) -> float:
+    """把转账手续费记一笔「其他开支」（已付款），返回实际入账金额。
+
+    手续费是真实的期间费用，报表「其他开支 → 期间费用」直接扣减，不像入库运费那样已经在成本里，
+    所以不需要镜像排除。ref_type 留空 = 手工登记行：用户可以在「其他开支」页改/删（填错了能自己修）。
+    """
+    try:
+        amt = round(float(amount or 0.0), 2)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "手续费应为数字")
+    if amt < 0:
+        raise HTTPException(400, "手续费不能为负数")
+    if amt < 0.01:
+        return 0.0
+    day = (day or "").strip() or _date.today().isoformat()
+    if not DATE_RE.match(day):
+        raise HTTPException(400, "日期格式应为 YYYY-MM-DD")
+    db.add(OtherExpense(
+        category=PAY_FEE_CATEGORY, amount=amt, date=day, remark=remark,
+        operator=operator, pay_status="paid", paid_at=day,
+        ref_type="", ref_id=None,
+    ))
+    return amt
+
+
+def _pay_label(db: Session, kind: str, rid: int) -> str:
+    """账单的可读标识（单号优先，没有就用来源+id），用于手续费备注。"""
+    code = ""
+    model = MODEL_OF.get(kind)
+    if model:
+        rec = db.get(model, rid)
+        code = (getattr(rec, "code", "") or "") if rec else ""
+    return code or f"#{rid}"
 
 
 def _qty(v) -> str:
@@ -330,9 +377,22 @@ def list_payables(
 
 @router.post("/payables/pay")
 def pay_bill(data: PayIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """标记已支付（转入财务报表）或撤销（改回待付款，从报表移出）。"""
+    """标记已支付（转入财务报表）或撤销（改回待付款，从报表移出）。
+
+    可选：带上转账手续费 fee > 0，会自动记一笔「其他开支 → 手续费」（日期=付款日期，已付款），
+    计入财务报表的期间费用；撤销时不会自动删掉手续费（钱确实被银行收了），需要的话到「其他开支」删。
+    """
     kind = (data.kind or "").strip()
+    if float(data.fee or 0) < 0:
+        raise HTTPException(400, "手续费不能为负数")
     status, paid_at = _mark_paid(db, kind, data.id, bool(data.paid))
+    fee = 0.0
+    if data.paid and float(data.fee or 0) > 0:
+        label = SOURCE_NAME.get(kind, kind)
+        fee = _record_pay_fee(
+            db, data.fee, data.date, user.name,
+            f"支付{label} {_pay_label(db, kind, data.id)} 转账手续费",
+        )
     db.commit()
     return {
         "ok": True,
@@ -341,6 +401,7 @@ def pay_bill(data: PayIn, db: Session = Depends(get_db), user: User = Depends(ge
         "source": SOURCE_NAME.get(kind, kind),
         "pay_status": status,
         "paid_at": paid_at,
+        "fee": fee,
     }
 
 
@@ -351,6 +412,8 @@ def pay_bills_batch(data: PayBatchIn, db: Session = Depends(get_db), user: User 
     ids 的含义随 kind：普通单据是自身 id；代发是**出库单 id**（整单的代发成本一起结清）。
     """
     kind = (data.kind or "").strip()
+    if float(data.fee or 0) < 0:
+        raise HTTPException(400, "手续费不能为负数")
     ids = list(dict.fromkeys(int(i) for i in (data.ids or [])))
     if not ids:
         raise HTTPException(400, "请先勾选要处理的账单")
@@ -363,8 +426,15 @@ def pay_bills_batch(data: PayBatchIn, db: Session = Depends(get_db), user: User 
             if e.status_code != 404:
                 raise
             missing += 1
+    # 转账手续费：整批只记一笔（不是每单都收）；一笔都没处理成功就不记
+    fee = 0.0
+    if data.paid and updated > 0 and float(data.fee or 0) > 0:
+        fee = _record_pay_fee(
+            db, data.fee, data.date, user.name,
+            f"批量支付 {updated} 笔{SOURCE_NAME.get(kind, kind)}账单 转账手续费",
+        )
     db.commit()
-    return {"ok": True, "kind": kind, "updated": updated, "missing": missing}
+    return {"ok": True, "kind": kind, "updated": updated, "missing": missing, "fee": fee}
 
 
 @router.get("/payables/dropship")

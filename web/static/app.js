@@ -9069,18 +9069,87 @@ function renderPayables() {
   renderPaySum(rows, undated, active, f);
 }
 
-/** 标记已支付/撤销：支付后按原日期纳入财务报表，撤销则移出 */
+/* ---------- 已支付确认弹窗（可顺手记一笔转账手续费 → 其他开支） ---------- */
+let PAY_MODAL_OK = null;   // 当前弹窗「确认」后要执行的动作（fee, date）=> Promise
+
+function openPayModal({ title, label, note, onOk }) {
+  PAY_MODAL_OK = onOk;
+  openModal(`
+    <h3>${title} <button class="close" onclick="closeModal()">✕</button></h3>
+    <div style="margin-bottom:8px;">${label}</div>
+    ${note ? `<div class="muted" style="font-size:12.5px;margin-bottom:12px;">${note}</div>` : ""}
+    <div class="form-grid">
+      <div class="field">
+        <label>转账手续费（选填）</label>
+        <input id="payFee" type="number" min="0" step="any" placeholder="0.00" oninput="payFeeCalc()" />
+        <div class="field-hint">部分转款会产生手续费：填了会自动记一笔「其他开支 → 手续费」（已付款），计入财务报表期间费用</div>
+      </div>
+      <div class="field">
+        <label>手续费入账日期</label>
+        <input id="payFeeDate" type="date" value="${today()}" onchange="payFeeCalc()" />
+        <div class="field-hint">一般就是付款当天；不填手续费可以不管它</div>
+      </div>
+    </div>
+    <p class="hint" id="payFeeTip"></p>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn green" onclick="payModalSubmit()">✓ 确认已支付</button>
+    </div>`);
+  payFeeCalc();
+  const el = $("payFee");
+  if (el) el.focus();
+}
+
+/** 手续费输入实时提示（记到哪、多少钱） */
+function payFeeCalc() {
+  const tip = $("payFeeTip");
+  if (!tip) return;
+  const fee = parseFloat(($("payFee") || {}).value) || 0;
+  const day = ($("payFeeDate") || {}).value || today();
+  tip.innerHTML = fee > 0
+    ? `将自动记一笔其他开支：<b>手续费 ¥${fmtMoney(fee)}</b>（${esc(day)}，已付款）`
+    : "不收手续费就留空，不影响记账。";
+}
+
+async function payModalSubmit() {
+  const ok = PAY_MODAL_OK;
+  if (!ok) return;
+  const fee = parseFloat(($("payFee") || {}).value) || 0;
+  if (fee < 0) { toast("手续费不能为负数"); return; }
+  const day = ($("payFeeDate") || {}).value || today();
+  PAY_MODAL_OK = null;
+  closeModal();
+  await ok(fee, day);
+}
+
+/** 标记已支付/撤销：支付时弹窗可填手续费；支付后按原日期纳入财务报表，撤销则移出 */
 async function payBill(kind, id, paid) {
   const r = PAY_ROWS.find((x) => x.kind === kind && x.id === id);
-  const label = r ? `${r.source}「${r.title}」${fmtMoney(r.amount)}` : "";
-  const isDs = kind === "dropship";
-  if (paid && !confirm(`确认已支付？\n${label}\n${isDs ? "（代发成本只做付款核对，不影响财务报表）" : "确认后这笔将按原日期计入财务报表。"}`)) return;
-  if (!paid && !confirm(`确认撤销？\n${label}\n${isDs ? "（只撤销付款核对标记）" : "撤销后它会移出财务报表，回到待付款账单。"}`)) return;
+  const plain = r ? `${r.source}「${r.title}」${fmtMoney(r.amount)}` : "";
+  const label = r ? `<b>${esc(r.source)}</b>「${esc(r.title)}」<b class="mono">${fmtMoney(r.amount)}</b>` : "";
+  const isDs = kind === "dropship" || kind === "dropship_item";
+  if (!paid) {
+    if (!confirm(`确认撤销？\n${plain}\n${isDs ? "（只撤销付款核对标记）" : "撤销后它会移出财务报表，回到待付款账单。"}`)) return;
+    return submitPayDoc({ kind, id, paid: false, fee: 0 });
+  }
+  openPayModal({
+    title: "确认已支付",
+    label,
+    note: isDs
+      ? "代发成本只做付款核对、不影响报表的收入成本；手续费照常记入「其他开支」。"
+      : "确认后这笔将按原日期计入财务报表。",
+    onOk: (fee, day) => submitPayDoc({ kind, id, paid: true, fee, date: day }),
+  });
+}
+
+async function submitPayDoc({ kind, id, paid, fee, date }) {
+  const isDs = kind === "dropship" || kind === "dropship_item";
   try {
-    await api("/api/payables/pay", "POST", { kind, id, paid });
-    toast(paid
+    const r = await api("/api/payables/pay", "POST", { kind, id, paid, fee, date });
+    const tail = r && r.fee ? `；手续费 ¥${fmtMoney(r.fee)} 已记「其他开支」` : "";
+    toast((paid
       ? (isDs ? "已标记代发成本已支付" : "已标记已支付，已按原日期计入财务报表")
-      : (isDs ? "已撤销付款标记" : "已撤销，已移出财务报表"));
+      : (isDs ? "已撤销付款标记" : "已撤销，已移出财务报表")) + tail);
     await loadPayablesPage();
     if (DS_LOADED) loadDropshipBills();   // 代发页签同源，跟着刷新
   } catch (e) { toast("操作失败：" + e.message); }
@@ -9113,7 +9182,7 @@ function payPicked() {
   }).filter((x) => x.kind && Number.isFinite(x.id));
 }
 
-/** 批量标记已支付 / 撤销：按 kind 分组提交（代发按出库单整单结清，其余按单据自身） */
+/** 批量标记已支付 / 撤销：支付时弹窗可填手续费（整批只记一笔），按 kind 分组提交 */
 async function payBatch(paid) {
   const picked = payPicked();
   if (!picked.length) { toast("请先勾选要处理的账单"); return; }
@@ -9121,23 +9190,36 @@ async function payBatch(paid) {
     const r = PAY_ROWS.find((x) => x.kind === p.kind && x.id === p.id);
     return a + (r ? r.amount : 0);
   }, 0);
-  const tip = paid
-    ? "确认后这些将按原日期计入财务报表（代发只做付款核对、不进报表）。"
-    : "撤销后会从财务报表移出（代发只撤销付款标记）。";
-  if (!confirm(`${paid ? "批量标记已支付" : "批量撤销"}：${picked.length} 笔，合计 ${fmtMoney(amount)}？\n${tip}`)) return;
+  if (!paid) {
+    if (!confirm(`批量撤销：${picked.length} 笔，合计 ${fmtMoney(amount)}？\n撤销后会从财务报表移出（代发只撤销付款标记）。`)) return;
+    return submitPayBatch(picked, false, 0, "");
+  }
+  openPayModal({
+    title: "批量标记已支付",
+    label: `<b>${picked.length}</b> 笔账单，合计 <b class="mono">${fmtMoney(amount)}</b>`,
+    note: "确认后这些将按原日期计入财务报表（代发只做付款核对、不进报表）。整批只记一笔手续费。",
+    onOk: (fee, day) => submitPayBatch(picked, true, fee, day),
+  });
+}
+
+async function submitPayBatch(picked, paid, fee, date) {
   const byKind = new Map();
   picked.forEach((p) => {
     if (!byKind.has(p.kind)) byKind.set(p.kind, []);
     byKind.get(p.kind).push(p.id);
   });
-  let updated = 0, missing = 0;
+  let updated = 0, missing = 0, feeTotal = 0, feeLeft = fee;
   try {
     for (const [kind, ids] of byKind) {
-      const r = await api("/api/payables/pay-batch", "POST", { kind, ids, paid });
+      // 手续费只随第一组提交一次（后端每收到一次就记一笔其他开支，避免按来源重复记）
+      const r = await api("/api/payables/pay-batch", "POST", { kind, ids, paid, fee: feeLeft, date });
+      feeLeft = 0;
       updated += r.updated || 0;
       missing += r.missing || 0;
+      feeTotal += r.fee || 0;
     }
-    toast(`已处理 ${updated} 笔${missing ? `，${missing} 笔已不存在` : ""}`);
+    toast(`已处理 ${updated} 笔${missing ? `，${missing} 笔已不存在` : ""}`
+      + (feeTotal ? `；手续费 ¥${fmtMoney(feeTotal)} 已记「其他开支」` : ""));
     await loadPayablesPage();
     if (DS_LOADED) loadDropshipBills();
   } catch (e) { toast("批量操作失败：" + e.message); }
