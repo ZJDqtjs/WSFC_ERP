@@ -836,7 +836,7 @@
             <input id="adpSkuSearch" type="search" placeholder="搜索 SKU / 商品名称" oninput="renderAdProfitSku()" style="width:180px;" />
           </div>
           <div class="table-wrap"><table id="adpSkuTable"></table></div>
-          <p class="note">广告花费按缓存段整段读取后按 SKU 汇总；ERP 商品编码需填京东 skuId（如 100157104844）才能匹配。没匹配上的广告花费单列为「未匹配 ERP」行（收入按 0 计），并计入全部 SKU 的合计。</p>
+          <p class="note">广告花费按缓存段整段读取后按 SKU 汇总；ERP 商品编码需填京东 skuId（如 100157104844）才能匹配。入仓品（ERP 里没有出库销售）的成交件数与毛利取 jdfenxi「月度利润」的本地缓存，利润 = 入仓品毛利 − 广告费；缓存只到某天时会在上方标注截止日，不会触发京东抓取。没匹配上的广告花费单列为「未匹配 ERP」行（收入按 0 计）。本表按成交口径统计：ERP 的入仓台账（备货入库结算）不是成交，不再计入本表，避免和入仓品行的成交重复，所以本表合计与上方财务卡片的收入口径不同。</p>
         </div>
       </section>
 
