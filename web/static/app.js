@@ -11490,6 +11490,8 @@ async function importJushuitan() {
 /* ==================== 广告利润（财务报表口径 + 挂载服务 CPS / 京准通花费） ==================== */
 let ADP_SCOPE = "all";   // all 全仓总览（默认） / one 单仓总览
 let ADP_WH = "";         // 单仓总览查看的分仓 key；"" = 当前分仓
+let ADP_SKU = null;      // 按 SKU 明细接口的返回（搜索/排序只在前端重排，不重复请求）
+let ADP_SKU_FULL = false; // 是否展开「显示全部」
 let adpInited = false;
 let adpWhLoaded = false;
 
@@ -11571,6 +11573,96 @@ async function loadAdProfit(refresh) {
     return;
   }
   renderAdProfit(d);
+  loadAdProfitSku(from, to, whQs, refresh);
+}
+
+/* ---------------- 按 SKU 明细 ---------------- */
+
+async function loadAdProfitSku(from, to, whQs, refresh) {
+  const stat = $("adpSkuStat");
+  if (stat) stat.textContent = "按 SKU 加载中…";
+  try {
+    const d = await api(`/api/adprofit/skus?date_from=${from}&date_to=${to}${whQs}${excludeOtherQs()}${refresh ? "&refresh=1" : ""}`);
+    ADP_SKU = d;
+    ADP_SKU_FULL = false;
+    renderAdProfitSku();
+  } catch (e) {
+    ADP_SKU = null;
+    const t = $("adpSkuTable");
+    if (t) t.innerHTML = `<tbody><tr><td class="empty">按 SKU 明细加载失败：${esc(e.message)}</td></tr></tbody>`;
+    if (stat) stat.textContent = "";
+  }
+}
+
+const ADP_SKU_SORTS = {
+  ads: (a, b) => b.ads_total - a.ads_total || b.revenue - a.revenue,
+  revenue: (a, b) => b.revenue - a.revenue || b.ads_total - a.ads_total,
+  gross: (a, b) => b.gross_before - a.gross_before || b.ads_total - a.ads_total,
+  gross_after: (a, b) => b.gross_after - a.gross_after || b.ads_total - a.ads_total,
+};
+
+function renderAdProfitSku() {
+  const t = $("adpSkuTable");
+  if (!t) return;
+  const stat = $("adpSkuStat");
+  if (!ADP_SKU) {
+    t.innerHTML = `<tbody><tr><td class="empty">暂无数据</td></tr></tbody>`;
+    return;
+  }
+  const q = ($("adpSkuSearch").value || "").trim().toLowerCase();
+  const onlyAds = $("adpSkuOnlyAds").checked;
+  const sortKey = ($("adpSkuSort").value || "ads");
+  const all = ADP_SKU.rows || [];
+  let rows = all.filter((r) =>
+    (!onlyAds || r.ads_total > 0) &&
+    (!q || String(r.sku || "").toLowerCase().includes(q) || String(r.name || "").toLowerCase().includes(q))
+  );
+  rows = rows.slice().sort(ADP_SKU_SORTS[sortKey] || ADP_SKU_SORTS.ads);
+
+  const totals = ADP_SKU.totals || {};
+  if (stat) {
+    const un = Number(totals.unmatched_ads) || 0;
+    stat.innerHTML = `${totals.sku_count || 0} 个 SKU · 匹配广告 ${totals.matched_skus || 0} 个 · 仅广告花费 ${totals.ad_only_skus || 0} 个`
+      + (un > 0.005 ? ` · <span style="color:var(--red);">未匹配广告费 ${fmtMoney(un)}</span>` : "");
+  }
+
+  const LIMIT = 80;
+  const shown = ADP_SKU_FULL ? rows : rows.slice(0, LIMIT);
+  const qtyOf = (r) => (r.qty ? `${fmtNum(r.qty)}${r.unit ? " " + esc(r.unit) : ""}` : "—");
+  const tagOf = (r) => r.ad_only
+    ? ` <span class="badge out" title="有广告花费，但 ERP 商品明细里没有这个编码（京东 skuId）的销售记录">未匹配 ERP</span>`
+    : (r.no_code ? ` <span class="badge pack" title="商品资料没填编码，无法匹配广告花费">未填编码</span>` : "");
+  const body = shown.length ? shown.map((r) => `<tr>
+      <td class="mono">${esc(r.sku || "—")}</td>
+      <td>${esc(r.name || "—")}${tagOf(r)}</td>
+      <td class="num">${qtyOf(r)}</td>
+      <td class="num mono">${fmtMoney(r.revenue)}</td>
+      <td class="num mono">${fmtMoney(r.gross_before)}</td>
+      <td class="num mono">${fmtMoney(r.cps)}</td>
+      <td class="num mono">${fmtMoney(r.jzt)}</td>
+      <td class="num mono"><strong>${fmtMoney(r.ads_total)}</strong></td>
+      <td class="num mono" style="color:${r.gross_after >= 0 ? "var(--green)" : "var(--red)"};">${fmtMoney(r.gross_after)}</td>
+      <td class="num muted">${adpPct(r.ad_rate)}</td>
+      <td class="num muted">${r.roi == null ? "—" : Number(r.roi).toFixed(2)}</td>
+    </tr>`).join("") : `<tr><td colspan="11" class="empty">${q || onlyAds ? "没有符合条件的 SKU" : "所选区间没有可用的 SKU 数据"}</td></tr>`;
+
+  t.innerHTML = `<thead><tr>
+      <th>SKU</th><th>商品名称</th>
+      <th class="num">销量</th><th class="num">销售额</th><th class="num">广告前毛利</th>
+      <th class="num">CPS 花费</th><th class="num">京准通花费</th><th class="num">广告费合计</th>
+      <th class="num">广告后毛利</th><th class="num">广告费率</th><th class="num">ROI</th>
+    </tr></thead><tbody>${body}</tbody>` +
+    `<tfoot><tr>
+      <td><strong>合计</strong></td><td class="muted">共 ${rows.length} 个 SKU</td>
+      <td class="num"></td>
+      <td class="num mono"><strong>${fmtMoney(totals.erp_revenue)}</strong></td>
+      <td class="num mono"><strong>${fmtMoney(totals.gross_before)}</strong></td>
+      <td class="num mono"><strong>${fmtMoney(totals.cps_total)}</strong></td>
+      <td class="num mono"><strong>${fmtMoney(totals.jzt_total)}</strong></td>
+      <td class="num mono"><strong>${fmtMoney(totals.ads_total)}</strong></td>
+      <td class="num mono"><strong>${fmtMoney(totals.gross_after)}</strong></td>
+      <td class="num"></td><td class="num"></td>
+    </tr>${(!ADP_SKU_FULL && rows.length > LIMIT) ? `<tr><td colspan="11" class="muted">已显示前 ${LIMIT} 条，共 ${rows.length} 条 · <a href="javascript:;" onclick="ADP_SKU_FULL=true;renderAdProfitSku();">显示全部</a></td></tr>` : ""}</tfoot>`;
 }
 
 function renderAdProfit(d) {

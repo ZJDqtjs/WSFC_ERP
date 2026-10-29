@@ -817,6 +817,27 @@
           <div class="table-wrap"><table id="adpAccTable"></table></div>
           <p class="note">缓存只能按账号 + 区间整段读取：所选区间拼不满的日期会列在「缺口」里，并且不计入广告费（不会用区间外的数据凑数），此时广告费会被低估，请到挂载服务按该区间补抓一次。</p>
         </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>按 SKU 明细</h3>
+            <span class="muted" id="adpSkuStat">按商品编码（京东 skuId）匹配挂载服务的 SKU 花费</span>
+            <div class="grow"></div>
+            <label class="rep-switch" title="只显示有广告花费的 SKU">
+              <input type="checkbox" id="adpSkuOnlyAds" onchange="renderAdProfitSku()" />
+              <span>只看有广告费</span>
+            </label>
+            <select id="adpSkuSort" onchange="renderAdProfitSku()" title="排序方式">
+              <option value="ads">按广告费</option>
+              <option value="revenue">按销售额</option>
+              <option value="gross">按广告前毛利</option>
+              <option value="gross_after">按广告后毛利</option>
+            </select>
+            <input id="adpSkuSearch" type="search" placeholder="搜索 SKU / 商品名称" oninput="renderAdProfitSku()" style="width:180px;" />
+          </div>
+          <div class="table-wrap"><table id="adpSkuTable"></table></div>
+          <p class="note">广告花费按缓存段整段读取后按 SKU 汇总；ERP 商品编码需填京东 skuId（如 100157104844）才能匹配。没匹配上的广告花费单列为「未匹配 ERP」行（收入按 0 计），并计入全部 SKU 的合计。</p>
+        </div>
       </section>
 
       <!-- 其他收支 -->
