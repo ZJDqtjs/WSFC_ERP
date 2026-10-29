@@ -22,7 +22,7 @@ from .database import DATA_DIR, get_user_db
 from .models import User
 
 # 会话 Cookie 名。默认 erp_token；本地实例经公网子路径（/jdfenxi/）挂载时，
-# 浏览器仍把它当成 47.108.13.20 这一个站点，同名 Cookie 会覆盖公网主站的登录态，
+# 浏览器仍把它当成公网主站这一个站点，同名 Cookie 会覆盖公网主站的登录态，
 # 因此本地实例需用 ERP_COOKIE_NAME=erp_token_dev 之类的独立名字。
 COOKIE_NAME = os.getenv("ERP_COOKIE_NAME", "erp_token")
 TOKEN_MAX_AGE = 60 * 60 * 24 * 7  # 7 天

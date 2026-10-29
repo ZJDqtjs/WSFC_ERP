@@ -1,7 +1,8 @@
 # frp 客户端（本地机器，即跑着 http://192.168.1.117:8011 的那台）
 # 启动方式：frpc.exe -c frpc.toml   （Windows 可用 nssm / 任务计划注册为开机自启）
 
-serverAddr = "47.108.13.20"
+# 公网 frps 服务器地址（部署时填你自己的公网 IP/域名，勿把生产地址提交进仓库）
+serverAddr = "REPLACE_WITH_FRPS_SERVER_ADDR"
 serverPort = 7000
 
 # 与公网 frps.toml 保持一致

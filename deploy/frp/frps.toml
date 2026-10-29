@@ -1,4 +1,4 @@
-# frp 服务端（公网服务器 47.108.13.20）
+# frp 服务端（部署在你的公网服务器上）
 # 放置位置：/etc/frp/frps.toml
 # 启动方式：frps -c /etc/frp/frps.toml   （建议用 systemd 常驻）
 
