@@ -46,6 +46,7 @@
     <symbol id="i-sliders" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></symbol>
     <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></symbol>
     <symbol id="i-coins" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/></symbol>
+    <symbol id="i-megaphone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 5 3 9v6l10 4V5z"/><path d="M17 7a5 5 0 0 1 0 10"/><path d="M20 4a9 9 0 0 1 0 16"/><rect x="4" y="14" width="3" height="5" rx="1"/></symbol>
     <symbol id="i-bill" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01"/><path d="M18 12h.01"/></symbol>
     <symbol id="i-paperclip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
     <symbol id="i-warehouse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 8.35V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8.35A2 2 0 0 1 3.26 6.5l8-3.2a2 2 0 0 1 1.48 0l8 3.2A2 2 0 0 1 22 8.35Z"/><path d="M6 18h12"/><path d="M6 14h12"/><rect width="12" height="12" x="6" y="10"/></symbol>
@@ -75,6 +76,7 @@
         <button class="nav-item" data-page="packrules"><span class="nav-ico"><svg class="ic"><use href="#i-link"/></svg></span>一单多货</button>
         <div class="nav-group">经营分析</div>
         <button class="nav-item" data-page="report"><span class="nav-ico"><svg class="ic"><use href="#i-chart"/></svg></span>财务报表</button>
+        <button class="nav-item" data-page="adprofit"><span class="nav-ico"><svg class="ic"><use href="#i-megaphone"/></svg></span>广告利润</button>
         <button class="nav-item" data-page="otherexp"><span class="nav-ico"><svg class="ic"><use href="#i-wallet"/></svg></span>其他收支</button>
         <button class="nav-item" data-page="payables"><span class="nav-ico"><svg class="ic"><use href="#i-bill"/></svg></span>待付款账单<span class="badge" id="payNavBadge" style="display:none;margin-left:auto;background:#f97316;color:#fff;"></span></button>
         <div class="nav-group">数据工具</div>
@@ -751,6 +753,70 @@
           </div>
         </div>
         </div>  <!-- /#rep-one 单仓总览 -->
+      </section>
+
+      <!-- 广告利润：财务报表口径 + 挂载服务（/jdfenxi）的 CPS 花费与京准通花费 -->
+      <section id="page-adprofit" class="page">
+        <div class="card">
+          <div class="card-head">
+            <h3>含广告费利润</h3>
+            <label class="rep-switch" title="开启后不计入「其他收支」的款项，与财务报表口径一致">
+              <input type="checkbox" id="adpExcludeOtherChk" checked onchange="adpToggleExcludeOther(this)" />
+              <span>排除其他收支</span>
+            </label>
+            <span class="hint" id="adpRangeHint"></span>
+            <div class="grow"></div>
+            <div class="seg" id="adpScopeSeg" style="margin-bottom:0;">
+              <button class="seg-item active" data-scope="all" onclick="adpScope(this)">全仓总览</button>
+              <button class="seg-item" data-scope="one" onclick="adpScope(this)">单仓总览</button>
+            </div>
+          </div>
+          <div class="toolbar">
+            <input id="adpDateFrom" type="date" /><span>-</span><input id="adpDateTo" type="date" />
+            <button class="btn" onclick="loadAdProfit()">查询</button>
+            <button class="btn secondary" onclick="adpQuick('today')">今天</button>
+            <button class="btn secondary" onclick="adpQuick('month')">本月</button>
+            <button class="btn secondary" onclick="adpQuick('lastmonth')">上月</button>
+            <div class="grow"></div>
+            <button class="btn secondary" onclick="loadAdProfit(true)" title="忽略 60 秒缓存，重新读取挂载服务的花费缓存清单">↻ 刷新广告缓存</button>
+            <button class="btn secondary" onclick="adpOpenAdService()" title="打开京东广告分析（jdfenxi）">京东广告分析 →</button>
+          </div>
+          <div class="toolbar" id="adpWhBar" style="display:none;">
+            <label class="muted">查看分仓</label>
+            <select id="adpWhSel" onchange="adpWhChange()"></select>
+            <span class="muted">默认是你当前所在分仓；换一个只是换看谁的数据，不会改变你的工作分仓</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>利润概览</h3>
+            <span class="muted" id="adpStatHint"></span>
+            <div class="grow"></div>
+            <span class="muted" id="adpGeneratedAt"></span>
+          </div>
+          <div class="stat-grid" id="adpStats"></div>
+          <div id="adpWarn" class="alert warn" style="display:none;"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>广告前后利润桥</h3>
+            <span class="muted">口径 = 财务报表（本页只额外扣减广告费，不改动原报表）</span>
+          </div>
+          <div class="table-wrap"><table id="adpBridge"></table></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>按店铺账号的广告费</h3>
+            <span class="muted">来自挂载服务「花费一览」的本地缓存（一次抓取 = 一个账号 + 一个区间）</span>
+            <div class="grow"></div>
+            <button class="btn secondary" onclick="adpOpenAdService()">去抓取花费 →</button>
+          </div>
+          <div class="table-wrap"><table id="adpAccTable"></table></div>
+          <p class="note">缓存只能按账号 + 区间整段读取：所选区间拼不满的日期会列在「缺口」里，并且不计入广告费（不会用区间外的数据凑数），此时广告费会被低估，请到挂载服务按该区间补抓一次。</p>
+        </div>
       </section>
 
       <!-- 其他收支 -->

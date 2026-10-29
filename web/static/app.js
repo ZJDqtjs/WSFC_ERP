@@ -401,7 +401,7 @@ function daysAgo(n) {
 const PAGE_TITLES = {
   home: "工作台", stock: "库存管理",   inbound: "入库", outbound: "出库 / 销售",
   "warehouse-in": "入仓", "wingroup": "入仓批次明细", eva: "待办处理",
-  products: "商品", report: "财务报表", otherexp: "其他收支", payables: "待付款账单",
+  products: "商品", report: "财务报表", adprofit: "广告利润", otherexp: "其他收支", payables: "待付款账单",
   import: "批量导入", jushuitan: "聚水潭关联",
   backup: "备份与恢复",
 };
@@ -430,6 +430,7 @@ function goPage(name) {
     deduction: loadDeductionPage, express: loadExpressPage, settings: loadSettingsPage,
     otherexp: loadOtherExpensePage, payables: loadPayablesPage,
     eva: loadEva,   // 待办处理（AI 识别队列 / 入库待办 / 出库待办），也可用 #/eva 深链
+    adprofit: loadAdProfit,   // 广告利润（财务报表口径 + 挂载服务 CPS/京准通花费）
   };
   (loaders[name] || (() => {}))();
 }
@@ -11485,3 +11486,201 @@ async function importJushuitan() {
     $("mpImportResult").innerHTML = `<div class="alert err">导入失败：${esc(e.message)}</div>`;
   }
 }
+
+/* ==================== 广告利润（财务报表口径 + 挂载服务 CPS / 京准通花费） ==================== */
+let ADP_SCOPE = "all";   // all 全仓总览（默认） / one 单仓总览
+let ADP_WH = "";         // 单仓总览查看的分仓 key；"" = 当前分仓
+let adpInited = false;
+let adpWhLoaded = false;
+
+const adpYmd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const adpPct = (v) => (v == null || isNaN(Number(v))) ? "—" : (Number(v) * 100).toFixed(1) + "%";
+
+async function adpEnsureWhOptions() {
+  if (adpWhLoaded) return;
+  const sel = $("adpWhSel");
+  if (!sel) return;
+  try {
+    const d = await api("/api/warehouses");
+    const list = d.warehouses || [];
+    ADP_WH = ADP_WH || d.current || "";
+    sel.innerHTML = list.map((w) =>
+      `<option value="${esc(w.key)}"${w.key === ADP_WH ? " selected" : ""}>${esc(w.name)}${w.is_current ? "（当前分仓）" : ""}</option>`
+    ).join("");
+    adpWhLoaded = true;
+  } catch (e) { /* 拿不到分仓列表时按「当前分仓」看，不影响页面 */ }
+}
+
+function adpScope(btn) {
+  btn.closest(".seg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
+  ADP_SCOPE = btn.dataset.scope === "all" ? "all" : "one";
+  $("adpWhBar").style.display = ADP_SCOPE === "all" ? "none" : "";
+  if (ADP_SCOPE === "one") adpEnsureWhOptions();
+  loadAdProfit();
+}
+
+function adpWhChange() {
+  ADP_WH = $("adpWhSel").value || "";
+  loadAdProfit();
+}
+
+function adpToggleExcludeOther(chk) {
+  EXCLUDE_OTHER = !!chk.checked;
+  localStorage.setItem(EXCLUDE_OTHER_KEY, EXCLUDE_OTHER ? "1" : "0");
+  syncExcludeOtherHint();
+  loadAdProfit();
+}
+
+function adpQuick(kind) {
+  const d = new Date();
+  if (kind === "today") {
+    $("adpDateFrom").value = today();
+    $("adpDateTo").value = today();
+  } else if (kind === "lastmonth") {
+    $("adpDateFrom").value = adpYmd(new Date(d.getFullYear(), d.getMonth() - 1, 1));
+    $("adpDateTo").value = adpYmd(new Date(d.getFullYear(), d.getMonth(), 0));
+  } else {
+    $("adpDateFrom").value = monthStart();
+    $("adpDateTo").value = today();
+  }
+  loadAdProfit();
+}
+
+function adpOpenAdService() {
+  window.open("/jdfenxi/", "_blank");
+}
+
+async function loadAdProfit(refresh) {
+  if (!adpInited) {
+    adpInited = true;
+    if (!$("adpDateFrom").value) $("adpDateFrom").value = monthStart();
+    if (!$("adpDateTo").value) $("adpDateTo").value = today();
+    syncExcludeOtherHint();
+    if (ADP_SCOPE === "one") await adpEnsureWhOptions();
+  }
+  const from = $("adpDateFrom").value, to = $("adpDateTo").value;
+  const whQs = ADP_SCOPE === "all" ? "&wh=all" : (ADP_WH ? `&wh=${encodeURIComponent(ADP_WH)}` : "");
+  const hint = $("adpStatHint");
+  if (hint) hint.textContent = "加载中…";
+  let d;
+  try {
+    d = await api(`/api/adprofit/summary?date_from=${from}&date_to=${to}${whQs}${excludeOtherQs()}${refresh ? "&refresh=1" : ""}`);
+  } catch (e) {
+    if (hint) hint.textContent = "";
+    toast("加载广告利润失败：" + e.message);
+    return;
+  }
+  renderAdProfit(d);
+}
+
+function renderAdProfit(d) {
+  const erp = d.erp || {}, p = d.profit || {}, ads = d.ads || {};
+  const rng = d.range || {};
+  const rev = Number(erp.revenue) || 0;
+  const pre = erp.is_all ? "全仓" : "";
+
+  const rh = $("adpRangeHint");
+  if (rh) {
+    const caliber = erp.exclude_other_expense
+      ? `已排除其他收支 ${fmtMoney(erp.excluded_other_expense)}`
+      : `含其他收支 ${fmtMoney(erp.excluded_other_expense)}`;
+    rh.textContent = `统计区间 ${rng.start} ~ ${rng.end}（${rng.days} 天）`
+      + (erp.is_all ? " · 全仓合计" : (erp.warehouse && erp.warehouse.name ? ` · ${erp.warehouse.name}` : ""))
+      + ` · ${caliber}`
+      + (erp.is_all ? "" : " · 广告费为店铺合计（店铺未与分仓做映射）");
+  }
+  const gen = $("adpGeneratedAt");
+  if (gen) gen.textContent = d.generated_at ? `数据时间 ${d.generated_at}` : "";
+  const hint = $("adpStatHint");
+  if (hint) hint.textContent = ads.service_ok ? "" : "广告数据读取异常，广告费按 0 计入";
+
+  // ---- 概览统计 ----
+  const netAfter = Number(p.net_after_ads) || 0;
+  $("adpStats").innerHTML = `
+    <div class="stat blue"><div class="label">${pre}销售收入</div><div class="value">${fmtMoney(erp.revenue)}</div><div class="sub">${erp.order_count} 单</div></div>
+    <div class="stat green"><div class="label">${pre}毛利（广告前）</div><div class="value">${fmtMoney(p.gross_before_ads)}</div><div class="sub">毛利率 ${rev ? ((Number(p.gross_before_ads) / rev) * 100).toFixed(1) + "%" : "—"}</div></div>
+    <div class="stat red"><div class="label">CPS 花费</div><div class="value">${fmtMoney(p.cps_total)}</div><div class="sub">付款佣金（挂载服务缓存）</div></div>
+    <div class="stat red"><div class="label">京准通花费</div><div class="value">${fmtMoney(p.jzt_total)}</div><div class="sub">投放花费（挂载服务缓存）</div></div>
+    <div class="stat amber"><div class="label">广告费合计</div><div class="value">${fmtMoney(p.ads_total)}</div><div class="sub">占收入 ${adpPct(p.ad_rate)}</div></div>
+    <div class="stat ${Number(p.gross_after_ads) >= 0 ? "green" : "red"}"><div class="label">${pre}毛利（广告后）</div><div class="value">${fmtMoney(p.gross_after_ads)}</div><div class="sub">毛利 − 广告费</div></div>
+    <div class="stat red"><div class="label">${pre}净利润（广告前）</div><div class="value">${fmtMoney(p.net_before_ads)}</div><div class="sub">净利率 ${adpPct(p.net_margin_before)}</div></div>
+    <div class="stat ${netAfter >= 0 ? "green" : "red"}"><div class="label">${pre}净利润（广告后）</div><div class="value">${fmtMoney(netAfter)}</div><div class="sub">净利率 ${adpPct(p.net_margin_after)}</div></div>`;
+
+  // ---- 告警：缺口 / 服务不可用 / 未抓取 ----
+  const warnBox = $("adpWarn");
+  const warns = d.warnings || [];
+  if (warnBox) {
+    warnBox.style.display = warns.length ? "" : "none";
+    warnBox.innerHTML = warns.map((w) => `⚠ ${esc(w)}`).join("<br>");
+  }
+
+  // ---- 利润桥 ----
+  const pctOf = (v) => rev ? ((Number(v) || 0) / rev * 100).toFixed(1) + "%" : "—";
+  const rowOf = (name, value, desc) =>
+    `<tr><td>${esc(name)}</td><td class="num mono">${fmtMoney(value)}</td><td class="num muted">${pctOf(value)}</td><td class="muted">${esc(desc)}</td></tr>`;
+  $("adpBridge").innerHTML = `<thead><tr><th>项目</th><th class="num">金额</th><th class="num">占收入</th><th>说明</th></tr></thead><tbody>` +
+    rowOf("销售收入", erp.revenue, "商品销售 + 客户代收的关联结算") +
+    rowOf("结转成本", -(Number(erp.cogs) || 0), `商品成本 ${fmtMoney(erp.goods_cogs)}` + (erp.brush_cost ? ` · 刷单成本 ${fmtMoney(erp.brush_cost)}` : "")) +
+    rowOf("毛利（广告前）", p.gross_before_ads, "财务报表口径") +
+    rowOf("期间费用", -(Number(erp.expense) || 0), `手工记账 ${fmtMoney(erp.manual_expense)} · 其他收支 ${fmtMoney(erp.other_expense)}`) +
+    rowOf("净利润（广告前）", p.net_before_ads, "毛利 − 期间费用") +
+    rowOf("CPS 花费", -(Number(p.cps_total) || 0), "付款佣金") +
+    rowOf("京准通花费", -(Number(p.jzt_total) || 0), "京东京准通投放") +
+    rowOf("广告费合计", -(Number(p.ads_total) || 0), "CPS + 京准通") +
+    `<tr><td><strong>毛利（广告后）</strong></td><td class="num mono"><strong>${fmtMoney(p.gross_after_ads)}</strong></td><td class="num muted">${pctOf(p.gross_after_ads)}</td><td class="muted">毛利 − 广告费</td></tr>` +
+    `<tr><td><strong>净利润（广告后）</strong></td><td class="num mono" style="color:${netAfter >= 0 ? "var(--green)" : "var(--red)"};font-weight:700;">${fmtMoney(netAfter)}</td><td class="num muted">${pctOf(netAfter)}</td><td class="muted">净利润 − 广告费</td></tr>` +
+    `</tbody>`;
+
+  // ---- 按店铺账号的广告费 ----
+  renderAdAccounts(ads, rng.days);
+}
+
+function renderAdAccounts(ads, days) {
+  const t = $("adpAccTable");
+  if (!t) return;
+  const map = new Map();
+  const merge = (kind, part) => {
+    ((part && part.accounts) || []).forEach((a) => {
+      const k = a.label || a.key;
+      const m = map.get(k) || { label: k, cps: null, jzt: null };
+      m[kind] = a;
+      map.set(k, m);
+    });
+  };
+  merge("cps", ads.cps);
+  merge("jzt", ads.jzt);
+  const rows = Array.from(map.values()).sort((a, b) =>
+    ((b.cps ? b.cps.total : 0) + (b.jzt ? b.jzt.total : 0)) -
+    ((a.cps ? a.cps.total : 0) + (a.jzt ? a.jzt.total : 0))
+  );
+  const totalOf = (r) => (r.cps ? r.cps.total : 0) + (r.jzt ? r.jzt.total : 0);
+  const covered = (a) => a ? `${a.covered_days}/${days}` : "—";
+  const gapOf = (r) => {
+    const g = [];
+    if (r.cps && r.cps.gaps && r.cps.gaps.length) g.push(`CPS 缺 ${r.cps.gaps.join("、")}`);
+    if (r.jzt && r.jzt.gaps && r.jzt.gaps.length) g.push(`京准通缺 ${r.jzt.gaps.join("、")}`);
+    return g.join("；");
+  };
+  const total = rows.reduce((s, r) => s + totalOf(r), 0);
+  t.innerHTML = `<thead><tr>
+      <th>店铺账号</th>
+      <th class="num">CPS 花费</th><th class="num">覆盖</th>
+      <th class="num">京准通花费</th><th class="num">覆盖</th>
+      <th class="num">合计</th><th>缺口</th>
+    </tr></thead><tbody>` +
+    (rows.length ? rows.map((r) => `<tr>
+      <td>${esc(r.label)}</td>
+      <td class="num mono">${fmtMoney(r.cps ? r.cps.total : 0)}</td>
+      <td class="num muted">${covered(r.cps)} 天</td>
+      <td class="num mono">${fmtMoney(r.jzt ? r.jzt.total : 0)}</td>
+      <td class="num muted">${covered(r.jzt)} 天</td>
+      <td class="num mono"><strong>${fmtMoney(totalOf(r))}</strong></td>
+      <td class="muted">${gapOf(r) ? `<span style="color:var(--red);">${esc(gapOf(r))}</span>` : "—"}</td>
+    </tr>`).join("") : `<tr><td colspan="7" class="empty">所选区间没有可用的花费缓存</td></tr>`) +
+    `</tbody>` + (rows.length ? `<tfoot><tr>
+      <td><strong>合计</strong></td>
+      <td class="num mono"></td><td></td><td class="num mono"></td><td></td>
+      <td class="num mono"><strong>${fmtMoney(total)}</strong></td><td></td>
+    </tr></tfoot>` : "");
+}
+
