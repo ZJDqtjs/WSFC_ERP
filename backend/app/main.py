@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -33,6 +32,30 @@ UPLOAD_ROUTE = ROUTES.get("uploads", "/uploads").rstrip("/") or "/uploads"
 # 前后端分离：默认后端只提供 API（SERVE_STATIC=0，由 nginx / web/serve.py 托管前端）。
 # 需要单进程一体化预览时，设 SERVE_STATIC=1 让后端顺带托管 static/。
 SERVE_STATIC = os.getenv("SERVE_STATIC", "0") in ("1", "true", "yes", "on")
+
+
+class UploadAuthMiddleware:
+    """上传文件鉴权：``/uploads/*`` 只允许已登录会话读取。
+
+    文件名只是微秒时间戳，链接一旦泄露（转发、日志、截图），任何人都能直接打开票据/附件；
+    因此在应用层拦一道——即使 nginx 配置没更新、或后端端口被临时暴露，也不会裸奔。
+    只校验令牌签名与有效期，不查库（每张图片都查一次数据库太重）。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http" and str(scope.get("path", "")).startswith(UPLOAD_ROUTE + "/"):
+            from starlette.requests import Request as _Request
+            from starlette.responses import PlainTextResponse
+
+            from .auth import COOKIE_NAME, decode_token
+
+            if not decode_token(_Request(scope).cookies.get(COOKIE_NAME)):
+                await PlainTextResponse("未登录", status_code=401)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
 
 
 class WarehouseScopeMiddleware:
@@ -183,14 +206,13 @@ class AccessLogMiddleware:
                 pass
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# 不配置 CORS：桌面端 / 移动端 PWA / Capacitor 都是同源访问（nginx 同域反代），
+# 对外只读接口是服务端到服务端调用，均不需要跨域。此前 allow_origins=["*"] 会让任意站点
+# 在浏览器里直接调用本服务，属于不必要的暴露面。
 # gzip 压缩：移动端/公网体积大的 JSON 响应显著减小传输量（桌面内网提升有限，弱网收益大）
 app.add_middleware(GZipMiddleware, minimum_size=500)
+# 上传文件（票据/附件）必须先登录：文件名可枚举性弱，但链接泄露即可读取
+app.add_middleware(UploadAuthMiddleware)
 # 分仓随登录会话（请求级），必须早于业务路由生效
 app.add_middleware(WarehouseScopeMiddleware)
 # 访问日志放在最外层：统计端到端耗时，且不改动响应体
@@ -204,7 +226,7 @@ app.include_router(outbound.router)
 app.include_router(inventory.router)
 app.include_router(jst_auto.router)  # 自动出库设置（聚水潭销售出库单定时导出并导入）
 app.include_router(others.router)
-app.include_router(payables.router)   # 待付款账单（入库/入仓/出库/其他开支/手动记账 汇总）
+app.include_router(payables.router)   # 待付款账单（入库/入仓/出库/其他收支/手动记账 汇总）
 app.include_router(pack_rules.router)
 app.include_router(deductions.router)
 app.include_router(express.router)

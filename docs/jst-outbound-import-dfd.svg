@@ -1,0 +1,168 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1580" height="1210" viewBox="0 0 1580 1210" font-family="Microsoft YaHei,PingFang SC,Hiragino Sans GB,sans-serif">
+  <defs>
+    <marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#64748b"/>
+    </marker>
+    <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#16a34a"/>
+    </marker>
+  </defs>
+
+  <rect width="1580" height="1210" fill="#ffffff"/>
+
+  <text x="40" y="46" font-size="24" font-weight="bold" fill="#0f172a">聚水潭出库单导入 · 数据流程图（DFD）</text>
+  <text x="40" y="74" font-size="13" fill="#64748b">P 处理 · D 数据存储 · 橙 外部实体 · 箭头 数据流</text>
+
+  <g font-size="12">
+    <rect x="1150" y="28" width="16" height="16" rx="3" fill="#eff6ff" stroke="#3b82f6"/>
+    <text x="1173" y="41" fill="#475569">处理过程</text>
+    <rect x="1262" y="28" width="16" height="16" rx="3" fill="#f0fdf4" stroke="#16a34a"/>
+    <text x="1285" y="41" fill="#475569">数据存储</text>
+    <rect x="1374" y="28" width="16" height="16" rx="3" fill="#fff7ed" stroke="#f97316"/>
+    <text x="1397" y="41" fill="#475569">外部实体</text>
+  </g>
+
+  <!-- 外部实体：数据来源 -->
+  <rect x="480" y="40" width="600" height="54" rx="10" fill="#fff7ed" stroke="#f97316" stroke-width="1.6"/>
+  <text x="780" y="73" font-size="13.5" fill="#9a3412" text-anchor="middle">外部实体 · 聚水潭后台 / 运营：导出「销售出库单_*.xlsx」</text>
+
+  <!-- 左侧输入数据存储 -->
+  <g>
+    <rect x="40" y="110" width="380" height="80" rx="8" fill="#f0fdf4" stroke="#16a34a"/>
+    <rect x="40" y="110" width="5" height="80" fill="#16a34a"/>
+    <text x="230" y="142" font-size="14" font-weight="bold" fill="#166534" text-anchor="middle">D1 上传文件</text>
+    <text x="230" y="166" font-size="12.5" fill="#475569" text-anchor="middle">.xlsx 首个 sheet 的全部行</text>
+  </g>
+  <g>
+    <rect x="40" y="240" width="380" height="80" rx="8" fill="#f0fdf4" stroke="#16a34a"/>
+    <rect x="40" y="240" width="5" height="80" fill="#16a34a"/>
+    <text x="230" y="272" font-size="14" font-weight="bold" fill="#166534" text-anchor="middle">D3 products（商品主数据）</text>
+    <text x="230" y="296" font-size="12.5" fill="#475569" text-anchor="middle">换算 / 关联结算 / 扣减方案 / 成本</text>
+  </g>
+  <g>
+    <rect x="40" y="370" width="380" height="80" rx="8" fill="#f0fdf4" stroke="#16a34a"/>
+    <rect x="40" y="370" width="5" height="80" fill="#16a34a"/>
+    <text x="230" y="402" font-size="14" font-weight="bold" fill="#166534" text-anchor="middle">D2 code_mappings</text>
+    <text x="230" y="426" font-size="12.5" fill="#475569" text-anchor="middle">聚水潭商品名 → 系统商品</text>
+  </g>
+  <g>
+    <rect x="40" y="500" width="380" height="80" rx="8" fill="#f0fdf4" stroke="#16a34a"/>
+    <rect x="40" y="500" width="5" height="80" fill="#16a34a"/>
+    <text x="230" y="532" font-size="14" font-weight="bold" fill="#166534" text-anchor="middle">D4 pack_rules</text>
+    <text x="230" y="556" font-size="12.5" fill="#475569" text-anchor="middle">一单多货组合 → 商品/纸箱/人工</text>
+  </g>
+  <g>
+    <rect x="40" y="630" width="380" height="80" rx="8" fill="#f0fdf4" stroke="#16a34a"/>
+    <rect x="40" y="630" width="5" height="80" fill="#16a34a"/>
+    <text x="230" y="662" font-size="14" font-weight="bold" fill="#166534" text-anchor="middle">D5 deduction_config.json</text>
+    <text x="230" y="686" font-size="12.5" fill="#475569" text-anchor="middle">店铺扣点（按店铺 / 按分类）</text>
+  </g>
+  <g>
+    <rect x="40" y="760" width="380" height="80" rx="10" fill="#fff7ed" stroke="#f97316" stroke-width="1.6"/>
+    <text x="230" y="792" font-size="14" font-weight="bold" fill="#9a3412" text-anchor="middle">外部实体 · 运营 / 财务</text>
+    <text x="230" y="816" font-size="12.5" fill="#475569" text-anchor="middle">核对预览 / 填刷单成本 / 点确认</text>
+  </g>
+
+  <!-- 主干处理过程 -->
+  <g>
+    <rect x="480" y="110" width="600" height="80" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+    <text x="780" y="142" font-size="15" font-weight="bold" fill="#1e40af" text-anchor="middle">P1 解析文件与状态过滤</text>
+    <text x="780" y="166" font-size="12.5" fill="#475569" text-anchor="middle">read_rows 读首个 sheet + detect_header 定位表头；只留「已出库」，其余计入 skip</text>
+  </g>
+  <g>
+    <rect x="480" y="240" width="600" height="80" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+    <text x="780" y="262" font-size="15" font-weight="bold" fill="#1e40af" text-anchor="middle">P2 拆解商品名与规格</text>
+    <text x="780" y="282" font-size="12.5" fill="#475569" text-anchor="middle">parse_jushuitan_name → (商品名, 件数)，去开头序号</text>
+    <text x="780" y="300" font-size="12.5" fill="#475569" text-anchor="middle">pick_jst_unit → 单位 / 每件数量（名称规格 · 计数单位）</text>
+  </g>
+  <g>
+    <rect x="480" y="370" width="600" height="80" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+    <text x="780" y="402" font-size="15" font-weight="bold" fill="#1e40af" text-anchor="middle">P3 商品解析与关联</text>
+    <text x="780" y="426" font-size="12.5" fill="#475569" text-anchor="middle">_resolve_jst_product：编码关联 → 订单小类；未关联记入 unmapped</text>
+  </g>
+  <g>
+    <rect x="480" y="500" width="600" height="80" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+    <text x="780" y="532" font-size="15" font-weight="bold" fill="#1e40af" text-anchor="middle">P4 一单多货规则结算</text>
+    <text x="780" y="556" font-size="12.5" fill="#475569" text-anchor="middle">命中 pack_rules 组合 → 按规则商品 / 纸箱 / 人工生成销售与包材行</text>
+  </g>
+  <g>
+    <rect x="480" y="630" width="600" height="80" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+    <text x="780" y="662" font-size="15" font-weight="bold" fill="#1e40af" text-anchor="middle">P5 金额分摊与店铺扣点</text>
+    <text x="780" y="686" font-size="12.5" fill="#475569" text-anchor="middle">按实收单价 × 数量分摊实收；店铺 / 分类扣点，保留 gross_sales</text>
+  </g>
+  <g>
+    <rect x="480" y="760" width="600" height="80" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+    <text x="780" y="792" font-size="15" font-weight="bold" fill="#1e40af" text-anchor="middle">P6 预览与人工确认</text>
+    <text x="780" y="816" font-size="12.5" fill="#475569" text-anchor="middle">按商品名聚合预览；未关联走「去新增商品」/ AI 归并；放单仓填刷单成本</text>
+  </g>
+  <g>
+    <rect x="480" y="890" width="600" height="80" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+    <text x="780" y="922" font-size="15" font-weight="bold" fill="#1e40af" text-anchor="middle">P7 建单落库</text>
+    <text x="780" y="946" font-size="12.5" fill="#475569" text-anchor="middle">create_outbound：FIFO 结转 → 库存流水 / 财务流水 / 代发应付</text>
+  </g>
+
+  <!-- 数据流：左列 → 处理 -->
+  <line x1="420" y1="150" x2="476" y2="150" stroke="#64748b" stroke-width="1.6" marker-end="url(#ar1)"/>
+  <line x1="420" y1="280" x2="476" y2="280" stroke="#64748b" stroke-width="1.6" marker-end="url(#ar1)"/>
+  <line x1="420" y1="410" x2="476" y2="410" stroke="#64748b" stroke-width="1.6" marker-end="url(#ar1)"/>
+  <line x1="420" y1="540" x2="476" y2="540" stroke="#64748b" stroke-width="1.6" marker-end="url(#ar1)"/>
+  <line x1="420" y1="670" x2="476" y2="670" stroke="#64748b" stroke-width="1.6" marker-end="url(#ar1)"/>
+  <line x1="420" y1="800" x2="476" y2="800" stroke="#64748b" stroke-width="1.6" marker-start="url(#ar1)" marker-end="url(#ar1)"/>
+
+  <!-- 主干竖向数据流 -->
+  <g stroke="#64748b" stroke-width="1.8" fill="none">
+    <line x1="780" y1="94" x2="780" y2="106" marker-end="url(#ar1)"/>
+    <line x1="780" y1="190" x2="780" y2="236" marker-end="url(#ar1)"/>
+    <line x1="780" y1="320" x2="780" y2="366" marker-end="url(#ar1)"/>
+    <line x1="780" y1="450" x2="780" y2="496" marker-end="url(#ar1)"/>
+    <line x1="780" y1="580" x2="780" y2="626" marker-end="url(#ar1)"/>
+    <line x1="780" y1="710" x2="780" y2="756" marker-end="url(#ar1)"/>
+    <line x1="780" y1="840" x2="780" y2="886" marker-end="url(#ar1)"/>
+    <line x1="780" y1="970" x2="780" y2="1000" marker-end="url(#ar1)"/>
+    <line x1="195" y1="1000" x2="195" y2="1036" marker-end="url(#ar1)"/>
+    <line x1="485" y1="1000" x2="485" y2="1036" marker-end="url(#ar1)"/>
+    <line x1="775" y1="1000" x2="775" y2="1036" marker-end="url(#ar1)"/>
+    <line x1="1065" y1="1000" x2="1065" y2="1036" marker-end="url(#ar1)"/>
+    <line x1="1355" y1="1000" x2="1355" y2="1036" marker-end="url(#ar1)"/>
+  </g>
+  <line x1="195" y1="1000" x2="1355" y2="1000" stroke="#64748b" stroke-width="1.6"/>
+
+  <!-- 输出数据存储 -->
+  <g>
+    <rect x="60" y="1040" width="270" height="100" rx="8" fill="#f0fdf4" stroke="#16a34a"/>
+    <rect x="60" y="1040" width="5" height="100" fill="#16a34a"/>
+    <text x="195" y="1072" font-size="13.5" font-weight="bold" fill="#166534" text-anchor="middle">D6 outbounds</text>
+    <text x="195" y="1094" font-size="12" fill="#475569" text-anchor="middle">/ outbound_lines</text>
+    <text x="195" y="1116" font-size="12" fill="#475569" text-anchor="middle">出库单 + 明细（批次号）</text>
+  </g>
+  <g>
+    <rect x="350" y="1040" width="270" height="100" rx="8" fill="#f0fdf4" stroke="#16a34a"/>
+    <rect x="350" y="1040" width="5" height="100" fill="#16a34a"/>
+    <text x="485" y="1072" font-size="13.5" font-weight="bold" fill="#166534" text-anchor="middle">D7 stock_movements</text>
+    <text x="485" y="1094" font-size="12" fill="#475569" text-anchor="middle">销售 out / 包装 pack_out</text>
+    <text x="485" y="1116" font-size="12" fill="#475569" text-anchor="middle">/ 人工 work</text>
+  </g>
+  <g>
+    <rect x="640" y="1040" width="270" height="100" rx="8" fill="#f0fdf4" stroke="#16a34a"/>
+    <rect x="640" y="1040" width="5" height="100" fill="#16a34a"/>
+    <text x="775" y="1072" font-size="13.5" font-weight="bold" fill="#166534" text-anchor="middle">D8 finance_records</text>
+    <text x="775" y="1094" font-size="12" fill="#475569" text-anchor="middle">销售收入 / 人工打包费</text>
+    <text x="775" y="1116" font-size="12" fill="#475569" text-anchor="middle">（挂账状态随出库单）</text>
+  </g>
+  <g>
+    <rect x="930" y="1040" width="270" height="100" rx="8" fill="#f0fdf4" stroke="#16a34a"/>
+    <rect x="930" y="1040" width="5" height="100" fill="#16a34a"/>
+    <text x="1065" y="1072" font-size="13.5" font-weight="bold" fill="#166534" text-anchor="middle">D9 payables</text>
+    <text x="1065" y="1094" font-size="12" fill="#475569" text-anchor="middle">代发商品应付账单</text>
+    <text x="1065" y="1116" font-size="12" fill="#475569" text-anchor="middle">（按商品 × 规格列明细）</text>
+  </g>
+  <g>
+    <rect x="1220" y="1040" width="270" height="100" rx="8" fill="#f0fdf4" stroke="#16a34a"/>
+    <rect x="1220" y="1040" width="5" height="100" fill="#16a34a"/>
+    <text x="1355" y="1072" font-size="13.5" font-weight="bold" fill="#166534" text-anchor="middle">D10 执行记录</text>
+    <text x="1355" y="1094" font-size="12" fill="#475569" text-anchor="middle">自动出库设置 → 执行记录</text>
+    <text x="1355" y="1116" font-size="12" fill="#475569" text-anchor="middle">（触发 = 古法导入）</text>
+  </g>
+
+  <text x="40" y="1180" font-size="12" fill="#94a3b8">注：P1/P2 的失败与跳过逐行累积为 skip / failed / notices；未关联商品累积为 unmapped，供 P6 的人工补录与 AI 归并使用。</text>
+</svg>

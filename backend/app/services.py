@@ -379,9 +379,14 @@ def _sync_outbound_cogs(db: Session, outbound_id: int) -> None:
 
     优先按流水的 line_id 归组求和回写（订单商品可关联多个库存商品，一行明细对应多条流水）；
     旧数据（流水无 line_id）退化为按 id 顺序一一对应；结构不一致(数量不等)时保守跳过，避免错配。
+
+    退货单直接跳过：它的库存流水是**入库**（金额为正），而单据成本是负数（红冲），
+    按流水回写会把符号翻过来。退货成本固定在开单时按原单结转成本算好（见 create_sales_return）。
     """
     out = db.get(Outbound, outbound_id)
     if not out:
+        return
+    if getattr(out, "is_return", False):
         return
     lines = sorted(out.lines, key=lambda x: x.id)
     moves = list(
@@ -512,7 +517,7 @@ def purge_outbounds(db: Session, ids: list[int]) -> tuple[int, int, set[int]]:
     for part in _chunks(existing):
         _bulk_delete_ref(db, StockMovement, "outbound", part)
         _bulk_delete_ref(db, FinanceRecord, "outbound", part)
-        _bulk_delete_ref(db, OtherExpense, "outbound", part)  # 金额调整带出的其他开支一并删除
+        _bulk_delete_ref(db, OtherExpense, "outbound", part)  # 金额调整带出的其他收支一并删除
         # 代发应付账单（按 outbound_id 挂着）一并删除
         db.execute(
             delete(DropshipBill).where(DropshipBill.outbound_id.in_(part)).execution_options(synchronize_session=False)
@@ -549,8 +554,9 @@ def purge_inbounds(db: Session, ids: list[int]) -> tuple[int, int, set[int]]:
     for part in _chunks(existing):
         _bulk_delete_ref(db, StockMovement, "inbound", part)
         _bulk_delete_ref(db, FinanceRecord, "inbound", part)
-        _bulk_delete_ref(db, OtherExpense, "inbound", part)  # 金额调整带出的其他开支一并删除
+        _bulk_delete_ref(db, OtherExpense, "inbound", part)  # 金额调整带出的其他收支一并删除
         _bulk_delete_ref(db, OtherExpense, INBOUND_FEE_REF, part)  # 运费/装卸费镜像行一并删除
+        _bulk_delete_ref(db, OtherExpense, INBOUND_COMP_REF, part)  # 供应商补偿镜像行一并删除
         db.execute(delete(Inbound).where(Inbound.id.in_(part)).execution_options(synchronize_session=False))
     db.flush()
     for pid in affected:
@@ -616,6 +622,14 @@ def gen_outbound_code(db: Session, date: str) -> str:
     return f"CK{date}-{count + 1:03d}"
 
 
+def gen_return_code(db: Session, date: str) -> str:
+    """退货单号 TH2026-10-28-001（与出库单 CK… 分开编号，避免和销售单混在一起）"""
+    count = db.scalar(
+        select(func.count()).select_from(Outbound).where(Outbound.code.like(f"TH{date}%"))
+    )
+    return f"TH{date}-{count + 1:03d}"
+
+
 def pay_fields(payload: dict, date: str = "") -> dict:
     """付款状态：paid 已付款（默认）/ unpaid 待付款。
 
@@ -628,12 +642,50 @@ def pay_fields(payload: dict, date: str = "") -> dict:
     return {"pay_status": status, "paid_at": paid_at if status == "paid" else ""}
 
 
-ADJUST_CATEGORY = "金额调整"  # 抹零/凑整等金额调整自动生成的其他开支类型
+PARTIAL = "partial"  # 部分付款（目前仅入库单支持）
+
+
+def pay_due(amount: float, adjust: float = 0.0, freight: float = 0.0, handling: float = 0.0) -> float:
+    """入库单「应付合计」= 货款 + 金额调整 + 运费 + 装卸（与「待付款账单」的应付口径一致）。"""
+    return round(float(amount or 0) + float(adjust or 0) + float(freight or 0) + float(handling or 0), 2)
+
+
+def inbound_pay_fields(payload: dict, due: float, date: str = "") -> dict:
+    """入库单付款状态：paid 已付款（默认）/ partial 部分付款 / unpaid 待付款。
+
+    partial 时按应付合计 due 收口已付金额 paid_amount：已付 ≤ 0 按「待付款」记，
+    已付 ≥ 应付按「已付款」记，避免出现 0 元/超额这种没有意义的部分付款。
+    paid/unpaid 时 paid_amount 也统一成 应付 / 0，报表与「待付款账单」直接取用即可。
+    """
+    status = (payload.get("pay_status") or "").strip()
+    due = round(float(due or 0), 2)
+    paid_amount = round(float(payload.get("paid_amount") or 0), 2)
+    if status == PARTIAL:
+        paid_amount = max(0.0, min(paid_amount, due))
+        if paid_amount <= 0.005:
+            status, paid_amount = "unpaid", 0.0
+        elif paid_amount >= due - 0.005:
+            status, paid_amount = "paid", due
+    elif status == "unpaid":
+        status, paid_amount = "unpaid", 0.0
+    else:
+        status, paid_amount = "paid", due
+    paid_at = (payload.get("paid_at") or "").strip()
+    if status in ("paid", PARTIAL) and not paid_at:
+        paid_at = (date or payload.get("date") or "").strip()
+    return {
+        "pay_status": status,
+        "paid_amount": paid_amount,
+        "paid_at": paid_at if status in ("paid", PARTIAL) else "",
+    }
+
+
+ADJUST_CATEGORY = "金额调整"  # 抹零/凑整等金额调整自动生成的其他收支类型
 
 
 def sync_adjust_expense(db: Session, kind: str, ref_id: int, code: str, date: str,
                         operator: str, adjust: float, pay: dict) -> None:
-    """维护单据「金额调整」对应的其他开支：调整额为 0 则删除，否则新建/更新为 |调整额|。
+    """维护单据「金额调整」对应的其他收支：调整额为 0 则删除，否则新建/更新为 |调整额|。
 
     单据金额与商品成本都按商品原价不变，抹零/凑整的差额在这里单独记一笔支出——
     这样报表口径 = 实收/实付，而商品成本（FIFO 批次）不受影响。
@@ -662,16 +714,16 @@ def sync_adjust_expense(db: Session, kind: str, ref_id: int, code: str, date: st
     ))
 
 
-# 入库「运费 / 装卸费」带出的其他开支镜像行的 ref_type（与金额调整的 "inbound" 区分，互不误伤）
+# 入库「运费 / 装卸费」带出的其他收支镜像行的 ref_type（与金额调整的 "inbound" 区分，互不误伤）
 INBOUND_FEE_REF = "inbound_fee"
 INBOUND_FEE_CATEGORIES = (("freight", "运费"), ("handling", "装卸费"))
 
 
 def sync_inbound_fee_expenses(db: Session, rec: "Inbound", product_name: str, pay: dict) -> None:
-    """维护入库单「运费 / 装卸费」对应的其他开支镜像行：每项 >0 各生成一行，清零则删除。
+    """维护入库单「运费 / 装卸费」对应的其他收支镜像行：每项 >0 各生成一行，清零则删除。
 
     这两项费用已计入批次到岸成本（FIFO 结转随销量扣减，体现在该品毛利上）；这里的镜像行
-    只供「其他开支」页按类型/日期查询，报表的期间费用聚合一律排除 ref_type="inbound_fee"
+    只供「其他收支」页按类型/日期查询，报表的期间费用聚合一律排除 ref_type="inbound_fee"
     （见 routers/report.py），避免「成本 + 期间费用」重复扣减。日期/付款状态随单据
     同步维护（sync_doc_edit / pay_bill / 删除级联）。
     """
@@ -701,6 +753,41 @@ def sync_inbound_fee_expenses(db: Session, rec: "Inbound", product_name: str, pa
                 operator=rec.operator, ref_type=INBOUND_FEE_REF, ref_id=rec.id,
                 pay_status=pay["pay_status"], paid_at=pay["paid_at"],
             ))
+
+
+# 入库「供应商补偿」镜像行的 ref_type（与金额调整 "inbound"、运费装卸 "inbound_fee" 区分）
+INBOUND_COMP_REF = "inbound_comp"
+COMP_CATEGORY = "供应商补偿"
+
+
+def sync_compensation_expense(db: Session, rec: "Inbound") -> None:
+    """维护入库单「供应商补偿」的其他收支镜像行：补偿 >0 记一笔**负数**其他收支，清零则删除。
+
+    供应商退的钱 / 赔偿不冲减货款与批次成本（FIFO），而是记成负数的期间费用：
+    报表「其他收支 → 供应商补偿」为负 → 期间费用减少 → 净利增加，与实际收到的钱一致。
+    付款状态恒为已付款（钱是收进来的），不走单据的收付款状态，避免出现负数的待付款账单；
+    日期随入库单日期（改单时同步）。
+    """
+    amt = round(float(getattr(rec, "compensation", 0.0) or 0.0), 2)
+    existing = list(db.execute(
+        select(OtherExpense).where(OtherExpense.ref_type == INBOUND_COMP_REF, OtherExpense.ref_id == rec.id)
+    ).scalars())
+    for stale in existing[1:]:
+        db.delete(stale)
+    if amt <= 0:
+        for e in existing[:1]:
+            db.delete(e)
+        return
+    remark = f"入库 {rec.code} 供应商补偿{(' · ' + (rec.supplier or '')) if rec.supplier else ''}"
+    if existing:
+        e = existing[0]
+        e.amount, e.date, e.remark, e.operator = -amt, rec.date, remark, rec.operator
+    else:
+        db.add(OtherExpense(
+            category=COMP_CATEGORY, amount=-amt, date=rec.date, remark=remark,
+            operator=rec.operator, ref_type=INBOUND_COMP_REF, ref_id=rec.id,
+            pay_status="paid", paid_at=rec.date,
+        ))
 
 
 def sync_dropship_bills(db: Session, rec: "Outbound", sale_lines: list) -> None:
@@ -782,7 +869,7 @@ def _product_name(db: Session, pid: int) -> str:
 
 
 def sync_doc_edit(db: Session, kind: str, ref_id: int, date: str, operator: str, pay: dict) -> None:
-    """单据被手动修改（供应商/客户、日期、付款状态）后，同步它带出的库存流水/财务流水/其他开支。
+    """单据被手动修改（供应商/客户、日期、付款状态）后，同步它带出的库存流水/财务流水/其他收支。
 
     - 操作员统一记为本次修改人（后端强制取登录账号，忽略前端传值）；
     - 改日期时三类关联记录的日期一起改，保证报表按日期统计口径一致；
@@ -797,7 +884,7 @@ def sync_doc_edit(db: Session, kind: str, ref_id: int, date: str, operator: str,
     ).scalars():
         f.date, f.operator = date, operator
         f.pay_status, f.paid_at = pay["pay_status"], pay["paid_at"]
-    # 其他开支带出行：金额调整(ref_type=kind) + 入库的运费/装卸费镜像行(ref_type=inbound_fee)
+    # 其他收支带出行：金额调整(ref_type=kind) + 入库的运费/装卸费镜像行(ref_type=inbound_fee)
     fee_types = [kind] + ([INBOUND_FEE_REF] if kind == "inbound" else [])
     for e in db.execute(
         select(OtherExpense).where(OtherExpense.ref_type.in_(fee_types), OtherExpense.ref_id == ref_id)
@@ -833,7 +920,11 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     landed = round(amount + freight + handling, 2)  # 批次到岸成本 = 货款 + 运费 + 装卸费（金额调整不计入）
     op = (payload.get("operator") or "").strip() or operator
 
-    pay = pay_fields(payload, date)
+    # 应付合计（表单上的「实付」）= 货款 + 金额调整 + 运费 + 装卸：部分付款的已付金额按它收口
+    pay = inbound_pay_fields(payload, pay_due(amount, adjust, freight, handling), date)
+    # 关联的财务流水 / 其他收支没有「已付金额」，付款状态原样跟随单据（partial 时它们也只作标记，
+    # 报表的入库口径由入库单自身按 paid_amount 计，待付款账单也只算入库单的未付余额）
+    pay_link = {k: pay[k] for k in ("pay_status", "paid_at")}
     rec = Inbound(
         code=gen_inbound_code(db, date),
         product_id=product.id,
@@ -849,6 +940,7 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
         operator=op,
         date=date,
         remark=(payload.get("remark") or "").strip(),
+        compensation=round(float(payload.get("compensation") or 0), 2),
         **pay,
     )
     db.add(rec)
@@ -877,11 +969,12 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
             remark=f"采购入库 {rec.code}",
             ref_type="inbound",
             ref_id=rec.id,
-            **pay,   # 挂账状态随入库单：待付款时这笔采购支出也不进报表
+            **pay_link,   # 挂账状态随入库单：待付款时这笔采购支出也不进报表
         )
     )
-    sync_adjust_expense(db, "inbound", rec.id, rec.code, date, op, adjust, pay)
-    sync_inbound_fee_expenses(db, rec, product.name, pay)
+    sync_adjust_expense(db, "inbound", rec.id, rec.code, date, op, adjust, pay_link)
+    sync_inbound_fee_expenses(db, rec, product.name, pay_link)
+    sync_compensation_expense(db, rec)
     recompute_product(db, product.id)
     db.flush()
     return rec
@@ -1428,3 +1521,160 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
             recompute_product(db, pid)
     db.flush()
     return rec, order["warnings"]
+
+
+# ---------------- 销售退货（红冲） ----------------
+"""退回的货怎么记账（口径）：
+
+ 原来的做法是把退回的货当「入库」再记一次 —— 库存是对的，但账会错：
+ 进 100kg@6（成本 600）→ 卖 100kg@8（收入 800、成本 600、毛利 200）→ 退 20kg：
+  · 当「入库」记 → 本期进货虚增 ¥120，收入还是 800、成本还是 600，毛利虚高；
+  · 正确口径是「销售退货（红冲）」→ 收入 −160、成本 −120（按原单 FIFO 结转成本回补）、
+    库存 +20kg（成本 ¥120）→ 净收入 640、净成本 480、毛利 160，与实际一致。
+
+落库方式：复用 outbounds / outbound_lines（is_return=True），数量、金额、成本全记**负数**，
+库存流水记**正数入库**（金额 = 原单结转成本），报表的收入/成本/商品明细因此天然按加法净额，
+不用在报表里到处加减项。退货单不生成财务流水、包材/人工/快递结算、代发账单。
+"""
+
+
+def returned_qty_by_line(db: Session, line_ids: list[int]) -> dict[int, float]:
+    """这几条原销售行已经退了多少（按退货行的 src_line_id 汇总，单位为原行的单位）。"""
+    if not line_ids:
+        return {}
+    rows = db.execute(
+        select(OutboundLine.src_line_id, func.coalesce(func.sum(OutboundLine.quantity), 0.0))
+        .join(Outbound, Outbound.id == OutboundLine.outbound_id)
+        .where(OutboundLine.src_line_id.in_(line_ids), Outbound.is_return.is_(True))
+        .group_by(OutboundLine.src_line_id)
+    ).all()
+    # 退货行的 quantity 是负数，取绝对值就是已退数量
+    return {int(lid): abs(float(q or 0.0)) for lid, q in rows if lid}
+
+
+def create_sales_return(db: Session, outbound_id: int, items: list[dict], date: str,
+                        operator: str = "", remark: str = "") -> Outbound:
+    """按原出库单生成一张销售退货单（红冲）。
+
+    items = [{"line_id": 原销售行 id, "quantity": 退货数量（按原行的单位）}, ...]
+    - 累计退货数量不能超过原行数量（已退多少看 returned_qty_by_line）；
+    - 收入/成本按原行等比例冲减；成本取原行**当时 FIFO 结转的成本**（不是当前进价），
+      退回的货按该成本重新入库存（FIFO 新批次），之后出库仍按这个成本结转；
+    - 原行关联多个库存商品（多扣减）时，按各扣减流水的比例分别回补；
+    - 代发/刷单这类没有库存流水的行：只冲收入与成本，不回补库存。
+    """
+    src = db.get(Outbound, outbound_id)
+    if not src:
+        raise ValueError("原出库单不存在")
+    if getattr(src, "is_return", False):
+        raise ValueError("退货单不能再退货")
+    sale_lines = {l.id: l for l in src.lines if l.line_type == "sale"}
+    if not sale_lines:
+        raise ValueError("该出库单没有可退货的销售行")
+
+    done = returned_qty_by_line(db, list(sale_lines))
+    moves_by_line: dict[int, list] = {}
+    for m in db.execute(
+        select(StockMovement)
+        .where(StockMovement.ref_type == "outbound", StockMovement.ref_id == outbound_id)
+        .order_by(StockMovement.id)
+    ).scalars():
+        if m.line_id:
+            moves_by_line.setdefault(m.line_id, []).append(m)
+
+    plan: list[tuple] = []   # (原行, 退货数量, 基础数量, 退货金额, 退货成本, [(库存商品id, 回补基础数量, 回补成本)])
+    for it in items or []:
+        lid = int((it or {}).get("line_id") or 0)
+        qty = round(float((it or {}).get("quantity") or 0.0), 6)
+        if qty <= 0:
+            continue
+        line = sale_lines.get(lid)
+        if not line:
+            raise ValueError("退货行不属于这张出库单")
+        name = line.product.name if line.product else str(line.product_id)
+        remain = round(float(line.quantity or 0.0) - done.get(lid, 0.0), 6)
+        if qty > remain + 1e-6:
+            raise ValueError(
+                f"「{name}」最多还能退 {fmt_qty(remain)}{line.unit or ''}，"
+                f"本次填了 {fmt_qty(qty)}{line.unit or ''}"
+            )
+        ratio = (qty / float(line.quantity)) if float(line.quantity or 0) else 0.0
+        qty_base = round(float(line.quantity_base or 0.0) * ratio, 6)
+        amount = round(float(line.amount or 0.0) * ratio, 2)
+        cogs = round(float(line.cogs or 0.0) * ratio, 2)
+        back = [
+            (m.product_id, round(abs(float(m.quantity_base or 0.0)) * ratio, 6),
+             round(float(m.amount or 0.0) * ratio, 2))
+            for m in moves_by_line.get(lid, [])
+        ]
+        plan.append((line, qty, qty_base, amount, cogs, back))
+    if not plan:
+        raise ValueError("请填写要退货的数量")
+
+    total_amount = round(sum(p[3] for p in plan), 2)
+    total_cogs = round(sum(p[4] for p in plan), 2)
+    op = (operator or "").strip() or src.operator or ""
+    rec = Outbound(
+        code=gen_return_code(db, date),
+        import_group="",
+        customer=src.customer,
+        operator=op,
+        date=date,
+        remark=(remark or "").strip() or f"退货 {src.code}",
+        total_amount=-total_amount,     # 红冲：收入记负数
+        adjust_amount=0.0,
+        total_cogs=-total_cogs,         # 红冲：成本记负数
+        total_fee=0.0,
+        settle_income=0.0,
+        settle_cats="",
+        brush_cost=0.0, brush_fee=0.0, brush_auto_fee=0.0,
+        is_return=True,
+        return_of_id=src.id,
+        # 退货不是应收：钱要么退给客户（现金/转账），要么冲抵下次货款，账已在红冲里体现
+        pay_status="paid",
+        paid_at=date,
+    )
+    db.add(rec)
+    db.flush()
+
+    affected: set[int] = set()
+    for line, qty, qty_base, amount, cogs, back in plan:
+        row = OutboundLine(
+            outbound_id=rec.id,
+            product_id=line.product_id,
+            line_type="sale",
+            spec=line.spec or "",
+            unit=line.unit,
+            quantity=-qty,                 # 负数：数量/金额/成本全反向
+            quantity_base=-qty_base,
+            unit_price=line.unit_price or 0.0,
+            amount=-amount,
+            cogs=-cogs,
+            gross_sales=-amount,
+            pack_fee=0.0,
+            is_dropship=False,
+            src_line_id=line.id,
+        )
+        db.add(row)
+        db.flush()
+        # 退回的货按原单结转成本重新入库（正数流水，金额 = 回补成本 → FIFO 新批次单价即原成本）
+        for pid, base_qty, base_amount in back:
+            if base_qty <= 0:
+                continue
+            db.add(StockMovement(
+                product_id=pid,
+                move_type="in",
+                quantity_base=base_qty,
+                amount=base_amount,
+                ref_type="outbound",
+                ref_id=rec.id,
+                line_id=row.id,
+                date=date,
+                operator=op,
+                remark=f"销售退货 {rec.code}",
+            ))
+            affected.add(pid)
+    for pid in affected:
+        recompute_product(db, pid)
+    db.flush()
+    return rec

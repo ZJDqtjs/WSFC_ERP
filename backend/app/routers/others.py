@@ -1,7 +1,8 @@
-"""其他开支：仓库/经营中的零散支出（网线费、安装费、机器费、样品费等）。
+"""其他收支：仓库/经营中的零散支出与收入（网线费、安装费、机器费、供应商补偿等）。
 
-- 按「费用类型 + 日期」独立记账，供「经营分析 → 其他开支」页做按日 / 按月 / 按类型统计；
-- 财务报表（/report/summary）与工作台（/dashboard）把它并入「期间费用」，
+- 按「费用类型 + 日期」独立记账，供「经营分析 → 其他收支」页做按日 / 按月 / 按类型统计；
+- 数据上**收入 = 负数的 OtherExpense**（如入库单「供应商补偿」镜像行、手工登记的其他收入），
+  支出 = 正数；财务报表（/report/summary）与工作台（/dashboard）把净额并入「期间费用」，
   从毛利中扣减得到净利——所以不要再在「手动记账」里重复录一遍，避免重复扣减。
 """
 import re
@@ -23,10 +24,14 @@ router = APIRouter(prefix="/api", tags=["other-expense"])
 PRESET_CATEGORIES = [
     "金额调整",  # 入库/出库抹零·凑整自动生成（也可手动登记）
     "运费", "装卸费",  # 入库单「运费/装卸费」自动生成镜像行（已计入批次成本，报表期间费用不重复扣）；也可手动登记
+    "供应商补偿",  # 入库单「供应商补偿」自动生成镜像行（负数=其他收入）；也可手动登记
     "网线费", "安装费", "机器费", "样品费", "设备维修", "水电费", "搬运费", "办公用品", "其他",
 ]
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# 「其他收入」页签的预设类型（与支出的预设分开，登记收入时下拉建议更贴切）
+INCOME_PRESET_CATEGORIES = ["供应商补偿", "返利", "赔偿", "利息收入", "其他"]
 
 
 class OtherExpenseIn(BaseModel):
@@ -35,6 +40,8 @@ class OtherExpenseIn(BaseModel):
     date: str
     remark: str = ""
     pay_status: str = "paid"  # paid 已付款（默认）/ unpaid 待付款（先进「待付款账单」，支付后才计入报表）
+    # expense = 支出（存正数）/ income = 收入（存负数，如供应商补偿、返利）
+    kind: str = "expense"
 
 
 def _to_dict(e: OtherExpense) -> dict:
@@ -55,21 +62,31 @@ def _to_dict(e: OtherExpense) -> dict:
 
 
 def _clean(data: OtherExpenseIn) -> tuple[str, float, str, str, str]:
+    """校验并归一化：返回 (类型, 入库金额, 日期, 备注, 付款状态)。
+
+    支出存正数；收入存**负数**（与「供应商补偿」镜像行同一约定，报表期间费用自动冲减）。
+    收入默认立即到账，付款状态恒为已付款（避免出现负数的待付款账单）。
+    """
     category = (data.category or "").strip()
     if not category:
         raise HTTPException(400, "请填写费用类型（如 网线费 / 安装费 / 机器费 / 样品费）")
     if len(category) > 32:
         raise HTTPException(400, "费用类型过长（≤32 字）")
+    kind = "income" if (data.kind or "").strip() == "income" else "expense"
     try:
-        amount = round(float(data.amount), 2)
+        amount = round(abs(float(data.amount)), 2)
     except (TypeError, ValueError):
         raise HTTPException(400, "金额格式不正确")
     if amount <= 0:
         raise HTTPException(400, "金额必须大于 0")
+    if kind == "income":
+        amount = -amount
+        pay = "paid"
+    else:
+        pay = "unpaid" if (data.pay_status or "").strip() == "unpaid" else "paid"
     day = (data.date or "").strip()
     if not DATE_RE.match(day):
         raise HTTPException(400, "日期格式应为 YYYY-MM-DD")
-    pay = "unpaid" if (data.pay_status or "").strip() == "unpaid" else "paid"
     return category, amount, day, (data.remark or "").strip(), pay
 
 
@@ -78,10 +95,11 @@ def list_other_expenses(
     date_from: str = "",
     date_to: str = "",
     category: str = "",
+    kind: str = "",   # expense=只看支出（正数）/ income=只看收入（负数）；空=全部（老客户端兼容）
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """开支明细：按日期倒序（可按日期区间 / 类型过滤）。"""
+    """收支明细：按日期倒序（可按日期区间 / 类型 / 支出-收入过滤）。"""
     q = select(OtherExpense).order_by(OtherExpense.date.desc(), OtherExpense.id.desc())
     if date_from:
         q = q.where(OtherExpense.date >= date_from)
@@ -89,6 +107,10 @@ def list_other_expenses(
         q = q.where(OtherExpense.date <= date_to)
     if category:
         q = q.where(OtherExpense.category == category)
+    if kind == "income":
+        q = q.where(OtherExpense.amount < 0)
+    elif kind == "expense":
+        q = q.where(OtherExpense.amount >= 0)
     return [_to_dict(e) for e in db.execute(q).scalars()]
 
 
@@ -115,16 +137,29 @@ def _span_days(date_from: str, date_to: str, rows: list[OtherExpense]) -> int:
 def other_expense_stats(
     date_from: str = "",
     date_to: str = "",
+    kind: str = "",   # expense=只统计支出 / income=只统计收入；空=净额（老客户端兼容）
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """开支统计：今日 / 本月 / 所选区间（合计、笔数、日均）+ 按日 / 按月 / 按类型。"""
+    """收支统计：今日 / 本月 / 所选区间（合计、笔数、日均）+ 按日 / 按月 / 按类型。
+
+    kind=expense 只统计支出（正数行）；kind=income 只统计收入（负数行，如供应商补偿），
+    且**金额按正数返回**（收入 ¥500 就显示 500，不用前端再翻符号）——报表的净额口径不受影响。
+    """
     today = _date.today().isoformat()
     month = today[:7]
     rows = list(db.execute(select(OtherExpense)).scalars())  # 表很小，一次取回做多口径统计
+    if kind == "income":
+        rows = [r for r in rows if (r.amount or 0.0) < 0]
+        sign = -1.0   # 收入行存负数，统计口径翻成正数
+    elif kind == "expense":
+        rows = [r for r in rows if (r.amount or 0.0) >= 0]
+        sign = 1.0
+    else:
+        sign = 1.0
 
     def _sum(items: list[OtherExpense]) -> float:
-        return round(sum(x.amount or 0.0 for x in items), 2)
+        return round(sum(sign * (x.amount or 0.0) for x in items), 2)
 
     today_rows = [r for r in rows if r.date == today]
     month_rows = [r for r in rows if (r.date or "").startswith(month)]
@@ -137,7 +172,7 @@ def other_expense_stats(
     by_day: dict[str, dict] = {}
     by_month: dict[str, dict] = {}
     for r in range_rows:
-        amt = r.amount or 0.0
+        amt = sign * (r.amount or 0.0)
         by_category[r.category] = by_category.get(r.category, 0.0) + amt
         for bucket, key in ((by_day, r.date), (by_month, (r.date or "")[:7])):
             b = bucket.setdefault(key, {"amount": 0.0, "count": 0})
@@ -147,7 +182,9 @@ def other_expense_stats(
     span = _span_days(date_from, date_to, range_rows)
     range_total = _sum(range_rows)
     used = {r.category for r in rows}
+    base_presets = INCOME_PRESET_CATEGORIES if kind == "income" else PRESET_CATEGORIES
     return {
+        "kind": "income" if kind == "income" else ("expense" if kind == "expense" else ""),
         "today": today,
         "month": month,
         "today_total": _sum(today_rows),
@@ -170,8 +207,8 @@ def other_expense_stats(
             {"month": k, "amount": round(v["amount"], 2), "count": v["count"]}
             for k, v in sorted(by_month.items(), reverse=True)
         ],
-        # 前端下拉建议 = 预设类型 + 已用过的自定义类型
-        "presets": PRESET_CATEGORIES + sorted(used - set(PRESET_CATEGORIES)),
+        # 前端下拉建议 = 预设类型 + 当前口径里已用过的自定义类型
+        "presets": base_presets + sorted(used - set(base_presets)),
     }
 
 
@@ -179,7 +216,7 @@ def other_expense_stats(
 def create_other_expense(
     data: OtherExpenseIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    """登记一笔其他开支（操作员固定为当前登录账号）。
+    """登记一笔其他收支（操作员固定为当前登录账号）。
 
     待付款的开支先进「待付款账单」，点「已支付」后才计入财务报表的期间费用。
     """

@@ -219,7 +219,7 @@ body {
   margin-top: 8px;
 }
 
-/* ============ 报表口径开关：排除其他开支（报表页标题旁） ============ */
+/* ============ 报表口径开关：排除其他收支（报表页标题旁） ============ */
 .rep-switch {
   display: inline-flex;
   align-items: center;
@@ -429,6 +429,24 @@ hr {
   padding: 4px; 
   margin-bottom: 20px;
   border: 1px solid var(--border-light);
+}
+
+/* 其他收支页级切换条：其他支出 / 其他收入，整页（登记/统计/明细）跟随 */
+.oe-page-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 24px;
+}
+
+.oe-page-head .seg {
+  margin-bottom: 0;
+}
+
+@media (max-width: 720px) {
+  .oe-page-head {
+    flex-wrap: wrap;
+  }
 }
 
 @media (prefers-color-scheme: dark) {
@@ -2032,6 +2050,30 @@ th[data-key] .sort-arrow {
   .agg-table tfoot td { background: rgba(255, 255, 255, 0.05); }
 }
 
+/* ============ 入仓：重算运费（运输账单预览） ============ */
+.fr-types {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  background: var(--primary-50);
+  font-size: 12.5px;
+}
+
+.fr-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 3px 14px 3px 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fr-type.off {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
 /* ============ 芳谊放单仓：逐单刷单结算（导入确认框） ============ */
 .brush-box {
   border: 1px solid var(--primary);
@@ -2274,6 +2316,56 @@ tr.draft-off {
   margin: 0;
 }
 
+/* 部分付款（入库单）：已付金额 / 比例 / 未付金额 三个输入联动 */
+/* 付款状态这一格要放得下三个输入 + 提示，占两列（窄屏再退回一列） */
+.in-block .in-pay-field {
+  grid-column: span 2;
+}
+
+@media (max-width: 720px) {
+  .in-block .in-pay-field {
+    grid-column: auto;
+  }
+}
+
+.pay-part {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border, #e5e7eb);
+  border-radius: 8px;
+  background: var(--primary-50, #f8fafc);
+}
+
+.pay-part-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.pay-part-row label {
+  color: var(--text-muted, #6b7280);
+  white-space: nowrap;
+}
+
+.pay-part-row input {
+  width: 92px;
+  padding: 4px 8px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.pp-unit {
+  color: var(--text-muted, #6b7280);
+  margin-right: 6px;
+}
+
+.pay-part .field-hint {
+  margin-top: 4px;
+}
+
 /* 待付款标记（列表里提示该笔还没结清） */
 .pay-tag {
   display: inline-block;
@@ -2284,6 +2376,13 @@ tr.draft-off {
   color: #f97316;
   border: 1px solid #fed7aa;
   margin-left: 6px;
+}
+
+/* 部分付款标记：已付一部分，余额还在待付款账单里 */
+.pay-tag.part {
+  background: #eff6ff;
+  color: #2563eb;
+  border-color: #bfdbfe;
 }
 
 /* 待付款账单：金额左、按钮右 */

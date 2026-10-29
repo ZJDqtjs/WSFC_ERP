@@ -185,16 +185,22 @@ def _serialize(u: User) -> dict:
 
 
 @app.post("/api/login")
-def login(data: LoginIn, response: Response, db: Session = Depends(get_db)):
-    """门禁登录；连续失败按 app/login_guard.py 的分级规则锁定该账号。"""
+def login(
+    data: LoginIn,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    """门禁登录；连续失败按 app/login_guard.py 的分级规则锁定「账号 + 客户端 IP」。"""
     username = (data.username or "").strip()
+    ip = mt.client_ip(request)
     if username:
-        left = guard.locked_left(guard.SCOPE_KEYADMIN, username)
+        left = guard.locked_left(guard.SCOPE_KEYADMIN, username, ip)
         if left:
             raise HTTPException(429, f"账号已锁定，请 {guard.humanize(left)} 后再试")
 
     if not _admin_password_ok(db, username, data.password):
-        wait = guard.record_fail(guard.SCOPE_KEYADMIN, username) if username else 0
+        wait = guard.record_fail(guard.SCOPE_KEYADMIN, username, ip) if username else 0
         if wait:
             raise HTTPException(
                 429,

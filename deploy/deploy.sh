@@ -50,15 +50,25 @@ echo "==> [5/7] 同步前端静态到 /var/www/erp（nginx 可读，家目录默
 sudo mkdir -p /var/www/erp
 sudo rm -rf /var/www/erp/*
 sudo cp -r "$APP_DIR/web/static/." /var/www/erp/
-sudo cp "$APP_DIR/config.json" /var/www/erp/config.json
+# config.json 是公网可读的静态文件，只发布前端真正需要的 routes 前缀；
+# 完整文件里的 server.api_port / keyadmin_port 等内网端口信息属信息泄露，不能对外。
+sudo python3 - "$APP_DIR/config.json" /var/www/erp/config.json <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+with open(sys.argv[2], "w", encoding="utf-8") as f:
+    json.dump({"routes": data.get("routes") or {}}, f, ensure_ascii=False, indent=2)
+PY
 # 给桌面端 index.html 里的 app.js / style.css 追加部署时间戳（?v=...）：
 # 这样每次部署浏览器都会重新取这两个文件，即使某台机器此前把它们按「启发式缓存」长期缓存了，
 # 也会因为 URL 变化立刻拿到新版本，根治「新 index.html + 旧 app.js」导致的 is not defined / 点击没反应。
 # 只改 /var/www/erp 下的副本，仓库里的 index.html 保持干净。
 STAMP="$(date +%Y%m%d%H%M%S)"
 sudo sed -i -E \
-  -e 's#(src="/app\.js)(\?v=[^"]*)?(")#\1?v='"$STAMP"'\3#' \
-  -e 's#(href="/style\.css)(\?v=[^"]*)?(")#\1?v='"$STAMP"'\3#' \
+  -e 's#(src="\.?/?app\.js)(\?v=[^"]*)?(")#\1?v='"$STAMP"'\3#' \
+  -e 's#(href="\.?/?style\.css)(\?v=[^"]*)?(")#\1?v='"$STAMP"'\3#' \
   /var/www/erp/index.html
 if [ ! -f "$APP_DIR/mobile/dist/index.html" ]; then
   echo "错误：找不到移动端生产构建 mobile/dist，请先在本地执行 npm --prefix mobile run build 并上传 mobile/dist" >&2
@@ -75,6 +85,7 @@ MOBILE_ROUTE=$(python3 -c 'import json; print(json.load(open("'$APP_DIR'/config.
 API_HOST=$(python3 -c 'import json; print(json.load(open("'$APP_DIR'/config.json"))["server"]["api_host"])')
 API_PORT=$(python3 -c 'import json; print(json.load(open("'$APP_DIR'/config.json"))["server"]["api_port"])')
 sed -e "s|__API_ROUTE__|$API_ROUTE|g" -e "s|__UPLOAD_ROUTE__|$UPLOAD_ROUTE|g" -e "s|__MOBILE_ROUTE__|$MOBILE_ROUTE|g" \
+  -e "s|__API_HOST__|$API_HOST|g" -e "s|__API_PORT__|$API_PORT|g" \
   "$APP_DIR/deploy/nginx.conf" | sudo tee "/etc/nginx/sites-available/$SERVICE" >/dev/null
 sudo ln -sf "/etc/nginx/sites-available/$SERVICE" "/etc/nginx/sites-enabled/$SERVICE"
 sudo rm -f /etc/nginx/sites-enabled/default

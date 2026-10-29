@@ -16,12 +16,16 @@
 - 重启服务不会把锁定状态清零，也便于人工直接删文件应急解锁；
 - 该文件位于已 gitignore 的 backend/data 下，不会进仓库。
 
+计数键 = ``scope:账号#IP``（IP 为空时退化为 ``scope:账号``，兼容旧状态文件）。
+带上 IP 是为了避免「知道用户名就能把别人锁死」：攻击者从自己的 IP 连续失败，只会锁住
+「该账号 + 该 IP」这一条，其他人换个 IP 仍能正常登录。
+
 对外接口：
-    locked_left(scope, username) -> int      剩余锁定秒数（0 = 未锁定）
-    record_fail(scope, username) -> int      记一次失败；返回本次触发的锁定秒数
-    reset(scope, username)                   登录成功时清零
-    locked_list(scope) -> list[dict]         当前锁定中的账号
-    clear(scope, username="")                手动解锁（username 为空 = 清空该 scope）
+    locked_left(scope, username, ip="") -> int   剩余锁定秒数（0 = 未锁定）
+    record_fail(scope, username, ip="") -> int   记一次失败；返回本次触发的锁定秒数
+    reset(scope, username)                       登录成功时清零该账号所有 IP 的条目
+    locked_list(scope) -> list[dict]             当前锁定中的账号（含 ip 字段）
+    clear(scope, username="")                    手动解锁（username 为空 = 清空该 scope）
 """
 from __future__ import annotations
 
@@ -61,8 +65,25 @@ def humanize(seconds: int) -> str:
     return f"{seconds} 秒"
 
 
-def _key(scope: str, username: str) -> str:
-    return f"{scope}:{(username or '').strip().lower()}"
+def _key(scope: str, username: str, ip: str = "") -> str:
+    """计数键：``scope:账号#IP``；IP 为空时保持旧格式 ``scope:账号``。"""
+    user = (username or "").strip().lower()
+    ip = (ip or "").strip()
+    return f"{scope}:{user}#{ip}" if ip else f"{scope}:{user}"
+
+
+def _split(key: str) -> tuple[str, str, str]:
+    """把计数键拆成 (scope, 账号, IP)。"""
+    scope, _, rest = key.partition(":")
+    user, sep, ip = rest.partition("#")
+    return scope, user, (ip if sep else "")
+
+
+def _user_keys(records: dict, scope: str, username: str) -> list[str]:
+    """该账号在该 scope 下的所有计数键（含各 IP 条目）。"""
+    user = (username or "").strip().lower()
+    exact = f"{scope}:{user}"
+    return [k for k in records if k == exact or k.startswith(exact + "#")]
 
 
 def _load() -> dict:
@@ -104,19 +125,19 @@ def _record(records: dict, key: str) -> dict:
     return rec
 
 
-def locked_left(scope: str, username: str) -> int:
+def locked_left(scope: str, username: str, ip: str = "") -> int:
     """剩余锁定秒数；0 表示当前未锁定（失败次数会被保留，下次再错继续进档）。"""
-    rec = _load().get(_key(scope, username))
+    rec = _load().get(_key(scope, username, ip))
     if not isinstance(rec, dict):
         return 0
     left = int(float(rec.get("until", 0) or 0) - time.time())
     return left if left > 0 else 0
 
 
-def record_fail(scope: str, username: str) -> int:
+def record_fail(scope: str, username: str, ip: str = "") -> int:
     """记一次失败。返回本次新触发的锁定秒数（0 = 还没到档位，不锁定）。"""
     records = _load()
-    key = _key(scope, username)
+    key = _key(scope, username, ip)
     rec = _record(records, key)
     rec["fails"] = int(rec["fails"]) + 1
     rec["ts"] = time.time()
@@ -132,9 +153,12 @@ def record_fail(scope: str, username: str) -> int:
 
 
 def reset(scope: str, username: str) -> None:
-    """登录成功：清零，回到起始状态。"""
+    """登录成功：清零该账号所有 IP 的条目，回到起始状态。"""
     records = _load()
-    if records.pop(_key(scope, username), None) is not None:
+    targets = _user_keys(records, scope, username)
+    for key in targets:
+        records.pop(key, None)
+    if targets:
         _save(records)
 
 
@@ -145,7 +169,7 @@ def locked_list(scope: str) -> list[dict]:
     for key, rec in _load().items():
         if not isinstance(rec, dict):
             continue
-        sc, _, user = key.partition(":")
+        sc, user, ip = _split(key)
         if sc != scope:
             continue
         left = int(float(rec.get("until", 0) or 0) - now)
@@ -153,6 +177,7 @@ def locked_list(scope: str) -> list[dict]:
             continue
         out.append({
             "username": user,
+            "ip": ip,
             "fails": int(rec.get("fails", 0)),
             "level": int(rec.get("level", 0)),
             "left": left,
@@ -165,10 +190,9 @@ def clear(scope: str, username: str = "") -> int:
     """手动解除锁定。username 为空表示清空该 scope 下所有账号。返回清除条数。"""
     records = _load()
     if not username:
-        targets = [k for k in records if k.partition(":")[0] == scope]
+        targets = [k for k in records if _split(k)[0] == scope]
     else:
-        key = _key(scope, username)
-        targets = [key] if key in records else []
+        targets = _user_keys(records, scope, username)
     for key in targets:
         records.pop(key, None)
     if targets:

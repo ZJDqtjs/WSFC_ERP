@@ -7,7 +7,7 @@
 import hmac
 from typing import NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -26,6 +26,7 @@ from ..database import (
     get_user_db,
 )
 from ..keys import public_from_private
+from ..maintenance import client_ip
 from ..models import User
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -36,9 +37,9 @@ class LoginIn(BaseModel):
     private_key: str
 
 
-def _reject(username: str) -> NoReturn:
+def _reject(username: str, ip: str) -> NoReturn:
     """记一次失败并抛出对应错误：到档位返回 429（带等待时长），否则 401。"""
-    wait = guard.record_fail(guard.SCOPE_ERP, username)
+    wait = guard.record_fail(guard.SCOPE_ERP, username, ip)
     if wait:
         raise HTTPException(
             429,
@@ -48,33 +49,45 @@ def _reject(username: str) -> NoReturn:
 
 
 @router.post("/login")
-def login(data: LoginIn, response: Response, db: Session = Depends(get_user_db)):
+def login(
+    data: LoginIn,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_user_db),
+):
     """私钥登录。
 
     账号注册表固定在默认仓（keyadmin 只写这里），所以登录不受任何"当前分仓"影响；
     新会话从默认分仓起步，之后各人可自行切仓（切仓只重签自己的令牌，无需重新登录）。
 
-    连续失败按 app/login_guard.py 的规则锁定该账号：每累计 3 次失败依次等待
+    连续失败按 app/login_guard.py 的规则锁定「账号 + 客户端 IP」：每累计 3 次失败依次等待
     1 分钟 → 3 分钟 → 5 分钟 → 1 小时 → 24 小时（之后每 3 次继续 24 小时），
     登录成功立即清零。锁定期内即使私钥正确也一律拒绝。
+    按「账号 + IP」计数是为了避免别人知道用户名就能把该账号锁死 24 小时。
+
+    **所有失败一律 401**（不再对「私钥格式错」单独返回 400）：否则攻击者用一段垃圾私钥
+    就能区分「账号存在」与「账号不存在」，把登录页变成用户名枚举接口。
     """
     username = data.username.strip()
+    ip = client_ip(request)
     if not username:
         raise HTTPException(401, "用户名或私钥不匹配")
 
-    left = guard.locked_left(guard.SCOPE_ERP, username)
+    left = guard.locked_left(guard.SCOPE_ERP, username, ip)
     if left:
         raise HTTPException(429, f"账号已锁定，请 {guard.humanize(left)} 后再试")
 
-    user = db.scalar(select(User).where(User.username == username))
-    if not user or not user.is_active:
-        _reject(username)
+    # 先解析私钥：格式非法直接按「凭证不匹配」处理，绝不查库、也不暴露具体原因
     try:
         _, fp = public_from_private(data.private_key)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+    except ValueError:
+        _reject(username, ip)
+
+    user = db.scalar(select(User).where(User.username == username))
+    if not user or not user.is_active:
+        _reject(username, ip)
     if not user.fingerprint or not hmac.compare_digest(fp, user.fingerprint):
-        _reject(username)
+        _reject(username, ip)
 
     guard.reset(guard.SCOPE_ERP, username)
 

@@ -1,10 +1,11 @@
 """待付款账单：把各处的「待付款」单据聚合成一张待办账单。
 
-- 来源：入库（采购）/ 入仓 / 出库（销售回款）/ 其他开支 / 手动记账；
+- 来源：入库（采购）/ 入仓 / 出库（销售回款）/ 其他收支 / 手动记账；
 - 各处录入表单默认「已付款」→ 直接进财务报表；勾「待付款」→ 先落到这张账单；
 - 点「已支付」→ 标记该单据已结清（入库/出库会同步它自动生成的财务流水），
   随后按原日期纳入财务报表（收入/支出同时计入，避免只算一头导致毛利失真）。
 """
+import re
 from datetime import date as _date
 from datetime import timedelta
 
@@ -26,8 +27,11 @@ from ..models import (
     User,
     WarehouseIn,
 )
+from ..services import pay_due
 
 router = APIRouter(prefix="/api", tags=["payables"])
+
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # kind → 模型（前端按 kind 提交「已支付」）。dropship 例外：按出库单聚合，见 pay_bill。
 MODEL_OF = {
@@ -41,7 +45,7 @@ SOURCE_NAME = {
     "inbound": "入库",
     "warehouse_in": "入仓",
     "outbound": "出库",
-    "otherexp": "其他开支",
+    "otherexp": "其他收支",
     "finance": "手动记账",
     "dropship": "代发",
     "dropship_item": "代发",
@@ -58,17 +62,64 @@ SOURCE_PAGE = {
 DROPSHIP_KIND = "dropship"                  # 按出库单整单结算（账单列表里的代发行）
 DROPSHIP_ITEM_KIND = "dropship_item"        # 按「商品+规格+日期」的账单行结算（代发页签按天分行后的行）
 
+# 未结清的付款状态：unpaid 一分没付 / partial 部分付款（只有未付的余额还挂在账单上）
+PENDING_STATUSES = ("unpaid", "partial")
+
 
 class PayIn(BaseModel):
     kind: str
     id: int
     paid: bool = True  # True=已支付（转入报表），False=撤销为待付款
+    # 转账手续费（元）：>0 时自动记一笔「其他收支 → 手续费」，计入财务报表期间费用
+    fee: float = 0.0
+    date: str = ""     # 手续费的入账日期（空=今天）
 
 
 class PayBatchIn(BaseModel):
     kind: str
     ids: list[int]
     paid: bool = True
+    # 整批只记一笔手续费（不是每单都收），前端只在第一组提交时带上
+    fee: float = 0.0
+    date: str = ""
+
+
+PAY_FEE_CATEGORY = "手续费"     # 其他收支里的费用类型
+
+
+def _record_pay_fee(db: Session, amount: float, day: str, operator: str, remark: str) -> float:
+    """把转账手续费记一笔「其他收支」（已付款），返回实际入账金额。
+
+    手续费是真实的期间费用，报表「其他收支 → 期间费用」直接扣减，不像入库运费那样已经在成本里，
+    所以不需要镜像排除。ref_type 留空 = 手工登记行：用户可以在「其他收支」页改/删（填错了能自己修）。
+    """
+    try:
+        amt = round(float(amount or 0.0), 2)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "手续费应为数字")
+    if amt < 0:
+        raise HTTPException(400, "手续费不能为负数")
+    if amt < 0.01:
+        return 0.0
+    day = (day or "").strip() or _date.today().isoformat()
+    if not DATE_RE.match(day):
+        raise HTTPException(400, "日期格式应为 YYYY-MM-DD")
+    db.add(OtherExpense(
+        category=PAY_FEE_CATEGORY, amount=amt, date=day, remark=remark,
+        operator=operator, pay_status="paid", paid_at=day,
+        ref_type="", ref_id=None,
+    ))
+    return amt
+
+
+def _pay_label(db: Session, kind: str, rid: int) -> str:
+    """账单的可读标识（单号优先，没有就用来源+id），用于手续费备注。"""
+    code = ""
+    model = MODEL_OF.get(kind)
+    if model:
+        rec = db.get(model, rid)
+        code = (getattr(rec, "code", "") or "") if rec else ""
+    return code or f"#{rid}"
 
 
 def _qty(v) -> str:
@@ -100,7 +151,7 @@ def _dropship_formula(b: "DropshipBill") -> str:
 
 def _row(kind: str, rid: int, date: str, title: str, sub: str, amount: float,
          direction: str, pay_status: str, paid_at: str, operator: str, remark: str,
-         code: str = "") -> dict:
+         code: str = "", due_amount: float = 0.0, paid_amount: float = 0.0) -> dict:
     return {
         "kind": kind,
         "source": SOURCE_NAME[kind],
@@ -116,6 +167,11 @@ def _row(kind: str, rid: int, date: str, title: str, sub: str, amount: float,
         "paid_at": paid_at or "",
         "operator": operator or "",
         "remark": remark or "",
+        # 部分付款才有意义：应付合计 / 已付（amount 是还没付的余额）
+        "due_amount": round(float(due_amount or 0), 2),
+        "paid_amount": round(float(paid_amount or 0), 2),
+        # 部分付款标记（pay_status 对外仍报 unpaid，兼容只认两档的老客户端）
+        "partial": False,
     }
 
 
@@ -123,19 +179,19 @@ def _pay_filter(model, include_paid: bool, cutoff: str):
     """付款状态过滤（下推到 SQL）。
 
     pay_status 为空的历史数据按「已付款」看待（与 report._is_paid 同一口径）；
-    默认只取「待付款」，勾选「含已结清」时再带上最近 cutoff 之后结清的。
+    默认只取「待付款 / 部分付款」，勾选「含已结清」时再带上最近 cutoff 之后结清的。
 
     以前是整表加载后按 pay_status 在内存里筛——几千张出库单连同明细全部 ORM 实例化，
     实测单仓近 1 秒（线上 4 秒+），而真正要展示的常常只有几条。
     """
-    unpaid = func.coalesce(model.pay_status, "paid") == "unpaid"
+    pending = func.coalesce(model.pay_status, "paid").in_(PENDING_STATUSES)
     if not include_paid:
-        return unpaid
+        return pending
     settled_recent = and_(
-        func.coalesce(model.pay_status, "paid") != "unpaid",
+        func.coalesce(model.pay_status, "paid").notin_(PENDING_STATUSES),
         func.coalesce(func.nullif(model.paid_at, ""), model.date) >= cutoff,
     )
-    return or_(unpaid, settled_recent)
+    return or_(pending, settled_recent)
 
 
 def _outbound_titles(db: Session, ids: list[int]) -> dict[int, tuple[str, float, str, int]]:
@@ -174,15 +230,31 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
         .where(_pay_filter(Inbound, include_paid, cutoff))
     ).scalars():
         name = r.product.name if r.product else ""
-        rows.append(_row(
+        # 应付 = 实付（含抹零/凑整调整 + 运费/装卸费；后两者的「其他收支」镜像行不单独列为待办）
+        due = round((r.total_amount or 0.0) + (getattr(r, "adjust_amount", 0.0) or 0.0)
+                    + (getattr(r, "freight", 0.0) or 0.0) + (getattr(r, "handling", 0.0) or 0.0), 2)
+        status = (getattr(r, "pay_status", "paid") or "paid")
+        paid_amount = round(getattr(r, "paid_amount", 0.0) or 0.0, 2)
+        sub = "供应商 " + r.supplier if r.supplier else "采购入库"
+        if status == "partial":
+            # 部分付款：账单上只留没付的余额，已付多少写在副标题上，方便核对
+            paid_amount = max(0.0, min(paid_amount, due))
+            sub += f" · 部分付款：应付 ¥{due:.2f}，已付 ¥{paid_amount:.2f}"
+        else:
+            paid_amount = due if status != "unpaid" else 0.0
+        row = _row(
             "inbound", r.id, r.date,
             f"{name} × {_qty(r.quantity)}{r.unit or ''}".strip(),
-            "供应商 " + r.supplier if r.supplier else "采购入库",
-            # 应付 = 实付（含抹零/凑整调整 + 运费/装卸费；后两者的「其他开支」镜像行不单独列为待办）
-            r.total_amount + (getattr(r, "adjust_amount", 0.0) or 0.0)
-            + (getattr(r, "freight", 0.0) or 0.0) + (getattr(r, "handling", 0.0) or 0.0),
-            "out", r.pay_status, r.paid_at, r.operator, r.remark, r.code,
-        ))
+            sub,
+            round(due - paid_amount, 2),
+            # 部分付款对外仍报「待付款」：老客户端（手机 App）只认 已付/待付 两档，
+            # 报 partial 会被它当成都结清了；前端用 partial 标记显示「部分付款」徽标
+            "out", "unpaid" if status == "partial" else status,
+            r.paid_at, r.operator, r.remark, r.code,
+            due_amount=due, paid_amount=paid_amount,
+        )
+        row["partial"] = status == "partial"
+        rows.append(row)
 
     for r in db.execute(
         select(WarehouseIn).where(_pay_filter(WarehouseIn, include_paid, cutoff))
@@ -199,8 +271,10 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
 
     # 「含最近已结清」时最近 30 天可能上万张单（wh01 实测 1.9 万）：按日期倒序只取最近一批，
     # 免得接口要 1.5 秒、浏览器拉 2MB 备注渲染几千行（未结清的单不受影响，一笔都不会少）。
+    # 销售退货（红冲）不进账单：它的金额已在原单收入里净掉，也不存在「待客户支付」这回事
     ob_q = (
-        select(Outbound).where(_pay_filter(Outbound, include_paid, cutoff))
+        select(Outbound)
+        .where(_pay_filter(Outbound, include_paid, cutoff), func.coalesce(Outbound.is_return, 0) == 0)
         .order_by(Outbound.date.desc(), Outbound.id.desc())
     )
     if include_paid:
@@ -224,7 +298,7 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
             "in", r.pay_status, r.paid_at, r.operator, r.remark, r.code,
         ))
 
-    # 只列手工登记的其他开支：入库/出库金额调整自动生成的记录随主单结算，不单独作为待办
+    # 只列手工登记的其他收支：入库/出库金额调整自动生成的记录随主单结算，不单独作为待办
     for r in db.execute(
         select(OtherExpense).where(
             func.coalesce(OtherExpense.ref_type, "") == "",
@@ -232,7 +306,7 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
         )
     ).scalars():
         rows.append(_row(
-            "otherexp", r.id, r.date, r.category, "其他开支",
+            "otherexp", r.id, r.date, r.category, "其他收支",
             r.amount, "out", r.pay_status, r.paid_at, r.operator, r.remark,
         ))
 
@@ -282,8 +356,8 @@ def list_payables(
     cutoff = (_date.today() - timedelta(days=max(1, days))).isoformat()
     # 过滤已下推到 SQL：默认只查「待付款」的少量单据，不再把整库单据+明细拉进内存
     all_rows = _collect(db, include_paid=bool(include_paid), cutoff=cutoff)
-    unpaid = [r for r in all_rows if r["pay_status"] == "unpaid"]
-    paid: list[dict] = [r for r in all_rows if r["pay_status"] != "unpaid"]
+    unpaid = [r for r in all_rows if r["pay_status"] in PENDING_STATUSES]
+    paid: list[dict] = [r for r in all_rows if r["pay_status"] not in PENDING_STATUSES]
     unpaid.sort(key=lambda r: r["date"], reverse=True)
     paid.sort(key=lambda r: (r["paid_at"] or r["date"]), reverse=True)
 
@@ -303,9 +377,22 @@ def list_payables(
 
 @router.post("/payables/pay")
 def pay_bill(data: PayIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """标记已支付（转入财务报表）或撤销（改回待付款，从报表移出）。"""
+    """标记已支付（转入财务报表）或撤销（改回待付款，从报表移出）。
+
+    可选：带上转账手续费 fee > 0，会自动记一笔「其他收支 → 手续费」（日期=付款日期，已付款），
+    计入财务报表的期间费用；撤销时不会自动删掉手续费（钱确实被银行收了），需要的话到「其他收支」删。
+    """
     kind = (data.kind or "").strip()
+    if float(data.fee or 0) < 0:
+        raise HTTPException(400, "手续费不能为负数")
     status, paid_at = _mark_paid(db, kind, data.id, bool(data.paid))
+    fee = 0.0
+    if data.paid and float(data.fee or 0) > 0:
+        label = SOURCE_NAME.get(kind, kind)
+        fee = _record_pay_fee(
+            db, data.fee, data.date, user.name,
+            f"支付{label} {_pay_label(db, kind, data.id)} 转账手续费",
+        )
     db.commit()
     return {
         "ok": True,
@@ -314,6 +401,7 @@ def pay_bill(data: PayIn, db: Session = Depends(get_db), user: User = Depends(ge
         "source": SOURCE_NAME.get(kind, kind),
         "pay_status": status,
         "paid_at": paid_at,
+        "fee": fee,
     }
 
 
@@ -324,6 +412,8 @@ def pay_bills_batch(data: PayBatchIn, db: Session = Depends(get_db), user: User 
     ids 的含义随 kind：普通单据是自身 id；代发是**出库单 id**（整单的代发成本一起结清）。
     """
     kind = (data.kind or "").strip()
+    if float(data.fee or 0) < 0:
+        raise HTTPException(400, "手续费不能为负数")
     ids = list(dict.fromkeys(int(i) for i in (data.ids or [])))
     if not ids:
         raise HTTPException(400, "请先勾选要处理的账单")
@@ -336,8 +426,15 @@ def pay_bills_batch(data: PayBatchIn, db: Session = Depends(get_db), user: User 
             if e.status_code != 404:
                 raise
             missing += 1
+    # 转账手续费：整批只记一笔（不是每单都收）；一笔都没处理成功就不记
+    fee = 0.0
+    if data.paid and updated > 0 and float(data.fee or 0) > 0:
+        fee = _record_pay_fee(
+            db, data.fee, data.date, user.name,
+            f"批量支付 {updated} 笔{SOURCE_NAME.get(kind, kind)}账单 转账手续费",
+        )
     db.commit()
-    return {"ok": True, "kind": kind, "updated": updated, "missing": missing}
+    return {"ok": True, "kind": kind, "updated": updated, "missing": missing, "fee": fee}
 
 
 @router.get("/payables/dropship")
@@ -466,7 +563,7 @@ def _mark_paid(db: Session, kind: str, rid: int, paid: bool) -> tuple[str, str]:
     """把一张账单标记为已支付/撤销，返回 (pay_status, paid_at)。
 
     代发（dropship）按出库单批量更新它名下的规格明细；其余 kind 更新单据自身，
-    入库/出库还要把自动生成的财务流水与其他开支（金额调整 / 运费装卸）一起跟着走。
+    入库/出库还要把自动生成的财务流水与其他收支（金额调整 / 运费装卸）一起跟着走。
     """
     status = "paid" if paid else "unpaid"
     paid_at = _date.today().isoformat() if paid else ""
@@ -491,13 +588,20 @@ def _mark_paid(db: Session, kind: str, rid: int, paid: bool) -> tuple[str, str]:
     if not rec:
         raise HTTPException(404, "账单不存在")
     rec.pay_status, rec.paid_at = status, paid_at
+    # 入库单还有「已付金额」：点已支付即整单结清（已付 = 应付合计），撤销则清零；
+    # 部分付款的单据结清后不再留在待付款账单里
+    if kind == "inbound" and hasattr(rec, "paid_amount"):
+        rec.paid_amount = pay_due(
+            rec.total_amount, getattr(rec, "adjust_amount", 0.0),
+            getattr(rec, "freight", 0.0), getattr(rec, "handling", 0.0),
+        ) if paid else 0.0
     # 入库/出库会自动生成财务流水（采购支出 / 销售收入 / 人工打包费），状态要跟着走
     if kind in ("inbound", "outbound"):
         for f in db.execute(
             select(FinanceRecord).where(FinanceRecord.ref_type == kind, FinanceRecord.ref_id == rec.id)
         ).scalars():
             f.pay_status, f.paid_at = rec.pay_status, rec.paid_at
-        # 单据带出的其他开支同样随主单结算：金额调整(ref_type=kind) + 入库运费/装卸镜像行
+        # 单据带出的其他收支同样随主单结算：金额调整(ref_type=kind) + 入库运费/装卸镜像行
         exp_types = [kind] + (["inbound_fee"] if kind == "inbound" else [])
         for e in db.execute(
             select(OtherExpense).where(OtherExpense.ref_type.in_(exp_types), OtherExpense.ref_id == rec.id)

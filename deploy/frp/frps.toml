@@ -1,0 +1,12 @@
+# frp 服务端（部署在你的公网服务器上）
+# 放置位置：/etc/frp/frps.toml
+# 启动方式：frps -c /etc/frp/frps.toml   （建议用 systemd 常驻）
+
+bindPort = 7000
+
+# 关键：隧道端口只绑在 127.0.0.1。
+# 这样 18011 无法被公网直接访问，只能由 nginx 的 /jdfenxi/ 门禁反代进入。
+proxyBindAddr = "127.0.0.1"
+
+# 与本地 frpc.toml 保持一致，务必替换成随机长串
+auth.token = "REPLACE_WITH_RANDOM_TOKEN"

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>企业台账系统</title>
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <!-- 停服公告滚动条：仅在管理员发布维护公告（倒计时）期间显示 -->
@@ -75,7 +75,7 @@
         <button class="nav-item" data-page="packrules"><span class="nav-ico"><svg class="ic"><use href="#i-link"/></svg></span>一单多货</button>
         <div class="nav-group">经营分析</div>
         <button class="nav-item" data-page="report"><span class="nav-ico"><svg class="ic"><use href="#i-chart"/></svg></span>财务报表</button>
-        <button class="nav-item" data-page="otherexp"><span class="nav-ico"><svg class="ic"><use href="#i-wallet"/></svg></span>其他开支</button>
+        <button class="nav-item" data-page="otherexp"><span class="nav-ico"><svg class="ic"><use href="#i-wallet"/></svg></span>其他收支</button>
         <button class="nav-item" data-page="payables"><span class="nav-ico"><svg class="ic"><use href="#i-bill"/></svg></span>待付款账单<span class="badge" id="payNavBadge" style="display:none;margin-left:auto;background:#f97316;color:#fff;"></span></button>
         <div class="nav-group">数据工具</div>
         <button class="nav-item" data-page="fresh"><span class="nav-ico"><svg class="ic"><use href="#i-truck"/></svg></span>鲜货现采</button>
@@ -417,7 +417,7 @@
               <div class="field">
                 <label>调整（给客户抹零 / 凑整）</label>
                 <input id="outAdjust" type="number" step="any" placeholder="0.00" oninput="calcOutboundTotals()" />
-                <div class="field-hint">正=加收，负=抹零；差额自动记「金额调整」其他开支，商品成本不变</div>
+                <div class="field-hint">正=加收，负=抹零；差额自动记「金额调整」其他收支，商品成本不变</div>
               </div>
             </div>
             <div class="field" style="grid-column:1/-1;margin-top:10px;">
@@ -490,6 +490,7 @@
             <span class="hint" id="winHint"></span>
             <div class="grow"></div>
             <button class="btn" onclick="openWarehouseInImport()"><svg class="ic"><use href="#i-download"/></svg> 导入<span id="winSheetName">常温贴单</span></button>
+            <button class="btn secondary" onclick="openFreightRecalc()" title="上传京东《运输转运费》账单，把命中采购单的运费改成账单里的实际结算金额"><svg class="ic"><use href="#i-truck"/></svg> 重算运费</button>
             <button class="btn secondary" onclick="openWarehouseInAdd()"><svg class="ic"><use href="#i-plus"/></svg> 手动入仓</button>
             <button class="btn secondary" onclick="loadWarehouseIns()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
           </div>
@@ -602,10 +603,10 @@
         <div class="card">
           <div class="card-head">
             <h3>财务利润报表</h3>
-            <!-- 报表口径开关：开启后不计入「其他开支」的款项，只看商品售卖利润（默认开启） -->
-            <label class="rep-switch" title="开启后本报表不计入「其他开支」的款项，只看商品售卖利润">
+            <!-- 报表口径开关：开启后不计入「其他收支」的款项，只看商品售卖利润（默认开启） -->
+            <label class="rep-switch" title="开启后本报表不计入「其他收支」的款项，只看商品售卖利润">
               <input type="checkbox" id="excludeOtherChk" checked onchange="toggleExcludeOther(this)" />
-              <span>排除其他开支</span>
+              <span>排除其他收支</span>
             </label>
             <span class="hint" id="repRangeHint"></span>
             <div class="grow"></div>
@@ -662,14 +663,14 @@
           </div>
         </div>
 
-        <!-- 支出（采购 + 其他开支 + 手工记账） -->
+        <!-- 支出（采购 + 其他收支 + 手工记账） -->
         <div id="rep-panel-expense" style="display:none;">
           <div class="card">
             <div class="card-head">
               <h3>支出汇总</h3>
               <span class="muted" id="repFeeHint"></span>
               <div class="grow"></div>
-              <button class="btn secondary" onclick="goPage('otherexp')">去登记其他开支 →</button>
+              <button class="btn secondary" onclick="goPage('otherexp')">去登记其他收支 →</button>
             </div>
             <div class="table-wrap"><table id="repExpSummary"></table></div>
             <div id="repFeeBreak" style="margin-top:14px;"></div>
@@ -695,13 +696,13 @@
           <div class="card">
             <div class="card-head">
               <h3>支出明细（逐笔）</h3>
-              <span class="muted">采购 / 其他开支 / 手工记账 / 刷单成本逐条列出，合计与「支出合计」一致</span>
+              <span class="muted">采购 / 其他收支 / 手工记账 / 刷单成本逐条列出，合计与「支出合计」一致</span>
             </div>
             <div class="toolbar">
               <select id="repExpItemSrc" onchange="renderExpenseItemRows()">
                 <option value="">全部来源</option>
                 <option value="采购">采购（进货）</option>
-                <option value="其他开支">其他开支</option>
+                <option value="其他收支">其他收支</option>
                 <option value="手工记账">手工记账</option>
                 <option value="刷单成本">刷单成本</option>
               </select>
@@ -752,12 +753,21 @@
         </div>  <!-- /#rep-one 单仓总览 -->
       </section>
 
-      <!-- 其他开支 -->
+      <!-- 其他收支 -->
       <section id="page-otherexp" class="page">
+        <!-- 页级切换：其他支出 / 其他收入 —— 登记表单、统计、明细整页跟随 -->
+        <div class="card oe-page-head">
+          <div class="seg" id="oeScopeSeg">
+            <button class="seg-item active" data-scope="expense" onclick="oeScope(this)">其他支出</button>
+            <button class="seg-item" data-scope="income" onclick="oeScope(this)">其他收入</button>
+          </div>
+          <div class="grow"></div>
+          <span class="hint" id="oeScopeHint"></span>
+        </div>
         <div class="card">
           <div class="card-head">
-            <h3><svg class="ic"><use href="#i-wallet"/></svg> 登记其他开支</h3>
-            <span class="hint">仓库/经营中的零散支出：网线费、安装费、机器费、样品费等。保存后计入财务报表「期间费用」，并从毛利中扣减得到净利（无需再到「手动记账」重复登记）</span>
+            <h3><svg class="ic"><use href="#i-wallet"/></svg> <span id="oeFormTitle">登记其他支出</span></h3>
+            <span class="hint">仓库/经营中的零散支出与收入：网线费、安装费、机器费、样品费、供应商补偿等。保存后计入财务报表「期间费用」（收入为负数冲减），并影响净利（无需再到「手动记账」重复登记）</span>
           </div>
           <div class="form-grid">
             <div class="field">
@@ -768,7 +778,7 @@
             <div class="field"><label>金额（元）*</label><input id="oeAmount" type="number" min="0" step="any" placeholder="0.00" onkeydown="if(event.key==='Enter')oeSubmit()" /></div>
             <div class="field"><label>日期 *</label><input id="oeDate" type="date" /></div>
             <div class="field"><label>操作员</label><input id="oeOperator" readonly title="默认当前登录账号，不可修改" /></div>
-            <div class="field">
+            <div class="field" id="oePayField">
               <label>付款状态</label>
               <div class="pay-radios">
                 <label class="pay-radio on"><input type="radio" name="oePay" value="paid" checked onchange="payRadioSync(this)" /> 已付款</label>
@@ -797,7 +807,7 @@
         <div class="stat-grid" id="oeStats"></div>
 
         <div class="card">
-          <div class="card-head"><h3>开支统计</h3><span class="hint" id="oeStatsHint"></span></div>
+          <div class="card-head"><h3>收支统计</h3><span class="hint" id="oeStatsHint"></span></div>
           <div class="toolbar">
             <input id="oeDateFrom" type="date" /><span>-</span><input id="oeDateTo" type="date" />
             <button class="btn" onclick="loadOtherExpensePage()">查询</button>
@@ -826,7 +836,7 @@
 
         <div class="card">
           <div class="card-head">
-            <h3>开支明细</h3><span class="hint" id="oeListHint"></span>
+            <h3>收支明细</h3><span class="hint" id="oeListHint"></span>
             <div class="grow"></div>
             <button class="btn secondary" onclick="loadOtherExpensePage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
           </div>
@@ -847,7 +857,7 @@
         <div class="card">
           <div class="card-head">
             <h3><svg class="ic"><use href="#i-bill"/></svg> 待付款账单</h3>
-            <span class="hint" id="payHint">入库 / 入仓 / 出库 / 其他开支 / 手动记账 里勾了「待付款」的单据，以及出库单里代发商品自动带出的「代发成本」，都汇总在这里；点「已支付」后按原日期纳入财务报表。上方统计卡是全部待结清，下方「合计」随日期 / 关键词筛选实时更新；已结清只载入最近 30 天</span>
+            <span class="hint" id="payHint">入库 / 入仓 / 出库 / 其他收支 / 手动记账 里勾了「待付款」的单据，以及出库单里代发商品自动带出的「代发成本」，都汇总在这里；点「已支付」后按原日期纳入财务报表。上方统计卡是全部待结清，下方「合计」随日期 / 关键词筛选实时更新；已结清只载入最近 30 天</span>
             <div class="grow"></div>
             <button class="btn secondary" onclick="loadPayablesPage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
           </div>
@@ -1340,7 +1350,7 @@
             <textarea id="finRemark" rows="1" placeholder="可选：本次入库的每一张单共用"></textarea>
           </div>
           <div class="toolbar" style="margin-top:10px;">
-            <span class="muted">运费 / 装卸费默认留空：填了会算进该商品的批次成本（体现在它的毛利上），并同步「其他开支」备查；商品类别若配了扣点，入库单价会自动按 原价×(1−扣点%) 折算</span>
+            <span class="muted">运费 / 装卸费默认留空：填了会算进该商品的批次成本（体现在它的毛利上），并同步「其他收支」备查；商品类别若配了扣点，入库单价会自动按 原价×(1−扣点%) 折算</span>
             <div class="grow"></div>
             <button class="btn green" id="finSubmitBtn" onclick="submitFreshInbound()">✓ 全部入库</button>
           </div>
@@ -1395,6 +1405,6 @@
     </div>
   </div>
 
-  <script src="/app.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

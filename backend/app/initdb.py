@@ -433,21 +433,28 @@ _PAY_COLUMNS = (
 
 # 各表需要补齐的新增列（幂等）：{表名: ((列, DDL), ...)}
 _EXTRA_COLUMNS = {
-    # 金额调整（抹零/凑整）：单据金额仍按商品原价，差额单独记「金额调整」的其他开支
-    # freight/handling：入库运费/装卸费（选填），计入批次成本，并镜像记入「其他开支」供查询
+    # 金额调整（抹零/凑整）：单据金额仍按商品原价，差额单独记「金额调整」的其他收支
+    # freight/handling：入库运费/装卸费（选填），计入批次成本，并镜像记入「其他收支」供查询
     "inbounds": _PAY_COLUMNS + (
         ("adjust_amount", "FLOAT DEFAULT 0"),
         ("freight", "FLOAT DEFAULT 0"),
         ("handling", "FLOAT DEFAULT 0"),
+        # 部分付款：pay_status="partial" 时已付的金额（老库默认 0，历史单据口径不变）
+        ("paid_amount", "FLOAT DEFAULT 0"),
+        # 供应商补偿：供应商退的钱/赔偿，镜像记「其他收支 → 供应商补偿」负数行冲减期间费用
+        ("compensation", "FLOAT DEFAULT 0"),
     ),
     "outbounds": _PAY_COLUMNS + (
         ("adjust_amount", "FLOAT DEFAULT 0"),
+        # 销售退货（红冲单）：金额/数量/成本记负数，库存按原单结转成本回补
+        ("is_return", "BOOLEAN DEFAULT 0"),
+        ("return_of_id", "INTEGER"),
         # 芳谊放单仓刷单结算：刷单成本 / 结算固定费（快递+包装） / 系统自动固定费快照
         ("brush_cost", "FLOAT DEFAULT 0"),
         ("brush_fee", "FLOAT DEFAULT 0"),
         ("brush_auto_fee", "FLOAT DEFAULT 0"),
     ),
-    # 其他开支：来源单据（入库/出库金额调整自动生成）——单据删除/改日期时按此同步
+    # 其他收支：来源单据（入库/出库金额调整自动生成）——单据删除/改日期时按此同步
     "other_expenses": _PAY_COLUMNS + (
         ("ref_type", "VARCHAR(16) DEFAULT ''"),
         ("ref_id", "INTEGER"),
@@ -459,6 +466,11 @@ _EXTRA_COLUMNS = {
         ("pack_cost", "FLOAT DEFAULT 0"),
         # 每袋商品成本（元/袋）：代发（未关联库存商品）时来自入仓品的「代发成本」
         ("bag_cost", "FLOAT DEFAULT 0"),
+        # 运费来源：'' 按入仓品资料的每袋运费；'actual' 按运输账单实际结算（重算运费）
+        ("freight_source", "VARCHAR(16) DEFAULT ''"),
+        # 固定成本（元/袋）快照 + 合计（数量 × 每袋固定成本）；老记录默认 0，历史毛利不变
+        ("fixed_cost", "FLOAT DEFAULT 0"),
+        ("fixed_total", "FLOAT DEFAULT 0"),
     ),
     # 入仓品：关联结算（随货包材）清单，每袋用量；代发成本（不关联库存商品时手填的每袋商品成本）
     # bag_net_weight/bag_net_unit：每袋净重 + 单位（重量统计口径）—— 
@@ -468,9 +480,12 @@ _EXTRA_COLUMNS = {
         ("dropship_cost", "FLOAT DEFAULT 0"),
         ("bag_net_weight", "FLOAT DEFAULT 0"),
         ("bag_net_unit", "VARCHAR(8) DEFAULT '克'"),
+        # 固定成本（元/袋）：每袋打包费 / 难量化的包材或额外费用，计入对外 sku-costs 的包材口径
+        ("fixed_cost", "FLOAT DEFAULT 0"),
     ),
     # 出库行：代发标记（订单商品未关联库存大类 → 不扣库存，只记代发数量/成本）
-    "outbound_lines": (("is_dropship", "BOOLEAN DEFAULT 0"),),
+    # src_line_id：退货行指向被冲减的原销售行（累计退货数量按它校验）
+    "outbound_lines": (("is_dropship", "BOOLEAN DEFAULT 0"), ("src_line_id", "INTEGER")),
     # 商品：关联的库存商品清单（订单商品关联多个库存商品扣减 / 成本回写用）
     # ⚠️ 新增列必须登记在这里：非默认分仓启动时只跑 ensure_schema（即本表），不跑 migrate()。
     #    这两列当初只加在 migrate() 里，导致 wh01 等分仓缺列，/api/products 等接口 500（表现为"数据全没了"）。
@@ -488,6 +503,10 @@ _EXTRA_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_stock_movements_ref ON stock_movements(ref_type, ref_id)",
     "CREATE INDEX IF NOT EXISTS idx_finance_records_ref ON finance_records(ref_type, ref_id)",
     "CREATE INDEX IF NOT EXISTS idx_outbound_lines_outbound ON outbound_lines(outbound_id)",
+    # 退货行按原销售行汇总已退数量（services.returned_qty_by_line）
+    "CREATE INDEX IF NOT EXISTS idx_outbound_lines_src ON outbound_lines(src_line_id)",
+    # 退货单按原单反查（列表/详情显示「已退」用）
+    "CREATE INDEX IF NOT EXISTS idx_outbounds_return_of ON outbounds(return_of_id)",
     "CREATE INDEX IF NOT EXISTS idx_other_expenses_ref ON other_expenses(ref_type, ref_id)",
     # 报表「重量(kg)」按出库行的库存流水反推扣减量：line_id 是 ALTER 补加的列，模型里的
     # index=True 对老库不生效 → 缺这个索引时重量查询会退化成全表扫描（实测 13 天区间 104 秒）。

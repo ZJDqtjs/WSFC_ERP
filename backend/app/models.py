@@ -91,10 +91,10 @@ class Inbound(Base):
     unit_price: Mapped[float] = mapped_column(Float)  # 所选单位的单价
     total_amount: Mapped[float] = mapped_column(Float)  # 商品金额（数量×单价），= 批次成本，不随金额调整变化
     # 金额调整（抹零/凑整）：正=多付给供应商，负=少付。实付金额 = total_amount + adjust_amount；
-    # 商品成本仍按 total_amount（不变），差额自动记一笔「金额调整」的其他开支（见 services.create_inbound）
+    # 商品成本仍按 total_amount（不变），差额自动记一笔「金额调整」的其他收支（见 services.create_inbound）
     adjust_amount: Mapped[float] = mapped_column(Float, default=0.0)
     # 入库运费 / 装卸费（选填）：计入该批次的到岸成本（StockMovement.amount = 商品金额 + 这两项），
-    # FIFO 结转后自动体现在该品的毛利与库存均价上；同时在「其他开支」生成 ref_type="inbound_fee"
+    # FIFO 结转后自动体现在该品的毛利与库存均价上；同时在「其他收支」生成 ref_type="inbound_fee"
     # 的镜像行供查询（报表期间费用会排除镜像行，避免与成本口径重复扣减，见 services/报告聚合）。
     # 与金额调整不同：调整差额不改成本、只记开支；运费/装卸费改成本、镜像行不重复进期间费用。
     freight: Mapped[float] = mapped_column(Float, default=0.0)
@@ -103,9 +103,17 @@ class Inbound(Base):
     operator: Mapped[str] = mapped_column(String(32), default="")
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
     remark: Mapped[str] = mapped_column(String(255), default="")
-    # 付款状态：paid 已付款（默认，直接进报表）/ unpaid 待付款（先进「待付款账单」，点「已支付」后才进报表）
+    # 付款状态：paid 已付款（默认，直接进报表）/ partial 部分付款 / unpaid 待付款（先进「待付款账单」，点「已支付」后才进报表）
     pay_status: Mapped[str] = mapped_column(String(8), default="paid")
     paid_at: Mapped[str] = mapped_column(String(10), default="")  # 标记已支付那天（YYYY-MM-DD）
+    # 部分付款（pay_status="partial"）时已付的那部分：0 < paid_amount < 应付合计
+    # （应付合计 = 货款 + 金额调整 + 运费 + 装卸，与「待付款账单」的应付口径一致）。
+    # 已付部分进报表、未付部分进待付款账单；paid/unpaid 时它统一记全额/0，方便报表直接取用。
+    paid_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    # 供应商补偿（元，正数=供应商补给我们的钱，如破损赔偿/返利）：
+    # 保存后镜像记一笔「其他收支 → 供应商补偿」负数行（ref_type=inbound_comp），冲减期间费用、计入报表净利。
+    # 不冲减货款/应付合计，也不影响批次成本（FIFO）。
+    compensation: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     product: Mapped[Product] = relationship()
@@ -127,7 +135,7 @@ class Outbound(Base):
     remark: Mapped[str] = mapped_column(String(255), default="")
     total_amount: Mapped[float] = mapped_column(Float, default=0.0)  # 销售收入（商品原价）
     # 金额调整（给客户抹零/凑整）：正=加收，负=抹零。实收金额 = total_amount + adjust_amount；
-    # 商品成本（total_cogs）不受影响，差额自动记一笔「金额调整」的其他开支（见 services.create_outbound）
+    # 商品成本（total_cogs）不受影响，差额自动记一笔「金额调整」的其他收支（见 services.create_outbound）
     adjust_amount: Mapped[float] = mapped_column(Float, default=0.0)
     total_cogs: Mapped[float] = mapped_column(Float, default=0.0)  # 商品成本+包装材料成本
     total_fee: Mapped[float] = mapped_column(Float, default=0.0)  # 人工/打包等固定费用
@@ -148,6 +156,10 @@ class Outbound(Base):
     # 付款状态：paid 已付款/已回款（默认，整单进报表）/ unpaid 待付款（未回款，整单先进待付款账单，不进报表）
     pay_status: Mapped[str] = mapped_column(String(8), default="paid")
     paid_at: Mapped[str] = mapped_column(String(10), default="")
+    # 销售退货单（红冲单）：金额/数量/成本都是负数，库存按原单结转成本回补（见 services.create_sales_return）。
+    # 复用出库表是为了让报表的收入/成本/商品明细直接按加法净额，不用到处改口径。
+    is_return: Mapped[bool] = mapped_column(Boolean, default=False)
+    return_of_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 退货对应的原出库单 id
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     lines: Mapped[list["OutboundLine"]] = relationship(
@@ -177,6 +189,8 @@ class OutboundLine(Base):
     pack_fee: Mapped[float] = mapped_column(Float, default=0.0)  # 该行固定费用(sale 行)
     # 代发（订单商品未关联库存大类）：不扣任何库存，只记代发数量与代发成本
     is_dropship: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 退货行专用：指向被冲减的原销售行 id（累计已退数量按它校验，见 services.create_sales_return）
+    src_line_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
 
     outbound: Mapped[Outbound] = relationship(back_populates="lines")
     product: Mapped[Product] = relationship()
@@ -255,7 +269,7 @@ class FinanceRecord(Base):
     remark: Mapped[str] = mapped_column(String(255), default="")
     ref_type: Mapped[str] = mapped_column(String(16), default="")
     ref_id: Mapped[int] = mapped_column(Integer, nullable=True)
-    # 付款状态：由来源单据（入库/出库/其他开支）带过来，或有手动记账时自己设
+    # 付款状态：由来源单据（入库/出库/其他收支）带过来，或有手动记账时自己设
     pay_status: Mapped[str] = mapped_column(String(8), default="paid")
     paid_at: Mapped[str] = mapped_column(String(10), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
@@ -264,7 +278,7 @@ class FinanceRecord(Base):
 
 
 class OtherExpense(Base):
-    """其他开支：仓库/经营中发生的零散支出（网线费、安装费、机器费、样品费等）。
+    """其他收支：仓库/经营中发生的零散支出（网线费、安装费、机器费、样品费等）。
 
     独立于 FinanceRecord（财务流水）：这里只按「费用类型 + 日期」记账，用于经营分析页的
     按日/按月/按类型统计；财务报表把它并入「期间费用」，从毛利中扣减得到净利。
@@ -381,6 +395,9 @@ class WarehouseProduct(Base):
     box_spec: Mapped[float] = mapped_column(Float, default=0.0)  # 箱规（袋/箱）
     purchase_price: Mapped[float] = mapped_column(Float, default=0.0)  # 采购价（元/袋）＝给「我」的收入单价
     freight: Mapped[float] = mapped_column(Float, default=0.0)  # 运费（元/袋），暂空待维护
+    # 固定成本（元/袋）：每袋（每单）的打包费、不好量化的包材或额外费用。
+    # 只用在成本口径（对外 /api/open/sku-costs 的包材部分），不改入仓记录的毛利计算。
+    fixed_cost: Mapped[float] = mapped_column(Float, default=0.0)
     stock_product_id: Mapped[int | None] = mapped_column(
         ForeignKey("products.id"), nullable=True, index=True
     )  # 关联的库存商品（成本按库存管理的均价/参考成本计算）
@@ -433,6 +450,9 @@ class WarehouseIn(Base):
     unit_price: Mapped[float] = mapped_column(Float, default=0.0)  # 采购价（元/袋）＝收入单价（扣点前）
     deduction_percent: Mapped[float] = mapped_column(Float, default=0.0)  # 采购价扣点%快照
     freight: Mapped[float] = mapped_column(Float, default=0.0)  # 运费（元/袋）
+    # 运费来源：'' = 按入仓品资料的「每袋运费」；'actual' = 按运输账单（运输转运费）里该采购单的
+    # 实际结算金额重算过（见 routers/warehouse_in.py 的 /freight/apply）
+    freight_source: Mapped[str] = mapped_column(String(16), default="")
     # 成本口径：收入 = 数量×采购价；商品成本 = 数量×每袋净重×库存单位成本；运费 = 数量×运费单价
     stock_product_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 关联库存商品
     bag_weight: Mapped[float] = mapped_column(Float, default=0.0)  # 每袋净重快照（基础单位）
@@ -446,7 +466,11 @@ class WarehouseIn(Base):
     # 随货包材结算快照 + 成本：pack_items=[{product_id,name,unit,quantity,quantity_base,cost}]，pack_cost 为合计
     pack_items: Mapped[list] = mapped_column(JSON, default=list)
     pack_cost: Mapped[float] = mapped_column(Float, default=0.0)
-    profit: Mapped[float] = mapped_column(Float, default=0.0)  # 毛利 = 收入 - 商品成本 - 运费 - 包材成本
+    # 固定成本（元/袋）+ 合计：入仓时从入仓品资料快照下来（每袋打包费 / 难量化包材 / 额外费用）。
+    # 老记录默认 0 → 口径不变；只有新建 / 编辑过的记录才带上。
+    fixed_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    fixed_total: Mapped[float] = mapped_column(Float, default=0.0)
+    profit: Mapped[float] = mapped_column(Float, default=0.0)  # 毛利 = 收入 - 商品成本 - 运费 - 包材成本 - 固定成本
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
     operator: Mapped[str] = mapped_column(String(32), default="")
     remark: Mapped[str] = mapped_column(String(255), default="")
