@@ -50,7 +50,17 @@ echo "==> [5/7] 同步前端静态到 /var/www/erp（nginx 可读，家目录默
 sudo mkdir -p /var/www/erp
 sudo rm -rf /var/www/erp/*
 sudo cp -r "$APP_DIR/web/static/." /var/www/erp/
-sudo cp "$APP_DIR/config.json" /var/www/erp/config.json
+# config.json 是公网可读的静态文件，只发布前端真正需要的 routes 前缀；
+# 完整文件里的 server.api_port / keyadmin_port 等内网端口信息属信息泄露，不能对外。
+sudo python3 - "$APP_DIR/config.json" /var/www/erp/config.json <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+with open(sys.argv[2], "w", encoding="utf-8") as f:
+    json.dump({"routes": data.get("routes") or {}}, f, ensure_ascii=False, indent=2)
+PY
 # 给桌面端 index.html 里的 app.js / style.css 追加部署时间戳（?v=...）：
 # 这样每次部署浏览器都会重新取这两个文件，即使某台机器此前把它们按「启发式缓存」长期缓存了，
 # 也会因为 URL 变化立刻拿到新版本，根治「新 index.html + 旧 app.js」导致的 is not defined / 点击没反应。

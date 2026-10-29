@@ -74,7 +74,9 @@ async function logout() {
    这里只是给管理员一个"忘记密码被锁死"时的解锁入口。 */
 function fmtLocks(list) {
   if (!list.length) return "（无）";
-  return list.map((x) => `${x.username}：剩 ${x.left_text}，已连续失败 ${x.fails} 次`).join("\n");
+  return list
+    .map((x) => `${x.username}${x.ip ? ` @${x.ip}` : ""}：剩 ${x.left_text}，已连续失败 ${x.fails} 次`)
+    .join("\n");
 }
 async function showLocks() {
   try {
