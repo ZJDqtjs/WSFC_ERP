@@ -531,6 +531,17 @@ hr {
   margin-top: 6px; 
 }
 
+/* 广告利润概览：金额位数多（如 ¥1,699,912.35），卡片窄了 26px 的数字会被裁掉 */
+#adpStats { 
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); 
+}
+#adpStats .stat .value { 
+  font-size: clamp(18px, 1.6vw, 24px); 
+  white-space: nowrap; 
+  overflow: hidden; 
+  text-overflow: ellipsis;
+}
+
 .stat.accent::before { background: var(--primary); }
 .stat.success::before { background: var(--green); }
 .stat.warn::before { background: var(--amber); }
