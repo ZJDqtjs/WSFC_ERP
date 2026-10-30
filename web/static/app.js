@@ -388,6 +388,11 @@ function today() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
+function yesterday() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 function monthStart() {
   return today().slice(0, 8) + "01";
 }
@@ -3455,7 +3460,7 @@ async function openFreshConfig() {
             候选商品（<b id="fcCount">0</b> 个）
             <label style="float:right;font-weight:400;cursor:pointer;"><input type="checkbox" id="fcFreshOnly" onchange="renderFreshConfig()" /> 只看鲜货分类</label>
           </div>
-          <input id="fcSearch" placeholder="🔍 搜索名称 / 分类…（多个用「；」隔开）" oninput="renderFreshConfig()" style="margin-bottom:8px;" />
+          <input id="fcSearch" placeholder="🔍 搜索名称 / 分类…（「；」任一命中，「：」同时命中）" oninput="renderFreshConfig()" style="margin-bottom:8px;" />
           <div id="fcOptions" class="fc-list"></div>
         </div>
         <div class="fc-pane">
@@ -5277,18 +5282,25 @@ function unitOptions(product, selected) {
   ).join("");
 }
 
-/** 把搜索框内容拆成多个关键词（小写）。分隔符：全/半角冒号、分号、空格（含全角）、逗号、顿号、竖线。
-    多个关键词之间是「且」的关系：都要命中才算匹配。例：「牛油果；代发」→ ['牛油果','代发'] */
+/** 把搜索框内容拆成关键词分组（小写）。
+    外层「；」分开的是平行条件：任一命中即显示，每个词都从整张表里找（例：「牛油果；代发」）。
+    同一段里用「：」「:」、空格（含全角）、逗号、顿号、竖线分开的是递进条件：全部命中才显示（例：「牛油果：进口」）。
+    返回拍平后的全部关键词数组（.length 与旧版一致），分组挂在 .groups 上。 */
 function splitSearchKeywords(raw) {
-  return String(raw || "")
+  const groups = String(raw || "")
     .toLowerCase()
-    .split(/[：:；;，,、\s|｜]+/)
-    .filter(Boolean);
+    .split(/[；;]+/)
+    .map((g) => g.split(/[：:，,、\s|｜]+/).filter(Boolean))
+    .filter((g) => g.length);
+  const flat = groups.flat();
+  flat.groups = groups;
+  return flat;
 }
-/** 多关键词匹配：每个关键词都要在 hay（已小写的可搜索文本）里出现。关键词为空视为全部命中。 */
+/** 多关键词匹配：组内每个词都要命中（递进），组间任一命中即可（平行）。关键词为空视为全部命中。 */
 function searchHit(hay, kws) {
   const text = String(hay || "").toLowerCase();
-  return !kws || !kws.length || kws.every((k) => text.includes(k));
+  const groups = (kws && kws.groups) || (kws && kws.length ? [kws] : []);
+  return !groups.length || groups.some((g) => g.every((k) => text.includes(k)));
 }
 async function renderProducts() {
   if (!PRODUCTS.length) PRODUCTS = await api("/api/products");
@@ -5412,9 +5424,10 @@ async function renderProducts() {
         </td></tr>`;
     }).join("") + `</tbody>`;
   if (!rows.length) {
-    // 空结果时把命中的关键词逐个写出来，方便发现「某个关键词打错了」
+    // 空结果时把命中的关键词逐个写出来，方便发现「某个关键词打错了」（平行条件用「或」连，递进条件用「+」连）
+    const kwsHtml = (kws.groups || []).map((g) => g.map((k) => `「${esc(k)}」`).join("+")).join(" 或 ");
     t.innerHTML = kws.length
-      ? `<tr><td colspan="10" class="empty">没有同时匹配 ${kws.map((k) => `「${esc(k)}」`).join(" ")} 的商品</td></tr>`
+      ? `<tr><td colspan="10" class="empty">${kws.groups.length > 1 ? "没有匹配任一组" : "没有同时匹配"} ${kwsHtml} 的商品</td></tr>`
       : `<tr><td colspan="10" class="empty">暂无商品</td></tr>`;
   }
   t._rows = rows;
@@ -6396,7 +6409,7 @@ function openInboundPicker(inp) {
   openModal(`
     <h3>选择入库商品 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="toolbar" style="margin-bottom:10px;">
-      <input id="spSearch" placeholder="🔍 搜索商品名称 / 分类…（多个用「；」隔开）" oninput="renderInboundPicker()" />
+      <input id="spSearch" placeholder="🔍 搜索商品名称 / 分类…（「；」任一命中，「：」同时命中）" oninput="renderInboundPicker()" />
       <select id="spType" style="display:none;"><option value="">全部类型</option><option value="stock">库存商品</option></select>
       <select id="spCat" class="searchable" onchange="renderInboundPicker()"><option value="">全部分类</option>${cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
     </div>
@@ -6830,7 +6843,7 @@ function openSalePicker(inp) {
   openModal(`
     <h3>选择销售商品 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="toolbar" style="margin-bottom:10px;">
-      <input id="spSearch" placeholder="🔍 搜索商品名称 / 分类…（多个用「；」隔开）" oninput="renderSalePicker()" />
+      <input id="spSearch" placeholder="🔍 搜索商品名称 / 分类…（「；」任一命中，「：」同时命中）" oninput="renderSalePicker()" />
       <select id="spType" onchange="renderSalePicker()"><option value="">全部类型</option><option value="order">订单商品</option><option value="stock">库存商品</option></select>
       <select id="spCat" class="searchable" onchange="renderSalePicker()"><option value="">全部分类</option>${cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
     </div>
@@ -7000,7 +7013,7 @@ function openPackItemPicker() {
   openModal(`
     <h3>选择关联出库物品 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="toolbar" style="margin-bottom:10px;">
-      <input id="ppSearch" placeholder="🔍 搜索商品名称 / 分类…（多个用「；」隔开）" oninput="renderPackItemPicker()" />
+      <input id="ppSearch" placeholder="🔍 搜索商品名称 / 分类…（「；」任一命中，「：」同时命中）" oninput="renderPackItemPicker()" />
       <select id="ppCat" class="searchable" onchange="renderPackItemPicker()"><option value="">全部分类</option>${cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
     </div>
     <div class="sp-list" id="ppList" style="max-height:52vh;overflow-y:auto;"></div>`);
@@ -9644,7 +9657,7 @@ function renderJstStatus(st, last) {
       lines.push(`　　失败 ${s.failed.length} 条：${s.failed.slice(0, 3).map((f) => `${f.doc || ""} ${f.reason || ""}`).join("；")}`);
     }
   }
-  // 出库记录列表默认只筛「今天」，而自动出库常导昨天/前几天的单，容易被误判成"没建单"：
+  // 出库记录列表默认只筛「昨天」，而自动出库导的可能是前几天的单，容易被误判成"没建单"：
   // 这里按本次导出区间给一个直达按钮（区间结束是次日 00:00，展示时回退一天）。
   const rng = String((r && r.window) || "").match(/(\d{4}-\d{2}-\d{2})[^~]*~\s*(\d{4}-\d{2}-\d{2})/);
   let jump = "";
@@ -9655,7 +9668,7 @@ function renderJstStatus(st, last) {
     if (endStr >= rng[1]) {
       jump = `<div style="margin-top:6px;">
         <button class="btn sm" onclick="gotoOutbounds('${rng[1]}','${endStr}')">▸ 去出库记录看这批单（${rng[1]} ~ ${endStr}）</button>
-        <span class="muted" style="margin-left:6px;">出库记录默认只看今天，记得把日期改到这天</span></div>`;
+        <span class="muted" style="margin-left:6px;">出库记录默认只看昨天，记得把日期改到这天</span></div>`;
     }
   }
   if (JST_PENDING_N) {
@@ -9665,7 +9678,7 @@ function renderJstStatus(st, last) {
   if (box) box.innerHTML = (lines.map((l) => `<div>${esc(l)}</div>`).join("") || "<div>还没有执行记录</div>") + jump;
 }
 
-/* 跳到出库记录页并把日期筛选设成本次导出区间（否则默认只看今天，看不到昨天的单） */
+/* 跳到出库记录页并把日期筛选设成本次导出区间（否则默认只看昨天，看不到这几天的单） */
 function gotoOutbounds(from, to) {
   if ($("outDateFrom")) $("outDateFrom").value = from;
   if ($("outDateTo")) $("outDateTo").value = to;
@@ -10574,12 +10587,12 @@ function startMaintenanceWatch() {
   } catch (e) {
     return; // 未登录，停留在登录页
   }
-  // 预设默认日期范围：入库记录本月，出库记录当天（入库单的日期在每行里各自默认今天）
+  // 预设默认日期范围：入库记录本月，出库记录昨天（入库单的日期在每行里各自默认今天）
   $("outDate").value = today();
   $("inDateFrom").value = monthStart();
   $("inDateTo").value = today();
-  $("outDateFrom").value = today();
-  $("outDateTo").value = today();
+  $("outDateFrom").value = yesterday();
+  $("outDateTo").value = yesterday();
   $("mvDateFrom").value = today(); // 库存流水默认显示当天
   $("mvDateTo").value = today();
   $("wlDateFrom").value = monthStart(); // 工作量统计默认本月
@@ -11588,6 +11601,17 @@ function adpOpenAdService() {
   window.open("/jdfenxi/", "_blank");
 }
 
+/* 页内视图切换：利润概览 / SKU 明细（默认利润概览）。切到 SKU 时把概览、利润桥、店铺账号收起，
+   让 SKU 表直接贴在标题栏下方，不用再滚到页面底部 */
+function adpView(btn) {
+  const sku = btn.dataset.view === "sku";
+  btn.closest(".seg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
+  $("adpOverviewCard").classList.toggle("adp-collapsed", sku);
+  ["adpOverviewBody", "adpBridgeCard", "adpAccountsCard"].forEach((id) => {
+    $(id).style.display = sku ? "none" : "";
+  });
+}
+
 async function loadAdProfit(refresh) {
   if (!adpInited) {
     adpInited = true;
@@ -11630,16 +11654,19 @@ async function loadAdProfitSku(from, to, whQs, refresh) {
   }
 }
 
-const ADP_SKU_SORTS = {
-  ads: (a, b) => b.ads_total - a.ads_total || b.revenue - a.revenue,
-  revenue: (a, b) => b.revenue - a.revenue || b.ads_total - a.ads_total,
-  gross: (a, b) => b.gross_before - a.gross_before || b.ads_total - a.ads_total,
-  gross_after: (a, b) => b.gross_after - a.gross_after || b.ads_total - a.ads_total,
-};
+/* 下拉里的「常用列」→ 行字段；点列头可以按任意列排，两者共用 adpSkuTable._sort 一份状态 */
+const ADP_SKU_SORT_COLS = { ads: "ads_total", revenue: "revenue", gross: "gross_before", gross_after: "gross_after" };
+
+function adpSkuSortBySel() {
+  const sel = $("adpSkuSort");
+  $("adpSkuTable")._sort = { key: ADP_SKU_SORT_COLS[sel.value] || "ads_total", dir: -1 };
+  renderAdProfitSku();
+}
 
 function renderAdProfitSku() {
   const t = $("adpSkuTable");
   if (!t) return;
+  t._render = renderAdProfitSku;   // 供表头点击排序的通用派发器回调重绘
   const stat = $("adpSkuStat");
   if (!ADP_SKU) {
     t.innerHTML = `<tbody><tr><td class="empty">暂无数据</td></tr></tbody>`;
@@ -11647,13 +11674,16 @@ function renderAdProfitSku() {
   }
   const kws = splitSearchKeywords($("adpSkuSearch").value);
   const onlyAds = $("adpSkuOnlyAds").checked;
-  const sortKey = ($("adpSkuSort").value || "ads");
   const all = ADP_SKU.rows || [];
   let rows = all.filter((r) =>
     (!onlyAds || r.ads_total > 0) &&
     searchHit(`${r.sku || ""} ${r.name || ""}`, kws)
   );
-  rows = rows.slice().sort(ADP_SKU_SORTS[sortKey] || ADP_SKU_SORTS.ads);
+  if (!t._sort) t._sort = { key: "ads_total", dir: -1 };
+  const sel = $("adpSkuSort");
+  const preset = Object.keys(ADP_SKU_SORT_COLS).find((k) => ADP_SKU_SORT_COLS[k] === t._sort.key);
+  if (sel) sel.value = preset || "__col";   // 点列头选了非快捷列时，下拉显示「按列头排序」
+  rows = applyTableSort(t, rows);
 
   const totals = ADP_SKU.totals || {};
   if (stat) {
@@ -11687,13 +11717,20 @@ function renderAdProfitSku() {
       <td class="num mono" style="color:${r.gross_after >= 0 ? "var(--green)" : "var(--red)"};">${fmtMoney(r.gross_after)}</td>
       <td class="num muted">${adpPct(r.ad_rate)}</td>
       <td class="num muted">${r.roi == null ? "—" : Number(r.roi).toFixed(2)}</td>
-    </tr>`).join("") : `<tr><td colspan="11" class="empty">${q || onlyAds ? "没有符合条件的 SKU" : "所选区间没有可用的 SKU 数据"}</td></tr>`;
+    </tr>`).join("") : `<tr><td colspan="11" class="empty">${kws.length || onlyAds ? "没有符合条件的 SKU" : "所选区间没有可用的 SKU 数据"}</td></tr>`;
 
   t.innerHTML = `<thead><tr>
-      <th>SKU</th><th>商品名称</th>
-      <th class="num">销量 / 成交件数</th><th class="num">销售额</th><th class="num">广告前毛利</th>
-      <th class="num">CPS 花费</th><th class="num">京准通花费</th><th class="num">广告费合计</th>
-      <th class="num">广告后毛利</th><th class="num">广告费率</th><th class="num">ROI</th>
+      <th data-key="sku">SKU${sortArrow("adpSkuTable", "sku")}</th>
+      <th data-key="name">商品名称${sortArrow("adpSkuTable", "name")}</th>
+      <th class="num" data-key="qty">销量 / 成交件数${sortArrow("adpSkuTable", "qty")}</th>
+      <th class="num" data-key="revenue">销售额${sortArrow("adpSkuTable", "revenue")}</th>
+      <th class="num" data-key="gross_before">广告前毛利${sortArrow("adpSkuTable", "gross_before")}</th>
+      <th class="num" data-key="cps">CPS 花费${sortArrow("adpSkuTable", "cps")}</th>
+      <th class="num" data-key="jzt">京准通花费${sortArrow("adpSkuTable", "jzt")}</th>
+      <th class="num" data-key="ads_total">广告费合计${sortArrow("adpSkuTable", "ads_total")}</th>
+      <th class="num" data-key="gross_after">广告后毛利${sortArrow("adpSkuTable", "gross_after")}</th>
+      <th class="num" data-key="ad_rate">广告费率${sortArrow("adpSkuTable", "ad_rate")}</th>
+      <th class="num" data-key="roi">ROI${sortArrow("adpSkuTable", "roi")}</th>
     </tr></thead><tbody>${body}</tbody>` +
     `<tfoot><tr>
       <td><strong>合计</strong></td><td class="muted">共 ${rows.length} 个 SKU</td>

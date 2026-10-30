@@ -33,19 +33,26 @@ STANDARD_COUNT_UNITS = ["个", "包", "袋", "盒", "箱", "件", "份"]
 DEFAULT_CONVERSIONS_BASE_WEIGHT = {"克": 1, "斤": 500, "公斤": 1000, "千克": 1000}
 DEFAULT_CONVERSIONS_BASE_COUNT = {"个": 1}
 
-# 搜索框多关键词：分隔符与前端 splitSearchKeywords 保持一致（全/半角冒号、分号、空格、逗号、顿号、竖线）
-_SEARCH_KW_SPLIT = re.compile(r"[：:；;，,、\s|｜]+")
+# 搜索框多关键词：「；」分开的是平行条件（任一命中即可，每个词都从整张表里找）；
+# 同一段里用「：」「:」、空格、逗号、顿号、竖线分开的是递进条件（全部命中）。与前端 splitSearchKeywords 一致
+_SEARCH_OR_SPLIT = re.compile(r"[；;]+")
+_SEARCH_AND_SPLIT = re.compile(r"[：:，,、\s|｜]+")
 
 
-def split_search_keywords(raw: str) -> list[str]:
-    """把搜索词拆成小写关键词列表；多个关键词之间是「且」的关系。"""
-    return [k for k in _SEARCH_KW_SPLIT.split(str(raw or "").strip().lower()) if k]
+def split_search_keywords(raw: str) -> list[list[str]]:
+    """把搜索词拆成分组：外层列表是「或」，内层列表是「且」；空输入返回 []。"""
+    groups: list[list[str]] = []
+    for part in _SEARCH_OR_SPLIT.split(str(raw or "").strip().lower()):
+        kws = [k for k in _SEARCH_AND_SPLIT.split(part) if k]
+        if kws:
+            groups.append(kws)
+    return groups
 
 
-def search_hit(text: str, keywords: list[str]) -> bool:
-    """每个关键词都要出现在 text 里；关键词为空视为全部命中。"""
+def search_hit(text: str, groups: list[list[str]]) -> bool:
+    """组内每个关键词都要出现在 text 里，组间任一命中即可；空条件视为全部命中。"""
     t = str(text or "").lower()
-    return all(k in t for k in keywords)
+    return not groups or any(all(k in t for k in g) for g in groups)
 
 
 def seed_units(db: Session) -> None:

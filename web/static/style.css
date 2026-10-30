@@ -542,6 +542,11 @@ hr {
   text-overflow: ellipsis;
 }
 
+/* 广告利润切到「SKU 明细」时，利润概览卡片只留标题栏，SKU 表紧贴在切换条下方 */
+#adpOverviewCard.adp-collapsed .card-head { 
+  margin-bottom: 0; 
+}
+
 .stat.accent::before { background: var(--primary); }
 .stat.success::before { background: var(--green); }
 .stat.warn::before { background: var(--amber); }
