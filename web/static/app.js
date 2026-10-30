@@ -11850,6 +11850,11 @@ function renderAdProfitSku() {
       <td class="num" style="color:${r.gp_ads != null && r.gp_ads < 0 ? "var(--red)" : ""}">${r.gp_ads == null ? "—" : Number(r.gp_ads).toFixed(2)}</td>
     </tr>`).join("") : `<tr><td colspan="12" class="empty">${kws.length || onlyAds || onlyLoss ? "没有符合条件的 SKU" : "所选区间没有可用的 SKU 数据"}</td></tr>`;
 
+  const filtered = kws.length > 0 || onlyAds || onlyLoss;
+  // 筛选生效时合计必须跟着筛，否则「只看亏损 28 个」下面却挂着全量广告费，会误导
+  const sumF = (k) => Math.round(rows.reduce((a, r) => a + (Number(r[k]) || 0), 0) * 100) / 100;
+  const revenueTotal = filtered ? sumF("revenue") : (totals.revenue_total != null ? totals.revenue_total : totals.erp_revenue);
+
   t.innerHTML = `<thead><tr>
       <th data-key="sku">SKU${sortArrow("adpSkuTable", "sku")}</th>
       <th data-key="name">商品名称${sortArrow("adpSkuTable", "name")}</th>
@@ -11865,14 +11870,14 @@ function renderAdProfitSku() {
       <th class="num" data-key="gp_ads" title="广告前毛利 ÷ 广告费：小于 1 说明这批广告带来的毛利还不够付广告费">毛利/广告费${sortArrow("adpSkuTable", "gp_ads")}</th>
     </tr></thead><tbody>${body}</tbody>` +
     `<tfoot><tr>
-      <td><strong>合计</strong></td><td class="muted">共 ${rows.length} 个 SKU</td>
+      <td><strong>${filtered ? "筛选合计" : "合计"}</strong></td><td class="muted">共 ${rows.length} 个 SKU</td>
       <td class="num"></td>
-      <td class="num mono"><strong>${fmtMoney(totals.revenue_total != null ? totals.revenue_total : totals.erp_revenue)}</strong></td>
-      <td class="num mono"><strong>${fmtMoney(totals.gross_before)}</strong></td>
-      <td class="num mono"><strong>${fmtMoney(totals.cps_total)}</strong></td>
-      <td class="num mono"><strong>${fmtMoney(totals.jzt_total)}</strong></td>
-      <td class="num mono"><strong>${fmtMoney(totals.ads_total)}</strong></td>
-      <td class="num mono"><strong>${fmtMoney(totals.gross_after)}</strong></td>
+      <td class="num mono"><strong>${fmtMoney(revenueTotal)}</strong></td>
+      <td class="num mono"><strong>${fmtMoney(filtered ? sumF("gross_before") : totals.gross_before)}</strong></td>
+      <td class="num mono"><strong>${fmtMoney(filtered ? sumF("cps") : totals.cps_total)}</strong></td>
+      <td class="num mono"><strong>${fmtMoney(filtered ? sumF("jzt") : totals.jzt_total)}</strong></td>
+      <td class="num mono"><strong>${fmtMoney(filtered ? sumF("ads_total") : totals.ads_total)}</strong></td>
+      <td class="num mono"><strong>${fmtMoney(filtered ? sumF("gross_after") : totals.gross_after)}</strong></td>
       <td class="num"></td><td class="num"></td><td class="num"></td>
     </tr>${Number(totals.warehouse_sku_count) ? `<tr><td colspan="12" class="muted">其中入仓品 ${totals.warehouse_sku_count} 个 · 成交 ${fmtNum(totals.warehouse_qty)} 件 · 销售额 ${fmtMoney(totals.warehouse_revenue)} · 毛利 ${fmtMoney(totals.warehouse_gross)} · 广告费 ${fmtMoney(totals.warehouse_ads)} · 广告后毛利 ${fmtMoney(totals.warehouse_net)}</td></tr>` : ""}${(!ADP_SKU_FULL && rows.length > LIMIT) ? `<tr><td colspan="12" class="muted">已显示前 ${LIMIT} 条，共 ${rows.length} 条 · <a href="javascript:;" onclick="ADP_SKU_FULL=true;renderAdProfitSku();">显示全部</a></td></tr>` : ""}</tfoot>`;
 }
