@@ -402,7 +402,7 @@ def summary(
     date_from: str = "",
     date_to: str = "",
     wh: str = "",   # 可选：指定查看哪个分仓（单仓总览手动切换用），缺省=本登录会话的分仓；wh=all = 全仓合计
-    exclude_other: int = 0,   # 1 = 排除「其他收支」，报表只看商品售卖利润（默认 0：含其他收支）
+    exclude_other: int = 1,   # 1 = 排除「其他收支」（与前端默认开关、/adprofit 一致）
     db: Session = Depends(get_db_wh),
     user: User = Depends(get_current_user),
 ):
@@ -1015,9 +1015,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         cat_key = _pack_cost_category_of(pcat, pname)   # 注意别用 key：那是分仓标识参数
         pack_costs[cat_key] = round(pack_costs.get(cat_key, 0.0) + float(amt or 0.0), 2)
     pack_total = round(sum(pack_costs.values()), 2)
-    # 商品本身成本 = 总成本 − 出库关联结算成本 − 入仓运费/随货包材
-    # （入仓的运费/包材单独列在 warehouse_in_* 字段里，不混进「关联结算」口径）
-    goods_cogs = round(cogs - pack_total - wi_freight - wi_pack, 2)
+    # 商品本身成本 = 总成本 − 出库关联结算成本 − 入仓运费/随货包材/固定成本
+    # （入仓的运费/包材/固定成本单独列在 warehouse_in_* 字段里，不混进「关联结算」和「商品成本」口径）
+    goods_cogs = round(cogs - pack_total - wi_freight - wi_pack - wi_fixed, 2)
 
     # 账外费用（finance_records 中登记的手工支出），按类别归集
     manual_fees: dict[str, float] = {}
@@ -1789,7 +1789,7 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
 def all_warehouses(
     date_from: str = "",
     date_to: str = "",
-    exclude_other: int = 0,   # 1 = 排除「其他收支」（与 /report/summary 同口径）
+    exclude_other: int = 1,   # 1 = 排除「其他收支」（与 /report/summary 同口径）
     user: User = Depends(get_current_user),
 ):
     """全仓总览：把所有分仓的收入 / 支出 / 利润汇总成一张表 + 合计。"""

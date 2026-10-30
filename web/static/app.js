@@ -4057,7 +4057,7 @@ function wprodEdit(id) {
       <div class="field"><label>采购价（元/袋，收入）</label><input id="wpPrice" type="number" step="any" min="0" value="${p.purchase_price || ""}" /></div>
       <div class="field"><label>运费（元/袋）</label><input id="wpFreight" type="number" step="any" min="0" value="${p.freight || ""}" placeholder="可留空，后续维护" oninput="wprodCostHint()" /></div>
       <div class="field"><label>固定成本（元/袋）</label><input id="wpFixedCost" type="number" step="any" min="0" value="${p.fixed_cost || ""}" placeholder="如 每袋打包费" oninput="wprodCostHint()" />
-        <div class="field-hint">每袋（每单）的打包费、不好量化的包材或额外费用。<b>会并入对外 <code>/api/open/sku-costs</code> 的 <code>package</code>（包材）口径</b>，并单独给 <code>fixed</code> 字段；不改入仓记录的毛利。</div>
+        <div class="field-hint">每袋（每单）的打包费、不好量化的包材或额外费用。<b>计入入仓记录成本</b>（毛利 = 收入 − 商品成本 − 运费 − 包材 − 固定成本×袋数），同时并入对外 <code>/api/open/sku-costs</code> 的 <code>package</code>（包材）口径，并单独给 <code>fixed</code> 字段。</div>
       </div>
       <div class="field"><label>关联库存商品（成本来源）</label><select id="wpStock" class="searchable">${stockProductOptions(p.stock_product_id)}</select></div>
       <div class="field"><label>代发成本（元/袋）</label><input id="wpDropshipCost" type="number" step="any" min="0" value="${p.dropship_cost || ""}" placeholder="不关联库存商品时填" oninput="wprodCostHint()" />
@@ -4117,7 +4117,7 @@ function wprodCostHint() {
   } else {
     weightLine = "";
   }
-  // 每袋总成本：商品成本 ＋ 运费 ＋ 固定成本（固定成本只进对外 sku-costs 的包材口径，不进入仓毛利）
+  // 每袋总成本：商品成本 ＋ 运费 ＋ 固定成本（固定成本计入入仓记录毛利，同时并入对外 sku-costs 的包材口径）
   const fr = parseFloat($("wpFreight")?.value) || 0;
   const fx = parseFloat($("wpFixedCost")?.value) || 0;
   const goodsBag = sp ? bw * uc : dc;
@@ -7873,13 +7873,17 @@ async function batchDeleteOutbounds() {
 const EXCLUDE_OTHER_KEY = "erp_exclude_other_expense";
 let EXCLUDE_OTHER = localStorage.getItem(EXCLUDE_OTHER_KEY) !== "0";   // 无记录时默认开启
 
-/** 报表请求附加的口径参数（前后端都默认含其他收支，所以这里总是显式声明） */
+/** 报表请求附加的口径参数（后端默认值同为「排除」，这里仍显式声明，避免依赖默认值） */
 const excludeOtherQs = () => (EXCLUDE_OTHER ? "&exclude_other=1" : "&exclude_other=0");
 
-/** 把本机偏好回显到报表页的口径开关（初始化时调用） */
+/** 把本机偏好回显到两份报表页的口径开关（初始化时调用）
+ *  财务报表页 excludeOtherChk + 广告利润页 adpExcludeOtherChk 必须同时回显，
+ *  否则开关画的是 HTML 默认值、请求发的是 localStorage 里的真实值 —— 显示与生效不一致。 */
 function syncExcludeOtherHint() {
-  const chk = $("excludeOtherChk");
-  if (chk) chk.checked = EXCLUDE_OTHER;
+  ["excludeOtherChk", "adpExcludeOtherChk"].forEach((id) => {
+    const chk = $(id);
+    if (chk) chk.checked = EXCLUDE_OTHER;
+  });
 }
 
 /** 报表页口径开关：切换后持久化，并立即按新口径重算 */
@@ -8140,6 +8144,8 @@ async function loadReport() {
     <div class="stat red"><div class="label">${pre}本期总支出</div><div class="value">${fmtMoney(rep.total_expense)}</div><div class="sub">含采购 ${fmtMoney(rep.purchase)} · 期间费用 ${fmtMoney(rep.expense)}</div></div>
     <div class="stat blue"><div class="label">${pre}当前库存总值</div><div class="value">${fmtMoney(rep.stock_value)}</div></div>`;
 
+  renderReportBridge(rep);
+  renderRevenueBreakdown(rep);
   renderCostBreakdown(rep);
   renderExpenseSummary(rep);
   renderFeeBreakdown(rep);
@@ -8219,6 +8225,118 @@ function renderCostBreakdown(rep) {
       </tr></tfoot>
     </table></div>
     ${packTotal || wiCost ? "" : `<div class="alert warn" style="margin-top:10px;">本期没有包材 / 人工 / 快递等关联结算成本。若商品已配置包装清单，请确认出库时是否生成了关联结算行。</div>`}`;
+}
+/* 利润桥：与「广告利润」页同一套口径，但本页不扣广告费。
+   刷单成本单列成一行（不混进结转成本），所以每一行都能直接相加减，能一路对到净利润。 */
+function renderReportBridge(rep) {
+  const t = $("repBridge");
+  if (!t) return;
+  const rev = Number(rep.revenue) || 0;
+  const pctOf = (v) => (rev ? ((Number(v) || 0) / rev * 100).toFixed(1) + "%" : "—");
+  const rowOf = (name, value, desc, strong) => `<tr>
+      <td>${strong ? `<strong>${esc(name)}</strong>` : esc(name)}</td>
+      <td class="num mono"${strong ? ' style="font-weight:700;"' : ""}>${fmtMoney(value)}</td>
+      <td class="num muted">${pctOf(value)}</td>
+      <td class="muted">${desc}</td>
+    </tr>`;
+  const settle = Number(rep.settle_income) || 0;
+  const wiRev = Number(rep.warehouse_in_revenue) || 0;
+  const wiCogs = Number(rep.warehouse_in_cogs) || 0;
+  const brush = Number(rep.brush_cost) || 0;
+  const revDesc = `商品销售 ${fmtMoney(rev - settle - wiRev)}`
+    + (settle ? ` · 客户代收关联结算 ${fmtMoney(settle)}` : "")
+    + (wiRev ? ` · 入仓 ${fmtMoney(wiRev)}` : "");
+  const costDesc = `商品成本 ${fmtMoney(rep.goods_cogs)}`
+    + (Number(rep.pack_cost_total) ? ` · 关联结算 ${fmtMoney(rep.pack_cost_total)}` : "")
+    + (wiCogs ? ` · 入仓成本 ${fmtMoney(wiCogs)}` : "");
+  const otherDesc = rep.exclude_other_expense
+    ? `已排除其他收支 ${fmtMoney(rep.excluded_other_expense)}`
+    : `其他收支 ${fmtMoney(rep.other_expense)}`;
+  const pend = rep.pending || {};
+  const pendNote = [];
+  if (pend.payables_count) pendNote.push(`待付款 ${pend.payables_count} 笔 ${fmtMoney(pend.payables_amount)}`);
+  if (pend.receivables_count) pendNote.push(`待收款 ${pend.receivables_count} 笔 ${fmtMoney(pend.receivables_amount)}`);
+  t.innerHTML = `<thead><tr><th>项目</th><th class="num">金额</th><th class="num">占收入</th><th>说明</th></tr></thead><tbody>`
+    + rowOf("销售收入", rev, revDesc)
+    + rowOf("结转成本", -(Number(rep.cogs) || 0), costDesc)
+    + (Math.abs(brush) > 0.005 ? rowOf("刷单成本", -brush, "芳谊放单仓：刷单成本 + 快递包装固定费覆盖差") : "")
+    + rowOf("毛利", Number(rep.gross_profit) || 0, "销售收入 − 结转成本" + (Math.abs(brush) > 0.005 ? " − 刷单成本" : ""), true)
+    + rowOf("期间费用", -(Number(rep.expense) || 0), `手工记账 ${fmtMoney(rep.manual_expense)} · ${otherDesc}`)
+    + rowOf("净利润", Number(rep.net_profit) || 0, "毛利 − 期间费用", true)
+    + `</tbody>`
+    + (pendNote.length ? `<tfoot><tr><td colspan="4" class="muted">以上只含「已付款」单据；另有 ${pendNote.join(" · ")} 未计入，在「待付款账单」支付后按原日期转入。</td></tr></tfoot>` : "");
+}
+
+/* 收入构成：与「销售成本构成」对称，回答「赚的从哪来」——按渠道 + 按商品 TOP10 */
+function renderRevenueBreakdown(rep) {
+  const box = $("repRevBreak");
+  if (!box) return;
+  const hint = $("repRevHint");
+  const revOf = (p) => (Number(p.amount) || 0) + (Number(p.settle_income) || 0);
+  const rows = (rep.by_product || []).filter((p) => revOf(p) > 0.005);
+  const total = rows.reduce((a, p) => a + revOf(p), 0);
+  if (!total) {
+    box.innerHTML = `<div class="empty">本期无销售收入</div>`;
+    if (hint) hint.textContent = "";
+    return;
+  }
+  const CH = [
+    { name: "库存出库", color: "#0067c0" },
+    { name: "代发", color: "#107c10" },
+    { name: "入仓", color: "#ffb900" },
+  ];
+  const chOf = (p) => (p.is_warehouse_in ? "入仓" : (p.is_dropship ? "代发" : "库存出库"));
+  const chSum = { "库存出库": 0, "代发": 0, "入仓": 0 };
+  for (const p of rows) chSum[chOf(p)] += revOf(p);
+  // 商品 TOP10：同名多规格合并（报表按「商品+规格」分行，这里看商品整体）
+  const byName = new Map();
+  for (const p of rows) {
+    const nm = p.name || "（未命名）";
+    const cur = byName.get(nm) || { name: nm, rev: 0, cogs: 0 };
+    cur.rev += revOf(p);
+    cur.cogs += Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
+    byName.set(nm, cur);
+  }
+  const top = [...byName.values()].sort((a, b) => b.rev - a.rev).slice(0, 10);
+  const pct = (v) => ((v / total) * 100).toFixed(1) + "%";
+  const bar = (v, color) => `<div style="height:6px;background:var(--border-light, #f0f0f0);border-radius:3px;overflow:hidden;"><div style="width:${Math.max(0, Math.min(100, (v / total) * 100))}%;height:100%;background:${color};"></div></div>`;
+  if (hint) hint.textContent = `合计 ${fmtMoney(total)} · ` + CH.map((c) => `${c.name} ${pct(chSum[c.name] || 0)}`).join(" / ");
+  const topRev = top.reduce((a, p) => a + p.rev, 0);
+  const topGp = top.reduce((a, p) => a + (p.rev - p.cogs), 0);
+  box.innerHTML = `
+    <div class="cost-stack">
+      ${CH.filter((c) => chSum[c.name] > 0).map((c) => `<span title="${c.name} ${fmtMoney(chSum[c.name])}" style="width:${(chSum[c.name] / total) * 100}%;background:${c.color};"></span>`).join("")}
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>渠道</th><th class="num">收入</th><th class="num">占收入</th><th style="width:22%;">占比</th></tr></thead>
+      <tbody>${CH.map((c) => `<tr>
+        <td><span class="cost-dot" style="background:${c.color};"></span>${c.name}</td>
+        <td class="num mono">${fmtMoney(chSum[c.name] || 0)}</td>
+        <td class="num mono">${pct(chSum[c.name] || 0)}</td>
+        <td>${bar(chSum[c.name] || 0, c.color)}</td>
+      </tr>`).join("")}</tbody>
+    </table></div>
+    <div class="card-head" style="margin-top:16px;"><h3 style="font-size:14px;">商品 TOP 10（按收入）</h3><span class="muted">同名多规格已合并</span></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>商品</th><th class="num">收入</th><th class="num">占总收入</th><th class="num">毛利</th><th class="num">毛利率</th><th style="width:18%;">占比</th></tr></thead>
+      <tbody>${top.map((p) => {
+        const gp = p.rev - p.cogs;
+        const color = gp >= 0 ? "var(--green)" : "var(--red)";
+        return `<tr>
+          <td>${esc(p.name)}</td>
+          <td class="num mono">${fmtMoney(p.rev)}</td>
+          <td class="num mono">${pct(p.rev)}</td>
+          <td class="num mono" style="color:${color}">${fmtMoney(gp)}</td>
+          <td class="num mono" style="color:${color}">${p.rev ? ((gp / p.rev) * 100).toFixed(1) + "%" : "—"}</td>
+          <td>${bar(p.rev, "#0067c0")}</td>
+        </tr>`;
+      }).join("")}</tbody>
+      <tfoot><tr><td><b>TOP10 合计</b></td>
+        <td class="num mono"><b>${fmtMoney(topRev)}</b></td>
+        <td class="num mono"><b>${pct(topRev)}</b></td>
+        <td class="num mono"><b>${fmtMoney(topGp)}</b></td>
+        <td class="num"></td><td class="num muted">共 ${byName.size} 个商品</td></tr></tfoot>
+    </table></div>`;
 }
 /* 商品销售明细表：带「商品名称筛选」（与移动端财务报表同一套口径——名称 / 规格任一包含关键词即命中）。
    输入即过滤、点表头排序都只重渲染这张表，不再请求后端；筛选词在重新查询后保留。 */
@@ -11675,9 +11793,16 @@ function renderAdProfitSku() {
   }
   const kws = splitSearchKeywords($("adpSkuSearch").value);
   const onlyAds = $("adpSkuOnlyAds").checked;
+  const onlyLoss = $("adpSkuOnlyLoss").checked;
   const all = ADP_SKU.rows || [];
+  // 毛利/广告费：广告前毛利 ÷ 广告费（ROAS 看收入，这一列看毛利，做保本判断更直接）
+  for (const r of all) {
+    const ads = Number(r.ads_total) || 0;
+    r.gp_ads = ads ? (Number(r.gross_before) || 0) / ads : null;
+  }
   let rows = all.filter((r) =>
     (!onlyAds || r.ads_total > 0) &&
+    (!onlyLoss || (Number(r.gross_after) < -0.005 && !r.ad_only)) &&
     searchHit(`${r.sku || ""} ${r.name || ""}`, kws)
   );
   if (!t._sort) t._sort = { key: "ads_total", dir: -1 };
@@ -11687,12 +11812,16 @@ function renderAdProfitSku() {
   rows = applyTableSort(t, rows);
 
   const totals = ADP_SKU.totals || {};
+  // 广告后亏损的分层：未匹配 ERP 的行收入记 0、天然为负，不计入亏损清单，避免误导
+  const negRows = all.filter((r) => !r.ad_only && Number(r.gross_after) < -0.005);
+  const negSum = negRows.reduce((a, r) => a + Number(r.gross_after), 0);
   if (stat) {
     const un = Number(totals.unmatched_ads) || 0;
     const pr = (ADP_SKU.profit_ranges || []).slice(-1)[0];
     stat.innerHTML = `${totals.sku_count || 0} 个 SKU · 匹配广告 ${totals.matched_skus || 0} 个 · 未匹配广告 ${totals.ad_only_skus || 0} 个`
       + (Number(totals.warehouse_sku_count) ? ` · 入仓品 ${totals.warehouse_sku_count} 个（利润缓存 ${esc(pr || "无")}）` : "")
-      + (un > 0.005 ? ` · <span style="color:var(--red);">未匹配广告费 ${fmtMoney(un)}</span>` : "");
+      + (un > 0.005 ? ` · <span style="color:var(--red);">未匹配广告费 ${fmtMoney(un)}</span>` : "")
+      + (negRows.length ? ` · <span style="color:var(--red);">${negRows.length} 个 SKU 广告后亏损，合计 ${fmtMoney(negSum)}</span>` : "");
   }
 
   const LIMIT = 80;
@@ -11718,7 +11847,8 @@ function renderAdProfitSku() {
       <td class="num mono" style="color:${r.gross_after >= 0 ? "var(--green)" : "var(--red)"};">${fmtMoney(r.gross_after)}</td>
       <td class="num muted">${adpPct(r.ad_rate)}</td>
       <td class="num muted">${r.roi == null ? "—" : Number(r.roi).toFixed(2)}</td>
-    </tr>`).join("") : `<tr><td colspan="11" class="empty">${kws.length || onlyAds ? "没有符合条件的 SKU" : "所选区间没有可用的 SKU 数据"}</td></tr>`;
+      <td class="num" style="color:${r.gp_ads != null && r.gp_ads < 0 ? "var(--red)" : ""}">${r.gp_ads == null ? "—" : Number(r.gp_ads).toFixed(2)}</td>
+    </tr>`).join("") : `<tr><td colspan="12" class="empty">${kws.length || onlyAds || onlyLoss ? "没有符合条件的 SKU" : "所选区间没有可用的 SKU 数据"}</td></tr>`;
 
   t.innerHTML = `<thead><tr>
       <th data-key="sku">SKU${sortArrow("adpSkuTable", "sku")}</th>
@@ -11731,7 +11861,8 @@ function renderAdProfitSku() {
       <th class="num" data-key="ads_total">广告费合计${sortArrow("adpSkuTable", "ads_total")}</th>
       <th class="num" data-key="gross_after">广告后毛利${sortArrow("adpSkuTable", "gross_after")}</th>
       <th class="num" data-key="ad_rate">广告费率${sortArrow("adpSkuTable", "ad_rate")}</th>
-      <th class="num" data-key="roi">ROI${sortArrow("adpSkuTable", "roi")}</th>
+      <th class="num" data-key="roi" title="销售额 ÷ 广告费（ROAS，不是利润率）">ROAS${sortArrow("adpSkuTable", "roi")}</th>
+      <th class="num" data-key="gp_ads" title="广告前毛利 ÷ 广告费：小于 1 说明这批广告带来的毛利还不够付广告费">毛利/广告费${sortArrow("adpSkuTable", "gp_ads")}</th>
     </tr></thead><tbody>${body}</tbody>` +
     `<tfoot><tr>
       <td><strong>合计</strong></td><td class="muted">共 ${rows.length} 个 SKU</td>
@@ -11742,8 +11873,8 @@ function renderAdProfitSku() {
       <td class="num mono"><strong>${fmtMoney(totals.jzt_total)}</strong></td>
       <td class="num mono"><strong>${fmtMoney(totals.ads_total)}</strong></td>
       <td class="num mono"><strong>${fmtMoney(totals.gross_after)}</strong></td>
-      <td class="num"></td><td class="num"></td>
-    </tr>${Number(totals.warehouse_sku_count) ? `<tr><td colspan="11" class="muted">其中入仓品 ${totals.warehouse_sku_count} 个 · 成交 ${fmtNum(totals.warehouse_qty)} 件 · 销售额 ${fmtMoney(totals.warehouse_revenue)} · 毛利 ${fmtMoney(totals.warehouse_gross)} · 广告费 ${fmtMoney(totals.warehouse_ads)} · 广告后毛利 ${fmtMoney(totals.warehouse_net)}</td></tr>` : ""}${(!ADP_SKU_FULL && rows.length > LIMIT) ? `<tr><td colspan="11" class="muted">已显示前 ${LIMIT} 条，共 ${rows.length} 条 · <a href="javascript:;" onclick="ADP_SKU_FULL=true;renderAdProfitSku();">显示全部</a></td></tr>` : ""}</tfoot>`;
+      <td class="num"></td><td class="num"></td><td class="num"></td>
+    </tr>${Number(totals.warehouse_sku_count) ? `<tr><td colspan="12" class="muted">其中入仓品 ${totals.warehouse_sku_count} 个 · 成交 ${fmtNum(totals.warehouse_qty)} 件 · 销售额 ${fmtMoney(totals.warehouse_revenue)} · 毛利 ${fmtMoney(totals.warehouse_gross)} · 广告费 ${fmtMoney(totals.warehouse_ads)} · 广告后毛利 ${fmtMoney(totals.warehouse_net)}</td></tr>` : ""}${(!ADP_SKU_FULL && rows.length > LIMIT) ? `<tr><td colspan="12" class="muted">已显示前 ${LIMIT} 条，共 ${rows.length} 条 · <a href="javascript:;" onclick="ADP_SKU_FULL=true;renderAdProfitSku();">显示全部</a></td></tr>` : ""}</tfoot>`;
 }
 
 function renderAdProfit(d) {
@@ -11769,6 +11900,9 @@ function renderAdProfit(d) {
 
   // ---- 概览统计 ----
   const netAfter = Number(p.net_after_ads) || 0;
+  // 广告缓存拼不满区间时，广告费被低估 → 净利润（广告后）偏高，必须在卡片上直接标出来
+  const gapDays = [ads.cps, ads.jzt].reduce((a, part) =>
+    a + ((part && part.accounts) || []).reduce((b, x) => b + ((x.gaps || []).length), 0), 0);
   $("adpStats").innerHTML = `
     <div class="stat blue"><div class="label">${pre}销售收入</div><div class="value">${fmtMoney(erp.revenue)}</div><div class="sub">${erp.order_count} 单</div></div>
     <div class="stat green"><div class="label">${pre}毛利（广告前）</div><div class="value">${fmtMoney(p.gross_before_ads)}</div><div class="sub">毛利率 ${rev ? ((Number(p.gross_before_ads) / rev) * 100).toFixed(1) + "%" : "—"}</div></div>
@@ -11777,7 +11911,7 @@ function renderAdProfit(d) {
     <div class="stat amber"><div class="label">广告费合计</div><div class="value">${fmtMoney(p.ads_total)}</div><div class="sub">占收入 ${adpPct(p.ad_rate)}</div></div>
     <div class="stat ${Number(p.gross_after_ads) >= 0 ? "green" : "red"}"><div class="label">${pre}毛利（广告后）</div><div class="value">${fmtMoney(p.gross_after_ads)}</div><div class="sub">毛利 − 广告费</div></div>
     <div class="stat red"><div class="label">${pre}净利润（广告前）</div><div class="value">${fmtMoney(p.net_before_ads)}</div><div class="sub">净利率 ${adpPct(p.net_margin_before)}</div></div>
-    <div class="stat ${netAfter >= 0 ? "green" : "red"}"><div class="label">${pre}净利润（广告后）</div><div class="value">${fmtMoney(netAfter)}</div><div class="sub">净利率 ${adpPct(p.net_margin_after)}</div></div>`;
+    <div class="stat ${netAfter >= 0 ? "green" : "red"}"><div class="label">${pre}净利润（广告后）</div><div class="value">${fmtMoney(netAfter)}</div><div class="sub">净利率 ${adpPct(p.net_margin_after)}${gapDays ? ` · <span style="color:var(--red)">缺 ${gapDays} 天广告数据，本行偏高</span>` : ""}</div></div>`;
 
   // ---- 告警：缺口 / 服务不可用 / 未抓取 ----
   const warnBox = $("adpWarn");

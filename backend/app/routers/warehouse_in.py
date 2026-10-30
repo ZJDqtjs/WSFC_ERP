@@ -1192,7 +1192,8 @@ def freight_apply(data: FreightApplyIn, db: Session = Depends(get_db), user: Use
             r.freight_total = amt
             r.freight = round(amt / float(r.quantity or 1), 6)
             r.freight_source = "actual"
-            r.profit = round(float(r.amount or 0) - float(r.cogs or 0) - amt - float(r.pack_cost or 0), 2)
+            r.profit = round(float(r.amount or 0) - float(r.cogs or 0) - amt - float(r.pack_cost or 0)
+                             - float(getattr(r, "fixed_total", 0.0) or 0.0), 2)
             new_sum += amt
             updated += 1
         orders += 1

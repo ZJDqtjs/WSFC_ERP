@@ -645,6 +645,17 @@
         <div id="rep-panel-summary">
           <div class="stat-grid" id="repStats"></div>
           <div class="card">
+            <div class="card-head">
+              <h3>利润桥</h3>
+              <span class="muted">收入 → 结转成本 → 毛利 → 期间费用 → 净利润；本页不扣广告费（广告费见「广告利润」）</span>
+            </div>
+            <div class="table-wrap"><table id="repBridge"></table></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>收入构成</h3><span class="muted" id="repRevHint"></span></div>
+            <div id="repRevBreak"></div>
+          </div>
+          <div class="card">
             <div class="card-head"><h3>销售成本构成</h3><span class="muted" id="repCostHint"></span></div>
             <div id="repCostBreak"></div>
           </div>
@@ -831,6 +842,10 @@
             <label class="rep-switch" title="只显示有广告花费的 SKU">
               <input type="checkbox" id="adpSkuOnlyAds" onchange="renderAdProfitSku()" />
               <span>只看有广告费</span>
+            </label>
+            <label class="rep-switch" title="只显示「广告后毛利」为负的 SKU（不含未匹配 ERP 的纯广告行）">
+              <input type="checkbox" id="adpSkuOnlyLoss" onchange="renderAdProfitSku()" />
+              <span>只看广告后亏损</span>
             </label>
             <select id="adpSkuSort" onchange="adpSkuSortBySel()" title="常用列快捷排序；点表格列头可按任意列升/降序">
               <option value="ads">按广告费</option>
