@@ -11601,8 +11601,8 @@ function adpOpenAdService() {
   window.open("/jdfenxi/", "_blank");
 }
 
-/* 页内视图切换：利润概览 / SKU 明细（默认利润概览）。切到 SKU 时把概览、利润桥、店铺账号收起，
-   让 SKU 表直接贴在标题栏下方，不用再滚到页面底部 */
+/* 页内视图切换：利润概览 / SKU 明细（默认利润概览），两个视图互斥，
+   SKU 表不再留在概览页底，切过去才显示 */
 function adpView(btn) {
   const sku = btn.dataset.view === "sku";
   btn.closest(".seg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
@@ -11610,6 +11610,7 @@ function adpView(btn) {
   ["adpOverviewBody", "adpBridgeCard", "adpAccountsCard"].forEach((id) => {
     $(id).style.display = sku ? "none" : "";
   });
+  $("adpSkuCard").style.display = sku ? "" : "none";
 }
 
 async function loadAdProfit(refresh) {
