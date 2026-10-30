@@ -201,9 +201,16 @@ def _detect_header(rows, aliases) -> tuple[dict, int]:
 
 def _load_workbook(file: UploadFile):
     try:
-        return load_workbook(file.file, data_only=True)
+        # read_only：普通模式逐格建对象，账单/贴单动辄几万格，1.6G 小机上会把内存顶死
+        return load_workbook(file.file, data_only=True, read_only=True)
     except Exception:
         raise HTTPException(400, "无法读取文件，请上传 .xlsx 格式")
+
+
+def _sheet_rows(ws) -> list[list]:
+    """取一张表的全部行。只读模式必须先 reset_dimensions，否则按声明维度截断。"""
+    ws.reset_dimensions()
+    return [list(r) for r in ws.iter_rows(values_only=True)]
 
 
 # 库存成本：库存均价(先进先出)优先，无库存时回退参考成本 unit_cost。
@@ -865,15 +872,17 @@ def import_preview(
     user: User = Depends(get_current_user),
 ):
     wb = _load_workbook(file)
-    sheets = wb.sheetnames
-    # 工作表按当前分仓自动选：wh02=冷冻贴单，其余（奥斯迪/昆明蔬菜仓）=常温贴单；
-    # 前端下拉显式选过则用所选那张
-    wh_key = get_current_key()
-    sheet_name = _pick_sheet(sheets, sheet, wh_key)
-    if not sheet_name:
-        raise HTTPException(400, "Excel 中没有可读取的工作表")
-    ws = wb[sheet_name]
-    rows = [list(r) for r in ws.iter_rows(values_only=True)]
+    try:
+        sheets = wb.sheetnames
+        # 工作表按当前分仓自动选：wh02=冷冻贴单，其余（奥斯迪/昆明蔬菜仓）=常温贴单；
+        # 前端下拉显式选过则用所选那张
+        wh_key = get_current_key()
+        sheet_name = _pick_sheet(sheets, sheet, wh_key)
+        if not sheet_name:
+            raise HTTPException(400, "Excel 中没有可读取的工作表")
+        rows = _sheet_rows(wb[sheet_name])
+    finally:
+        wb.close()
     mapping, start = _detect_header(rows, WH_ALIASES)
     if not mapping or "product" not in mapping:
         raise HTTPException(400, "未识别到表头（需包含「商品名称」等列），请确认工作表内容")
@@ -1044,7 +1053,7 @@ def _parse_freight_bill(wb) -> dict:
     used: list[str] = []
     row_count = 0
     for name in wb.sheetnames:
-        rows = [list(r) for r in wb[name].iter_rows(values_only=True)]
+        rows = _sheet_rows(wb[name])
         mapping, start = _detect_header(rows, FREIGHT_ALIASES)
         if not mapping.get("purchase_no") or "amount" not in mapping:
             continue
@@ -1087,7 +1096,10 @@ def freight_preview(
 ):
     """解析运输账单，按采购单号对上入仓记录，返回预览（含未命中清单与费用类型明细）。"""
     wb = _load_workbook(file)
-    bill = _parse_freight_bill(wb)
+    try:
+        bill = _parse_freight_bill(wb)
+    finally:
+        wb.close()
     if not bill["by_po"]:
         raise HTTPException(400, "没在文件里找到「采购单号 + 结算金额」两列，请确认上传的是运输转运费账单")
     by_pn = _bill_records_map(db)

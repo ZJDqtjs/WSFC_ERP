@@ -49,6 +49,19 @@ AD_TIMEOUT = float(os.getenv("ERP_AD_TIMEOUT", "8"))
 _AD_TTL = 60.0
 _AD_CACHE: dict[str, tuple[float, object]] = {}
 
+# 各缓存只在读取时判断 TTL、过期项从不删除，长跑下来条目只增不减；写入时顺带清扫并封顶。
+_CACHE_MAX = 200
+
+
+def _cache_put(cache: dict, key, value, ttl: float) -> None:
+    now = time.time()
+    for k in [k for k, (t, _) in cache.items() if now - t >= ttl]:
+        cache.pop(k, None)
+    cache[key] = (now, value)
+    while len(cache) > _CACHE_MAX:
+        oldest = min(cache, key=lambda k: cache[k][0])
+        cache.pop(oldest, None)
+
 
 def _ad_get(path: str):
     """读挂载服务的 JSON 接口；异常由调用方降级处理（不能拖垮 ERP 报表）。"""
@@ -66,7 +79,7 @@ def _ad_cached(key: str, loader, refresh: bool = False):
     if not refresh and hit and now - hit[0] < _AD_TTL:
         return hit[1]
     got = loader()
-    _AD_CACHE[key] = (now, got)
+    _cache_put(_AD_CACHE, key, got, _AD_TTL)
     return got
 
 
@@ -245,7 +258,7 @@ def _sku_rows_of(kind: str, account: str, s: date, e: date, refresh: bool = Fals
     })
     raw = _ad_get_bytes(f"/api/paycomm{'' if kind == 'cps' else '/spend'}/export?" + qs)
     rows = _parse_sku_xlsx(raw, kind)
-    _SKU_ROWS_CACHE[key] = (now, rows)
+    _cache_put(_SKU_ROWS_CACHE, key, rows, _SKU_TTL)
     return rows
 
 
@@ -435,7 +448,7 @@ def _profit_month(month_start: date, month_end: date, refresh: bool) -> tuple[di
 
     meta = {"label": "、".join(sorted(set(used_ranges)))}
     out = (rows, warnings, meta)
-    _PROFIT_CACHE[key] = (now, {"rows": rows, "warnings": warnings, "meta": meta})
+    _cache_put(_PROFIT_CACHE, key, {"rows": rows, "warnings": warnings, "meta": meta}, _PROFIT_TTL)
     return out
 
 

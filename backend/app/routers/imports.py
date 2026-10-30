@@ -108,11 +108,16 @@ def norm_date(v) -> str:
 
 def read_rows(file: UploadFile):
     try:
-        wb = load_workbook(file.file, data_only=True)
+        # read_only：普通模式逐格建对象，一份 400KB 出库单要占 30MB，导入几次 RSS 就降不下来了
+        wb = load_workbook(file.file, data_only=True, read_only=True)
     except Exception:
         raise HTTPException(400, "无法读取文件，请上传 .xlsx 格式")
-    ws = wb.worksheets[0]
-    return [list(r) for r in ws.iter_rows(values_only=True)]
+    try:
+        ws = wb.worksheets[0]
+        ws.reset_dimensions()  # 导出工具常不写 <dimension>，只读模式会按声明维度截断
+        return [list(r) for r in ws.iter_rows(values_only=True)]
+    finally:
+        wb.close()
 
 
 def _norm_cell(c) -> str:
