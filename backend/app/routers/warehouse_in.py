@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from ..auth import get_current_user
 from ..database import get_current_key, get_db
 from ..models import Deduction, Product, StockMovement, User, WarehouseIn, WarehouseProduct
-from ..services import fifo_state, fifo_take, pay_fields, recompute_product, unit_to_base
+from ..services import fifo_state, fifo_take, pay_fields, recompute_product, search_hit, split_search_keywords, unit_to_base
 
 router = APIRouter(prefix="/api/warehouse-in", tags=["warehouse-in"])
 
@@ -701,11 +701,11 @@ def list_inbounds(
     if date_to:
         query = query.where(WarehouseIn.date <= date_to)
     rows = list(db.execute(query).scalars())
-    kw = (q or "").strip().lower()
-    if kw:
-        rows = [r for r in rows if kw in " ".join(
+    kws = split_search_keywords(q)
+    if kws:
+        rows = [r for r in rows if search_hit(" ".join(
             [r.code, r.product_name, r.purchase_no, r.center, r.operator]
-        ).lower()]
+        ), kws)]
     items = [_in_dict(db, r) for r in rows]
     total = {
         "amount": round(sum(r.amount or 0 for r in rows), 2),  # 收入

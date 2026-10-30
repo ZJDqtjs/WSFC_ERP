@@ -1128,10 +1128,10 @@ function renderStock(overview) {
     cats.sort();
     catSel.insertAdjacentHTML("beforeend", cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join(""));
   }
-  const kw = ($("stockSearch").value || "").trim().toLowerCase();
+  const kws = splitSearchKeywords($("stockSearch")?.value);
   const cat = catSel ? catSel.value : "";
   let rows = overview.filter((p) =>
-    (!kw || (p.name || "").toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw)) &&
+    searchHit(`${p.name || ""} ${p.category || ""}`, kws) &&
     (!cat || p.category === cat)
   );
   const t = $("stockTable");
@@ -1272,11 +1272,11 @@ async function loadAdjustments() {
 function renderAdjustments() {
   const t = $("adjRecordTable");
   if (!t) return;
-  const kw = ($("adjSearch")?.value || "").trim().toLowerCase();
+  const kws = splitSearchKeywords($("adjSearch")?.value);
   let rows = ADJ_ROWS;
-  if (kw) {
+  if (kws.length) {
     rows = rows.filter((r) =>
-      [r.product_name, r.remark, r.operator, r.date, r.created_at].join(" ").toLowerCase().includes(kw));
+      searchHit([r.product_name, r.remark, r.operator, r.date, r.created_at].join(" "), kws));
   }
   rows = applyTableSort(t, rows);
   if (!rows.length) {
@@ -3455,7 +3455,7 @@ async function openFreshConfig() {
             候选商品（<b id="fcCount">0</b> 个）
             <label style="float:right;font-weight:400;cursor:pointer;"><input type="checkbox" id="fcFreshOnly" onchange="renderFreshConfig()" /> 只看鲜货分类</label>
           </div>
-          <input id="fcSearch" placeholder="🔍 搜索名称 / 分类…" oninput="renderFreshConfig()" style="margin-bottom:8px;" />
+          <input id="fcSearch" placeholder="🔍 搜索名称 / 分类…（多个用「；」隔开）" oninput="renderFreshConfig()" style="margin-bottom:8px;" />
           <div id="fcOptions" class="fc-list"></div>
         </div>
         <div class="fc-pane">
@@ -3471,12 +3471,12 @@ async function openFreshConfig() {
   } catch (e) { toast("加载失败：" + e.message); }
 }
 function renderFreshConfig() {
-  const kw = ($("fcSearch")?.value || "").trim().toLowerCase();
+  const kws = splitSearchKeywords($("fcSearch")?.value);
   const freshOnly = !!($("fcFreshOnly") || {}).checked;
   const selSet = new Set(FC_SEL);
   const rows = FC_ALL
     .filter((p) => !freshOnly || FC_CATS.includes(p.category))   // 「只看鲜货分类」按蔬菜/干货筛
-    .filter((p) => !kw || p.name.toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw));
+    .filter((p) => searchHit(`${p.name} ${p.category || ""}`, kws));
   const optHtml = rows
     .map((p) => `<div class="fc-opt ${selSet.has(p.id) ? "on" : ""}" onclick="fcToggle(${p.id})">${esc(p.name)} <span class="muted">${esc(p.category)}</span></div>`)
     .join("");
@@ -3604,11 +3604,11 @@ function finRowIds() {
 function renderFreshInbound() {
   const t = $("finTable");
   if (!t) return;
-  const kw = ($("finSearch") ? $("finSearch").value : "").trim().toLowerCase();
+  const kws = splitSearchKeywords($("finSearch") ? $("finSearch").value : "");
   FIN_DONE_SET = finDoneLoad();   // 今日已入库（日期变了就自动空）
   const matched = finRowIds().filter((id) => {
     const p = finProduct(id);
-    return !kw || `${p.name} ${p.category || ""}`.toLowerCase().includes(kw);
+    return searchHit(`${p.name} ${p.category || ""}`, kws);
   });
   // 今日已入库的先隐藏，让表里只剩「还没入库」的；点了「显示」才灰显列出来
   const hidden = matched.filter((id) => FIN_DONE_SET.has(id));
@@ -5277,12 +5277,12 @@ function unitOptions(product, selected) {
   ).join("");
 }
 
-/** 把搜索框内容拆成多个关键词（小写）。分隔符：全/半角冒号、空格（含全角）、逗号、顿号、竖线。
-    多个关键词之间是「且」的关系：都要命中才算匹配。例：「牛油果：代发」→ ['牛油果','代发'] */
+/** 把搜索框内容拆成多个关键词（小写）。分隔符：全/半角冒号、分号、空格（含全角）、逗号、顿号、竖线。
+    多个关键词之间是「且」的关系：都要命中才算匹配。例：「牛油果；代发」→ ['牛油果','代发'] */
 function splitSearchKeywords(raw) {
   return String(raw || "")
     .toLowerCase()
-    .split(/[：:，,、\s|｜]+/)
+    .split(/[：:；;，,、\s|｜]+/)
     .filter(Boolean);
 }
 /** 多关键词匹配：每个关键词都要在 hay（已小写的可搜索文本）里出现。关键词为空视为全部命中。 */
@@ -6116,15 +6116,16 @@ async function deletePackRule(rid) {
   catch (e) { toast("删除失败：" + e.message); }
 }
 function renderPackRules() {
-  const kw = ($("prSearch")?.value || "").trim().toLowerCase();
+  const kws = splitSearchKeywords($("prSearch")?.value);
   const box = $("prBox")?.value || "";
-  const rows = PACK_RULES.filter((r) =>
-    (!kw || r.name.toLowerCase().includes(kw) ||
-      (r.items || []).some((it) => (it.name || "").toLowerCase().includes(kw)) ||
-      (r.box_type || "").toLowerCase().includes(kw) ||
-      (r.box_items || []).some((it) => (it.name || "").toLowerCase().includes(kw))) &&
-    (!box || (r.box_type || "") === box)
-  );
+  const rows = PACK_RULES.filter((r) => {
+    const hay = [
+      r.name, r.box_type,
+      (r.items || []).map((it) => it.name || "").join(" "),
+      (r.box_items || []).map((it) => it.name || "").join(" "),
+    ].join(" ");
+    return searchHit(hay, kws) && (!box || (r.box_type || "") === box);
+  });
   const t = $("prTable");
   t.innerHTML = `<thead><tr>
     <th class="cb-col"><input type="checkbox" onclick="toggleAll(this,'pr')" /></th>
@@ -6395,7 +6396,7 @@ function openInboundPicker(inp) {
   openModal(`
     <h3>选择入库商品 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="toolbar" style="margin-bottom:10px;">
-      <input id="spSearch" placeholder="🔍 搜索商品名称 / 分类..." oninput="renderInboundPicker()" />
+      <input id="spSearch" placeholder="🔍 搜索商品名称 / 分类…（多个用「；」隔开）" oninput="renderInboundPicker()" />
       <select id="spType" style="display:none;"><option value="">全部类型</option><option value="stock">库存商品</option></select>
       <select id="spCat" class="searchable" onchange="renderInboundPicker()"><option value="">全部分类</option>${cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
     </div>
@@ -6403,10 +6404,10 @@ function openInboundPicker(inp) {
   renderInboundPicker();
 }
 function renderInboundPicker() {
-  const kw = ($("spSearch")?.value || "").trim().toLowerCase();
+  const kws = splitSearchKeywords($("spSearch")?.value);
   const cat = $("spCat")?.value || "";
   const rows = inboundProducts().filter((p) =>
-    (!kw || p.name.toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw)) &&
+    searchHit(`${p.name} ${p.category || ""}`, kws) &&
     (!cat || p.category === cat));
   const list = $("spList");
   if (!rows.length) { list.innerHTML = `<div class="empty" style="padding:30px;">无匹配商品</div>`; return; }
@@ -6592,8 +6593,8 @@ async function submitInbound() {
 async function loadInbounds() {
   const from = $("inDateFrom").value, to = $("inDateTo").value;
   let rows = await api(`/api/inbounds?date_from=${from || ""}&date_to=${to || ""}`);
-  const kw = ($("inSearch")?.value || "").trim().toLowerCase();
-  if (kw) rows = rows.filter((r) => [r.code, r.product_name, r.supplier, r.operator].join(" ").toLowerCase().includes(kw));
+  const kws = splitSearchKeywords($("inSearch")?.value);
+  if (kws.length) rows = rows.filter((r) => searchHit([r.code, r.product_name, r.supplier, r.operator].join(" "), kws));
   const t = $("inTable");
   rows = applyTableSort(t, rows);
   $("inListHint").textContent = `共 ${rows.length} 条`;
@@ -6829,7 +6830,7 @@ function openSalePicker(inp) {
   openModal(`
     <h3>选择销售商品 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="toolbar" style="margin-bottom:10px;">
-      <input id="spSearch" placeholder="🔍 搜索商品名称 / 分类..." oninput="renderSalePicker()" />
+      <input id="spSearch" placeholder="🔍 搜索商品名称 / 分类…（多个用「；」隔开）" oninput="renderSalePicker()" />
       <select id="spType" onchange="renderSalePicker()"><option value="">全部类型</option><option value="order">订单商品</option><option value="stock">库存商品</option></select>
       <select id="spCat" class="searchable" onchange="renderSalePicker()"><option value="">全部分类</option>${cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
     </div>
@@ -6837,11 +6838,11 @@ function openSalePicker(inp) {
   renderSalePicker();
 }
 function renderSalePicker() {
-  const kw = ($("spSearch")?.value || "").trim().toLowerCase();
+  const kws = splitSearchKeywords($("spSearch")?.value);
   const type = $("spType")?.value || "";
   const cat = $("spCat")?.value || "";
   const rows = saleProducts().filter((p) =>
-    (!kw || p.name.toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw)) &&
+    searchHit(`${p.name} ${p.category || ""}`, kws) &&
     (!type || p.product_type === type) &&
     (!cat || p.category === cat)
   );
@@ -6999,7 +7000,7 @@ function openPackItemPicker() {
   openModal(`
     <h3>选择关联出库物品 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="toolbar" style="margin-bottom:10px;">
-      <input id="ppSearch" placeholder="🔍 搜索商品名称 / 分类..." oninput="renderPackItemPicker()" />
+      <input id="ppSearch" placeholder="🔍 搜索商品名称 / 分类…（多个用「；」隔开）" oninput="renderPackItemPicker()" />
       <select id="ppCat" class="searchable" onchange="renderPackItemPicker()"><option value="">全部分类</option>${cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
     </div>
     <div class="sp-list" id="ppList" style="max-height:52vh;overflow-y:auto;"></div>`);
@@ -7007,10 +7008,10 @@ function openPackItemPicker() {
 }
 
 function renderPackItemPicker() {
-  const kw = ($("ppSearch")?.value || "").trim().toLowerCase();
+  const kws = splitSearchKeywords($("ppSearch")?.value);
   const cat = $("ppCat")?.value || "";
   const rows = PRODUCTS.filter((p) => p.is_active
-    && (!kw || (p.name || "").toLowerCase().includes(kw) || (p.category || "").toLowerCase().includes(kw))
+    && searchHit(`${p.name || ""} ${p.category || ""}`, kws)
     && (!cat || p.category === cat));
   const list = $("ppList");
   if (!list) return;
@@ -7161,7 +7162,7 @@ async function submitOutbound() {
 async function loadOutbounds() {
   const from = $("outDateFrom").value, to = $("outDateTo").value;
   const flat = await api(`/api/outbounds?date_from=${from || ""}&date_to=${to || ""}`);
-  const kw = ($("outSearch")?.value || "").trim().toLowerCase();
+  const kws = splitSearchKeywords($("outSearch")?.value);
   // 按批次聚合：同一 import_group 的若干单合并为一条展示行
   let rows = [];
   const groups = new Map();
@@ -7175,12 +7176,12 @@ async function loadOutbounds() {
   }
   for (const [key, recs] of groups) {
     const g = buildOutGroup(recs);
-    if (!kw || [g.code, g.customer, g.date].join(" ").toLowerCase().includes(kw)) rows.push({ _group: true, g });
+    if (searchHit([g.code, g.customer, g.date].join(" "), kws)) rows.push({ _group: true, g });
   }
   // 兼容旧筛选：进一步按单号/客户过滤（批次行存储成员以支持检索）
-  if (kw) rows = rows.filter((r) => r._group
-    ? (r.g.records || []).some((o) => [o.code, o.customer].join(" ").toLowerCase().includes(kw))
-    : [r.rec.code, r.rec.customer].join(" ").toLowerCase().includes(kw));
+  if (kws.length) rows = rows.filter((r) => r._group
+    ? (r.g.records || []).some((o) => searchHit([o.code, o.customer].join(" "), kws))
+    : searchHit([r.rec.code, r.rec.customer].join(" "), kws));
   const t = $("outTable");
   // 提供可排序的统一字段
   const sortable = rows.map((r) => r._group
@@ -7503,10 +7504,10 @@ function outAggBy(rows, pool) {
 function renderOutGroup() {
   if (!OUT_GROUP) return;
   const rows = OUT_GROUP;
-  const kw = ($("ogSearch")?.value || "").trim().toLowerCase();
+  const kws = splitSearchKeywords($("ogSearch")?.value);
   const t = $("ogTable");
   // 销售商品可额外按出库方式筛：输入「代发」/「库存」即可筛出对应商品
-  const kwHit = (a, extra = "") => !kw || `${a.name} ${extra}`.toLowerCase().includes(kw);
+  const kwHit = (a, extra = "") => searchHit(`${a.name} ${extra}`, kws);
   const aggSale = outAggBy(rows, "sale").filter((a) => kwHit(a, a.is_dropship ? "代发 外发" : "库存出库"));
   const aggPack = outAggBy(rows, "pack").filter((a) => kwHit(a));
   const aggLabor = outAggBy(rows, "labor").filter((a) => kwHit(a));
@@ -8082,8 +8083,8 @@ async function loadReport() {
 
   const ft = $("financeTable");
   let finRows = finance;
-  const fkw = ($("repSearch")?.value || "").trim().toLowerCase();
-  if (fkw) finRows = finRows.filter((f) => [f.category, f.product_name, f.remark, f.operator, f.type, f.warehouse].join(" ").toLowerCase().includes(fkw));
+  const kws = splitSearchKeywords($("repSearch")?.value);
+  if (kws.length) finRows = finRows.filter((f) => searchHit([f.category, f.product_name, f.remark, f.operator, f.type, f.warehouse].join(" "), kws));
   finRows = applyTableSort(ft, finRows);
   const finWh = !!rep.is_all;   // 全仓总览：流水来自多个分仓，需要标出来源
   ft.innerHTML = `<thead><tr>
@@ -8191,13 +8192,13 @@ function renderReportGoods() {
   const all = REP_PROD_ROWS || [];
   const kwEl = $("repGoodsKw");
   const kw = ((kwEl && kwEl.value) || "").trim();
-  const k = kw.toLowerCase();
+  const kws = splitSearchKeywords(kw);
   // 关键词命中：商品名 / 规格 / 出库方式 / 来源（输入「入仓」「代发」「手动」「聚水潭」都能筛）
-  const hit = k ? all.filter((p) =>
-    `${p.name || ""} ${p.spec || ""} ${wayTextOf(p)} ${p.source || ""}`.toLowerCase().includes(k)) : all;
+  const hit = kws.length ? all.filter((p) =>
+    searchHit(`${p.name || ""} ${p.spec || ""} ${wayTextOf(p)} ${p.source || ""}`, kws)) : all;
   const prodRows = applyTableSort(pt, hit);
   const hint = $("repGoodsHint");
-  if (hint) hint.textContent = all.length ? (k ? `匹配 ${prodRows.length} / ${all.length} 个商品` : `共 ${all.length} 个商品`) : "";
+  if (hint) hint.textContent = all.length ? (kws.length ? `匹配 ${prodRows.length} / ${all.length} 个商品` : `共 ${all.length} 个商品`) : "";
   // 成本为「总成本」= 商品成本 + 打包人工/耗材 + 快递费（后端 by_product 已按销售商品归属；
   // 无归属的快递费等按该单销售金额占比分摊）。收入含客户代收的关联结算 settle_income，
   // 毛利率分母用 扣点前销售金额 + 代收（与后端 gp_rate 同口径）。
@@ -8560,13 +8561,13 @@ function renderExpenseItemRows() {
   const t = $("repExpItemTable");
   if (!t) return;
   const src = ($("repExpItemSrc") || {}).value || "";
-  const kw = (($("repExpItemSearch") || {}).value || "").trim().toLowerCase();
+  const kws = splitSearchKeywords(($("repExpItemSearch") || {}).value);
   const withWh = REP_EXP_WITH_WH;
   let rows = REP_EXP_ITEMS;
   if (src) rows = rows.filter((r) => r.source === src);
-  if (kw) {
+  if (kws.length) {
     rows = rows.filter((r) =>
-      [r.date, r.source, r.category, r.item, r.remark, r.operator, r.ref, r.warehouse].join(" ").toLowerCase().includes(kw));
+      searchHit([r.date, r.source, r.category, r.item, r.remark, r.operator, r.ref, r.warehouse].join(" "), kws));
   }
   const MAX = 200;
   const shown = rows.slice(0, MAX);
@@ -8912,11 +8913,11 @@ function oeFillCategories(s) {
 function renderOtherExpenseList() {
   const income = OE_SCOPE === "income";
   const cat = $("oeFilterCat").value;
-  const kw = ($("oeSearch").value || "").trim().toLowerCase();
+  const kws = splitSearchKeywords($("oeSearch").value);
   // 支出页签看正数（开支），收入页签看负数（供应商补偿 / 手工登记的其他收入，显示为正数金额）
   let rows = OE_ROWS.filter((r) => (income ? (Number(r.amount) || 0) < 0 : (Number(r.amount) || 0) >= 0));
   if (cat) rows = rows.filter((r) => r.category === cat);
-  if (kw) rows = rows.filter((r) => [r.category, r.remark, r.operator, r.date].join(" ").toLowerCase().includes(kw));
+  if (kws.length) rows = rows.filter((r) => searchHit([r.category, r.remark, r.operator, r.date].join(" "), kws));
   const t = $("oeTable");
   t.innerHTML = `<thead><tr>
     <th>日期</th><th>费用类型</th><th class="num">金额</th><th>操作员</th><th>备注</th><th style="width:120px;"></th></tr></thead><tbody>` +
@@ -9071,11 +9072,11 @@ function payClearFilter() {
 /** 先按关键词、再按日期区间过滤出要展示的账单（同时报告被排除的「无日期」笔数） */
 function payFilterRows() {
   const f = payFilter();
-  const kw = f.kwRaw.toLowerCase();
+  const kws = splitSearchKeywords(f.kwRaw);
   let rows = PAY_ROWS;
-  if (kw) {
+  if (kws.length) {
     rows = rows.filter((r) =>
-      [r.date, r.source, r.title, r.sub, r.code, r.remark, r.operator].join(" ").toLowerCase().includes(kw));
+      searchHit([r.date, r.source, r.title, r.sub, r.code, r.remark, r.operator].join(" "), kws));
   }
   let undated = 0;
   if (f.from || f.to) {
@@ -9086,7 +9087,7 @@ function payFilterRows() {
     });
     rows = keep;
   }
-  return { rows, undated, active: !!(kw || f.from || f.to), f };
+  return { rows, undated, active: !!(kws.length || f.from || f.to), f };
 }
 
 /** 筛选结果实时合计：笔数 + 总金额（应付 + 应收）+ 拆分；关键词 / 日期一变就重算 */
@@ -9401,13 +9402,13 @@ function dsAlert(msg) {
 
 /** 关键词 / 日期筛选（行 = 商品+规格+日期；日期已由服务端过滤，这里再兜一次防漏） */
 function dsFilterGroups() {
-  const kw = ($("dsSearch") ? $("dsSearch").value : "").trim().toLowerCase();
+  const kws = splitSearchKeywords($("dsSearch") ? $("dsSearch").value : "");
   const from = $("dsFrom") ? $("dsFrom").value : "";
   const to = $("dsTo") ? $("dsTo").value : "";
   let groups = DS_GROUPS;
-  if (kw) {
+  if (kws.length) {
     groups = groups.filter((g) =>
-      [g.product_name, g.spec, g.unit, g.operator].join(" ").toLowerCase().includes(kw));
+      searchHit([g.product_name, g.spec, g.unit, g.operator].join(" "), kws));
   }
   if (from || to) {
     groups = groups.filter((g) => {
@@ -9416,7 +9417,7 @@ function dsFilterGroups() {
       return (!to || a <= to) && (!from || b >= from);
     });
   }
-  return { groups, active: !!(kw || from || to) };
+  return { groups, active: !!(kws.length || from || to) };
 }
 
 const DS_NUM4 = (v) => { const s = Number(v || 0).toFixed(4).replace(/0+$/, "").replace(/\.$/, ""); return s || "0"; };
@@ -11346,11 +11347,11 @@ function renderMappings() {
     <div class="mp-sum-item">→ 关联结算（订单商品）<b>${s.linked_order || 0}</b></div>
     <div class="mp-sum-item">→ 库存商品 <b>${s.linked_stock || 0}</b></div>
   </div>`;
-  const kw = ($("mpSearch")?.value || "").trim().toLowerCase();
+  const kws = splitSearchKeywords($("mpSearch")?.value);
   const f = $("mpFilter")?.value || "";
   let items = d.items || [];
-  if (kw) items = items.filter((m) =>
-    (m.external_code || "").toLowerCase().includes(kw) || (m.product_name || "").toLowerCase().includes(kw));
+  if (kws.length) items = items.filter((m) =>
+    searchHit(`${m.external_code || ""} ${m.product_name || ""}`, kws));
   if (f === "linked") items = items.filter((m) => m.product_id);
   else if (f === "unlinked") items = items.filter((m) => !m.product_id);
   else if (f === "order") items = items.filter((m) => m.product_type === "order");
@@ -11609,13 +11610,13 @@ function renderAdProfitSku() {
     t.innerHTML = `<tbody><tr><td class="empty">暂无数据</td></tr></tbody>`;
     return;
   }
-  const q = ($("adpSkuSearch").value || "").trim().toLowerCase();
+  const kws = splitSearchKeywords($("adpSkuSearch").value);
   const onlyAds = $("adpSkuOnlyAds").checked;
   const sortKey = ($("adpSkuSort").value || "ads");
   const all = ADP_SKU.rows || [];
   let rows = all.filter((r) =>
     (!onlyAds || r.ads_total > 0) &&
-    (!q || String(r.sku || "").toLowerCase().includes(q) || String(r.name || "").toLowerCase().includes(q))
+    searchHit(`${r.sku || ""} ${r.name || ""}`, kws)
   );
   rows = rows.slice().sort(ADP_SKU_SORTS[sortKey] || ADP_SKU_SORTS.ads);
 

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..auth import get_current_user
 from ..database import get_db
 from ..models import Product, StockMovement, User
-from ..services import fmt_qty, recompute_product
+from ..services import fmt_qty, recompute_product, search_hit, split_search_keywords
 
 router = APIRouter(prefix="/api", tags=["inventory"])
 
@@ -193,9 +193,9 @@ def list_movements(
     truncated = len(rows) >= MV_FETCH_CAP
     if merge_out:
         rows = _mv_merge_out(rows)
-    kw = (keyword or "").strip().lower()
-    if kw:
-        rows = [r for r in rows if kw in _mv_search_text(r)]
+    kws = split_search_keywords(keyword)
+    if kws:
+        rows = [r for r in rows if search_hit(_mv_search_text(r), kws)]
     rows.sort(key=lambda r: _mv_sort_val(r, sort), reverse=(dir != "asc"))
     total = len(rows)
 
