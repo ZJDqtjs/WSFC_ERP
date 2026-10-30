@@ -23,10 +23,10 @@
         </div>
       </div>
 
-      <!-- 报表口径开关：开启后不计入「其他开支」的款项，只看商品售卖利润（默认开启） -->
+      <!-- 报表口径开关：开启后不计入「其他收支」的款项，只看商品售卖利润（默认开启） -->
       <div class="caliber" :class="{ off: !excludeOther }">
         <span class="grow">
-          {{ excludeOther ? '排除其他开支 · 只看商品售卖利润' : '含其他开支（并入期间费用）' }}
+          {{ excludeOther ? '排除其他收支 · 只看商品售卖利润' : '含其他收支（并入期间费用）' }}
         </span>
         <van-switch v-model="excludeOther" size="18" @update:model-value="onExcludeOther" />
       </div>
@@ -116,7 +116,7 @@
         <div class="stat accent"><div class="label">销售收入</div><div class="value">{{ fmtMoney(rep.revenue) }}</div><div class="sub">{{ rep.order_count || 0 }} 单</div></div>
         <div class="stat warn"><div class="label">结转成本</div><div class="value">{{ fmtMoney(rep.cogs) }}</div><div class="sub">含关联结算 {{ fmtMoney(rep.pack_cost_total) }}</div></div>
         <div class="stat success"><div class="label">毛利</div><div class="value">{{ fmtMoney(rep.gross_profit) }}</div><div class="sub">{{ rep.revenue ? ((rep.gross_profit / rep.revenue) * 100).toFixed(1) + '%' : '—' }}</div></div>
-        <div class="stat danger"><div class="label">期间费用</div><div class="value">{{ fmtMoney(rep.expense) }}</div><div class="sub">其他开支 {{ fmtMoney(rep.other_expense) }} · 手工 {{ fmtMoney(rep.manual_expense) }}</div></div>
+        <div class="stat danger"><div class="label">期间费用</div><div class="value">{{ fmtMoney(rep.expense) }}</div><div class="sub">其他收支 {{ fmtMoney(rep.other_expense) }} · 手工 {{ fmtMoney(rep.manual_expense) }}</div></div>
         <div class="stat" :class="rep.net_profit >= 0 ? 'success' : 'danger'"><div class="label">净利润</div><div class="value">{{ fmtMoney(rep.net_profit) }}</div></div>
         <div class="stat"><div class="label">本期进货</div><div class="value">{{ fmtMoney(rep.purchase) }}</div></div>
         <div class="stat danger"><div class="label">本期总支出</div><div class="value">{{ fmtMoney(rep.total_expense) }}</div><div class="sub">含采购 {{ fmtMoney(rep.purchase) }}</div></div>
@@ -165,7 +165,7 @@
 
       </template>
 
-      <!-- 支出（期间费用 = 其他开支 + 手工记账） -->
+      <!-- 支出（期间费用 = 其他收支 + 手工记账） -->
       <template v-else-if="tab === 'expense'">
       <div class="card">
         <div class="card-title">
@@ -173,7 +173,7 @@
           <span class="bold up">{{ fmtMoney(rep.total_expense) }}</span>
         </div>
         <div class="muted" style="margin-bottom:8px;">
-          采购 {{ fmtMoney(rep.purchase) }} + 其他开支 {{ fmtMoney(rep.other_expense) }} + 手工记账 {{ fmtMoney(rep.manual_expense) }}；
+          采购 {{ fmtMoney(rep.purchase) }} + 其他收支 {{ fmtMoney(rep.other_expense) }} + 手工记账 {{ fmtMoney(rep.manual_expense) }}；
           其中期间费用 {{ fmtMoney(rep.expense) }} 从毛利中扣减（采购已计入结转成本，不重复扣）
         </div>
         <div v-if="staleApi" class="alert warn" style="margin-bottom:8px;">
@@ -186,7 +186,7 @@
           <div class="seg-item" :class="{ active: expTab === 'item' }" @click="expTab = 'item'">逐笔</div>
         </div>
 
-        <!-- 按类型：其他开支 + 手工记账 -->
+        <!-- 按类型：其他收支 + 手工记账 -->
         <template v-if="expTab === 'cat'">
           <div v-if="!rep.purchase && !Object.keys(rep.other_expenses || {}).length && !Object.keys(rep.manual_fees || {}).length" class="empty">本期无支出</div>
           <div v-if="rep.purchase" class="muted" style="margin:4px 0;">采购支出（进货）</div>
@@ -197,7 +197,7 @@
               <span class="bold up">{{ fmtMoney(rep.purchase) }}</span>
             </div>
           </div>
-          <div v-if="Object.keys(rep.other_expenses || {}).length" class="muted" style="margin:8px 0 4px;">其他开支（网线费 / 安装费 / 机器费 / 样品费…）</div>
+          <div v-if="Object.keys(rep.other_expenses || {}).length" class="muted" style="margin:8px 0 4px;">其他收支（网线费 / 安装费 / 机器费 / 样品费…）</div>
           <div v-for="(v, k) in rep.other_expenses || {}" :key="'o' + k" class="list-item">
             <div class="row">
               <van-tag type="danger" plain>{{ k }}</van-tag>
@@ -224,7 +224,7 @@
               <span class="bold up">{{ fmtMoney(d.total) }}</span>
             </div>
             <div class="item-meta">
-              采购 {{ fmtMoney(d.purchase) }} · 其他开支 {{ fmtMoney(d.other_expense) }} · 手工记账 {{ fmtMoney(d.manual_expense) }} · {{ d.count }} 笔 · <span class="muted">明细 ›</span>
+              采购 {{ fmtMoney(d.purchase) }} · 其他收支 {{ fmtMoney(d.other_expense) }} · 手工记账 {{ fmtMoney(d.manual_expense) }} · {{ d.count }} 笔 · <span class="muted">明细 ›</span>
             </div>
             <div class="exp-track" style="margin-top:6px;"><span class="exp-fill" :style="{ width: pctOfExp(d.total) + '%' }" /></div>
           </div>
@@ -240,18 +240,18 @@
               <span class="bold up">{{ fmtMoney(m.total) }}</span>
             </div>
             <div class="item-meta">
-              采购 {{ fmtMoney(m.purchase) }} · 其他开支 {{ fmtMoney(m.other_expense) }} · 手工记账 {{ fmtMoney(m.manual_expense) }} · {{ m.count }} 笔 · <span class="muted">明细 ›</span>
+              采购 {{ fmtMoney(m.purchase) }} · 其他收支 {{ fmtMoney(m.other_expense) }} · 手工记账 {{ fmtMoney(m.manual_expense) }} · {{ m.count }} 笔 · <span class="muted">明细 ›</span>
               <template v-if="expMomText(i) !== '—'"> · 环比 <b :class="expMom(i) >= 0 ? 'up' : 'down'">{{ expMomText(i) }}</b></template>
             </div>
           </div>
         </template>
 
-        <!-- 逐笔明细：每一条支出（采购 / 其他开支 / 手工记账），与「支出合计」同口径 -->
+        <!-- 逐笔明细：每一条支出（采购 / 其他收支 / 手工记账），与「支出合计」同口径 -->
         <template v-else>
           <div v-if="!expItems.length" class="empty">本期无支出</div>
           <div v-for="(r, i) in expItems" :key="i" class="list-item">
             <div class="row">
-              <van-tag :type="r.source === '采购' ? 'primary' : (r.source === '其他开支' ? 'warning' : 'default')" plain>{{ r.source }}</van-tag>
+              <van-tag :type="r.source === '采购' ? 'primary' : (r.source === '其他收支' ? 'warning' : 'default')" plain>{{ r.source }}</van-tag>
               <span class="grow item-title ellipsis" style="margin-left:6px;">{{ r.item || r.category }}</span>
               <span class="bold up">{{ fmtMoney(r.amount) }}</span>
             </div>
@@ -276,7 +276,7 @@
         </div>
         <div class="row" style="margin-top:8px;">
           <span class="grow"></span>
-          <van-button size="mini" plain type="primary" @click="$router.push('/otherexp')">去登记其他开支</van-button>
+          <van-button size="mini" plain type="primary" @click="$router.push('/otherexp')">去登记其他收支</van-button>
         </div>
       </div>
       </template>
@@ -389,7 +389,7 @@
       </div>
     </van-popup>
 
-    <!-- 支出下钻：点某天/某月看该时段构成明细（采购 / 其他开支 / 手工记账） -->
+    <!-- 支出下钻：点某天/某月看该时段构成明细（采购 / 其他收支 / 手工记账） -->
     <van-popup v-model:show="drillShow" position="bottom" round :style="{ height: '86%' }">
       <div class="sheet-body">
         <div class="sheet-title">
@@ -404,7 +404,7 @@
         </div>
         <div v-for="(r, i) in drillRows" :key="i" class="list-item">
           <div class="row">
-            <van-tag :type="r.source === '采购' ? 'primary' : (r.source === '其他开支' ? 'warning' : 'default')" plain>{{ r.source }}</van-tag>
+            <van-tag :type="r.source === '采购' ? 'primary' : (r.source === '其他收支' ? 'warning' : 'default')" plain>{{ r.source }}</van-tag>
             <span class="grow item-title ellipsis" style="margin-left:6px;">{{ r.item || r.category }}</span>
             <span class="bold up">{{ fmtMoney(r.amount) }}</span>
           </div>
@@ -435,12 +435,12 @@ import { getExcludeOther, setExcludeOther, excludeOtherQs } from '../utils/repor
 const router = useRouter()
 const route = useRoute()
 
-/* 报表口径：是否排除其他开支（开关在本页顶部，与 web 端共用同一偏好） */
+/* 报表口径：是否排除其他收支（开关在本页顶部，与 web 端共用同一偏好） */
 const excludeOther = ref(getExcludeOther())
 
 function onExcludeOther(v) {
   setExcludeOther(v)
-  showToast(v ? '已排除其他开支：只看商品售卖利润' : '已计入其他开支：含全部期间费用')
+  showToast(v ? '已排除其他收支：只看商品售卖利润' : '已计入其他收支：含全部期间费用')
   load()   // 口径变了，按新口径重算
 }
 
@@ -586,7 +586,7 @@ const MAX_EXP_DAYS = 90
 const expDays = computed(() => (rep.value.expense_by_day || []).slice(0, MAX_EXP_DAYS))
 const expDayTruncated = computed(() => (rep.value.expense_by_day || []).length > MAX_EXP_DAYS)
 
-/* 逐笔支出明细：采购 / 其他开支 / 手工记账（与「支出合计」同口径） */
+/* 逐笔支出明细：采购 / 其他收支 / 手工记账（与「支出合计」同口径） */
 const MAX_EXP_ITEMS = 100
 const expItems = computed(() => (rep.value.expense_items || []).slice(0, MAX_EXP_ITEMS))
 const expItemsTruncated = computed(() => (rep.value.expense_items || []).length > MAX_EXP_ITEMS)
@@ -595,12 +595,12 @@ const expItemsTruncated = computed(() => (rep.value.expense_items || []).length 
 const DRILL_TABS_ALL = [
   { v: '', label: '全部' },
   { v: '采购', label: '采购' },
-  { v: '其他开支', label: '其他' },
+  { v: '其他收支', label: '其他' },
   { v: '手工记账', label: '手工' },
 ]
-// 已排除其他开支时，逐笔明细里不会有该来源，对应筛选项一并隐藏
+// 已排除其他收支时，逐笔明细里不会有该来源，对应筛选项一并隐藏
 const DRILL_TABS = computed(() =>
-  excludeOther.value ? DRILL_TABS_ALL.filter((t) => t.v !== '其他开支') : DRILL_TABS_ALL
+  excludeOther.value ? DRILL_TABS_ALL.filter((t) => t.v !== '其他收支') : DRILL_TABS_ALL
 )
 const drillShow = ref(false)
 const drillKey = ref('')

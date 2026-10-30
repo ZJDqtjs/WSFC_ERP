@@ -124,7 +124,7 @@ const batchState = {
           </div>
         </div>
         <div class="muted" style="margin-bottom:4px;">
-          正=加收，负=抹零；差额自动记「金额调整」其他开支，商品成本不变。
+          正=加收，负=抹零；差额自动记「金额调整」其他收支，商品成本不变。
         </div>
 
         <div class="divider"></div>
@@ -218,6 +218,7 @@ const batchState = {
               <span class="grow item-title ellipsis">
                 {{ e.code }}
                 <van-tag v-if="e.isGroup" type="primary" plain style="margin-left:4px;">批次</van-tag>
+                <van-tag v-else-if="e.rec.is_return" type="danger" plain style="margin-left:4px;">退货</van-tag>
                 <van-tag v-else-if="e.rec.is_multi" type="warning" plain style="margin-left:4px;">一单多货</van-tag>
               </span>
               <span class="bold">{{ fmtMoney(e.amount) }}</span>
@@ -237,6 +238,13 @@ const batchState = {
             <div class="row" style="gap:8px;margin-top:6px;">
               <van-button v-if="e.isGroup" size="mini" plain type="primary" @click="openGroup(e)">查看批次明细</van-button>
               <van-button v-else size="mini" plain @click="toggleDetail(e)">{{ detailId === e.rec.id ? '收起明细' : '查看明细' }}</van-button>
+              <van-button
+                v-if="!e.isGroup && !e.rec.is_return"
+                size="mini"
+                plain
+                type="danger"
+                @click="openReturn(e.rec)"
+              >退货</van-button>
               <van-button size="mini" plain type="primary" @click="e.isGroup ? openGroupEdit(e) : openEdit(e.rec)">改</van-button>
               <div class="grow"></div>
               <van-button size="mini" plain type="danger" @click="delEntry(e)">删除</van-button>
@@ -247,8 +255,8 @@ const batchState = {
               <div v-for="(l, i) in e.rec.lines || []" :key="i" class="detail-line">
                 <div class="row">
                   <span class="grow">{{ l.product_name }}</span>
-                  <van-tag :type="l.line_type === 'sale' ? 'primary' : 'warning'" plain>
-                    {{ l.line_type === 'sale' ? '销售' : '包装消耗' }}
+                  <van-tag :type="e.rec.is_return ? 'danger' : (l.line_type === 'sale' ? 'primary' : 'warning')" plain>
+                    {{ e.rec.is_return ? '退货' : (l.line_type === 'sale' ? '销售' : '包装消耗') }}
                   </van-tag>
                 </div>
                 <div class="muted">
@@ -294,18 +302,75 @@ const batchState = {
         </div>
         <div v-for="o in groupEditRecs" :key="o.id" class="list-item">
           <div class="row">
-            <span class="grow item-title">{{ o.code }}</span>
+            <span class="grow item-title">
+              {{ o.code }}
+              <van-tag v-if="o.is_return" type="danger" plain style="margin-left:4px;">退货</van-tag>
+            </span>
             <span class="bold">{{ fmtMoney(finalOf(o)) }}</span>
           </div>
           <div class="item-meta">
             {{ o.customer || '—' }} · {{ o.date }}
             <span style="float:right;">
+              <van-button v-if="!o.is_return" size="mini" plain type="danger" @click="openReturn(o)">退货</van-button>
               <van-button size="mini" plain type="primary" @click="openEdit(o)">改</van-button>
             </span>
           </div>
         </div>
         <div class="sheet-foot">
           <van-button block plain @click="groupEditShow = false">关闭</van-button>
+        </div>
+      </div>
+    </van-popup>
+
+    <!-- 销售退货（红冲）：退回的货按原单结转成本回补库存，收入/成本反向冲减 -->
+    <van-popup v-model:show="returnShow" position="bottom" round :style="{ height: '88%' }">
+      <div class="sheet-body">
+        <div class="sheet-title">销售退货 · 红冲</div>
+        <div class="muted" style="margin-bottom:8px;line-height:1.5;">
+          原单 {{ rtInfo.code }} · 客户 {{ rtInfo.customer || '—' }} · {{ rtInfo.date }}<br />
+          退回的货按原单结转成本重新入库；收入与成本按数量比例反向冲减，财务报表自动净额。
+        </div>
+        <div v-if="(rtInfo.returns || []).length" class="muted" style="margin-bottom:8px;">
+          已生成退货单：{{ (rtInfo.returns || []).map((x) => `${x.code}（${x.date}，${fmtMoney(x.total_amount)}）`).join('、') }}
+        </div>
+
+        <div v-for="l in rtLines" :key="l.line_id" class="io-row">
+          <div class="row">
+            <span class="grow io-name">
+              {{ l.product_name }}
+              <van-tag v-if="l.is_dropship" type="warning" plain style="margin-left:4px;">代发</van-tag>
+            </span>
+            <span class="muted">{{ fmtNum(l.remaining) }}{{ l.unit }} 可退</span>
+          </div>
+          <div class="muted" style="font-size:12px;">
+            原 {{ fmtNum(l.quantity) }}{{ l.unit }} × {{ fmtMoney(l.unit_price) }}
+            · 已退 {{ l.returned ? fmtNum(l.returned) + l.unit : '—' }}
+            <template v-if="l.spec"> · {{ l.spec }}</template>
+          </div>
+          <div class="row mt8">
+            <van-field
+              v-model="l._qty"
+              type="number"
+              label="本次退货"
+              placeholder="0"
+              :disabled="l.remaining <= 0"
+              @update:model-value="rtClamp(l)"
+            />
+            <div class="io-amount">{{ fmtMoney(rtLineAmount(l)) }}</div>
+          </div>
+        </div>
+
+        <van-cell-group inset style="margin-top:8px;">
+          <van-field v-model="rtDate" label="退货日期" type="date" />
+          <van-field v-model="rtRemark" label="原因 / 备注" placeholder="如：客户用剩退回 / 质量问题" />
+        </van-cell-group>
+        <div class="muted" style="margin:6px 4px;line-height:1.5;">
+          合计：退货金额 <b>¥{{ rtTotal.amount.toFixed(2) }}</b>，冲减成本 <b>¥{{ rtTotal.cogs.toFixed(2) }}</b>
+          （按原单结转成本），毛利反向 <b>¥{{ (rtTotal.amount - rtTotal.cogs).toFixed(2) }}</b>
+        </div>
+        <div class="sheet-foot">
+          <van-button block plain @click="returnShow = false">取消</van-button>
+          <van-button block type="danger" :loading="rtSaving" @click="submitReturn">确认退货</van-button>
         </div>
       </div>
     </van-popup>
@@ -714,11 +779,11 @@ const totals = computed(() => {
   const goodsCogs = (p.sale_lines || []).reduce((s, l) => s + num(l.cogs), 0)
   const packCogs = (p.pack_lines || []).reduce((s, l) => s + packLineCost(l), 0)
   const fee = num(packFeeTotal.value)
-  const adjust = num(form.adjust)      // 抹零/凑整：正=加收，负=抹零（差额记「金额调整」其他开支）
+  const adjust = num(form.adjust)      // 抹零/凑整：正=加收，负=抹零（差额记「金额调整」其他收支）
   const settleIn = settleIncomeLocal() // 客户随货款付回的关联结算（勾选的类别）
   const final = amount + settleIn + adjust   // 实收金额
   const cogs = goodsCogs + packCogs
-  // 毛利 = 收入 + 代收 − 成本；净利按实收口径（抹零差额已计入其他开支）
+  // 毛利 = 收入 + 代收 − 成本；净利按实收口径（抹零差额已计入其他收支）
   return { amount, settleIn, final, adjust, cogs, gross: amount + settleIn - cogs, net: final - cogs - fee }
 })
 function calcPreview() {}
@@ -732,7 +797,7 @@ async function submit() {
     .map((l) => ({ product_id: l.product_id, unit: l.unit, quantity: num(l.quantity) }))
   saving.value = true
   try {
-    const adjust = num(form.adjust)   // 抹零/凑整：差额自动记「金额调整」其他开支
+    const adjust = num(form.adjust)   // 抹零/凑整：差额自动记「金额调整」其他收支
     const settleIn = settleIncomeLocal()
     const r = await api('/api/outbounds', 'POST', {
       customer: form.customer,
@@ -751,7 +816,7 @@ async function submit() {
     const settleTip = settleIn ? `（实收含${settleCatsLabel()} ${fmtMoney(settleIn)}）` : ''
     showToast(
       '出库成功'
-      + (adjust ? `（调整 ${adjust > 0 ? '+' : '−'}${Math.abs(adjust).toFixed(2)}，已记其他开支）` : '')
+      + (adjust ? `（调整 ${adjust > 0 ? '+' : '−'}${Math.abs(adjust).toFixed(2)}，已记其他收支）` : '')
       + settleTip
       + (form.pay_status === 'unpaid' ? '（待付款，已进待付款账单）' : '')
       + warns
@@ -921,6 +986,71 @@ function toggleEntry(e) {
 }
 function toggleDetail(e) { detailId.value = detailId.value === e.rec.id ? null : e.rec.id }
 function openGroup(e) { router.push(`/ogroup/${encodeURIComponent(e.importGroup)}`) }
+
+/* ---------- 销售退货（红冲）：退回的货按原单结转成本回补库存，收入/成本反向冲减 ---------- */
+const returnShow = ref(false)
+const rtInfo = ref({})
+const rtLines = ref([])
+const rtDate = ref(todayStr())
+const rtRemark = ref('')
+const rtSaving = ref(false)
+const round2 = (v) => Math.round((+v || 0) * 100) / 100
+
+async function openReturn(o) {
+  groupEditShow.value = false
+  try {
+    const info = await api(`/api/outbounds/${o.id}/returnable`)
+    const lines = info.lines || []
+    if (!lines.length) { showToast('这张单没有可退货的销售行'); return }
+    rtInfo.value = info
+    rtLines.value = lines.map((l) => ({ ...l, _qty: '' }))
+    rtDate.value = todayStr()
+    rtRemark.value = ''
+    returnShow.value = true
+  } catch (e) { showToast('读取可退信息失败：' + e.message) }
+}
+
+function rtQty(l) {
+  let q = num(l._qty)
+  if (q < 0) q = 0
+  if (q > l.remaining + 1e-9) q = l.remaining
+  return q
+}
+function rtClamp(l) {
+  const q = rtQty(l)
+  if (num(l._qty) !== q) l._qty = q ? String(q) : ''
+}
+function rtLineAmount(l) {
+  const q = rtQty(l)
+  return l.quantity ? round2(num(l.amount) * q / l.quantity) : 0
+}
+function rtLineCogs(l) {
+  const q = rtQty(l)
+  return l.quantity ? round2(num(l.cogs) * q / l.quantity) : 0
+}
+const rtTotal = computed(() => {
+  let amount = 0, cogs = 0
+  rtLines.value.forEach((l) => { amount += rtLineAmount(l); cogs += rtLineCogs(l) })
+  return { amount: round2(amount), cogs: round2(cogs) }
+})
+
+async function submitReturn() {
+  if (!rtDate.value) { showToast('请选择退货日期'); return }
+  const items = rtLines.value
+    .filter((l) => rtQty(l) > 0)
+    .map((l) => ({ line_id: l.line_id, quantity: rtQty(l) }))
+  if (!items.length) { showToast('请填写要退货的数量'); return }
+  rtSaving.value = true
+  try {
+    const r = await api(`/api/outbounds/${rtInfo.value.id}/return`, 'POST', {
+      items, date: rtDate.value, remark: (rtRemark.value || '').trim(),
+    })
+    returnShow.value = false
+    showToast(`已退货，生成红冲单 ${r.code}：收入 ${fmtMoney(r.total_amount)}，成本 ${fmtMoney(r.total_cogs)}（库存已按原成本回补）`)
+    loadList()
+  } catch (e) { showToast('退货失败：' + e.message) }
+  rtSaving.value = false
+}
 
 /* ---------- 修改单据（只允许改 客户 / 日期 / 付款状态） ---------- */
 const editShow = ref(false)

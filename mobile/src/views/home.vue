@@ -106,15 +106,15 @@
       </div>
     </div>
 
-    <!-- 其他开支（本月） -->
+    <!-- 其他收支（本月） -->
     <div class="card">
       <div class="row">
         <div class="grow">
-          <div class="muted">本月其他开支（网线费 / 安装费 / 样品费…）</div>
+          <div class="muted">本月其他收支净额（支出 − 收入）</div>
           <div class="bold up" style="font-size:18px;margin-top:2px;">{{ fmtMoney(month.other_expense) }}</div>
           <div class="muted">今日 {{ fmtMoney(todayStats.other_expense) }}</div>
         </div>
-        <van-button size="small" plain type="primary" @click="$router.push('/otherexp')">其他开支</van-button>
+        <van-button size="small" plain type="primary" @click="$router.push('/otherexp')">其他收支</van-button>
         <van-button size="small" plain type="warning" @click="$router.push('/payables')">待付款账单</van-button>
       </div>
     </div>
