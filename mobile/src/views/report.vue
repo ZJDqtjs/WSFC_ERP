@@ -341,7 +341,7 @@
         </div>
         <van-field v-model="fkw" placeholder="筛选分类 / 商品 / 备注 / 操作员" style="background:#f7f8fa;border-radius:6px;" />
         <div v-if="!financeFiltered.length" class="empty">本期无财务流水</div>
-        <div v-for="f in financeFiltered" :key="f.id" class="list-item">
+        <div v-for="f in financePage" :key="f.id" class="list-item">
           <div class="row">
             <van-tag :type="f.type === 'income' ? 'success' : 'danger'" plain>{{ f.type === 'income' ? '收入' : '支出' }}</van-tag>
             <span class="grow item-title" style="margin-left:6px;">{{ f.category }}</span>
@@ -355,6 +355,14 @@
           <div v-if="f.ref_type === 'manual'" class="row" style="margin-top:6px;">
             <van-button size="mini" plain type="danger" @click="delFinance(f)">删除</van-button>
           </div>
+        </div>
+        <div v-if="financeFiltered.length > finLimit" style="display:flex;align-items:center;justify-content:center;gap:8px;padding:12px 0;">
+          <van-button size="small" plain type="primary" @click="finMore">再显示 {{ Math.min(FIN_PAGE, financeFiltered.length - finLimit) }} 条</van-button>
+          <span style="color:#969799;font-size:12px;">共 {{ financeFiltered.length }} 条</span>
+          <van-button size="small" plain @click="finAllRows">显示全部</van-button>
+        </div>
+        <div v-else-if="financeFiltered.length" style="text-align:center;color:#969799;font-size:12px;padding:10px 0;">
+          共 {{ financeFiltered.length }} 条（已全部显示）
         </div>
       </div>
       </template>
@@ -423,7 +431,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api from '../api'
@@ -660,6 +668,16 @@ const financeFiltered = computed(() => {
   })
 })
 
+/* 流水行数和出库单一样多（每张出库单自动产一条「销售收入」流水，全仓本月 4 万多条），
+   一次性 v-for 出来手机会直接卡死：分批渲染，默认先给 300 条。
+   与桌面端 app.js 的 renderFinanceTable 同一套做法。 */
+const FIN_PAGE = 300
+const finLimit = ref(FIN_PAGE)
+const financePage = computed(() => financeFiltered.value.slice(0, finLimit.value))
+function finMore() { finLimit.value += FIN_PAGE }
+function finAllRows() { finLimit.value = financeFiltered.value.length }
+watch([fkw, gkwQ], () => { finLimit.value = FIN_PAGE })
+
 async function load() {
   await ensureWh()
   // 全仓总览：各分仓收入 / 支出 / 利润明细（合计卡由下面 wh=all 的 rep 提供）
@@ -687,6 +705,7 @@ async function load() {
     ])
     rep.value = r1
     finance.value = r2
+    finLimit.value = FIN_PAGE   // 换了区间/口径：窗口收回第一批
     inited = true
   } catch (e) { showToast(e.message || '加载失败') }
 }

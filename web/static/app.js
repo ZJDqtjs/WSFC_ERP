@@ -8302,7 +8302,7 @@ function renderReportGoods() {
       <td class="num mono" style="color:${color}">${gpRateOf(p)}</td></tr>`;
     }).join("") + `</tbody>
     <tfoot><tr>
-      <td><b>${k ? "筛选合计" : "本期合计"}</b> <span class="muted">${prodRows.length} 个商品</span></td>
+      <td><b>${kws.length ? "筛选合计" : "本期合计"}</b> <span class="muted">${prodRows.length} 个商品</span></td>
       <td></td>
       <td class="num mono"><b>${fmtNum(sum.qty)}</b></td>
       <td class="num mono"><b>${fmtKg(sum.weight)}</b></td>
