@@ -8007,6 +8007,63 @@ function quickRange(kind) {
   loadReport();
 }
 let reportInited = false;
+/* =============== 报表「财务流水」分区：窗口化渲染 ===============
+   流水行数跟出库单一样多（每张出库单自动产一条「销售收入」流水），全仓本月实测 4.4 万行。
+   以前是 finRows.map(...).join("") 一次性写进 innerHTML —— 4 万行 × 9 列 ≈ 36 万个 DOM 节点，
+   主线程一冻就是几十秒，浏览器直接弹「页面无响应」；筛选框每敲一个字还要重来一遍。
+   现在排序/筛选仍作用于完整数组，只是分批渲染，且筛选只重渲染、不再打接口。 */
+const FIN_PAGE = 300;
+const FIN = { rows: [], wh: false, limit: FIN_PAGE };
+
+function renderFinanceTable() {
+  const ft = $("financeTable");
+  if (!ft) return;
+  const kws = splitSearchKeywords($("repSearch")?.value);
+  let rows = FIN.rows;
+  if (kws.length) rows = rows.filter((f) => searchHit([f.category, f.product_name, f.remark, f.operator, f.type, f.warehouse].join(" "), kws));
+  rows = applyTableSort(ft, rows);
+  const cols = FIN.wh ? 9 : 8;
+  const shown = rows.slice(0, FIN.limit);
+  const more = rows.length - shown.length;
+  ft.innerHTML = `<thead><tr>
+    ${FIN.wh ? "<th>分仓</th>" : ""}
+    <th>类型</th>
+    <th data-key="category">分类${sortArrow("financeTable", "category")}</th>
+    <th data-key="product_name">商品${sortArrow("financeTable", "product_name")}</th>
+    <th data-key="amount" class="num">金额${sortArrow("financeTable", "amount")}</th>
+    <th data-key="operator">操作员${sortArrow("financeTable", "operator")}</th>
+    <th data-key="date">日期${sortArrow("financeTable", "date")}</th>
+    <th>备注</th><th></th></tr></thead><tbody>` +
+    shown.map((f) => `<tr>
+      ${FIN.wh ? `<td>${esc(f.warehouse) || "—"}</td>` : ""}
+      <td>${f.type === "income" ? '<span class="badge income">收入</span>' : '<span class="badge expense">支出</span>'}</td>
+      <td>${esc(f.category)}</td>
+      <td>${esc(f.product_name) || "—"}</td>
+      <td class="num mono" style="color:${f.type === "income" ? "var(--green)" : "var(--red)"}">${f.type === "income" ? "+" : "-"}${fmtMoney(f.amount)}</td>
+      <td>${esc(f.operator) || "—"}</td><td>${f.date}</td>
+      <td class="muted">${esc(f.remark)}</td>
+      <td>${f.ref_type === "manual" ? `<button class="btn sm danger" onclick="deleteFinance(${f.id})">删</button>` : ""}</td></tr>`).join("") +
+    (more > 0 ? `<tr><td colspan="${cols}" class="empty">已显示前 ${shown.length} / 共 ${rows.length} 条流水（全量渲染会把页面卡死）
+      <button class="btn sm" onclick="finMore()">再显示 ${Math.min(FIN_PAGE, more)} 条</button>
+      <button class="btn sm secondary" onclick="finAll()">显示全部 ${rows.length} 条</button></td></tr>` : "") + `</tbody>`;
+  if (!rows.length) ft.innerHTML = `<tr><td colspan="${cols}" class="empty">本期无财务流水</td></tr>`;
+  ft._rows = rows;
+  // 点表头排序：内存里的完整数组重排即可，不必再请求一次接口
+  ft._render = () => { FIN.limit = FIN_PAGE; renderFinanceTable(); };
+  const hint = $("repFinHint");
+  if (hint) hint.textContent = rows.length ? (kws.length ? `匹配 ${rows.length} / ${FIN.rows.length} 条` : `共 ${rows.length} 条`) : "";
+}
+
+function finMore() { FIN.limit += FIN_PAGE; renderFinanceTable(); }
+function finAll() { FIN.limit = FIN.rows.length; renderFinanceTable(); }
+
+let _finSearchTimer = null;
+/** 流水筛选只作用于内存里的 FIN.rows：防抖后重渲染，不再整页重新请求 */
+function finSearchInput() {
+  clearTimeout(_finSearchTimer);
+  _finSearchTimer = setTimeout(() => { FIN.limit = FIN_PAGE; renderFinanceTable(); }, 250);
+}
+
 async function loadReport() {
   // 首次进入默认显示当天数据（之后尊重手动选择的日期，「全部」可清空）
   if (!reportInited) {
@@ -8081,33 +8138,11 @@ async function loadReport() {
   renderReportGoods();
   renderSalesBySpec(from, to, whQs);   // 出库明细：每天 × 每种规格卖了多少单（含代发数量/代发成本）
 
-  const ft = $("financeTable");
-  let finRows = finance;
-  const kws = splitSearchKeywords($("repSearch")?.value);
-  if (kws.length) finRows = finRows.filter((f) => searchHit([f.category, f.product_name, f.remark, f.operator, f.type, f.warehouse].join(" "), kws));
-  finRows = applyTableSort(ft, finRows);
-  const finWh = !!rep.is_all;   // 全仓总览：流水来自多个分仓，需要标出来源
-  ft.innerHTML = `<thead><tr>
-    ${finWh ? "<th>分仓</th>" : ""}
-    <th>类型</th>
-    <th data-key="category">分类${sortArrow("financeTable", "category")}</th>
-    <th data-key="product_name">商品${sortArrow("financeTable", "product_name")}</th>
-    <th data-key="amount" class="num">金额${sortArrow("financeTable", "amount")}</th>
-    <th data-key="operator">操作员${sortArrow("financeTable", "operator")}</th>
-    <th data-key="date">日期${sortArrow("financeTable", "date")}</th>
-    <th>备注</th><th></th></tr></thead><tbody>` +
-    finRows.map((f) => `<tr>
-      ${finWh ? `<td>${esc(f.warehouse) || "—"}</td>` : ""}
-      <td>${f.type === "income" ? '<span class="badge income">收入</span>' : '<span class="badge expense">支出</span>'}</td>
-      <td>${esc(f.category)}</td>
-      <td>${esc(f.product_name) || "—"}</td>
-      <td class="num mono" style="color:${f.type === "income" ? "var(--green)" : "var(--red)"}">${f.type === "income" ? "+" : "-"}${fmtMoney(f.amount)}</td>
-      <td>${esc(f.operator) || "—"}</td><td>${f.date}</td>
-      <td class="muted">${esc(f.remark)}</td>
-      <td>${f.ref_type === "manual" ? `<button class="btn sm danger" onclick="deleteFinance(${f.id})">删</button>` : ""}</td></tr>`).join("") + `</tbody>`;
-  if (!finRows.length) ft.innerHTML = `<tr><td colspan="${finWh ? 9 : 8}" class="empty">本期无财务流水</td></tr>`;
-  ft._rows = finRows;
-  ft._render = loadReport;
+  // 流水表：数据留在内存（FIN.rows），渲染按窗口分批，见 renderFinanceTable 的注释
+  FIN.rows = finance;
+  FIN.wh = !!rep.is_all;   // 全仓总览：流水来自多个分仓，需要标出来源
+  FIN.limit = FIN_PAGE;
+  renderFinanceTable();
 
   // 全仓总览：额外加载「各分仓收入 / 支出 / 利润」明细表（汇总分区里）
   if (all) await loadAllWarehouses(from, to);

@@ -748,7 +748,7 @@
               <div class="grow"></div>
               <button class="btn secondary" onclick="openFinanceModal()">＋ 手动记账</button>
             </div>
-            <div class="toolbar"><input id="repSearch" placeholder="🔍 筛选分类/商品/备注/操作员…（多个用「；」隔开）" oninput="loadReport()" /></div>
+            <div class="toolbar"><input id="repSearch" placeholder="🔍 筛选分类/商品/备注/操作员…（多个用「；」隔开）" oninput="finSearchInput()" /><span id="repFinHint" class="muted" style="margin-left:10px;"></span></div>
             <div class="table-wrap"><table id="financeTable"></table></div>
           </div>
         </div>

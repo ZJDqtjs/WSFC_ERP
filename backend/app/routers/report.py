@@ -42,15 +42,20 @@ router = APIRouter(prefix="/api", tags=["report"])
 #   ② 并发闸：全局同一时刻只跑一个重汇总，其余排队，绝不叠加；
 #   ③ 短缓存：结果缓存 _HEAVY_TTL 秒，反复刷新秒回。
 _HEAVY_GATE = threading.Semaphore(1)
+# 财务流水只是「一条走索引的查询」（实测 wh01 本月 0.29 秒），和逐仓重汇总不是一个量级。
+# 让它挤同一把全局闸，等于排在 5~8 秒的汇总后面干等，所以给它独立的、可并发的闸。
+_FIN_GATE = threading.Semaphore(4)
 _HEAVY_LOCK = threading.Lock()
 _HEAVY_CACHE: dict = {}
 _HEAVY_INFLIGHT: dict = {}
 _HEAVY_TTL = 60.0
 _HEAVY_CACHE_MAX = 32
+# 行列表超过这个条数就不进缓存：全仓流水一条结果能占几十 MB，缓存 32 条足以吃掉整台 1.6G 机器
+_HEAVY_CACHE_LIST_MAX = 2000
 
 
-def _heavy_cached(key, compute):
-    """带单飞 + 全局并发闸 + 短缓存的汇总计算。key 必须能唯一标识「同一次结果」。"""
+def _heavy_cached(key, compute, gate=_HEAVY_GATE):
+    """带单飞 + 并发闸 + 短缓存的汇总计算。key 必须能唯一标识「同一次结果」。"""
     hit = _HEAVY_CACHE.get(key)
     if hit and time.time() - hit[0] < _HEAVY_TTL:
         return hit[1]
@@ -72,13 +77,14 @@ def _heavy_cached(key, compute):
         if hit:
             return hit[1]
         # 领导者异常退出且无缓存：退回自己算一次兜底（放弃单飞，避免死等）
-        with _HEAVY_GATE:
+        with gate:
             return compute()
     try:
-        with _HEAVY_GATE:
+        with gate:
             result = compute()
         with _HEAVY_LOCK:
-            _HEAVY_CACHE[key] = (time.time(), result)
+            if not isinstance(result, list) or len(result) <= _HEAVY_CACHE_LIST_MAX:
+                _HEAVY_CACHE[key] = (time.time(), result)
             while len(_HEAVY_CACHE) > _HEAVY_CACHE_MAX:
                 oldest = min(_HEAVY_CACHE, key=lambda k: _HEAVY_CACHE[k][0])
                 _HEAVY_CACHE.pop(oldest, None)
@@ -136,6 +142,17 @@ def _income_expr():
 def _income_of(o) -> float:
     """单据对象侧收入：销售收入 + 客户代收的关联结算。"""
     return (o.total_amount or 0.0) + (getattr(o, "settle_income", 0.0) or 0.0)
+
+
+# 报表读出库单只用到这几列：整行 ORM 实例化在 wh01 一个月就要造 3.3 万个对象
+# （实测占 _summary_of 一半耗时，光InstanceState.__init__ 就 1.5 秒）。
+# 列查询返回的 Row 同样支持 o.total_amount / getattr(o, "brush_cost", 0) 这种属性访问，
+# 所以下游口径代码一行都不用改。
+OUTBOUND_COLS = (
+    Outbound.id, Outbound.code, Outbound.date, Outbound.operator, Outbound.remark,
+    Outbound.total_amount, Outbound.total_cogs, Outbound.settle_income, Outbound.pay_status,
+    Outbound.brush_cost, Outbound.brush_fee, Outbound.brush_auto_fee,
+)
 
 
 def _not_return(model):
@@ -445,10 +462,14 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             q = q.where(model.date <= date_to)
         return q
 
-    # 出库单只取单据本身：明细（单仓 2 万行）改成下面的列查询 + 按单分组处理，
-    # 不再把每张单的 lines/product 都实例化成 ORM 对象（这一步实测 0.9 秒，线上放大到 4 秒+）。
+    # 出库单只取用到的那几列（见 OUTBOUND_COLS），不再整行实例化 ORM 对象。
     # 「待付款」的单据不进报表：先拆出来，单独汇总给报表页提示（在「待付款账单」点「已支付」后转入报表）
-    outbounds, unpaid_outbounds = _split_paid(list(db.execute(scope(Outbound)).scalars()))
+    ob_q = select(*OUTBOUND_COLS)
+    if date_from:
+        ob_q = ob_q.where(Outbound.date >= date_from)
+    if date_to:
+        ob_q = ob_q.where(Outbound.date <= date_to)
+    outbounds, unpaid_outbounds = _split_paid(list(db.execute(ob_q)))
     # 采购明细要显示商品名，预载 product 避免逐条懒加载
     inbounds, unpaid_inbounds = _split_paid(
         list(db.execute(scope(Inbound).options(selectinload(Inbound.product))).scalars())
@@ -456,7 +477,15 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     # 部分付款：已付的那部分算进报表（_inbound_landed 按 paid_amount 计），
     # 没付的余额仍算「待付款」（跟着 unpaid_inbounds 一起进 pending）
     partial_inbounds = [i for i in inbounds if (getattr(i, "pay_status", PAID) or PAID) == "partial"]
-    finances, unpaid_finances = _split_paid(list(db.execute(scope(FinanceRecord)).scalars()))
+    # 流水只取两类行：支出桶要 type=expense，待收/待付桶要 ref_type=manual。
+    # 每张出库单都会自动产一条「销售收入」流水（wh01 本月 3.3 万行），本函数一处都不读它，
+    # 在 SQL 侧就滤掉：3.3 万个 ORM 对象 → 493 个。
+    fin_q = select(FinanceRecord).where(
+        or_(FinanceRecord.type == "expense", FinanceRecord.ref_type == "manual")
+    )
+    finances, unpaid_finances = _split_paid(
+        list(db.execute(_date_filter(fin_q, date_from, date_to)).scalars())
+    )
     others, unpaid_others = _split_paid(list(db.execute(scope(OtherExpense)).scalars()))
     # 入库「运费/装卸费」镜像行已计入批次到岸成本（FIFO 结转随销量扣减，体现在该品毛利上），
     # 期间费用口径（others → other_raw/other_fees/支出分区/excluded_other_expense）剔除它，
@@ -1848,10 +1877,12 @@ def list_finance(
         return _heavy_cached(
             ("finance", "all", date_from, date_to),
             lambda: _finance_all(date_from, date_to),
+            gate=_FIN_GATE,
         )
     return _heavy_cached(
         ("finance", resolve_key(wh), date_from, date_to),
         lambda: _finance_of(db, date_from, date_to),
+        gate=_FIN_GATE,
     )
 
 
