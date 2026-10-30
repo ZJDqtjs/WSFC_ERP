@@ -288,7 +288,8 @@ class OtherExpense(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     category: Mapped[str] = mapped_column(String(32), index=True)  # 费用类型：网线费/安装费/机器费/样品费…
-    amount: Mapped[float] = mapped_column(Float, default=0.0)  # 金额（元，正数）
+    amount: Mapped[float] = mapped_column(Float, default=0.0)  # 入账金额（元，正数；已含手续费）
+    fee: Mapped[float] = mapped_column(Float, default=0.0)  # 其中转账手续费（元，仅备查，已算进 amount）
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
     remark: Mapped[str] = mapped_column(String(255), default="")
     operator: Mapped[str] = mapped_column(String(32), default="")

@@ -455,9 +455,11 @@ _EXTRA_COLUMNS = {
         ("brush_auto_fee", "FLOAT DEFAULT 0"),
     ),
     # 其他收支：来源单据（入库/出库金额调整自动生成）——单据删除/改日期时按此同步
+    # fee：转账手续费（元），登记时已并入 amount，这里留档以便明细里看出「含手续费多少」
     "other_expenses": _PAY_COLUMNS + (
         ("ref_type", "VARCHAR(16) DEFAULT ''"),
         ("ref_id", "INTEGER"),
+        ("fee", "FLOAT DEFAULT 0"),
     ),
     "finance_records": _PAY_COLUMNS,
     "warehouse_ins": _PAY_COLUMNS + (

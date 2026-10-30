@@ -875,7 +875,7 @@
         <div class="card">
           <div class="card-head">
             <h3><svg class="ic"><use href="#i-wallet"/></svg> <span id="oeFormTitle">登记其他支出</span></h3>
-            <span class="hint">仓库/经营中的零散支出与收入：网线费、安装费、机器费、样品费、供应商补偿等。保存后计入财务报表「期间费用」（收入为负数冲减），并影响净利（无需再到「手动记账」重复登记）</span>
+            <span class="hint">仓库/经营中的零散支出与收入：网线费、安装费、机器费、样品费、供应商补偿等。保存后计入财务报表「期间费用」（收入为负数冲减），并影响净利（无需再到「手动记账」重复登记）；转账产生的手续费填在「手续费」里，与金额一并计入开支</span>
           </div>
           <div class="form-grid">
             <div class="field">
@@ -883,7 +883,12 @@
               <input id="oeCategory" list="oeCategoryList" placeholder="如：网线费" onkeydown="if(event.key==='Enter')oeSubmit()" />
               <datalist id="oeCategoryList"></datalist>
             </div>
-            <div class="field"><label>金额（元）*</label><input id="oeAmount" type="number" min="0" step="any" placeholder="0.00" onkeydown="if(event.key==='Enter')oeSubmit()" /></div>
+            <div class="field"><label>金额（元）*</label><input id="oeAmount" type="number" min="0" step="any" placeholder="0.00" onkeydown="if(event.key==='Enter')oeSubmit()" oninput="oeSyncTotal()" /></div>
+            <div class="field" id="oeFeeField">
+              <label>手续费（元）</label>
+              <input id="oeFee" type="number" min="0" step="any" placeholder="0.00" onkeydown="if(event.key==='Enter')oeSubmit()" oninput="oeSyncTotal()" />
+              <div class="field-hint" id="oeTotalHint">转账手续费并入这笔开支，金额填「转出金额」即可</div>
+            </div>
             <div class="field"><label>日期 *</label><input id="oeDate" type="date" /></div>
             <div class="field"><label>操作员</label><input id="oeOperator" readonly title="默认当前登录账号，不可修改" /></div>
             <div class="field" id="oePayField">

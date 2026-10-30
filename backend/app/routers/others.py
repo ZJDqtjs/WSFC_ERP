@@ -36,7 +36,8 @@ INCOME_PRESET_CATEGORIES = ["供应商补偿", "返利", "赔偿", "利息收入
 
 class OtherExpenseIn(BaseModel):
     category: str
-    amount: float
+    amount: float      # 入账金额（元）：支出侧即「转出金额 + 手续费」的合计，手续费不再叠加
+    fee: float = 0     # 其中转账手续费（元）：只作备查拆分，供明细里看出「含手续费多少」
     date: str
     remark: str = ""
     pay_status: str = "paid"  # paid 已付款（默认）/ unpaid 待付款（先进「待付款账单」，支付后才计入报表）
@@ -49,6 +50,7 @@ def _to_dict(e: OtherExpense) -> dict:
         "id": e.id,
         "category": e.category,
         "amount": round(e.amount or 0.0, 2),
+        "fee": round(getattr(e, "fee", 0.0) or 0.0, 2),
         "date": e.date,
         "remark": e.remark or "",
         "operator": e.operator or "",
@@ -61,10 +63,12 @@ def _to_dict(e: OtherExpense) -> dict:
     }
 
 
-def _clean(data: OtherExpenseIn) -> tuple[str, float, str, str, str]:
-    """校验并归一化：返回 (类型, 入库金额, 日期, 备注, 付款状态)。
+def _clean(data: OtherExpenseIn) -> tuple[str, float, float, str, str, str]:
+    """校验并归一化：返回 (类型, 入库金额, 其中手续费, 日期, 备注, 付款状态)。
 
     支出存正数；收入存**负数**（与「供应商补偿」镜像行同一约定，报表期间费用自动冲减）。
+    手续费是 amount 已含的一部分（前端登记时就把「转出金额 + 手续费」合计进 amount），
+    这里只校验 0 ≤ 手续费 ≤ 金额、不再叠加；收入侧不记手续费（恒为 0）。
     收入默认立即到账，付款状态恒为已付款（避免出现负数的待付款账单）。
     """
     category = (data.category or "").strip()
@@ -75,19 +79,23 @@ def _clean(data: OtherExpenseIn) -> tuple[str, float, str, str, str]:
     kind = "income" if (data.kind or "").strip() == "income" else "expense"
     try:
         amount = round(abs(float(data.amount)), 2)
+        fee = round(abs(float(data.fee or 0)), 2)
     except (TypeError, ValueError):
         raise HTTPException(400, "金额格式不正确")
     if amount <= 0:
         raise HTTPException(400, "金额必须大于 0")
     if kind == "income":
         amount = -amount
+        fee = 0.0
         pay = "paid"
     else:
+        if fee > amount + 0.005:
+            raise HTTPException(400, "手续费不能高于金额（金额请填「转出金额 + 手续费」的合计）")
         pay = "unpaid" if (data.pay_status or "").strip() == "unpaid" else "paid"
     day = (data.date or "").strip()
     if not DATE_RE.match(day):
         raise HTTPException(400, "日期格式应为 YYYY-MM-DD")
-    return category, amount, day, (data.remark or "").strip(), pay
+    return category, amount, fee, day, (data.remark or "").strip(), pay
 
 
 @router.get("/other-expenses")
@@ -220,9 +228,9 @@ def create_other_expense(
 
     待付款的开支先进「待付款账单」，点「已支付」后才计入财务报表的期间费用。
     """
-    category, amount, day, remark, pay = _clean(data)
+    category, amount, fee, day, remark, pay = _clean(data)
     e = OtherExpense(
-        category=category, amount=amount, date=day, remark=remark, operator=user.name,
+        category=category, amount=amount, fee=fee, date=day, remark=remark, operator=user.name,
         pay_status=pay, paid_at=day if pay == "paid" else "",
     )
     db.add(e)
@@ -240,8 +248,8 @@ def update_other_expense(
         raise HTTPException(404, "开支记录不存在")
     if e.ref_type:
         raise HTTPException(400, "该笔开支由单据自动带出（金额调整 / 入库运费·装卸费），请在来源单据中修改或删除")
-    category, amount, day, remark, pay = _clean(data)
-    e.category, e.amount, e.date, e.remark = category, amount, day, remark
+    category, amount, fee, day, remark, pay = _clean(data)
+    e.category, e.amount, e.fee, e.date, e.remark = category, amount, fee, day, remark
     if pay != (e.pay_status or "paid"):
         e.pay_status = pay
         e.paid_at = day if pay == "paid" else ""

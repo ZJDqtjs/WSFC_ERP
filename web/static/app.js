@@ -8935,6 +8935,9 @@ function oeApplyScope() {
   if (btn) btn.textContent = income ? "✓ 保存收入" : "✓ 保存开支";
   const payField = $("oePayField");
   if (payField) payField.style.display = income ? "none" : "";
+  // 手续费只针对「转出去」的开支，收入侧不填（后端也会把它归 0）
+  const feeField = $("oeFeeField");
+  if (feeField) feeField.style.display = income ? "none" : "";
   const cat = $("oeCategory");
   if (cat) cat.placeholder = income ? "如：供应商补偿 / 返利 / 赔偿" : "如：网线费";
   const hint = $("oeScopeHint");
@@ -9091,11 +9094,12 @@ function renderOtherExpenseList() {
       ? rows.map((r) => {
         const neg = (Number(r.amount) || 0) < 0;    // 收入行（存负数）
         const amt = neg ? -Number(r.amount) : Number(r.amount);
+        const fee = Math.abs(Number(r.fee) || 0);   // 其中转账手续费（已含在 amt 里）
         const badge = neg ? "income" : "expense";
         return `<tr>
         <td class="mono">${esc(r.date)}</td>
         <td><span class="badge ${badge}">${esc(r.category)}</span>${payTag(r.pay_status)}${r.ref_type ? ` <span class="badge${r.ref_type === "inbound_fee" ? " pack" : ""}" title="${r.ref_type === "inbound_fee" ? "入库单带出的运费/装卸费：已计入该批次成本（随销量在毛利中扣减），这里留档备查，报表期间费用不再重复扣" : r.ref_type === "inbound_comp" ? "入库单带出的供应商补偿：冲减期间费用、计入财务报表净利" : "单据自动带出的金额调整，只影响开支、不改成本"}">来自${r.ref_type === "inbound_fee" ? "入库单·成本" : r.ref_type === "inbound_comp" ? "入库单·补偿" : r.ref_type === "inbound" ? "入库单" : "出库单"}</span>` : ""}</td>
-        <td class="num mono" style="color:${neg ? "var(--green)" : "var(--red)"}">${neg ? "+" : ""}${fmtMoney(amt)}</td>
+        <td class="num mono" style="color:${neg ? "var(--green)" : "var(--red)"}">${neg ? "+" : ""}${fmtMoney(amt)}${fee ? `<div class="muted" style="font-size:11px;font-weight:400;">含手续费 ${fmtMoney(fee)}</div>` : ""}</td>
         <td>${esc(r.operator) || "—"}</td>
         <td class="muted" style="max-width:260px;">${renderRemarkHtml(r.remark)}</td>
         <td>${r.ref_type
@@ -9119,11 +9123,24 @@ function oeResetForm() {
   OE_EDIT_ID = null;
   $("oeCategory").value = "";
   $("oeAmount").value = "";
+  $("oeFee").value = "";
   $("oeDate").value = today();
   setPay("oePay", "paid");
   clearRemarkField("oeRemark");
   oeApplyScope();
+  oeSyncTotal();
   oeAlertMsg("");
+}
+
+/* 金额 + 手续费 = 这笔开支实际入账的钱，边填边提示，避免以为手续费没算进去 */
+function oeSyncTotal() {
+  const hint = $("oeTotalHint");
+  if (!hint) return;
+  if (OE_SCOPE === "income") { hint.textContent = "转账手续费并入这笔开支，金额填「转出金额」即可"; return; }
+  const amt = +$("oeAmount").value || 0, fee = +$("oeFee").value || 0;
+  hint.textContent = fee
+    ? `合计入账 ${fmtMoney(amt + fee)} = 金额 ${fmtMoney(amt)} + 手续费 ${fmtMoney(fee)}`
+    : "转账手续费并入这笔开支，金额填「转出金额」即可";
 }
 
 function oeEdit(id) {
@@ -9134,26 +9151,34 @@ function oeEdit(id) {
   OE_SCOPE = (Number(r.amount) || 0) < 0 ? "income" : "expense";
   $("oeScopeSeg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x.dataset.scope === OE_SCOPE));
   $("oeCategory").value = r.category;
-  $("oeAmount").value = Math.abs(Number(r.amount) || 0);
+  // 库里 amount 已含手续费，回填时拆回「转出金额 + 手续费」两个框
+  const fee = Math.abs(Number(r.fee) || 0);
+  $("oeAmount").value = Math.round((Math.abs(Number(r.amount) || 0) - fee) * 100) / 100;
+  $("oeFee").value = fee || "";
   $("oeDate").value = r.date;
   setRemarkValue("oeRemark", r.remark);   // 已有附件拆到标签区，文本框只留纯文本
   setPay("oePay", r.pay_status);
   oeApplyScope();
+  oeSyncTotal();
   $("oeSaveBtn").textContent = "✓ 保存修改";
-  oeAlertMsg(`正在修改 ${r.date}「${r.category}」${fmtMoney(Math.abs(Number(r.amount) || 0))}（保存后覆盖原记录）`);
+  oeAlertMsg(`正在修改 ${r.date}「${r.category}」${fmtMoney(Math.abs(Number(r.amount) || 0))}${fee ? `（含手续费 ${fmtMoney(fee)}）` : ""}（保存后覆盖原记录）`);
   $("oeCategory").focus();
 }
 
 async function oeSubmit() {
   const category = ($("oeCategory").value || "").trim();
   const amount = +$("oeAmount").value;
-  const date = $("oeDate").value;
   const income = OE_SCOPE === "income";
+  const fee = income ? 0 : (+($("oeFee").value) || 0);
+  const date = $("oeDate").value;
   if (!category) { oeAlertMsg(income ? "请填写收入类型（如 供应商补偿 / 返利）" : "请填写费用类型（如 网线费 / 安装费 / 机器费 / 样品费）"); return; }
   if (!(amount > 0)) { oeAlertMsg("金额必须大于 0"); return; }
+  if (fee < 0) { oeAlertMsg("手续费不能是负数"); return; }
   if (!date) { oeAlertMsg("请选择日期"); return; }
   const payStatus = income ? "paid" : payOf("oePay");
-  const body = { category, amount, date, remark: remarkValue("oeRemark"), pay_status: payStatus, kind: OE_SCOPE };
+  // 手续费是这笔开支的一部分：入库金额 = 转出金额 + 手续费，fee 单独存一份供明细查看
+  const total = Math.round((amount + fee) * 100) / 100;
+  const body = { category, amount: total, fee, date, remark: remarkValue("oeRemark"), pay_status: payStatus, kind: OE_SCOPE };
   const editing = !!OE_EDIT_ID;
   try {
     if (editing) await api("/api/other-expenses/" + OE_EDIT_ID, "PUT", body);
@@ -9162,7 +9187,7 @@ async function oeSubmit() {
     if ($("oeDateFrom").value && date < $("oeDateFrom").value) $("oeDateFrom").value = date;
     if ($("oeDateTo").value && date > $("oeDateTo").value) $("oeDateTo").value = date;
     const tail = (!income && payStatus === "unpaid") ? "（待付款，已进待付款账单）" : "";
-    toast((editing ? "已保存修改" : `已登记${income ? "收入" : "开支"} ${category} ${fmtMoney(amount)}`) + tail);
+    toast((editing ? "已保存修改" : `已登记${income ? "收入" : "开支"} ${category} ${fmtMoney(total)}${fee ? `（含手续费 ${fmtMoney(fee)}）` : ""}`) + tail);
     oeResetForm();
     await loadOtherExpensePage();
   } catch (e) { oeAlertMsg("保存失败：" + e.message); }
