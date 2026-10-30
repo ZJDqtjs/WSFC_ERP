@@ -7,7 +7,9 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .database import (
     DEFAULT_WAREHOUSE_KEY,
@@ -156,6 +158,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="企业台账系统", lifespan=lifespan)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def swallow_method_not_allowed(request, exc):
+    """路径存在但方法不对时，Starlette 默认返回 405 并在 Allow 头里写出可用方法——
+    等于替扫描器确认「这条路径是真的」。统一降为 404、不回显 Allow，
+    让猜中的路径和不存在的路径从外面看起来一模一样。业务代码自己抛的状态码原样保留。"""
+    if exc.status_code == 405:
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
 
 
 @app.middleware("http")
