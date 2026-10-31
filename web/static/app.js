@@ -1059,7 +1059,7 @@ function inPayToggle(el) {
   if (box.closest(".in-block")) calcInboundBlock(el);
 }
 
-/** 部分付款的应付合计：弹窗里用固定 data-due；入库行按 货款 + 调整 + 运费 + 装卸 实时算 */
+/** 部分付款的应付合计：弹窗里用固定 data-due；入库行按 货款 + 调整 + 运费 + 装卸 + 手续费 实时算 */
 function partialDueOf(box) {
   const fixed = box.dataset.due;
   if (fixed !== undefined && fixed !== "") return round2(parseFloat(fixed) || 0);
@@ -1082,7 +1082,7 @@ function applyPartialPay(box, paidInput) {
   setNum(ratioEl, due > 0 ? round2(paid / due * 100) : 0);
   setNum(unpaidEl, unpaid);
   const hint = box.querySelector(".pp-hint");
-  if (hint) hint.innerHTML = `应付合计 <b>¥${fmtMoney(due)}</b>（货款 + 调整 + 运费/装卸）：`
+  if (hint) hint.innerHTML = `应付合计 <b>¥${fmtMoney(due)}</b>（货款 + 调整 + 运费/装卸/手续费）：`
     + `已付 <b>¥${fmtMoney(paid)}</b>，未付 <b>¥${fmtMoney(unpaid)}</b>`
     + (paid > 0 && unpaid > 0 ? "" : "（已付填 0 按「待付款」记，填满应付按「已付款」记）");
 }
@@ -1109,10 +1109,10 @@ function syncPartialPay(block) {
   applyPartialPay(box);
 }
 
-/** 入库行应付合计 = 货款 + 金额调整 + 运费 + 装卸（与后端「实付」口径一致） */
+/** 入库行应付合计 = 货款 + 金额调整 + 运费 + 装卸 + 手续费（与后端「实付」口径一致） */
 function payDueOf(block) {
   const v = (sel) => parseFloat((block.querySelector(sel) || {}).value) || 0;
-  return round2(v(".in-qty") * v(".in-price") + v(".in-adjust") + v(".in-freight") + v(".in-handling"));
+  return round2(v(".in-qty") * v(".in-price") + v(".in-adjust") + v(".in-freight") + v(".in-handling") + v(".in-fee"));
 }
 
 /* =============== 库存 =============== */
@@ -3528,7 +3528,7 @@ async function saveFreshConfig() {
    每天把要入库的鲜货数量填进去，提交后每个填了数量的商品各生成一张入库单。
    - 陈列清单 = 「鲜货现采 → 管理展示商品」那份（按展示顺序），也可临时「加一个商品」；
    - 单价自动带出：最近一次入库价 → 参考成本（与入库页同一套规则，可改）；
-   - 运费 / 装卸费默认留空，填了才计入该行批次成本；
+   - 运费 / 装卸费 / 手续费默认留空，填了才计入该行批次成本；
    - 已填的值记在 FIN_VALS 里，切页 / 筛选 / 刷新都不会丢。 */
 let FIN_LIST = [];      // 已陈列的鲜货（/api/fresh?only_list=true：展示顺序 + 库存），表格只显示这些
 let FIN_VALS = {};      // {商品id: {qty, price, freight, handling}} 本次填的值
@@ -3627,7 +3627,8 @@ function renderFreshInbound() {
       <th class="num" style="width:10%;">金额</th>
       <th style="width:8%;">运费</th>
       <th style="width:8%;">装卸费</th>
-      <th style="width:19%;">备注</th>
+      <th style="width:8%;">手续费</th>
+      <th style="width:15%;">备注</th>
       <th></th>
     </tr></thead><tbody>`
     + (hidden.length ? finDoneBarHtml(hidden.length) : "")
@@ -3679,6 +3680,7 @@ function finRowHtml(id) {
     <td class="num in-amount-cell">—</td>
     <td><input class="in-freight" type="number" min="0" step="any" placeholder="留空" value="${esc(val("freight"))}" oninput="finRowCalc(this)" style="width:74px;" title="运费（默认空，选填）：计入这行的批次成本，并同步「其他收支」备查" /></td>
     <td><input class="in-handling" type="number" min="0" step="any" placeholder="留空" value="${esc(val("handling"))}" oninput="finRowCalc(this)" style="width:74px;" title="装卸费（默认空，选填）：同运费" /></td>
+    <td><input class="in-fee" type="number" min="0" step="any" placeholder="留空" value="${esc(val("fee"))}" oninput="finRowCalc(this)" style="width:74px;" title="转账手续费（默认空，选填）：同运费，入成本并同步「其他收支」" /></td>
     <td class="fin-remark-cell">
       <textarea id="finRemark_${id}" class="fin-remark" rows="1" placeholder="备注（可 Ctrl+V 粘贴图片）" oninput="finRemember(this)" onpaste="pasteRemarkFiles('finRemark_${id}', event)"></textarea>
       <div class="attach-bar">
@@ -3701,7 +3703,7 @@ function finRemember(el) {
   const get = (sel) => { const x = tr.querySelector(sel); return x ? x.value : ""; };
   FIN_VALS[id] = {
     qty: get(".in-qty"), price: get(".in-price"), freight: get(".in-freight"),
-    handling: get(".in-handling"), remark: get(".fin-remark"),
+    handling: get(".in-handling"), fee: get(".in-fee"), remark: get(".fin-remark"),
   };
 }
 
@@ -3722,10 +3724,11 @@ function finRowCalc(el, onlyCalc) {
   if (!tr) return;
   if (!onlyCalc) finRemember(tr);
   const qty = parseFloat((tr.querySelector(".in-qty") || {}).value) || 0;
-  // 本行金额（与入库页同一口径：金额 + 有运费/装卸时补一行批次成本）
+  // 本行金额（与入库页同一口径：金额 + 有运费/装卸/手续费时补一行批次成本）
   const price = parseFloat((tr.querySelector(".in-price") || {}).value) || 0;
   const fee = (parseFloat((tr.querySelector(".in-freight") || {}).value) || 0)
-    + (parseFloat((tr.querySelector(".in-handling") || {}).value) || 0);
+    + (parseFloat((tr.querySelector(".in-handling") || {}).value) || 0)
+    + (parseFloat((tr.querySelector(".in-fee") || {}).value) || 0);
   const cell = tr.querySelector(".in-amount-cell");
   if (cell) {
     const base = qty * price;
@@ -3789,10 +3792,12 @@ function finClearAllQty() {
     const q = tr.querySelector(".in-qty");
     const f = tr.querySelector(".in-freight");
     const h = tr.querySelector(".in-handling");
+    const fd = tr.querySelector(".in-fee");
     if (q && (parseFloat(q.value) || 0) > 0) n++;
     if (q) q.value = "";
     if (f) f.value = "";
     if (h) h.value = "";
+    if (fd) fd.value = "";
     finRowCalc(tr.querySelector(".in-qty") || tr);
   });
   toast(n ? `已清空 ${n} 个商品的数量` : "本来就没填数量");
@@ -3809,7 +3814,8 @@ function finSummary() {
     rows++;
     goods += qty * price;
     fee += (parseFloat((tr.querySelector(".in-freight") || {}).value) || 0)
-      + (parseFloat((tr.querySelector(".in-handling") || {}).value) || 0);
+      + (parseFloat((tr.querySelector(".in-handling") || {}).value) || 0)
+      + (parseFloat((tr.querySelector(".in-fee") || {}).value) || 0);
   });
   const picked = FIN_PICK.size;
   const btn = $("finSubmitBtn");
@@ -3819,7 +3825,7 @@ function finSummary() {
   if (!rows) { box.style.display = "none"; box.innerHTML = ""; return; }
   box.style.display = "block";
   box.innerHTML = (picked ? `勾选 <b>${picked}</b> 个` : `已填 <b>${rows}</b> 个商品`) + `：货款 <b>¥${goods.toFixed(2)}</b>`
-    + (fee ? ` ＋ 运费/装卸 <b>¥${fee.toFixed(2)}</b>` : "")
+    + (fee ? ` ＋ 运费/装卸/手续费 <b>¥${fee.toFixed(2)}</b>` : "")
     + ` ＝ 实付 <b>¥${(goods + fee).toFixed(2)}</b> <span class="muted">（每个填了数量的商品各生成一张入库单；只勾了几个就只入那几个，也可以点行尾「入库」单独入一行）</span>`
     + (picked ? ` <button class="btn sm secondary" onclick="finClearPick()">取消勾选</button>` : "");
 }
@@ -3842,29 +3848,30 @@ async function submitFreshInbound(rows) {
     const price = parseFloat((tr.querySelector(".in-price") || {}).value);
     const freight = parseFloat((tr.querySelector(".in-freight") || {}).value) || 0;
     const handling = parseFloat((tr.querySelector(".in-handling") || {}).value) || 0;
+    const fee = parseFloat((tr.querySelector(".in-fee") || {}).value) || 0;
     if (isNaN(price)) { bad.push(p.name); return; }
     // 这一行自己的备注（文字 + 附件）：行备注在前，顶部那条通用备注在后，两者都保留
     const rowRemark = remarkValue(`finRemark_${p.id}`);
     items.push({
       product_id: p.id, unit, quantity: qty, unit_price: price,
       supplier, operator, date, remark: [rowRemark, remark].filter(Boolean).join("\n"), pay_status: payStatus,
-      adjust_amount: 0, freight, handling,
+      adjust_amount: 0, freight, handling, fee,
     });
   });
   if (bad.length) { toast(`这些商品没填单价：${bad.slice(0, 5).join("、")}${bad.length > 5 ? " 等" : ""}`); return; }
   if (!items.length) { toast("还没填数量：先把今天要入库的数量填进「数量」列"); return; }
   const goods = items.reduce((s, it) => s + it.quantity * it.unit_price, 0);
-  const fee = items.reduce((s, it) => s + it.freight + it.handling, 0);
-  if (!confirm(`确认入库 ${items.length} 个商品？\n日期 ${date}，货款 ¥${goods.toFixed(2)}${fee ? ` + 运费/装卸 ¥${fee.toFixed(2)}` : ""}，共 ${items.length} 张入库单`)) return;
+  const fee = items.reduce((s, it) => s + it.freight + it.handling + it.fee, 0);
+  if (!confirm(`确认入库 ${items.length} 个商品？\n日期 ${date}，货款 ¥${goods.toFixed(2)}${fee ? ` + 运费/装卸/手续费 ¥${fee.toFixed(2)}` : ""}，共 ${items.length} 张入库单`)) return;
   const btn = $("finSubmitBtn");
   if (btn) { btn.disabled = true; btn.textContent = "⏳ 正在入库…"; }
   try {
     const r = await api("/api/inbounds/batch", "POST", { items });
     // 入库成功的商品记成「今日已入库」：先从列表隐藏，第二天 0 点自动回来
     finDoneAdd(items.map((it) => it.product_id));
-    // 入库完清空数量 / 运费 / 装卸（单价保留），备注与附件也清掉，并去掉这行的勾选
+    // 入库完清空数量 / 运费 / 装卸 / 手续费（单价保留），备注与附件也清掉，并去掉这行的勾选
     items.forEach((it) => {
-      FIN_VALS[it.product_id] = { qty: "", price: "", freight: "", handling: "", remark: "" };
+      FIN_VALS[it.product_id] = { qty: "", price: "", freight: "", handling: "", fee: "", remark: "" };
       FIN_PICK.delete(it.product_id);
       clearRemarkField(`finRemark_${it.product_id}`);
     });
@@ -3872,7 +3879,7 @@ async function submitFreshInbound(rows) {
     const box = $("finSummary");
     if (box) {
       box.style.display = "block";
-      box.innerHTML = `<b>✅ 已入库 ${r.created} 张单</b>（货款 ¥${goods.toFixed(2)}${fee ? ` ＋ 运费/装卸 ¥${fee.toFixed(2)}` : ""}）`
+      box.innerHTML = `<b>✅ 已入库 ${r.created} 张单</b>（货款 ¥${goods.toFixed(2)}${fee ? ` ＋ 运费/装卸/手续费 ¥${fee.toFixed(2)}` : ""}）`
         + (r.failed_count ? `<div class="alert err" style="margin-top:8px;">失败 ${r.failed_count} 行：${(r.failed || []).slice(0, 5).map((f) => esc(f.reason)).join("；")}</div>` : "")
         + `<div style="margin-top:8px;"><button class="btn sm secondary" onclick="goPage('inbound');loadInbounds()">去入库列表查看</button></div>`;
     }
@@ -6206,7 +6213,7 @@ let IN_PICK_BLOCK = null;  // 商品选择器当前作用在哪一行
 function inboundBlocks() { return [...document.querySelectorAll("#inBlocks .in-block")]; }
 function inBlockOf(el) { return el && el.closest ? el.closest(".in-block") : null; }
 
-/** 一行 = 原来那张完整入库单（商品/单位/数量/单价/金额/调整/运费/装卸费/供应商/日期/操作员/付款状态/备注附件） */
+/** 一行 = 原来那张完整入库单（商品/单位/数量/单价/金额/调整/运费/装卸费/手续费/供应商/日期/操作员/付款状态/备注附件） */
 function inboundBlockHtml(idx) {
   return `<div class="in-block" data-idx="${idx}">
     <div class="in-block-head">
@@ -6238,6 +6245,11 @@ function inboundBlockHtml(idx) {
         <label>装卸费（选填）</label>
         <input class="in-handling" type="number" min="0" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" />
         <div class="field-hint">同运费：入成本、进「其他收支」，不强制填</div>
+      </div>
+      <div class="field">
+        <label>手续费（选填）</label>
+        <input class="in-fee" type="number" min="0" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" />
+        <div class="field-hint">付款给供应商产生的转账手续费：同运费，入成本、进「其他收支」</div>
       </div>
       <div class="field"><label>供应商</label><input class="in-supplier" placeholder="供应商名称" /></div>
       <div class="field"><label>日期 *</label><input class="in-date" type="date" /></div>
@@ -6297,7 +6309,7 @@ function syncInboundBlocks() {
   updateInboundTotal();
 }
 
-/** 这一行的付款情况：应付 = 货款＋调整＋运费装卸；已付按付款状态取（部分付款取弹开的已付金额） */
+/** 这一行的付款情况：应付 = 货款＋调整＋运费装卸手续费；已付按付款状态取（部分付款取弹开的已付金额） */
 function inPaySummary(block) {
   const due = payDueOf(block);
   const status = payOf("inPay_" + (block.dataset.idx || "")) || "paid";
@@ -6323,7 +6335,8 @@ function renderInboundSum(b) {
   const base = qty * price;
   const adj = parseFloat((b.querySelector(".in-adjust") || {}).value) || 0;
   const fee = (parseFloat((b.querySelector(".in-freight") || {}).value) || 0)
-    + (parseFloat((b.querySelector(".in-handling") || {}).value) || 0);
+    + (parseFloat((b.querySelector(".in-handling") || {}).value) || 0)
+    + (parseFloat((b.querySelector(".in-fee") || {}).value) || 0);
   const info = inPaySummary(b);
   let tail = ` ＝ 实付 ${fmtMoney(info.due)}`;
   if (info.status === "partial") {
@@ -6332,7 +6345,7 @@ function renderInboundSum(b) {
     tail = ` ＝ 应付 ${fmtMoney(info.due)}（待付款，进待付款账单）`;
   }
   sum.textContent = `本单：${fmtNum(qty)}${unit} × ${unit ? fmtMoney(price) : ""} = 货款 ${fmtMoney(base)}`
-    + (fee ? ` ＋ 运费/装卸 ${fmtMoney(fee)}` : "")
+    + (fee ? ` ＋ 运费/装卸/手续费 ${fmtMoney(fee)}` : "")
     + (adj ? ` ${adj > 0 ? "＋" : "－"} 调整 ${fmtMoney(Math.abs(adj))}` : "")
     + tail;
 }
@@ -6349,7 +6362,8 @@ function updateInboundTotal() {
     n++;
     goods += qty * (parseFloat((b.querySelector(".in-price") || {}).value) || 0);
     fee += (parseFloat((b.querySelector(".in-freight") || {}).value) || 0)
-      + (parseFloat((b.querySelector(".in-handling") || {}).value) || 0);
+      + (parseFloat((b.querySelector(".in-handling") || {}).value) || 0)
+      + (parseFloat((b.querySelector(".in-fee") || {}).value) || 0);
     adj += parseFloat((b.querySelector(".in-adjust") || {}).value) || 0;
     const info = inPaySummary(b);
     due += info.due;
@@ -6359,7 +6373,7 @@ function updateInboundTotal() {
   if (!n) { el.style.display = "none"; el.innerHTML = ""; return; }
   el.style.display = "block";
   el.innerHTML = `本次填了 <b>${n}</b> 张入库单：货款 <b>¥${goods.toFixed(2)}</b>`
-    + (fee ? ` ＋ 运费/装卸 <b>¥${fee.toFixed(2)}</b>` : "")
+    + (fee ? ` ＋ 运费/装卸/手续费 <b>¥${fee.toFixed(2)}</b>` : "")
     + (adj ? ` ${adj > 0 ? "＋" : "－"} 调整 <b>¥${Math.abs(adj).toFixed(2)}</b>` : "")
     + (unpaid > 0.005
       ? ` ＝ 应付 <b>¥${due.toFixed(2)}</b>，其中已付 <b>¥${paid.toFixed(2)}</b>、未付 <b>¥${unpaid.toFixed(2)}</b>（进待付款账单）`
@@ -6385,7 +6399,8 @@ function calcInboundBlock(el) {
   const base = qty * price;
   const adj = parseFloat((b.querySelector(".in-adjust") || {}).value) || 0;
   const fee = (parseFloat((b.querySelector(".in-freight") || {}).value) || 0)
-    + (parseFloat((b.querySelector(".in-handling") || {}).value) || 0);
+    + (parseFloat((b.querySelector(".in-handling") || {}).value) || 0)
+    + (parseFloat((b.querySelector(".in-fee") || {}).value) || 0);
   const amt = b.querySelector(".in-amount");
   if (amt) amt.value = base.toFixed(2);
   const setHint = (sel, html) => { const e = b.querySelector(sel); if (e) e.innerHTML = html; };
@@ -6393,7 +6408,7 @@ function calcInboundBlock(el) {
     ? `实付 ¥${(base + adj).toFixed(2)}（商品金额 ¥${base.toFixed(2)} ${adj > 0 ? "+" : "-"} ${Math.abs(adj).toFixed(2)}）· 差额记「金额调整」其他收支`
     : "正=多付，负=少付；差额自动记「金额调整」其他收支，商品成本不变");
   setHint(".in-freight-hint", fee > 0
-    ? `批次成本 ¥${(base + fee).toFixed(2)}（商品 ${base.toFixed(2)} + 运费/装卸 ${fee.toFixed(2)}）· 毛利随销量扣减，并同步记入「其他收支」`
+    ? `批次成本 ¥${(base + fee).toFixed(2)}（商品 ${base.toFixed(2)} + 运费/装卸/手续费 ${fee.toFixed(2)}）· 毛利随销量扣减，并同步记入「其他收支」`
     : "计入该批次成本 → 体现在这个品的毛利；并自动记入「其他收支」备查");
   const factor = p && unit ? (p.conversions || {})[unit] : null;
   setHint(".in-unit-hint", factor ? `1${esc(unit)} = ${fmtNum(factor)} ${esc(p.base_unit)}` : "");
@@ -6521,6 +6536,7 @@ async function submitInbound() {
     const adjust = parseFloat((b.querySelector(".in-adjust") || {}).value) || 0;
     const freight = parseFloat((b.querySelector(".in-freight") || {}).value) || 0;
     const handling = parseFloat((b.querySelector(".in-handling") || {}).value) || 0;
+    const fee = parseFloat((b.querySelector(".in-fee") || {}).value) || 0;
     const date = ((b.querySelector(".in-date") || {}).value || "").trim();
     const unit = ((b.querySelector(".in-unit") || {}).value || "").trim();
     // 没选商品的行直接跳过（当没填）；选了商品就得填全，否则报出来
@@ -6528,7 +6544,7 @@ async function submitInbound() {
     if (!unit || !(qty > 0)) { bad.push(`第 ${no} 行数量/单位没填全`); return; }
     if (isNaN(price)) { bad.push(`第 ${no} 行没填单价`); return; }
     if (!date) { bad.push(`第 ${no} 行没选日期`); return; }
-    if (freight < 0 || handling < 0) { bad.push(`第 ${no} 行运费/装卸费不能为负`); return; }
+    if (freight < 0 || handling < 0 || fee < 0) { bad.push(`第 ${no} 行运费/装卸费/手续费不能为负`); return; }
     const idx = b.dataset.idx || no;
     // 部分付款：已付金额必须大于 0 且小于应付合计（等于 0 / 填满都该选「待付款」/「已付款」）
     const payStatus = payOf("inPay_" + idx);
@@ -6545,7 +6561,7 @@ async function submitInbound() {
       operator: ((b.querySelector(".in-operator") || {}).value || "").trim() || operatorName(),
       date, remark: remarkValue("inRemark_" + idx),
       pay_status: payStatus, paid_amount: paidAmount,
-      adjust_amount: adjust, freight, handling,
+      adjust_amount: adjust, freight, handling, fee,
     });
     picked.push({ block: b, idx, pay_name: "inPay_" + idx });
   });
@@ -6553,14 +6569,14 @@ async function submitInbound() {
   if (!items.length) { toast("请先选商品并填数量（一行 = 一张入库单）"); return; }
 
   const goods = items.reduce((a, it) => a + it.quantity * it.unit_price, 0);
-  const fee = items.reduce((a, it) => a + it.freight + it.handling, 0);
+  const fee = items.reduce((a, it) => a + it.freight + it.handling + it.fee, 0);
   const adj = items.reduce((a, it) => a + it.adjust_amount, 0);
   const alertBox = $("inAlert");
   if (alertBox) { alertBox.style.display = "none"; alertBox.innerHTML = ""; }
   try {
     const r = await api("/api/inbounds/batch", "POST", { items });
     const tips = [];
-    if (r.created) tips.push(`已入库 ${r.created} 张单（货款 ¥${goods.toFixed(2)}${fee ? ` + 运费/装卸 ¥${fee.toFixed(2)}` : ""}${adj ? ` ${adj > 0 ? "+" : "-"} 调整 ¥${Math.abs(adj).toFixed(2)}` : ""}）`);
+    if (r.created) tips.push(`已入库 ${r.created} 张单（货款 ¥${goods.toFixed(2)}${fee ? ` + 运费/装卸/手续费 ¥${fee.toFixed(2)}` : ""}${adj ? ` ${adj > 0 ? "+" : "-"} 调整 ¥${Math.abs(adj).toFixed(2)}` : ""}）`);
     if (r.failed_count) tips.push(`${r.failed_count} 行失败`);
     if (items.some((it) => it.pay_status === "unpaid")) tips.push("待付款已进「待付款账单」");
     if (items.some((it) => it.pay_status === "partial")) tips.push("部分付款的未付余额已进「待付款账单」");
@@ -6580,7 +6596,7 @@ async function submitInbound() {
       picked.forEach((p, i) => {
         if (badRows.has(i + 1)) return;   // 只按成功/失败的行号清
         const b = p.block;
-        ["in-qty", "in-price", "in-amount", "in-adjust", "in-freight", "in-handling"].forEach((cls) => {
+        ["in-qty", "in-price", "in-amount", "in-adjust", "in-freight", "in-handling", "in-fee"].forEach((cls) => {
           const el = b.querySelector("." + cls);
           if (el) el.value = "";
         });
@@ -6629,7 +6645,7 @@ async function loadInbounds() {
       <td><b>${esc(r.product_name)}</b></td>
       <td>${fmtNum(r.quantity)} ${r.unit}</td>
       <td class="num mono">${fmtMoney(r.unit_price)}/${r.unit}</td>
-      <td class="num mono">${fmtMoney(r.final_amount != null ? r.final_amount : r.total_amount)}${r.adjust_amount ? `<div class="muted" style="font-size:11px;">调整 ${r.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(r.adjust_amount))}</div>` : ""}${(r.freight || r.handling) ? `<div class="muted" style="font-size:11px;" title="已计入批次成本（体现在该品毛利），并同步「其他收支」备查">${r.freight ? "运费 " + fmtMoney(r.freight) : ""}${r.freight && r.handling ? " · " : ""}${r.handling ? "装卸 " + fmtMoney(r.handling) : ""}</div>` : ""}${r.pay_status === "partial" ? `<div class="muted" style="font-size:11px;" title="应付合计 ${fmtMoney(r.due_amount)}">已付 ${fmtMoney(r.paid_amount)} · 未付 ${fmtMoney(r.unpaid_amount)}</div>` : ""}${r.compensation ? `<div class="muted" style="font-size:11px;" title="供应商补偿：已记「其他收支 → 供应商补偿」负数行，冲减期间费用、计入财务报表净利">补偿 -${fmtMoney(r.compensation)}</div>` : ""}</td>
+      <td class="num mono">${fmtMoney(r.final_amount != null ? r.final_amount : r.total_amount)}${r.adjust_amount ? `<div class="muted" style="font-size:11px;">调整 ${r.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(r.adjust_amount))}</div>` : ""}${(r.freight || r.handling || r.fee) ? `<div class="muted" style="font-size:11px;" title="已计入批次成本（体现在该品毛利），并同步「其他收支」备查">${[r.freight ? "运费 " + fmtMoney(r.freight) : "", r.handling ? "装卸 " + fmtMoney(r.handling) : "", r.fee ? "手续费 " + fmtMoney(r.fee) : ""].filter(Boolean).join(" · ")}</div>` : ""}${r.pay_status === "partial" ? `<div class="muted" style="font-size:11px;" title="应付合计 ${fmtMoney(r.due_amount)}">已付 ${fmtMoney(r.paid_amount)} · 未付 ${fmtMoney(r.unpaid_amount)}</div>` : ""}${r.compensation ? `<div class="muted" style="font-size:11px;" title="供应商补偿：已记「其他收支 → 供应商补偿」负数行，冲减期间费用、计入财务报表净利">补偿 -${fmtMoney(r.compensation)}</div>` : ""}</td>
       <td>${esc(r.supplier) || "—"}</td>
       <td>${esc(r.operator) || "—"}</td>
       <td>${r.date}</td>
@@ -6644,8 +6660,8 @@ async function deleteInbound(id) {
   try { await api("/api/inbounds/" + id, "DELETE"); toast("已删除"); loadInbounds(); loadStock(); }
   catch (e) { toast("删除失败：" + e.message); }
 }
-/* 手动修改入库单：可改 供应商 / 入库日期 / 付款状态 / 运费 / 装卸费；保存后操作员记为修改人 */
-let ED_IN_ADJUST = 0;   // 改单弹窗里的金额调整（应付合计 = 货款 + 调整 + 运费 + 装卸）
+/* 手动修改入库单：可改 供应商 / 入库日期 / 付款状态 / 运费 / 装卸费 / 手续费；保存后操作员记为修改人 */
+let ED_IN_ADJUST = 0;   // 改单弹窗里的金额调整（应付合计 = 货款 + 调整 + 运费 + 装卸 + 手续费）
 function editInbound(id) {
   const r = ($("inTable")._rows || []).find((x) => x.id === id);
   if (!r) { toast("未找到该入库单，请刷新列表"); return; }
@@ -6669,6 +6685,11 @@ function editInbound(id) {
         <div class="field-hint">选填；日期随入库单日期，清零即删掉对应的「其他收支」</div>
       </div>
       <div class="field">
+        <label>手续费</label>
+        <input id="edInFee" type="number" min="0" step="any" value="${r.fee || ""}" placeholder="0.00" oninput="edInCalc(${r.total_amount || 0})" />
+        <div class="field-hint">选填；付款给供应商产生的转账手续费，同运费计入成本</div>
+      </div>
+      <div class="field">
         <label>供应商补偿</label>
         <input id="edInComp" type="number" min="0" step="any" value="${r.compensation || ""}" placeholder="0.00" oninput="edInCompHint()" />
         <div class="field-hint" id="edInCompHint"></div>
@@ -6677,11 +6698,11 @@ function editInbound(id) {
         <label>付款状态</label>
         ${inboundPayRadios("edInPay", r.pay_status, r.paid_amount || 0,
           "待付款：先进「待付款账单」，点「已支付」后才计入财务报表；部分付款：已付部分计入报表，未付余额留在待付款账单",
-          round2((r.total_amount || 0) + (r.adjust_amount || 0) + (r.freight || 0) + (r.handling || 0)))}
+          round2((r.total_amount || 0) + (r.adjust_amount || 0) + (r.freight || 0) + (r.handling || 0) + (r.fee || 0)))}
       </div>
     </div>
     <p class="hint" id="edInHint"></p>
-    <p class="hint">保存后操作员记为当前登录账号（${esc(operatorName())}）。数量 / 单价 / 商品如需更正，请删除后重新入库；运费与装卸费之后随时可改（会重算该批次成本与该品毛利）。</p>
+    <p class="hint">保存后操作员记为当前登录账号（${esc(operatorName())}）。数量 / 单价 / 商品如需更正，请删除后重新入库；运费、装卸费与手续费之后随时可改（会重算该批次成本与该品毛利）。</p>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
       <button class="btn green" onclick="saveInboundEdit(${id})">✓ 保存</button>
@@ -6700,15 +6721,16 @@ function edInCompHint() {
     : "选填：供应商退的钱 / 赔偿。保存后自动记一笔负数的其他收支计入财务报表；填 0 或清空即取消";
 }
 
-/** 改单时实时显示「货款 + 运费 + 装卸 = 批次到岸成本」，避免改完不知道成本变成多少 */
+/** 改单时实时显示「货款 + 运费 + 装卸 + 手续费 = 批次到岸成本」，避免改完不知道成本变成多少 */
 function edInCalc(total) {
   const el = $("edInHint");
   if (!el) return;
-  const fee = (parseFloat($("edInFreight")?.value) || 0) + (parseFloat($("edInHandling")?.value) || 0);
+  const fee = (parseFloat($("edInFreight")?.value) || 0) + (parseFloat($("edInHandling")?.value) || 0)
+    + (parseFloat($("edInFee")?.value) || 0);
   el.innerHTML = fee > 0
-    ? `批次成本 = 货款 ${fmtMoney(total)} + 运费/装卸 ${fmtMoney(fee)} = <b>${fmtMoney(total + fee)}</b>（按 FIFO 随销量扣减，同步更新该品毛利与「其他收支」）`
-    : "不填=没有运费/装卸费（对应「其他收支」里的运费、装卸费记录会一并清掉）";
-  // 运费/装卸费改了，部分付款的应付合计跟着变（已付金额不动，未付/比例重算）
+    ? `批次成本 = 货款 ${fmtMoney(total)} + 运费/装卸/手续费 ${fmtMoney(fee)} = <b>${fmtMoney(total + fee)}</b>（按 FIFO 随销量扣减，同步更新该品毛利与「其他收支」）`
+    : "不填=没有运费/装卸/手续费（对应「其他收支」里的运费、装卸费、转账手续费记录会一并清掉）";
+  // 运费/装卸费/手续费改了，部分付款的应付合计跟着变（已付金额不动，未付/比例重算）
   const box = document.querySelector("#modalBox .pay-part");
   if (box) {
     box.dataset.due = String(round2(total + ED_IN_ADJUST + fee));
@@ -6720,7 +6742,8 @@ async function saveInboundEdit(id) {
   if (!date) { toast("请选择入库日期"); return; }
   const freight = parseFloat($("edInFreight").value) || 0;
   const handling = parseFloat($("edInHandling").value) || 0;
-  if (freight < 0 || handling < 0) { toast("运费 / 装卸费不能为负数"); return; }
+  const fee = parseFloat($("edInFee")?.value) || 0;
+  if (freight < 0 || handling < 0 || fee < 0) { toast("运费 / 装卸费 / 手续费不能为负数"); return; }
   const compensation = round2(parseFloat($("edInComp")?.value) || 0);
   if (compensation < 0) { toast("供应商补偿不能为负数"); return; }
   // 部分付款：已付金额要大于 0 且小于应付合计
@@ -6736,11 +6759,11 @@ async function saveInboundEdit(id) {
   try {
     await api(`/api/inbounds/${id}`, "PUT", {
       supplier: $("edInSupplier").value, date, pay_status: payStatus, paid_amount: paidAmount,
-      freight, handling, compensation,
+      freight, handling, fee, compensation,
     });
     closeModal();
     toast(`已保存，操作员记为 ${operatorName()}`
-      + (freight + handling > 0 ? `；运费/装卸 ${fmtMoney(freight + handling)} 已计入成本` : "")
+      + (freight + handling + fee > 0 ? `；运费/装卸/手续费 ${fmtMoney(freight + handling + fee)} 已计入成本` : "")
       + (compensation > 0 ? `；供应商补偿 ¥${fmtMoney(compensation)} 已计入财务报表` : ""));
     loadInbounds();
     loadStock();   // 成本变了，库存列表的均价/货值跟着刷新
@@ -8789,7 +8812,7 @@ function renderExpenseSummary(rep) {
   const brushFee = rep.brush_fee_cost || 0;    // 其中「快递+包装固定费」（逐单手填，默认 3.6）
   const brushInput = rep.brush_input_cost || 0; // 其中「我填的刷单成本」原值
   const rows = [
-    { name: "采购支出（进货）", value: purchase, color: "#1989fa", desc: "入库 / 进货金额（与「本期进货」同源，含入库运费/装卸费），已计入结转成本" },
+    { name: "采购支出（进货）", value: purchase, color: "#1989fa", desc: "入库 / 进货金额（与「本期进货」同源，含入库运费/装卸费/手续费），已计入结转成本" },
     { name: "其他收支", value: other, color: "#f97316", desc: "网线费 / 安装费 / 机器费 / 样品费等（构成见下表）" },
     { name: "手工记账", value: manual, color: "#6366f1", desc: "财务流水里登记的支出（构成见下表）" },
     { name: "刷单成本", value: brush, color: "#e11d48", desc: "芳谊放单仓刷单单：快递+包装固定费 ＋ 刷单成本（逐单见「支出明细 / 来源=刷单成本」），已从毛利扣减，不重复计入期间费用" },
@@ -9098,7 +9121,7 @@ function renderOtherExpenseList() {
         const badge = neg ? "income" : "expense";
         return `<tr>
         <td class="mono">${esc(r.date)}</td>
-        <td><span class="badge ${badge}">${esc(r.category)}</span>${payTag(r.pay_status)}${r.ref_type ? ` <span class="badge${r.ref_type === "inbound_fee" ? " pack" : ""}" title="${r.ref_type === "inbound_fee" ? "入库单带出的运费/装卸费：已计入该批次成本（随销量在毛利中扣减），这里留档备查，报表期间费用不再重复扣" : r.ref_type === "inbound_comp" ? "入库单带出的供应商补偿：冲减期间费用、计入财务报表净利" : "单据自动带出的金额调整，只影响开支、不改成本"}">来自${r.ref_type === "inbound_fee" ? "入库单·成本" : r.ref_type === "inbound_comp" ? "入库单·补偿" : r.ref_type === "inbound" ? "入库单" : "出库单"}</span>` : ""}</td>
+        <td><span class="badge ${badge}">${esc(r.category)}</span>${payTag(r.pay_status)}${r.ref_type ? ` <span class="badge${r.ref_type === "inbound_fee" ? " pack" : ""}" title="${r.ref_type === "inbound_fee" ? "入库单带出的运费/装卸费/手续费：已计入该批次成本（随销量在毛利中扣减），这里留档备查，报表期间费用不再重复扣" : r.ref_type === "inbound_comp" ? "入库单带出的供应商补偿：冲减期间费用、计入财务报表净利" : "单据自动带出的金额调整，只影响开支、不改成本"}">来自${r.ref_type === "inbound_fee" ? "入库单·成本" : r.ref_type === "inbound_comp" ? "入库单·补偿" : r.ref_type === "inbound" ? "入库单" : "出库单"}</span>` : ""}</td>
         <td class="num mono" style="color:${neg ? "var(--green)" : "var(--red)"}">${neg ? "+" : ""}${fmtMoney(amt)}${fee ? `<div class="muted" style="font-size:11px;font-weight:400;">含手续费 ${fmtMoney(fee)}</div>` : ""}</td>
         <td>${esc(r.operator) || "—"}</td>
         <td class="muted" style="max-width:260px;">${renderRemarkHtml(r.remark)}</td>
@@ -11456,13 +11479,14 @@ function renderInboundReview(kind, r) {
       <td class="draft-amt">${fmtMoney(it.quantity * it.unit_price)}</td>
       <td><input class="draft-freight" type="number" step="any" min="0" value="${it.freight || ""}" placeholder="0" title="运费（选填）：计入批次成本，体现在该品毛利，并同步记入「其他收支」" style="width:64px;" /></td>
       <td><input class="draft-handling" type="number" step="any" min="0" value="${it.handling || ""}" placeholder="0" title="装卸费（选填）：同运费" style="width:64px;" /></td>
+      <td><input class="draft-fee" type="number" step="any" min="0" value="${it.fee || ""}" placeholder="0" title="转账手续费（选填）：同运费" style="width:64px;" /></td>
       <td class="muted">${esc(it.supplier || "—")} · ${esc(it.date)}</td>
     </tr>`).join("");
   $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} — 确认入库 <button class="close" onclick="closeModal()">✕</button></h3>
-    <div class="alert ok">解析出 <b>${items.length}</b> 行。可勾选、修改数量/单价/运费/装卸后点击「确认入库」；运费与装卸费会计入批次成本并同步「其他收支」。</div>
+    <div class="alert ok">解析出 <b>${items.length}</b> 行。可勾选、修改数量/单价/运费/装卸/手续费后点击「确认入库」；这几项费用会计入批次成本并同步「其他收支」。</div>
     ${warn}
     <table class="subtable" style="width:100%;">
-      <thead><tr><th style="width:34px;"><input type="checkbox" checked onchange="toggleDraftAll(this)" /></th><th>商品</th><th>单位</th><th>数量</th><th>单价</th><th>金额</th><th>运费</th><th>装卸</th><th>供应商 · 日期</th></tr></thead>
+      <thead><tr><th style="width:34px;"><input type="checkbox" checked onchange="toggleDraftAll(this)" /></th><th>商品</th><th>单位</th><th>数量</th><th>单价</th><th>金额</th><th>运费</th><th>装卸</th><th>手续费</th><th>供应商 · 日期</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     <div class="modal-foot">
@@ -11488,7 +11512,8 @@ async function confirmInbound(kind) {
     const price = parseFloat(tr.querySelector(".draft-price").value) || 0;
     const fee = Math.max(0, parseFloat(tr.querySelector(".draft-freight")?.value) || 0);
     const hand = Math.max(0, parseFloat(tr.querySelector(".draft-handling")?.value) || 0);
-    if (qty > 0) items.push({ ...it, quantity: qty, unit_price: price, freight: fee, handling: hand });
+    const tf = Math.max(0, parseFloat(tr.querySelector(".draft-fee")?.value) || 0);
+    if (qty > 0) items.push({ ...it, quantity: qty, unit_price: price, freight: fee, handling: hand, fee: tf });
   });
   if (!items.length) { toast("没有可入库的数据"); return; }
   try {

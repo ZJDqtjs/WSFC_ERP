@@ -424,21 +424,23 @@ def summary(
 
 
 def _inbound_landed(i) -> float:
-    """入库实际支出 = 货款 + 运费 + 装卸费（运费/装卸已计入批次成本，故期间费用不重复扣）。
+    """入库实际支出 = 货款 + 运费 + 装卸费 + 手续费（这几项已计入批次成本，故期间费用不重复扣）。
 
-    部分付款时只算已经付掉的那部分：已付金额按应付合计（含调整/运费/装卸）记，
-    这里按「货款 + 运费 + 装卸」封顶（金额调整另走「其他收支」，不计入采购桶）。
+    部分付款时只算已经付掉的那部分：已付金额按应付合计（含调整/运费/装卸/手续费）记，
+    这里按「货款 + 运费 + 装卸 + 手续费」封顶（金额调整另走「其他收支」，不计入采购桶）。
     """
-    landed = round((i.total_amount or 0.0) + (getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0), 2)
+    landed = round((i.total_amount or 0.0) + (getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0)
+                   + (getattr(i, "fee", 0.0) or 0.0), 2)
     if (getattr(i, "pay_status", PAID) or PAID) == "partial":
         return round(max(0.0, min(getattr(i, "paid_amount", 0.0) or 0.0, landed)), 2)
     return landed
 
 
 def _inbound_due(i) -> float:
-    """入库单应付合计 = 货款 + 金额调整 + 运费 + 装卸（与「待付款账单」页的应付口径一致）。"""
+    """入库单应付合计 = 货款 + 金额调整 + 运费 + 装卸 + 手续费（与「待付款账单」页的应付口径一致）。"""
     return round((i.total_amount or 0.0) + (getattr(i, "adjust_amount", 0.0) or 0.0)
-                 + (getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0), 2)
+                 + (getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0)
+                 + (getattr(i, "fee", 0.0) or 0.0), 2)
 
 
 def _inbound_unpaid(i) -> float:
@@ -1096,15 +1098,18 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
 
     expense_items: list[dict] = []
     for i in inbounds:
-        fee = round((getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0), 2)
+        fee = round((getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0)
+                    + (getattr(i, "fee", 0.0) or 0.0), 2)
         note = i.supplier or i.remark or ""
         if fee:
-            # 运费/装卸费已计入批次成本，这里并入采购支出金额并注明，和「逐日支出」的采购桶口径一致
+            # 运费/装卸费/手续费已计入批次成本，这里并入采购支出金额并注明，和「逐日支出」的采购桶口径一致
             parts = []
             if getattr(i, "freight", 0.0):
                 parts.append(f"运费 ¥{round(i.freight, 2)}")
             if getattr(i, "handling", 0.0):
                 parts.append(f"装卸费 ¥{round(i.handling, 2)}")
+            if getattr(i, "fee", 0.0):
+                parts.append(f"手续费 ¥{round(i.fee, 2)}")
             note = (note + " · " if note else "") + "、".join(parts) + "（已计入成本）"
         if (getattr(i, "pay_status", PAID) or PAID) == "partial":
             # 部分付款：这里只列已付部分，未付余额在「待付款账单」里
@@ -1710,7 +1715,7 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
     ).scalar() or 0.0), 2)
     # 部分付款：已付部分算本期进货，未付余额算待付款（与 /report/summary 同口径）
     inbound_landed = (Inbound.total_amount + func.coalesce(Inbound.freight, 0)
-                      + func.coalesce(Inbound.handling, 0))
+                      + func.coalesce(Inbound.handling, 0) + func.coalesce(Inbound.fee, 0))
     inbound_due = inbound_landed + func.coalesce(Inbound.adjust_amount, 0)
     inbound_paid = func.coalesce(Inbound.paid_amount, 0)
     inb_partial = func.coalesce(Inbound.pay_status, PAID) == "partial"

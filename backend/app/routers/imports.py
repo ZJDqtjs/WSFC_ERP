@@ -56,9 +56,10 @@ INBOUND_ALIASES = {
     "unit": ["进货单位", "单位", "*单位"],
     "quantity": ["数量", "*数量"],
     "unit_price": ["单价", "进货单价", "*单价"],
-    # 运费/装卸费（选填列）：计入该批次到岸成本，并自动记入「其他收支」备查
+    # 运费/装卸费/手续费（选填列）：计入该批次到岸成本，并自动记入「其他收支」备查
     "freight": ["运费", "入库运费", "货运费"],
     "handling": ["装卸费", "装卸", "搬运费"],
+    "fee": ["手续费", "转账手续费", "汇费"],
     "supplier": ["供应商"],
     "date": ["日期", "入库日期"],
     "operator": ["操作员"],
@@ -372,9 +373,10 @@ class DraftInbound(BaseModel):
     unit: str
     quantity: float
     unit_price: float
-    # 运费 / 装卸费（选填，Excel 有对应列时随行解析）：计入批次成本并同步「其他收支」
+    # 运费 / 装卸费 / 手续费（选填，Excel 有对应列时随行解析）：计入批次成本并同步「其他收支」
     freight: float = 0.0
     handling: float = 0.0
+    fee: float = 0.0
     supplier: str = ""
     date: str
     operator: str = ""
@@ -416,13 +418,14 @@ def parse_inbound_draft(file: UploadFile, db: Session, user: User) -> tuple[list
             continue
         # 扣点折算：商品类别命中扣点规则时，实际入库单价 = 原价 × (1 - 扣点%)
         price = apply_deduction_price(price, product, deduction_map)
-        # 运费/装卸费为选填列：无列/空白按 0，负数视为无效（钳到 0）
+        # 运费/装卸费/手续费为选填列：无列/空白按 0，负数视为无效（钳到 0）
         freight = max(0.0, to_float(cell(row, mapping.get("freight")), 0.0))
         handling = max(0.0, to_float(cell(row, mapping.get("handling")), 0.0))
+        fee = max(0.0, to_float(cell(row, mapping.get("fee")), 0.0))
         items.append(
             DraftInbound(
                 product_id=product.id, product_name=product.name, unit=unit,
-                quantity=qty, unit_price=price, freight=freight, handling=handling,
+                quantity=qty, unit_price=price, freight=freight, handling=handling, fee=fee,
                 supplier=cell(row, mapping.get("supplier")),
                 operator=cell(row, mapping.get("operator")) or user.name,
                 date=norm_date(cell(row, mapping.get("date"))) or datetime.now().strftime("%Y-%m-%d"),
@@ -452,6 +455,7 @@ def confirm_import_inbounds(data: ConfirmInboundIn, db: Session = Depends(get_db
                     "product_id": it.product_id, "unit": it.unit, "quantity": it.quantity,
                     "unit_price": it.unit_price, "supplier": it.supplier,
                     "freight": max(0.0, it.freight or 0.0), "handling": max(0.0, it.handling or 0.0),
+                    "fee": max(0.0, it.fee or 0.0),
                     "operator": it.operator or user.name,
                     "date": it.date, "remark": it.remark,
                 },
@@ -501,6 +505,7 @@ def import_inbounds(file: UploadFile, db: Session = Depends(get_db), user: User 
                     "unit_price": price, "supplier": cell(row, mapping.get("supplier")),
                     "freight": max(0.0, to_float(cell(row, mapping.get("freight")), 0.0)),
                     "handling": max(0.0, to_float(cell(row, mapping.get("handling")), 0.0)),
+                    "fee": max(0.0, to_float(cell(row, mapping.get("fee")), 0.0)),
                     "operator": cell(row, mapping.get("operator")) or user.name,
                     "date": norm_date(cell(row, mapping.get("date"))) or datetime.now().strftime("%Y-%m-%d"),
                     "remark": cell(row, mapping.get("remark")),

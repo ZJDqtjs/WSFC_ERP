@@ -230,9 +230,10 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
         .where(_pay_filter(Inbound, include_paid, cutoff))
     ).scalars():
         name = r.product.name if r.product else ""
-        # 应付 = 实付（含抹零/凑整调整 + 运费/装卸费；后两者的「其他收支」镜像行不单独列为待办）
+        # 应付 = 实付（含抹零/凑整调整 + 运费/装卸费/手续费；这些「其他收支」镜像行不单独列为待办）
         due = round((r.total_amount or 0.0) + (getattr(r, "adjust_amount", 0.0) or 0.0)
-                    + (getattr(r, "freight", 0.0) or 0.0) + (getattr(r, "handling", 0.0) or 0.0), 2)
+                    + (getattr(r, "freight", 0.0) or 0.0) + (getattr(r, "handling", 0.0) or 0.0)
+                    + (getattr(r, "fee", 0.0) or 0.0), 2)
         status = (getattr(r, "pay_status", "paid") or "paid")
         paid_amount = round(getattr(r, "paid_amount", 0.0) or 0.0, 2)
         sub = "供应商 " + r.supplier if r.supplier else "采购入库"
@@ -593,7 +594,7 @@ def _mark_paid(db: Session, kind: str, rid: int, paid: bool) -> tuple[str, str]:
     if kind == "inbound" and hasattr(rec, "paid_amount"):
         rec.paid_amount = pay_due(
             rec.total_amount, getattr(rec, "adjust_amount", 0.0),
-            getattr(rec, "freight", 0.0), getattr(rec, "handling", 0.0),
+            getattr(rec, "freight", 0.0), getattr(rec, "handling", 0.0), getattr(rec, "fee", 0.0),
         ) if paid else 0.0
     # 入库/出库会自动生成财务流水（采购支出 / 销售收入 / 人工打包费），状态要跟着走
     if kind in ("inbound", "outbound"):

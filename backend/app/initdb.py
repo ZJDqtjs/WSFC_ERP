@@ -443,6 +443,8 @@ _EXTRA_COLUMNS = {
         ("paid_amount", "FLOAT DEFAULT 0"),
         # 供应商补偿：供应商退的钱/赔偿，镜像记「其他收支 → 供应商补偿」负数行冲减期间费用
         ("compensation", "FLOAT DEFAULT 0"),
+        # 转账手续费：付款给供应商产生的手续费，同运费/装卸费（计入到岸成本 + 镜像记其他收支备查）
+        ("fee", "FLOAT DEFAULT 0"),
     ),
     "outbounds": _PAY_COLUMNS + (
         ("adjust_amount", "FLOAT DEFAULT 0"),
