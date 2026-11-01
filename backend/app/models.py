@@ -36,7 +36,14 @@ class Product(Base):
     __tablename__ = "products"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(128), default="", index=True)  # 商品编码
+    code: Mapped[str] = mapped_column(String(128), default="", index=True)  # 商品编码（主编码）
+    # 端商品：同一规格在多个店铺/端各有一个编码（如京东多店铺的 skuId）。
+    # 开关打开后 codes 生效；主编码 code 仍保留，作为「没匹配到店铺」时的兜底编码。
+    multi_code: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 额外编码：[{code, shop}]，shop = 该编码所属店铺（与出库单的客户/店铺名一致）。
+    # 对外成本表（/api/open/sku-costs）按「店铺 → 编码」把出库销量拆到各自的 SKU 上；
+    # shop 留空 = 通用编码（任何没匹配到店铺的订单都归它）。
+    codes: Mapped[list] = mapped_column(JSON, default=list)
     name: Mapped[str] = mapped_column(String(128), index=True)
     category: Mapped[str] = mapped_column(String(64), default="")  # 商品类型/分类
     product_type: Mapped[str] = mapped_column(String(8), default="stock")  # stock 库存 / order 订单

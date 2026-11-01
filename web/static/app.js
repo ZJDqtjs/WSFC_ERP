@@ -5362,7 +5362,11 @@ async function renderProducts() {
     const packs = (p.pack_items || [])
       .map((it) => (PRODUCTS.find((x) => x.id === it.product_id) || {}).name || "")
       .join(" ");
-    return [p.name, p.category, p.spec, p.code, p.unit, p.base_unit, way, packs]
+    // 端商品的其它编码 / 店铺名也进搜索：搜店铺能筛出它的商品，搜副编码也能找到
+    const extraCodes = p.multi_code
+      ? (p.codes || []).map((it) => `${it.code || ""} ${it.shop || ""}`).join(" ")
+      : "";
+    return [p.name, p.category, p.spec, p.code, extraCodes, p.unit, p.base_unit, way, packs]
       .join(" ").toLowerCase();
   };
   const kwHit = (p) => searchHit(hayOf(p), kws);   // 多个关键词：全部命中才算匹配
@@ -5418,7 +5422,7 @@ async function renderProducts() {
           : fmtStock(p);
       return `<tr>
         <td class="cb-col"><input type="checkbox" value="${p.id}" ${prodSel.has(p.id) ? "checked" : ""} onchange="toggleSel('prod',${p.id},this.checked)" /></td>
-        <td class="muted mono">${esc(p.code) || "—"}</td>
+        <td class="muted mono">${codeCellHtml(p)}</td>
         <td><b>${typeBadge} ${esc(p.name)}</b><div class="muted" style="font-size:12px;">${linkInfo}</div></td>
         <td>${esc(p.category) ? `<span class="badge adjust">${esc(p.category)}</span>` : "—"}</td>
         <td class="muted" style="max-width:170px;">${esc(packs) || "—"}</td>
@@ -5579,8 +5583,21 @@ async function openProductModal(pid = 0, prefillName = "") {
   openModal(`
     <h3>${pid ? "编辑商品" : "新增商品"} <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="form-grid">
-      <div class="field"><label>商品编码</label><input id="pCode" value="${esc(p?.code || "")}" placeholder="如 ydj001，可留空" /></div>
+      <div class="field"><label>商品编码</label><input id="pCode" value="${esc(p?.code || "")}" placeholder="如 ydj001，可留空" />
+        <div class="field-hint">主编码：没匹配到店铺的订单都归它</div>
+      </div>
       <div class="field"><label>商品名称 *</label><input id="pName" value="${esc(curName)}" placeholder="如：佛手柑大果2个" /></div>
+      <div class="field" id="pMultiBox" style="grid-column:1/-1;">
+        <label style="display:flex;gap:6px;align-items:center;">
+          <input type="checkbox" id="pMultiCode" ${p?.multi_code ? "checked" : ""} onchange="pMultiToggle()" />
+          端商品（同一规格在多个店铺/端各有一个编码，如京东多家店的 skuId）
+        </label>
+        <div class="field-hint">开启后可填「编码 + 店铺」多条：对外成本表 <code>/api/open/sku-costs</code> 按出库单的客户/店铺名把销量算到对应编码上（每个 SKU 拿到自己店铺的结算价与成本）；没填店铺的是通用编码。编码全局唯一（主编码 + 这里的编码）</div>
+        <div id="pCodesBox" style="margin-top:8px;display:${p?.multi_code ? "" : "none"};">
+          <div id="pCodeRows"></div>
+          <button class="btn secondary sm" type="button" onclick="addCodeRow()">＋ 新增编码</button>
+        </div>
+      </div>
       <div class="field"><label>分类</label><input id="pCategory" value="${esc(curCat)}" placeholder="如：蔬菜" /></div>
       <div class="field"><label>商品类型 *</label>
         <select id="pType" onchange="pTypeChanged()">
@@ -5621,6 +5638,8 @@ async function openProductModal(pid = 0, prefillName = "") {
       <button class="btn" onclick="saveProduct(${pid || 0})">保存</button>
     </div>`);
   initProductUnitSelect(ptype, curUnit);
+  initCodeRows(p?.codes || [], !!(p && p.multi_code));   // 端商品：多店铺多编码回填
+  if ($("pMultiBox")) $("pMultiBox").style.display = ptype === "order" ? "" : "none";
   updateProductPriceLabels(du0, f0, up0.base_unit);   // 价格字段标签/提示按默认单位显示
   updateUnitChangeBox(up0);                            // 跨类别换单位时显示「换算关系」输入框（初始=没换，隐藏）
   // 加载库存商品（大类）列表，并渲染「扣减方案」（每套方案多行，支持 + 号新增方案/扣减项）
@@ -5860,6 +5879,51 @@ function collectPacks() {
   });
   return out;
 }
+/* ---------- 端商品（同一规格多店铺多编码，如京东多家店 skuId） ---------- */
+function codeRowHtml(code = "", shop = "") {
+  return `<div class="code-row" style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+    <input class="pc-code" placeholder="编码（如京东 skuId 100157104844）" value="${esc(code)}" style="flex:1;" />
+    <input class="pc-shop" placeholder="店铺名（如 京东-旗舰店，留空=通用）" value="${esc(shop)}" style="flex:1;" />
+    <button class="btn sm danger" type="button" onclick="this.closest('.code-row').remove()">删</button>
+  </div>`;
+}
+
+/** 弹窗打开时回填编码行；开关打开但一条都没有时先给一行空输入 */
+function initCodeRows(codes, multi) {
+  const box = $("pCodeRows");
+  if (!box) return;
+  const list = Array.isArray(codes) ? codes.filter((x) => x && x.code) : [];
+  box.innerHTML = list.map((it) => codeRowHtml(it.code || "", it.shop || "")).join("");
+  if (multi && !list.length) addCodeRow();
+}
+
+function addCodeRow(code = "", shop = "") {
+  const box = $("pCodeRows");
+  if (!box) return;
+  box.insertAdjacentHTML("beforeend", codeRowHtml(code, shop));
+  const rows = box.querySelectorAll(".code-row");
+  const last = rows[rows.length - 1];
+  const inp = last && last.querySelector(".pc-code");
+  if (inp && !code) inp.focus();
+}
+
+function pMultiToggle() {
+  const on = $("pMultiCode") ? $("pMultiCode").checked : false;
+  const box = $("pCodesBox");
+  if (box) box.style.display = on ? "" : "none";
+  if (on && $("pCodeRows") && !$("pCodeRows").children.length) addCodeRow();
+}
+
+/** 读编码行 → [{code, shop}]（丢掉空编码） */
+function collectCodes() {
+  const box = $("pCodeRows");
+  if (!box) return [];
+  return [...box.querySelectorAll(".code-row")].map((row) => ({
+    code: ((row.querySelector(".pc-code") || {}).value || "").trim(),
+    shop: ((row.querySelector(".pc-shop") || {}).value || "").trim(),
+  })).filter((x) => x.code);
+}
+
 async function saveProduct(pid, opts) {
   const ptype = $("pType").value;
   const unit = $("pUnit") ? $("pUnit").value : "斤";
@@ -5868,10 +5932,14 @@ async function saveProduct(pid, opts) {
   // 方案，兼容报表、移动端、需求预演算等只认单方案的旧消费方。
   const schemes = ptype === "order" ? collectStockSchemes() : [];
   const stockLinks = schemes.length ? schemes[0].links : [];
+  const multiCode = !!($("pMultiCode") && $("pMultiCode").checked);
   const payload = {
     code: $("pCode").value,
     // 编码冲突时点「替换编码」→ 传 true：把占用该编码的原商品编码清空，改给当前商品
     code_takeover: !!(opts && opts.takeover),
+    // 端商品：多店铺多编码（开关关着时后端不使用这些编码，但仍然保存，重新打开不用重填）
+    multi_code: multiCode,
+    codes: collectCodes(),
     name: $("pName").value,
     category: $("pCategory").value,
     product_type: ptype,

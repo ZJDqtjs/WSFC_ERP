@@ -40,6 +40,13 @@ class StockSchemeIn(BaseModel):
     links: list[StockLinkIn] = []
 
 
+class CodeEntry(BaseModel):
+    """端商品的一条额外编码：code = 平台 SKU（如京东 skuId），shop = 该编码所属店铺名。"""
+
+    code: str = ""
+    shop: str = ""
+
+
 class ProductIn(BaseModel):
     code: str = ""
     name: str
@@ -62,11 +69,16 @@ class ProductIn(BaseModel):
     # 多套扣减方案：[{name, links:[{product_id, multiplier}]}]。
     # None = 未提供（保留原有方案，兼容未升级客户端）；[] = 清空（只剩 stock_links 那一套）
     stock_schemes: list[StockSchemeIn] | None = None
+    # 端商品：同一规格在多个店铺各有一个编码（如京东多店铺 skuId）。
+    # None = 未提供（保留原值，兼容未升级客户端）；True/False = 显式开关
+    multi_code: bool | None = None
+    # 额外编码：[{code, shop}]；None = 未提供（保留原值）；[] = 清空
+    codes: list[CodeEntry] | None = None
     # 改基础单位（计数「个」↔ 重量「克」）时的换算关系：1（旧）基础单位 = unit_change_ratio（新）基础单位。
     # 商品已有库存流水/入库记录/库存时必须给（见 _rescale_base_unit_change）；没有历史数据时可省。
     unit_change_ratio: float | None = None
     is_active: bool = True
-    # 编码冲突时是否「替换」：True = 把占用该编码的原商品编码清空、改给当前商品（编码一对一）。
+    # 编码冲突时是否「替换」：True = 把占用该编码的原商品（主编码 / 端商品编码）上的那条编码清掉、改给当前商品。
     # 用户点前端弹出的「替换编码」按钮时传；不传就返回 409，让前端弹按钮。
     code_takeover: bool = False
 
@@ -150,6 +162,9 @@ def _to_dict(p: Product, db: Session | None = None, last_in: dict[int, dict] | N
     return {
         "id": p.id,
         "code": p.code,
+        # 端商品：多店铺多编码。codes=[{code, shop}]，shop 为空 = 通用编码（没匹配到店铺的订单归它）
+        "multi_code": bool(getattr(p, "multi_code", False)),
+        "codes": [dict(it) for it in (getattr(p, "codes", None) or []) if isinstance(it, dict)],
         "name": p.name,
         "category": p.category,
         "product_type": p.product_type,
@@ -316,42 +331,90 @@ def list_products(db: Session = Depends(get_db), user: User = Depends(get_curren
     return [_to_dict(p, db, last_in) for p in rows]
 
 
-def _code_owner(db: Session, code: str, exclude_id: int | None = None) -> Product | None:
-    """占用该编码的其他商品（编码一对一：trim 后精确匹配；空编码不校验）。"""
-    code = (code or "").strip()
-    if not code:
-        return None
-    q = select(Product).where(func.trim(Product.code) == code)
-    if exclude_id:
-        q = q.where(Product.id != exclude_id)
-    return db.scalar(q)
+def _code_pair(it) -> tuple[str, str]:
+    """取一条编码项的 (code, shop)：兼容 dict（库里存的 JSON）与 CodeEntry 模型（请求体）。"""
+    if isinstance(it, dict):
+        return str(it.get("code") or "").strip(), str(it.get("shop") or "").strip()
+    return str(getattr(it, "code", "") or "").strip(), str(getattr(it, "shop", "") or "").strip()
 
 
-def _take_code(db: Session, code: str, exclude_id: int | None = None, takeover: bool = False) -> None:
-    """校验商品编码是否被别的商品占着（编码一对一）。
+def _norm_codes(raw: list | None) -> list[dict]:
+    """规范化「端商品」的额外编码 → [{code, shop}]：去空白、丢空编码、同编码只留第一条。"""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for it in (raw or []):
+        code, shop = _code_pair(it)
+        if not code or code in seen:
+            continue
+        if len(code) > 128:
+            raise HTTPException(400, f"编码「{code[:20]}…」过长（≤128 字）")
+        if len(shop) > 64:
+            raise HTTPException(400, f"店铺名「{shop[:20]}…」过长（≤64 字）")
+        seen.add(code)
+        out.append({"code": code, "shop": shop})
+    return out
 
-    被占用且没点「替换」→ 409，detail 里带上占用方，前端据此弹「替换编码」按钮；
-    点了替换（takeover=True）→ 把原商品编码清空，编码改给当前商品。
+
+def _all_codes_of(p: Product) -> list[str]:
+    """一个商品**生效中**的全部编码：主编码 + （端商品才生效的）额外编码。"""
+    out: list[str] = []
+    main = (getattr(p, "code", "") or "").strip()
+    if main:
+        out.append(main)
+    if getattr(p, "multi_code", False):
+        for it in (getattr(p, "codes", None) or []):
+            c, _shop = _code_pair(it)
+            if c:
+                out.append(c)
+    return out
+
+
+def _take_codes(db: Session, codes: list[str], exclude_id: int | None = None, takeover: bool = False) -> None:
+    """校验这批编码没被别的商品占着（编码全局唯一：主编码 + 端商品额外编码）。
+
+    被占用且没点「替换」→ 409（detail 带占用方，前端据此弹「替换编码」按钮）；
+    点了替换（takeover=True）→ 把原商品上占用该编码的那一条清掉（主编码清空 / 额外编码移除）。
     """
-    owner = _code_owner(db, code, exclude_id)
-    if not owner:
+    wanted = [c.strip() for c in (codes or []) if (c or "").strip()]
+    if not wanted:
         return
-    code = (code or "").strip()
+    owners: dict[str, Product] = {}
+    for p in db.execute(select(Product)).scalars():
+        if exclude_id and p.id == exclude_id:
+            continue
+        for c in _all_codes_of(p):
+            owners.setdefault(c, p)
+    conflicts = [(c, owners[c]) for c in wanted if c in owners]
+    if not conflicts:
+        return
+    code, owner = conflicts[0]
     if not takeover:
         raise HTTPException(409, detail={
-            "message": f"编码「{code}」已被商品「{owner.name}」使用（编码一对一）",
-            "code_conflict": {"id": owner.id, "name": owner.name, "code": code},
+            "message": f"编码「{code}」已被商品「{owner.name}」使用（编码全局唯一）",
+            "code_conflict": {
+                "id": owner.id, "name": owner.name, "code": code,
+                "more": [{"code": c, "name": o.name} for c, o in conflicts[1:]],
+            },
         })
-    owner.code = ""   # 替换：原商品的编码清空，改给当前商品
+    for c, o in conflicts:
+        if (o.code or "").strip() == c:
+            o.code = ""   # 替换：原商品的主编码清空
+        else:
+            o.codes = [dict(it) for it in (o.codes or [])
+                       if str((it or {}).get("code") or "").strip() != c]
 
 
 @router.post("/products")
 def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if db.scalar(select(Product).where(Product.name == data.name.strip())):
         raise HTTPException(400, f"商品「{data.name}」已存在")
-    _take_code(db, data.code, None, data.code_takeover)   # 编码一对一（冲突时 409 让前端弹「替换」）
     if data.product_type not in ("stock", "order"):
         raise HTTPException(400, "商品类型必须为 stock 或 order")
+    multi = bool(data.multi_code) if data.multi_code is not None else False
+    codes = _norm_codes(data.codes)
+    # 编码全局唯一（主编码 + 端商品额外编码；冲突时 409 让前端弹「替换」）
+    _take_codes(db, [data.code.strip()] + ([it["code"] for it in codes] if multi else []),
+                None, data.code_takeover)
     stock_links = _validate_stock_links(db, data)
     schemes = _validate_stock_schemes(db, data)
     if schemes and not stock_links:
@@ -361,6 +424,8 @@ def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = 
     conversions = data.conversions or default_conversions(data.base_unit)
     p = Product(
         code=data.code.strip(),
+        multi_code=multi,
+        codes=codes,
         name=data.name.strip(),
         category=data.category.strip(),
         product_type=data.product_type,
@@ -452,11 +517,16 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
     dup = db.scalar(select(Product).where(Product.name == data.name.strip(), Product.id != pid))
     if dup:
         raise HTTPException(400, f"商品「{data.name}」已存在")
-    # 编码一对一：只在「编码有变化」时校验（历史重复的编码不拦改名/改价，用户可点替换逐个理顺）
-    if data.code.strip() != (p.code or "").strip():
-        _take_code(db, data.code, pid, data.code_takeover)
     if data.product_type not in ("stock", "order"):
         raise HTTPException(400, "商品类型必须为 stock 或 order")
+    # 端商品：未传（None）= 保留原值 / 原编码清单，兼容未升级客户端（手机 App）
+    multi = bool(data.multi_code) if data.multi_code is not None else bool(getattr(p, "multi_code", False))
+    codes = (_norm_codes(data.codes) if data.codes is not None
+             else [dict(it) for it in (getattr(p, "codes", None) or []) if isinstance(it, dict)])
+    # 编码全局唯一：只在「生效的编码集合有变化」时校验（历史重复不拦改名/改价，用户可点替换逐个理顺）
+    new_eff = [data.code.strip()] + ([it["code"] for it in codes] if multi else [])
+    if {c for c in new_eff if c} != set(_all_codes_of(p)):
+        _take_codes(db, new_eff, pid, data.code_takeover)
     if data.stock_links is not None:
         stock_links = _validate_stock_links(db, data)
     elif (data.stock_product_id or None) == (p.stock_product_id or None) \
@@ -478,6 +548,8 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
     # 换基础单位（计数↔重量）先校验并取换算关系：不合格就整体报错，什么都不写
     unit_k = _rescale_base_unit_change(db, p, data.base_unit, data.unit_change_ratio)
     p.code = data.code.strip()
+    p.multi_code = multi
+    p.codes = codes
     p.name = data.name.strip()
     p.category = data.category.strip()
     p.product_type = data.product_type

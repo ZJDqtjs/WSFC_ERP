@@ -43,7 +43,8 @@
 </head>
 <body>
 <h1>SKU 成本接口测试 · <code>GET /api/open/sku-costs</code></h1>
-<div class="sub">按京东 skuId 返回单件成本口径。<b>Token 走请求头 <code>X-Api-Token</code>，不能拼在 URL 上</b>（拼在 query 里不会被读取）。</div>
+<div class="sub">按京东 skuId 返回单件成本口径。<b>Token 走请求头 <code>X-Api-Token</code>，不能拼在 URL 上</b>（拼在 query 里不会被读取）。<br>
+  端商品（同一规格多店铺）：商品上开启「端商品」并维护「编码 + 店铺」后，按出库单的店铺把销量算到该店铺自己的 skuId 上；没匹配到店铺的订单归主编码。</div>
 
 <div class="card">
   <div class="row">

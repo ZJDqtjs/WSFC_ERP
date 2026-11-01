@@ -468,11 +468,16 @@ def _inbound_unpaid(i) -> float:
     return round(i.total_amount or 0.0, 2)
 
 
-def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_other: bool = False) -> dict:
+def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_other: bool = False,
+                split_shop: set[int] | None = None) -> dict:
     """单个分仓的经营汇总（「单仓总览」各分区的数据源）。
 
     exclude_other=True 时不计入「其他收支」（other_expenses 表）：期间费用只剩手工记账支出，
     净利润即「只看商品售卖」的利润；被排除的金额仍以 excluded_other_expense 返回，供前端提示。
+
+    split_shop：需要按**店铺**拆行的商品 id 集合（端商品 / 多店铺多编码）。
+    传入后这些商品的 by_product 行会多一个 ``shop`` 维度（店铺名 = 出库单的 customer），
+    让对外成本表能把销量算到各店铺各自的 SKU 上；报表自己不传它，行数与口径完全不变。
     """
     def scope(model):
         q = select(model)
@@ -559,19 +564,25 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     #      单内只有一条 sale 行时全部归它，与该单口径一致，不会丢账。
     by_product: dict = {}
 
-    def _bucket(pid, spec, dropship, name=""):
-        """按「商品 + 规格 + 是否代发」分桶：出库明细里代发与库存商品不混在一起，也按规格区分。
+    def _bucket(pid, spec, dropship, name="", shop=""):
+        """按「商品 + 规格 + 是否代发（+ 端商品的店铺）」分桶：出库明细里代发与库存商品不混在一起，也按规格区分。
 
         注意：这里**不能**把空规格就地归一成商品名——结算行（owned_rows/_spread）调用时
         拿不到商品名（name 传空），就地归一会让结算行找不到销售行那个桶、关联成本丢失。
         规格归一统一放在输出阶段做（见下方 _merge_by_name）。
+
+        店铺维度只在 split_shop 指定了该商品时生效（端商品多店铺多编码，对外成本表按店铺拆）；
+        其它商品一律 shop="" 入桶，报表口径与行数完全不变。
         """
+        key_shop = shop if (split_shop and pid in split_shop) else ""
         return by_product.setdefault(
-            (pid, spec, dropship),
+            (pid, spec, dropship, key_shop),
             {
                 "product_id": pid,
                 "spec": spec,
                 "is_dropship": dropship,
+                # 店铺（端商品才非空）：对外成本表据此把销量算到该店铺的 SKU 上
+                "shop": key_shop,
                 "name": name,
                 "code": "",  # 商品编码：订单商品上一般填的是平台 SKU（京东 skuId），对外成本表按它对账
                 "unit": "",  # 销量单位（商品的默认单位，如 单 / 袋 / 公斤）
@@ -628,12 +639,15 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             # 来源：手动建单（无导入分组）/ 聚水潭导入（备注带「聚水潭」）/ 其他批量导入
             func.max(func.coalesce(Outbound.import_group, "")).label("ig"),
             func.max(case((Outbound.remark.like("%聚水潭%"), 1), else_=0)).label("jst"),
+            # 店铺名（= 出库单的客户/店铺）：端商品按店铺拆行时才用，见 _bucket
+            func.trim(func.coalesce(Outbound.customer, "")).label("shop"),
         )
         .select_from(OutboundLine)
         .join(Outbound, Outbound.id == OutboundLine.outbound_id)
         .join(Product, Product.id == OutboundLine.product_id, isouter=True)
         .where(OutboundLine.line_type == "sale", *line_conds, paid_out)
-        .group_by(OutboundLine.outbound_id, OutboundLine.product_id, spec_expr, dr_expr)
+        .group_by(OutboundLine.outbound_id, OutboundLine.product_id, spec_expr, dr_expr,
+                  func.trim(func.coalesce(Outbound.customer, "")))
     ).all()
 
     # ② 有关联对象的结算行：归到「本单该销售商品所在的桶」
@@ -653,6 +667,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             func.coalesce(owner.is_dropship, 0).label("dr"),
             field_expr.label("field"),
             func.coalesce(func.sum(OutboundLine.cogs), 0).label("amt"),
+            # 结算成本也要落到「该单店铺」的桶里（端商品按店铺拆行时才生效）
+            func.trim(func.coalesce(Outbound.customer, "")).label("shop"),
         )
         .select_from(OutboundLine)
         .join(Outbound, Outbound.id == OutboundLine.outbound_id)
@@ -662,7 +678,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         .join(pk, pk.id == OutboundLine.product_id, isouter=True)
         .where(OutboundLine.line_type == "pack", *line_conds, paid_out)
         .group_by(owner.product_id, func.trim(func.coalesce(owner.spec, "")),
-                  func.coalesce(owner.is_dropship, 0), field_expr)
+                  func.coalesce(owner.is_dropship, 0), field_expr,
+                  func.trim(func.coalesce(Outbound.customer, "")))
     ).all()
 
     # ③ 无归属的结算成本：按「单 × 类别」聚合，稍后按销售金额占比分摊
@@ -700,7 +717,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             du_of[_p.id] = (_du, _f)
 
     for r in sale_rows:
-        d = _bucket(r.pid, r.spec, bool(r.dr), r.pname or "")
+        d = _bucket(r.pid, r.spec, bool(r.dr), r.pname or "", r.shop or "")
         if r.pname:  # 名称以销售行自身的商品为准（结算行只累加金额，不参与命名）
             d["name"] = r.pname
         if r.pcode:  # 同理带上商品编码（对外成本表按平台 SKU 对账用）
@@ -717,7 +734,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         d["cogs"] += float(r.goods or 0.0)
 
     for r in owned_rows:
-        d = _bucket(r.pid, r.spec, bool(r.dr), "")
+        d = _bucket(r.pid, r.spec, bool(r.dr), "", r.shop or "")
         d[r.field] += float(r.amt or 0.0)
 
     # 分摊无归属的关联成本（按单内销售金额占比；金额为 0 时按销售行数平均）——
@@ -735,7 +752,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         tot_n = sum(int(x.n or 0) for x in rows_o)
         for x in rows_o:
             share = (float(x.amt or 0.0) / tot_amt) if tot_amt else ((int(x.n or 0) / tot_n) if tot_n else 0.0)
-            _bucket(x.pid, x.spec, bool(x.dr), "")[field] += float(amt or 0.0) * share
+            _bucket(x.pid, x.spec, bool(x.dr), "", x.shop or "")[field] += float(amt or 0.0) * share
 
     for r in unowned_rows:
         _spread(r.oid, r.field, float(r.amt or 0.0))
@@ -859,6 +876,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 # 规格 + 是否代发：前端据此把「代发」单独标出、并按规格区分
                 "spec": d["spec"],
                 "is_dropship": d["is_dropship"],
+                # 店铺：只有对外成本表（端商品按店铺拆行）会用，报表页不显示（默认全为空串）
+                "shop": d.get("shop") or "",
                 "name": d["name"],
                 # 商品编码：订单商品上一般填的是平台 SKU（京东为数字 skuId）
                 "code": d.get("code") or "",
@@ -901,7 +920,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     #   多个非空规格（真有规格差异）→ 空规格单独成行，规格标为「未标注规格」，不丢数据。
     _by_pid: dict[tuple, list[dict]] = {}
     for r in product_rows:
-        _by_pid.setdefault((r["product_id"], bool(r["is_dropship"])), []).append(r)
+        # 端商品按店铺拆行时，规格归一只能在同一个店铺内做，否则会把不同店铺的行并回去
+        _by_pid.setdefault((r["product_id"], bool(r["is_dropship"]), r.get("shop") or ""), []).append(r)
     _merged: list[dict] = []
     for _rows in _by_pid.values():
         _named = [r for r in _rows if (r["spec"] or "").strip()]

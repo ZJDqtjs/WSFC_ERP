@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from openpyxl import Workbook, load_workbook
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
@@ -25,6 +25,7 @@ from ..services import (
     create_inbound,
     create_outbound,
     default_conversions,
+    find_product_by_code,
     fmt_qty,
     recompute_product,
     resolve_product,
@@ -314,7 +315,8 @@ def import_products(file: UploadFile, db: Session = Depends(get_db), user: User 
             continue
         try:
             code = cell(row, mapping.get("code"))
-            if db.scalar(select(Product).where(Product.name == name)) or (code and db.scalar(select(Product).where(Product.code == code))):
+            # 查重：同名商品，或该编码已被任何商品占用（含端商品的额外编码）
+            if db.scalar(select(Product).where(Product.name == name)) or (code and find_product_by_code(db, code)):
                 skipped += 1
                 continue
             unit = cell(row, mapping.get("unit"))
@@ -774,8 +776,9 @@ def _resolve_jst_product(db: Session, mapping_by_code: dict[str, CodeMapping], e
         return same
     if mapped:
         return mapped
-    # 未配置编码关联时，回退按商品名称/编码精确匹配（如「佛手柑中果2个」）
-    return db.scalar(select(Product).where(or_(Product.name == ext_name, Product.code == ext_name)))
+    # 未配置编码关联时，回退按商品名称/编码精确匹配（如「佛手柑中果2个」）；
+    # 端商品的额外编码（多店铺 skuId）也要能命中
+    return resolve_product(db, ext_name)
 
 
 def _collect_batch_unit_price(db: Session, orders: list[dict], mapping_by_code: dict[str, CodeMapping]) -> dict[int, float]:
@@ -1437,7 +1440,9 @@ def auto_suggest(name: str, products: list[Product]) -> tuple[int | None, float]
     n = _norm(name)
     best, best_score = None, 0.0
     for p in products:
-        for cand in (p.name, p.code):
+        extra = [str((it or {}).get("code") or "") for it in (getattr(p, "codes", None) or [])
+                 if isinstance(it, dict) and getattr(p, "multi_code", False)]
+        for cand in (p.name, p.code, *extra):
             c = _norm(cand)
             if not c:
                 continue

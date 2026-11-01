@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db_wh, get_sessionmaker, load_warehouses, resolve_key
-from ..models import User, WarehouseProduct
+from ..models import Product, User, WarehouseProduct
 from .report import ALL_WH, _heavy_cached, _summary_all, _summary_of
 
 router = APIRouter(prefix="/api", tags=["adprofit"])
@@ -504,6 +504,46 @@ def _warehouse_skus(wh_key: str, db: Session) -> dict[str, str]:
     return out
 
 
+def _code_aliases(wh_key: str, db: Session) -> dict[str, list[str]]:
+    """主编码 → 该商品的全部编码（端商品多店铺多编码，如京东多家店的 skuId）。
+
+    广告花费是按店铺 SKU 抓的：多编码商品要把**所有编码**的广告费累加到同一行商品上，
+    否则没有主编码的那几个店铺会掉进「未匹配 ERP」行、利润被低估。
+    全仓时把各分仓的资料并起来（只收真的有多个编码的商品，普通商品不进表）。
+    """
+
+    def _scan(session) -> dict[str, list[str]]:
+        out: dict[str, list[str]] = {}
+        for p in session.execute(select(Product)).scalars():
+            main = str(p.code or "").strip()
+            if not main:
+                continue
+            codes = [main]
+            if getattr(p, "multi_code", False):
+                for it in (getattr(p, "codes", None) or []):
+                    c = str((it or {}).get("code") or "").strip() if isinstance(it, dict) else ""
+                    if c and c not in codes:
+                        codes.append(c)
+            if len(codes) > 1:
+                out.setdefault(main, codes)
+        return out
+
+    if wh_key != ALL_WH:
+        return _scan(db)
+    out: dict[str, list[str]] = {}
+    for w in load_warehouses().get("list") or []:
+        try:
+            session = get_sessionmaker(str(w.get("key")))()
+        except Exception:  # noqa: BLE001 - 某个仓文件坏了不影响其他仓
+            continue
+        try:
+            for main, codes in _scan(session).items():
+                out.setdefault(main, codes)
+        finally:
+            session.close()
+    return out
+
+
 def _parse_range(date_from: str, date_to: str) -> tuple[date, date]:
     """接口入参的日期区间（默认本月到今天，最长 366 天）。"""
     today = date.today()
@@ -706,19 +746,23 @@ def ad_profit_skus(
         if not b["unit"] and p.get("unit"):
             b["unit"] = str(p["unit"])
 
+    # 端商品（多店铺多编码）：广告费要把该商品所有编码的花费累加到同一行，避免掉进「未匹配 ERP」
+    aliases = _code_aliases(wh_key, db)
     rows: list[dict] = []
     matched: set[str] = set()
     for b in buckets.values():
-        a = ads.get(b["code"]) if b["code"] else None
-        if b["code"] and a:
-            matched.add(b["code"])
-        cps = round(float((a or {}).get("cps") or 0), 2)
-        jzt = round(float((a or {}).get("jzt") or 0), 2)
+        codes = (aliases.get(b["code"]) or [b["code"]]) if b["code"] else []
+        hits = [(c, ads[c]) for c in codes if ads.get(c)]
+        matched.update(c for c, _ in hits)
+        cps = round(sum(float(a.get("cps") or 0) for _, a in hits), 2)
+        jzt = round(sum(float(a.get("jzt") or 0) for _, a in hits), 2)
         ads_total = round(cps + jzt, 2)
         revenue = round(b["revenue"], 2)
         gross = round(b["gross_before"], 2)
         rows.append({
             "sku": b["code"],
+            # 该商品的全部编码（含端商品其它店铺的 skuId），供页面提示/核对；普通商品只有一条
+            "codes": codes,
             "name": b["name"],
             "qty": round(b["qty"], 4),
             "unit": b["unit"],
@@ -739,7 +783,9 @@ def ad_profit_skus(
         })
 
     # ---- 入仓品：成交件数/毛利取自月度利润缓存，利润 = 入仓品毛利 − 广告费 ----
-    erp_codes = {b["code"] for b in buckets.values() if b["code"]}
+    # 也要含端商品的所有编码：这些 SKU 已经并到上面的商品行里了，不能再按入仓品列一遍
+    erp_codes = {c for b in buckets.values() if b["code"]
+                 for c in (aliases.get(b["code"]) or [b["code"]])}
     for sku, pr in profit_rows.items():
         if sku in erp_codes or sku not in wh_skus:
             continue          # 已在 ERP 销售明细里 / 不是入仓品

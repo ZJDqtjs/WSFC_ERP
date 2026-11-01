@@ -619,12 +619,31 @@ def fmt_qty(qty: float) -> str:
     return f"{qty:.4f}".rstrip("0").rstrip(".")
 
 
+def find_product_by_code(db: Session, code: str) -> Product | None:
+    """按编码找商品：主编码优先，其次端商品（多店铺多编码）的额外编码。
+
+    端商品启用后 codes=[{code, shop}] 里的编码同样是这个商品的平台 SKU，
+    聚水潭/Excel 导入按编码找商品时必须能命中，否则会报「商品不存在」或重复建商品。
+    """
+    code = (code or "").strip()
+    if not code:
+        return None
+    p = db.scalar(select(Product).where(Product.code == code))
+    if p:
+        return p
+    for cand in db.execute(select(Product).where(Product.multi_code == True)).scalars():  # noqa: E712 - SQL 布尔
+        for it in (getattr(cand, "codes", None) or []):
+            if isinstance(it, dict) and str(it.get("code") or "").strip() == code:
+                return cand
+    return None
+
+
 def resolve_product(db: Session, key: str) -> Product | None:
     """按商品编码或名称查找商品（导入用）。"""
     key = (key or "").strip()
     if not key:
         return None
-    p = db.scalar(select(Product).where(Product.code == key))
+    p = find_product_by_code(db, key)
     if p:
         return p
     return db.scalar(select(Product).where(Product.name == key))
