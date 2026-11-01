@@ -2939,16 +2939,7 @@ function renderAiQueueBar() {
 function aiQueuePendingCount() {
   return AI_QUEUE.filter((j) => ["waiting", "running", "done"].includes(j.status)).length;
 }
-/** 待办总数（既有「待办处理」按钮上显示）：聚水潭待办 + AI 识别待办 */
-function evaPendingTotal() { return (JST_PENDING_N || 0) + aiQueuePendingCount(); }
-/** 侧边栏「待办处理」角标：有活才亮，和出库页按钮 / 队列条同一口径 */
-function setEvaNavBadge() {
-  const nb = $("evaNavBadge");
-  if (!nb) return;
-  const n = evaPendingTotal();
-  nb.textContent = n ? String(n) : "";   // 清空而不是写 0：「模块显示」面板按 textContent 取标签
-  nb.style.display = n ? "" : "none";
-}
+/** 待办数变了：刷新出库页那个「待办处理（N）」按钮与 AI 队列条 */
 function refreshEvaBadge() {
   jstPendingBtnState();   // 出库页那个「待办处理（N）」按钮：N = 聚水潭 + AI
   renderAiQueueBar();
@@ -10034,7 +10025,6 @@ let JST_PENDING_POPPED = false; // 本次登录只弹一次
 
 /* 出库页那个「待办处理」按钮：待办数 = 聚水潭待办（新商品没规则匹配 / 要验证码）+ AI 识别待办 */
 function jstPendingBtnState() {
-  setEvaNavBadge();      // 侧边栏角标先行刷新（不受下面早退影响）
   const b = $("jstPendingBtn");
   if (!b) return;
   const jst = JST_PENDING_N || 0;
