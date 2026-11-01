@@ -6,7 +6,7 @@
 SKU 口径（两边靠这个对上）：
 - **订单商品**：``products.code`` 存的就是京东 skuId。单件结算收入 = 出库明细 ``amount``
   （卖家实收，即京东结算给我们的钱）÷ 件数。
-- **端商品（多店铺）**：同一规格在多个店铺各有一个 skuId 时，在商品上开启「端商品」并维护
+- **多端商品（多店铺）**：同一规格在多个店铺各有一个 skuId 时，在商品上开启「多端商品」并维护
   ``codes=[{code, shop}]``。出库单的店铺（= 客户名）命中哪个 shop，销量/结算额就归到那个 code：
   每个 SKU 拿到的是**自己店铺**的结算价与成本，不是几家店的混合均价；
   没匹配到店铺的订单归主编码 ``products.code``（主编码为空时归第一条编码）。
@@ -140,7 +140,7 @@ def _defaults() -> dict:
 def _code_entries(db: Session) -> dict[int, dict]:
     """商品 id → 编码清单：[{code, shop}]（主编码 shop 为空 = 通用兜底编码）。
 
-    端商品（``multi_code``）的额外编码带店铺名：同一规格在多个店铺各有一个平台 SKU 时，
+    多端商品（``multi_code``）的额外编码带店铺名：同一规格在多个店铺各有一个平台 SKU 时，
     按出库单的店铺（= 客户名）把销量算到该店铺自己的 SKU 上，而不是混成一个均价。
     """
     out: dict[int, dict] = {}
@@ -184,7 +184,7 @@ def _sku_rows_sale(db: Session, date_from: str, date_to: str, key: str) -> dict:
     直接复用报表的 ``_summary_of``：出库时结算的快递费、包材、人工的归属与分摊规则都在那儿
     （有关联销售商品的直接归它，无归属的按单内销售金额占比分摊），这里不另写一套口径。
 
-    端商品（同一规格多店铺多编码）传 ``split_shop`` 让报表把销量按店铺拆行，
+    多端商品（同一规格多店铺多编码）传 ``split_shop`` 让报表把销量按店铺拆行，
     再按「店铺 → 编码」各自归集 —— 每个 SKU 拿到的是自己店铺的结算价与成本，不是混合均价。
     """
     codes_of = _code_entries(db)
@@ -193,7 +193,7 @@ def _sku_rows_sale(db: Session, date_from: str, date_to: str, key: str) -> dict:
     out: dict = {}
     for r in data.get("by_product") or []:
         pid = r.get("product_id")
-        # 端商品按店铺选编码；普通商品只有主编码
+        # 多端商品按店铺选编码；普通商品只有主编码
         code = _pick_code(codes_of.get(pid), r.get("shop") or "")
         if not code:
             code = str(r.get("code") or "").strip()

@@ -5357,13 +5357,13 @@ function searchHit(hay, kws) {
   const groups = (kws && kws.groups) || (kws && kws.length ? [kws] : []);
   return !groups.length || groups.some((g) => g.every((k) => text.includes(k)));
 }
-/** 商品列表「编码」格：主编码 + 端商品的其它编码（悬停看全部） */
+/** 商品列表「编码」格：主编码 + 多端商品的其它编码（悬停看全部） */
 function codeCellHtml(p) {
   const extra = ((p && p.multi_code) ? (p.codes || []) : []).filter((x) => x && x.code);
   const main = esc((p && p.code) || "") || "—";
   if (!extra.length) return main;
   const tip = extra.map((x) => `${x.code}${x.shop ? "（" + x.shop + "）" : ""}`).join("\n");
-  return `${main} <span class="badge income" title="${esc(tip)}">端商品 +${extra.length}</span>`;
+  return `${main} <span class="badge income" title="${esc(tip)}">多端商品 +${extra.length}</span>`;
 }
 
 async function renderProducts() {
@@ -5419,7 +5419,7 @@ async function renderProducts() {
     const packs = (p.pack_items || [])
       .map((it) => (PRODUCTS.find((x) => x.id === it.product_id) || {}).name || "")
       .join(" ");
-    // 端商品的其它编码 / 店铺名也进搜索：搜店铺能筛出它的商品，搜副编码也能找到
+    // 多端商品的其它编码 / 店铺名也进搜索：搜店铺能筛出它的商品，搜副编码也能找到
     const extraCodes = p.multi_code
       ? (p.codes || []).map((it) => `${it.code || ""} ${it.shop || ""}`).join(" ")
       : "";
@@ -5647,7 +5647,7 @@ async function openProductModal(pid = 0, prefillName = "") {
       <div class="field" id="pMultiBox" style="grid-column:1/-1;">
         <label style="display:flex;gap:6px;align-items:center;">
           <input type="checkbox" id="pMultiCode" ${p?.multi_code ? "checked" : ""} onchange="pMultiToggle()" />
-          端商品（同一规格在多个店铺/端各有一个编码，如京东多家店的 skuId）
+          多端商品（同一规格在多个店铺/端各有一个编码，如京东多家店的 skuId）
         </label>
         <div class="field-hint">开启后可填「编码 + 店铺」多条：对外成本表 <code>/api/open/sku-costs</code> 按出库单的客户/店铺名把销量算到对应编码上（每个 SKU 拿到自己店铺的结算价与成本）；没填店铺的是通用编码。编码全局唯一（主编码 + 这里的编码）</div>
         <div id="pCodesBox" style="margin-top:8px;display:${p?.multi_code ? "" : "none"};">
@@ -5695,7 +5695,7 @@ async function openProductModal(pid = 0, prefillName = "") {
       <button class="btn" onclick="saveProduct(${pid || 0})">保存</button>
     </div>`);
   initProductUnitSelect(ptype, curUnit);
-  initCodeRows(p?.codes || [], !!(p && p.multi_code));   // 端商品：多店铺多编码回填
+  initCodeRows(p?.codes || [], !!(p && p.multi_code));   // 多端商品：多店铺多编码回填
   if ($("pMultiBox")) $("pMultiBox").style.display = ptype === "order" ? "" : "none";
   updateProductPriceLabels(du0, f0, up0.base_unit);   // 价格字段标签/提示按默认单位显示
   updateUnitChangeBox(up0);                            // 跨类别换单位时显示「换算关系」输入框（初始=没换，隐藏）
@@ -5833,7 +5833,7 @@ function deriveUnitPayload(ptype, unit, prev) {
 function pTypeChanged() {
   const t = $("pType").value;
   $("pStockBox").style.display = t === "order" ? "grid" : "none";
-  // 端商品（多店铺多编码）只对订单商品有意义（平台 SKU 是卖出商品的编码）
+  // 多端商品（多店铺多编码）只对订单商品有意义（平台 SKU 是卖出商品的编码）
   if ($("pMultiBox")) $("pMultiBox").style.display = t === "order" ? "" : "none";
   initProductUnitSelect(t, $("pUnit").value);
   if (t === "order" && !STOCKS.length) {
@@ -5938,7 +5938,7 @@ function collectPacks() {
   });
   return out;
 }
-/* ---------- 端商品（同一规格多店铺多编码，如京东多家店 skuId） ---------- */
+/* ---------- 多端商品（同一规格多店铺多编码，如京东多家店 skuId） ---------- */
 function codeRowHtml(code = "", shop = "") {
   return `<div class="code-row" style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
     <input class="pc-code" placeholder="编码（如京东 skuId 100157104844）" value="${esc(code)}" style="flex:1;" />
@@ -5996,7 +5996,7 @@ async function saveProduct(pid, opts) {
     code: $("pCode").value,
     // 编码冲突时点「替换编码」→ 传 true：把占用该编码的原商品编码清空，改给当前商品
     code_takeover: !!(opts && opts.takeover),
-    // 端商品：多店铺多编码（开关关着时后端不使用这些编码，但仍然保存，重新打开不用重填）
+    // 多端商品：多店铺多编码（开关关着时后端不使用这些编码，但仍然保存，重新打开不用重填）
     multi_code: multiCode,
     codes: collectCodes(),
     name: $("pName").value,

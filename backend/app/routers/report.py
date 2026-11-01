@@ -475,7 +475,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     exclude_other=True 时不计入「其他收支」（other_expenses 表）：期间费用只剩手工记账支出，
     净利润即「只看商品售卖」的利润；被排除的金额仍以 excluded_other_expense 返回，供前端提示。
 
-    split_shop：需要按**店铺**拆行的商品 id 集合（端商品 / 多店铺多编码）。
+    split_shop：需要按**店铺**拆行的商品 id 集合（多端商品 / 多店铺多编码）。
     传入后这些商品的 by_product 行会多一个 ``shop`` 维度（店铺名 = 出库单的 customer），
     让对外成本表能把销量算到各店铺各自的 SKU 上；报表自己不传它，行数与口径完全不变。
     """
@@ -565,13 +565,13 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     by_product: dict = {}
 
     def _bucket(pid, spec, dropship, name="", shop=""):
-        """按「商品 + 规格 + 是否代发（+ 端商品的店铺）」分桶：出库明细里代发与库存商品不混在一起，也按规格区分。
+        """按「商品 + 规格 + 是否代发（+ 多端商品的店铺）」分桶：出库明细里代发与库存商品不混在一起，也按规格区分。
 
         注意：这里**不能**把空规格就地归一成商品名——结算行（owned_rows/_spread）调用时
         拿不到商品名（name 传空），就地归一会让结算行找不到销售行那个桶、关联成本丢失。
         规格归一统一放在输出阶段做（见下方 _merge_by_name）。
 
-        店铺维度只在 split_shop 指定了该商品时生效（端商品多店铺多编码，对外成本表按店铺拆）；
+        店铺维度只在 split_shop 指定了该商品时生效（多端商品多店铺多编码，对外成本表按店铺拆）；
         其它商品一律 shop="" 入桶，报表口径与行数完全不变。
         """
         key_shop = shop if (split_shop and pid in split_shop) else ""
@@ -581,7 +581,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "product_id": pid,
                 "spec": spec,
                 "is_dropship": dropship,
-                # 店铺（端商品才非空）：对外成本表据此把销量算到该店铺的 SKU 上
+                # 店铺（多端商品才非空）：对外成本表据此把销量算到该店铺的 SKU 上
                 "shop": key_shop,
                 "name": name,
                 "code": "",  # 商品编码：订单商品上一般填的是平台 SKU（京东 skuId），对外成本表按它对账
@@ -639,7 +639,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             # 来源：手动建单（无导入分组）/ 聚水潭导入（备注带「聚水潭」）/ 其他批量导入
             func.max(func.coalesce(Outbound.import_group, "")).label("ig"),
             func.max(case((Outbound.remark.like("%聚水潭%"), 1), else_=0)).label("jst"),
-            # 店铺名（= 出库单的客户/店铺）：端商品按店铺拆行时才用，见 _bucket
+            # 店铺名（= 出库单的客户/店铺）：多端商品按店铺拆行时才用，见 _bucket
             func.trim(func.coalesce(Outbound.customer, "")).label("shop"),
         )
         .select_from(OutboundLine)
@@ -667,7 +667,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             func.coalesce(owner.is_dropship, 0).label("dr"),
             field_expr.label("field"),
             func.coalesce(func.sum(OutboundLine.cogs), 0).label("amt"),
-            # 结算成本也要落到「该单店铺」的桶里（端商品按店铺拆行时才生效）
+            # 结算成本也要落到「该单店铺」的桶里（多端商品按店铺拆行时才生效）
             func.trim(func.coalesce(Outbound.customer, "")).label("shop"),
         )
         .select_from(OutboundLine)
@@ -876,7 +876,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 # 规格 + 是否代发：前端据此把「代发」单独标出、并按规格区分
                 "spec": d["spec"],
                 "is_dropship": d["is_dropship"],
-                # 店铺：只有对外成本表（端商品按店铺拆行）会用，报表页不显示（默认全为空串）
+                # 店铺：只有对外成本表（多端商品按店铺拆行）会用，报表页不显示（默认全为空串）
                 "shop": d.get("shop") or "",
                 "name": d["name"],
                 # 商品编码：订单商品上一般填的是平台 SKU（京东为数字 skuId）
@@ -920,7 +920,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     #   多个非空规格（真有规格差异）→ 空规格单独成行，规格标为「未标注规格」，不丢数据。
     _by_pid: dict[tuple, list[dict]] = {}
     for r in product_rows:
-        # 端商品按店铺拆行时，规格归一只能在同一个店铺内做，否则会把不同店铺的行并回去
+        # 多端商品按店铺拆行时，规格归一只能在同一个店铺内做，否则会把不同店铺的行并回去
         _by_pid.setdefault((r["product_id"], bool(r["is_dropship"]), r.get("shop") or ""), []).append(r)
     _merged: list[dict] = []
     for _rows in _by_pid.values():

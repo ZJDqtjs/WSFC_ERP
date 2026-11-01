@@ -41,7 +41,7 @@ class StockSchemeIn(BaseModel):
 
 
 class CodeEntry(BaseModel):
-    """端商品的一条额外编码：code = 平台 SKU（如京东 skuId），shop = 该编码所属店铺名。"""
+    """多端商品的一条额外编码：code = 平台 SKU（如京东 skuId），shop = 该编码所属店铺名。"""
 
     code: str = ""
     shop: str = ""
@@ -69,7 +69,7 @@ class ProductIn(BaseModel):
     # 多套扣减方案：[{name, links:[{product_id, multiplier}]}]。
     # None = 未提供（保留原有方案，兼容未升级客户端）；[] = 清空（只剩 stock_links 那一套）
     stock_schemes: list[StockSchemeIn] | None = None
-    # 端商品：同一规格在多个店铺各有一个编码（如京东多店铺 skuId）。
+    # 多端商品：同一规格在多个店铺各有一个编码（如京东多店铺 skuId）。
     # None = 未提供（保留原值，兼容未升级客户端）；True/False = 显式开关
     multi_code: bool | None = None
     # 额外编码：[{code, shop}]；None = 未提供（保留原值）；[] = 清空
@@ -78,7 +78,7 @@ class ProductIn(BaseModel):
     # 商品已有库存流水/入库记录/库存时必须给（见 _rescale_base_unit_change）；没有历史数据时可省。
     unit_change_ratio: float | None = None
     is_active: bool = True
-    # 编码冲突时是否「替换」：True = 把占用该编码的原商品（主编码 / 端商品编码）上的那条编码清掉、改给当前商品。
+    # 编码冲突时是否「替换」：True = 把占用该编码的原商品（主编码 / 多端商品编码）上的那条编码清掉、改给当前商品。
     # 用户点前端弹出的「替换编码」按钮时传；不传就返回 409，让前端弹按钮。
     code_takeover: bool = False
 
@@ -162,7 +162,7 @@ def _to_dict(p: Product, db: Session | None = None, last_in: dict[int, dict] | N
     return {
         "id": p.id,
         "code": p.code,
-        # 端商品：多店铺多编码。codes=[{code, shop}]，shop 为空 = 通用编码（没匹配到店铺的订单归它）
+        # 多端商品：多店铺多编码。codes=[{code, shop}]，shop 为空 = 通用编码（没匹配到店铺的订单归它）
         "multi_code": bool(getattr(p, "multi_code", False)),
         "codes": [dict(it) for it in (getattr(p, "codes", None) or []) if isinstance(it, dict)],
         "name": p.name,
@@ -339,7 +339,7 @@ def _code_pair(it) -> tuple[str, str]:
 
 
 def _norm_codes(raw: list | None) -> list[dict]:
-    """规范化「端商品」的额外编码 → [{code, shop}]：去空白、丢空编码、同编码只留第一条。"""
+    """规范化「多端商品」的额外编码 → [{code, shop}]：去空白、丢空编码、同编码只留第一条。"""
     out: list[dict] = []
     seen: set[str] = set()
     for it in (raw or []):
@@ -356,7 +356,7 @@ def _norm_codes(raw: list | None) -> list[dict]:
 
 
 def _all_codes_of(p: Product) -> list[str]:
-    """一个商品**生效中**的全部编码：主编码 + （端商品才生效的）额外编码。"""
+    """一个商品**生效中**的全部编码：主编码 + （多端商品才生效的）额外编码。"""
     out: list[str] = []
     main = (getattr(p, "code", "") or "").strip()
     if main:
@@ -370,7 +370,7 @@ def _all_codes_of(p: Product) -> list[str]:
 
 
 def _take_codes(db: Session, codes: list[str], exclude_id: int | None = None, takeover: bool = False) -> None:
-    """校验这批编码没被别的商品占着（编码全局唯一：主编码 + 端商品额外编码）。
+    """校验这批编码没被别的商品占着（编码全局唯一：主编码 + 多端商品额外编码）。
 
     被占用且没点「替换」→ 409（detail 带占用方，前端据此弹「替换编码」按钮）；
     点了替换（takeover=True）→ 把原商品上占用该编码的那一条清掉（主编码清空 / 额外编码移除）。
@@ -412,7 +412,7 @@ def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = 
         raise HTTPException(400, "商品类型必须为 stock 或 order")
     multi = bool(data.multi_code) if data.multi_code is not None else False
     codes = _norm_codes(data.codes)
-    # 编码全局唯一（主编码 + 端商品额外编码；冲突时 409 让前端弹「替换」）
+    # 编码全局唯一（主编码 + 多端商品额外编码；冲突时 409 让前端弹「替换」）
     _take_codes(db, [data.code.strip()] + ([it["code"] for it in codes] if multi else []),
                 None, data.code_takeover)
     stock_links = _validate_stock_links(db, data)
@@ -519,7 +519,7 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
         raise HTTPException(400, f"商品「{data.name}」已存在")
     if data.product_type not in ("stock", "order"):
         raise HTTPException(400, "商品类型必须为 stock 或 order")
-    # 端商品：未传（None）= 保留原值 / 原编码清单，兼容未升级客户端（手机 App）
+    # 多端商品：未传（None）= 保留原值 / 原编码清单，兼容未升级客户端（手机 App）
     multi = bool(data.multi_code) if data.multi_code is not None else bool(getattr(p, "multi_code", False))
     codes = (_norm_codes(data.codes) if data.codes is not None
              else [dict(it) for it in (getattr(p, "codes", None) or []) if isinstance(it, dict)])

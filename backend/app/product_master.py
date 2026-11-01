@@ -81,7 +81,7 @@ def _product_dict(p: Product, db) -> dict:
         stock_links = [{"product": sp_name, "multiplier": p.multiplier}]
     return {
         "code": p.code,
-        # 端商品：同一规格在多个店铺各有一个编码（如京东多店铺 skuId）
+        # 多端商品：同一规格在多个店铺各有一个编码（如京东多店铺 skuId）
         "multi_code": bool(getattr(p, "multi_code", False)),
         "codes": [dict(it) for it in (getattr(p, "codes", None) or []) if isinstance(it, dict)],
         "name": p.name,
@@ -228,7 +228,7 @@ def _import_products(db, items, default_type: str) -> dict:
         else:
             updated += 1
         p.code = str(it.get("code", "")).strip()
-        # 端商品多编码：JSON 里没这两项（老备份文件）时保留原值，不把开关/编码冲掉
+        # 多端商品多编码：JSON 里没这两项（老备份文件）时保留原值，不把开关/编码冲掉
         if "multi_code" in it:
             p.multi_code = bool(it.get("multi_code"))
         if "codes" in it:

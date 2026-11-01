@@ -315,7 +315,7 @@ def import_products(file: UploadFile, db: Session = Depends(get_db), user: User 
             continue
         try:
             code = cell(row, mapping.get("code"))
-            # 查重：同名商品，或该编码已被任何商品占用（含端商品的额外编码）
+            # 查重：同名商品，或该编码已被任何商品占用（含多端商品的额外编码）
             if db.scalar(select(Product).where(Product.name == name)) or (code and find_product_by_code(db, code)):
                 skipped += 1
                 continue
@@ -777,7 +777,7 @@ def _resolve_jst_product(db: Session, mapping_by_code: dict[str, CodeMapping], e
     if mapped:
         return mapped
     # 未配置编码关联时，回退按商品名称/编码精确匹配（如「佛手柑中果2个」）；
-    # 端商品的额外编码（多店铺 skuId）也要能命中
+    # 多端商品的额外编码（多店铺 skuId）也要能命中
     return resolve_product(db, ext_name)
 
 

@@ -505,7 +505,7 @@ def _warehouse_skus(wh_key: str, db: Session) -> dict[str, str]:
 
 
 def _code_aliases(wh_key: str, db: Session) -> dict[str, list[str]]:
-    """主编码 → 该商品的全部编码（端商品多店铺多编码，如京东多家店的 skuId）。
+    """主编码 → 该商品的全部编码（多端商品多店铺多编码，如京东多家店的 skuId）。
 
     广告花费是按店铺 SKU 抓的：多编码商品要把**所有编码**的广告费累加到同一行商品上，
     否则没有主编码的那几个店铺会掉进「未匹配 ERP」行、利润被低估。
@@ -746,7 +746,7 @@ def ad_profit_skus(
         if not b["unit"] and p.get("unit"):
             b["unit"] = str(p["unit"])
 
-    # 端商品（多店铺多编码）：广告费要把该商品所有编码的花费累加到同一行，避免掉进「未匹配 ERP」
+    # 多端商品（多店铺多编码）：广告费要把该商品所有编码的花费累加到同一行，避免掉进「未匹配 ERP」
     aliases = _code_aliases(wh_key, db)
     rows: list[dict] = []
     matched: set[str] = set()
@@ -761,7 +761,7 @@ def ad_profit_skus(
         gross = round(b["gross_before"], 2)
         rows.append({
             "sku": b["code"],
-            # 该商品的全部编码（含端商品其它店铺的 skuId），供页面提示/核对；普通商品只有一条
+            # 该商品的全部编码（含多端商品其它店铺的 skuId），供页面提示/核对；普通商品只有一条
             "codes": codes,
             "name": b["name"],
             "qty": round(b["qty"], 4),
@@ -783,7 +783,7 @@ def ad_profit_skus(
         })
 
     # ---- 入仓品：成交件数/毛利取自月度利润缓存，利润 = 入仓品毛利 − 广告费 ----
-    # 也要含端商品的所有编码：这些 SKU 已经并到上面的商品行里了，不能再按入仓品列一遍
+    # 也要含多端商品的所有编码：这些 SKU 已经并到上面的商品行里了，不能再按入仓品列一遍
     erp_codes = {c for b in buckets.values() if b["code"]
                  for c in (aliases.get(b["code"]) or [b["code"]])}
     for sku, pr in profit_rows.items():

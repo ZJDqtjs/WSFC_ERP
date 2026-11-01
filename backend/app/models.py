@@ -37,7 +37,7 @@ class Product(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(128), default="", index=True)  # 商品编码（主编码）
-    # 端商品：同一规格在多个店铺/端各有一个编码（如京东多店铺的 skuId）。
+    # 多端商品：同一规格在多个店铺/端各有一个编码（如京东多店铺的 skuId）。
     # 开关打开后 codes 生效；主编码 code 仍保留，作为「没匹配到店铺」时的兜底编码。
     multi_code: Mapped[bool] = mapped_column(Boolean, default=False)
     # 额外编码：[{code, shop}]，shop = 该编码所属店铺（与出库单的客户/店铺名一致）。

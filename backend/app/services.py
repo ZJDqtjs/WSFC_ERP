@@ -620,9 +620,9 @@ def fmt_qty(qty: float) -> str:
 
 
 def find_product_by_code(db: Session, code: str) -> Product | None:
-    """按编码找商品：主编码优先，其次端商品（多店铺多编码）的额外编码。
+    """按编码找商品：主编码优先，其次多端商品（多店铺多编码）的额外编码。
 
-    端商品启用后 codes=[{code, shop}] 里的编码同样是这个商品的平台 SKU，
+    多端商品启用后 codes=[{code, shop}] 里的编码同样是这个商品的平台 SKU，
     聚水潭/Excel 导入按编码找商品时必须能命中，否则会报「商品不存在」或重复建商品。
     """
     code = (code or "").strip()
