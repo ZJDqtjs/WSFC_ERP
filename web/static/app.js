@@ -5309,6 +5309,15 @@ function searchHit(hay, kws) {
   const groups = (kws && kws.groups) || (kws && kws.length ? [kws] : []);
   return !groups.length || groups.some((g) => g.every((k) => text.includes(k)));
 }
+/** 商品列表「编码」格：主编码 + 端商品的其它编码（悬停看全部） */
+function codeCellHtml(p) {
+  const extra = ((p && p.multi_code) ? (p.codes || []) : []).filter((x) => x && x.code);
+  const main = esc((p && p.code) || "") || "—";
+  if (!extra.length) return main;
+  const tip = extra.map((x) => `${x.code}${x.shop ? "（" + x.shop + "）" : ""}`).join("\n");
+  return `${main} <span class="badge income" title="${esc(tip)}">端商品 +${extra.length}</span>`;
+}
+
 async function renderProducts() {
   if (!PRODUCTS.length) PRODUCTS = await api("/api/products");
   const EXCLUDED = ["包材", "人工", "快递"]; // 已独立成侧边栏入口的分类，商品页默认不显示
@@ -5776,6 +5785,8 @@ function deriveUnitPayload(ptype, unit, prev) {
 function pTypeChanged() {
   const t = $("pType").value;
   $("pStockBox").style.display = t === "order" ? "grid" : "none";
+  // 端商品（多店铺多编码）只对订单商品有意义（平台 SKU 是卖出商品的编码）
+  if ($("pMultiBox")) $("pMultiBox").style.display = t === "order" ? "" : "none";
   initProductUnitSelect(t, $("pUnit").value);
   if (t === "order" && !STOCKS.length) {
     api("/api/stocks").then((stocks) => {
