@@ -957,6 +957,7 @@ $("logoutBtn").addEventListener("click", async () => {
   AI_QUEUE_FILES.clear();
   AI_QUEUE_CURRENT = null;
   AI_CONFIRM = null;
+  JST_PENDING_N = 0;   // 聚水潭待办计数也归零，避免侧边栏角标残留上一个分仓的数字
   try { refreshEvaBadge(); renderEva(); } catch (e) {}
   showLogin();
 });
@@ -2940,6 +2941,14 @@ function aiQueuePendingCount() {
 }
 /** 待办总数（既有「待办处理」按钮上显示）：聚水潭待办 + AI 识别待办 */
 function evaPendingTotal() { return (JST_PENDING_N || 0) + aiQueuePendingCount(); }
+/** 侧边栏「待办处理」角标：有活才亮，和出库页按钮 / 队列条同一口径 */
+function setEvaNavBadge() {
+  const nb = $("evaNavBadge");
+  if (!nb) return;
+  const n = evaPendingTotal();
+  nb.textContent = n ? String(n) : "";   // 清空而不是写 0：「模块显示」面板按 textContent 取标签
+  nb.style.display = n ? "" : "none";
+}
 function refreshEvaBadge() {
   jstPendingBtnState();   // 出库页那个「待办处理（N）」按钮：N = 聚水潭 + AI
   renderAiQueueBar();
@@ -10025,6 +10034,7 @@ let JST_PENDING_POPPED = false; // 本次登录只弹一次
 
 /* 出库页那个「待办处理」按钮：待办数 = 聚水潭待办（新商品没规则匹配 / 要验证码）+ AI 识别待办 */
 function jstPendingBtnState() {
+  setEvaNavBadge();      // 侧边栏角标先行刷新（不受下面早退影响）
   const b = $("jstPendingBtn");
   if (!b) return;
   const jst = JST_PENDING_N || 0;
@@ -10781,6 +10791,7 @@ function startMaintenanceWatch() {
   loadDashboard();
   aiQueueLoad();    // AI 识别队列（待办处理）：恢复上次未处理完的识别结果，并继续跑排队中的任务
   aiQueueTick();
+  refreshEvaBadge(); // 侧边栏「待办处理」角标：开机恢复的队列立刻可见
   applyHashRoute(); // 支持深链：登录后跳转到指定二级页
   checkJstPending(); // 自动出库待办（商品资料待补全 / 需要验证码）：有就弹窗提醒
 })();
