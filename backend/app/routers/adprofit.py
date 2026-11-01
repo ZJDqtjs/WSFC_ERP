@@ -613,6 +613,8 @@ def ad_profit_summary(
             "expense": round(float(base.get("expense") or 0), 2),
             "manual_expense": round(float(base.get("manual_expense") or 0), 2),
             "other_expense": round(float(base.get("other_expense") or 0), 2),
+            # 广告费充值已从 ERP 期间费用里剔出（广告费只在本页按实际消耗扣一次）
+            "ad_prepay_expense": round(float(base.get("ad_prepay_expense") or 0), 2),
             "excluded_other_expense": round(float(base.get("excluded_other_expense") or 0), 2),
             "exclude_other_expense": bool(base.get("exclude_other_expense")),
             "net_profit": net,

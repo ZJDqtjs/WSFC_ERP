@@ -742,6 +742,16 @@ def sync_adjust_expense(db: Session, kind: str, ref_id: int, code: str, date: st
 INBOUND_FEE_REF = "inbound_fee"
 INBOUND_FEE_CATEGORIES = (("freight", "运费"), ("handling", "装卸费"), ("fee", "转账手续费"))
 
+# 「广告费充值」类其他收支的前缀：钱是充进京准通账户的预付款，不是本期费用。
+# 广告费在「广告利润」页按 CPS + 京准通**实际消耗**扣一次，再进期间费用就是同一笔钱扣两遍
+# （2026-10 两边合计 9.4 万）。前缀匹配是为了带上「广告费充值（京准通）」这类变体写法。
+AD_PREPAID_CATEGORY = "广告费充值"
+
+
+def is_ad_prepay(category: str | None) -> bool:
+    """该「其他收支」类型是否属于广告费预付（不进期间费用）。"""
+    return str(category or "").strip().startswith(AD_PREPAID_CATEGORY)
+
 
 def sync_inbound_fee_expenses(db: Session, rec: "Inbound", product_name: str, pay: dict) -> None:
     """维护入库单「运费 / 装卸费 / 转账手续费」对应的其他收支镜像行：每项 >0 各生成一行，清零则删除。

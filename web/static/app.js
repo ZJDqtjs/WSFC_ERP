@@ -7899,6 +7899,36 @@ let EXCLUDE_OTHER = localStorage.getItem(EXCLUDE_OTHER_KEY) !== "0";   // 无记
 /** 报表请求附加的口径参数（后端默认值同为「排除」，这里仍显式声明，避免依赖默认值） */
 const excludeOtherQs = () => (EXCLUDE_OTHER ? "&exclude_other=1" : "&exclude_other=0");
 
+/** 期间费用说明后缀：「广告费充值」是充进京准通的预付款，后端已从期间费用剔出，
+ *  广告费只在「广告利润」页按 CPS + 京准通实际消耗扣一次；不写出来的话这里会凭空少一笔。 */
+const adPrepayNote = (o) => {
+  const v = Number(o && o.ad_prepay_expense) || 0;
+  return Math.abs(v) < 0.005 ? "" : ` · 广告费充值 ${fmtMoney(v)} 未计入（广告费见「广告利润」）`;
+};
+
+/* =============== 报表统计区间偏好 ===============
+   财务报表选过的区间存本机，其他收支页打开时直接跟随。
+   之前两边各用各的默认值（报表=当天，其他收支=本月），对账时经常出现
+   「报表算 10 月、其他收支算 11 月」，看不出差异从哪来。
+   只有财务报表写、其他收支读：其他收支页有「全部」（清空区间），
+   写回去会把财务报表也拉成无界区间，所以不反向同步。 */
+const REPORT_RANGE_KEY = "erp_report_range";
+const DATE_STR = /^\d{4}-\d{2}-\d{2}$/;
+
+function saveReportRange(from, to) {
+  if (!from || !to) return;   // 「全部」不写回，保留上一次的有界区间
+  try { localStorage.setItem(REPORT_RANGE_KEY, JSON.stringify([from, to])); } catch (e) { /* 隐私模式忽略 */ }
+}
+
+/** 已存过的报表区间；没存过或格式不对返回 null（调用方回落到各自默认值） */
+function savedReportRange() {
+  try {
+    const v = JSON.parse(localStorage.getItem(REPORT_RANGE_KEY) || "null");
+    if (Array.isArray(v) && DATE_STR.test(v[0] || "") && DATE_STR.test(v[1] || "") && v[0] <= v[1]) return v;
+  } catch (e) { /* 脏数据按未存过处理 */ }
+  return null;
+}
+
 /** 把本机偏好回显到两份报表页的口径开关（初始化时调用）
  *  财务报表页 excludeOtherChk + 广告利润页 adpExcludeOtherChk 必须同时回显，
  *  否则开关画的是 HTML 默认值、请求发的是 localStorage 里的真实值 —— 显示与生效不一致。 */
@@ -8105,14 +8135,16 @@ function finSearchInput() {
 }
 
 async function loadReport() {
-  // 首次进入默认显示当天数据（之后尊重手动选择的日期，「全部」可清空）
+  // 首次进入沿用上次查过的区间（存本机，其他收支页会跟着它）；没存过才回落当天
   if (!reportInited) {
     reportInited = true;
-    if (!$("repDateFrom").value) $("repDateFrom").value = today();
-    if (!$("repDateTo").value) $("repDateTo").value = today();
+    const saved = savedReportRange();
+    if (!$("repDateFrom").value) $("repDateFrom").value = saved ? saved[0] : today();
+    if (!$("repDateTo").value) $("repDateTo").value = saved ? saved[1] : today();
     await repEnsureWhOptions();
   }
   const from = $("repDateFrom").value, to = $("repDateTo").value;
+  saveReportRange(from, to);
   const all = REP_SCOPE === "all";
   // 全仓总览：wh=all 让后端把各分仓（各自独立账套）的结果合并；单仓总览：可切换查看指定分仓
   const whQs = all ? "&wh=all" : (REP_WH ? `&wh=${encodeURIComponent(REP_WH)}` : "");
@@ -8161,7 +8193,7 @@ async function loadReport() {
     <div class="stat amber"><div class="label">${pre}结转成本</div><div class="value">${fmtMoney(rep.cogs)}</div><div class="sub">含关联结算 ${fmtMoney(packTotal)}${wiCogs ? ` · 含入仓 ${fmtMoney(wiCogs)}` : ""}</div></div>
     ${rep.brush_cost ? `<div class="stat red"><div class="label">${pre}刷单成本</div><div class="value">${fmtMoney(rep.brush_cost)}</div><div class="sub">芳谊放单仓 · 已从毛利扣减</div></div>` : ""}
     <div class="stat green"><div class="label">${pre}毛利</div><div class="value">${fmtMoney(rep.gross_profit)}</div><div class="sub">${rep.revenue ? ((rep.gross_profit / rep.revenue) * 100).toFixed(1) + "%" : "—"}</div></div>
-    <div class="stat red"><div class="label">${pre}期间费用</div><div class="value">${fmtMoney(rep.expense)}</div><div class="sub">其他收支 ${fmtMoney(rep.other_expense)} · 手工记账 ${fmtMoney(rep.manual_expense)}</div></div>
+    <div class="stat red"><div class="label">${pre}期间费用</div><div class="value">${fmtMoney(rep.expense)}</div><div class="sub">其他收支 ${fmtMoney(rep.other_expense)} · 手工记账 ${fmtMoney(rep.manual_expense)}${adPrepayNote(rep)}</div></div>
     <div class="stat ${rep.net_profit >= 0 ? "green" : "red"}"><div class="label">${pre}净利润</div><div class="value">${fmtMoney(rep.net_profit)}</div></div>
     <div class="stat"><div class="label">${pre}本期进货</div><div class="value">${fmtMoney(rep.purchase)}</div></div>
     <div class="stat red"><div class="label">${pre}本期总支出</div><div class="value">${fmtMoney(rep.total_expense)}</div><div class="sub">含采购 ${fmtMoney(rep.purchase)} · 期间费用 ${fmtMoney(rep.expense)}</div></div>
@@ -8284,7 +8316,7 @@ function renderReportBridge(rep) {
     + rowOf("结转成本", -(Number(rep.cogs) || 0), costDesc)
     + (Math.abs(brush) > 0.005 ? rowOf("刷单成本", -brush, "芳谊放单仓：刷单成本 + 快递包装固定费覆盖差") : "")
     + rowOf("毛利", Number(rep.gross_profit) || 0, "销售收入 − 结转成本" + (Math.abs(brush) > 0.005 ? " − 刷单成本" : ""), true)
-    + rowOf("期间费用", -(Number(rep.expense) || 0), `手工记账 ${fmtMoney(rep.manual_expense)} · ${otherDesc}`)
+    + rowOf("期间费用", -(Number(rep.expense) || 0), `手工记账 ${fmtMoney(rep.manual_expense)} · ${otherDesc}${adPrepayNote(rep)}`)
     + rowOf("净利润", Number(rep.net_profit) || 0, "毛利 − 期间费用", true)
     + `</tbody>`
     + (pendNote.length ? `<tfoot><tr><td colspan="4" class="muted">以上只含「已付款」单据；另有 ${pendNote.join(" · ")} 未计入，在「待付款账单」支付后按原日期转入。</td></tr></tfoot>` : "");
@@ -8981,8 +9013,10 @@ async function loadOtherExpensePage() {
   if (!oeInited) {
     oeInited = true;
     if (!$("oeDate").value) $("oeDate").value = today();
-    if (!$("oeDateFrom").value) $("oeDateFrom").value = monthStart();  // 默认看本月
-    if (!$("oeDateTo").value) $("oeDateTo").value = today();
+    // 默认跟随财务报表查过的区间，两边对得上账；没存过才回落本月
+    const saved = savedReportRange();
+    if (!$("oeDateFrom").value) $("oeDateFrom").value = saved ? saved[0] : monthStart();
+    if (!$("oeDateTo").value) $("oeDateTo").value = saved ? saved[1] : today();
   }
   if ($("oeOperator")) $("oeOperator").value = operatorName();
   const from = $("oeDateFrom").value, to = $("oeDateTo").value;
@@ -11985,7 +12019,7 @@ function renderAdProfit(d) {
     rowOf("销售收入", erp.revenue, "商品销售 + 客户代收的关联结算") +
     rowOf("结转成本", -(Number(erp.cogs) || 0), `商品成本 ${fmtMoney(erp.goods_cogs)}` + (erp.brush_cost ? ` · 刷单成本 ${fmtMoney(erp.brush_cost)}` : "")) +
     rowOf("毛利（广告前）", p.gross_before_ads, "财务报表口径") +
-    rowOf("期间费用", -(Number(erp.expense) || 0), `手工记账 ${fmtMoney(erp.manual_expense)} · 其他收支 ${fmtMoney(erp.other_expense)}`) +
+    rowOf("期间费用", -(Number(erp.expense) || 0), `手工记账 ${fmtMoney(erp.manual_expense)} · 其他收支 ${fmtMoney(erp.other_expense)}${adPrepayNote(erp)}`) +
     rowOf("净利润（广告前）", p.net_before_ads, "毛利 − 期间费用") +
     rowOf("CPS 花费", -(Number(p.cps_total) || 0), "付款佣金") +
     rowOf("京准通花费", -(Number(p.jzt_total) || 0), "京东京准通投放") +

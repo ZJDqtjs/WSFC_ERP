@@ -29,7 +29,7 @@ from ..models import (
     WarehouseProduct,
 )
 from .warehouse_in import net_weight_kg
-from ..services import INBOUND_FEE_REF
+from ..services import AD_PREPAID_CATEGORY, INBOUND_FEE_REF, is_ad_prepay
 
 router = APIRouter(prefix="/api", tags=["report"])
 
@@ -128,6 +128,23 @@ def _split_paid(rows: list) -> tuple[list, list]:
     paid = [r for r in rows if _is_paid(r)]
     unpaid = [r for r in rows if not _is_paid(r)]
     return paid, unpaid
+
+
+def _reportable_other_expenses(others: list) -> tuple[list, float]:
+    """从「其他收支」行里拆出 (计入期间费用的行, 被剔出的广告费充值合计)。
+
+    剔掉两类，都不是「本期费用」：
+    - 入库运费/装卸镜像行（ref_type=inbound_fee）：已计入批次到岸成本，再扣就是重复；
+    - 广告费充值：是充进京准通账户的预付款，广告费在「广告利润」页按实际消耗扣。
+    """
+    fee_rows = [e for e in others if e.ref_type != INBOUND_FEE_REF]
+    ad_rows = [e for e in fee_rows if is_ad_prepay(e.category)]
+    return [e for e in fee_rows if not is_ad_prepay(e.category)], round(sum(e.amount or 0.0 for e in ad_rows), 2)
+
+
+def _not_ad_prepay():
+    """SQL 侧条件：排除「广告费充值」类预付，与 _reportable_other_expenses 的对象侧口径同源。"""
+    return func.coalesce(OtherExpense.category, "").notlike(f"{AD_PREPAID_CATEGORY}%")
 
 
 # ---------------- 出库「收入」口径 ----------------
@@ -280,7 +297,8 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
             .where(OtherExpense.date >= f, OtherExpense.date <= t,
                    func.coalesce(OtherExpense.pay_status, PAID) != "unpaid",
                    # 运费/装卸镜像行已计入批次成本，期间费用不重复扣（「其他收支」页仍可查）
-                   func.coalesce(OtherExpense.ref_type, "") != INBOUND_FEE_REF)
+                   func.coalesce(OtherExpense.ref_type, "") != INBOUND_FEE_REF,
+                   _not_ad_prepay())   # 广告费充值是预付，广告利润页按实际消耗扣
         ).scalar() or 0.0), 2)
 
         packs: dict[str, float] = {}
@@ -489,11 +507,11 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         list(db.execute(_date_filter(fin_q, date_from, date_to)).scalars())
     )
     others, unpaid_others = _split_paid(list(db.execute(scope(OtherExpense)).scalars()))
-    # 入库「运费/装卸费」镜像行已计入批次到岸成本（FIFO 结转随销量扣减，体现在该品毛利上），
-    # 期间费用口径（others → other_raw/other_fees/支出分区/excluded_other_expense）剔除它，
-    # 避免「成本 + 期间费用」重复扣减；待付款口径（unpaid_others → _pending_stats）保留，
-    # 与「待付款账单」页的应付金额（货款 + 调整 + 运费/装卸）保持一致。
-    others = [e for e in others if e.ref_type != INBOUND_FEE_REF]
+    # 期间费用口径（others → other_raw/other_fees/支出分区/excluded_other_expense）剔掉两类：
+    # 入库「运费/装卸费」镜像行已计入批次到岸成本（FIFO 结转随销量扣减，体现在该品毛利上）；
+    # 「广告费充值」是充进京准通的预付款，广告费在「广告利润」页按 CPS + 京准通实际消耗扣。
+    # 待付款口径（unpaid_others → _pending_stats）保留，与「待付款账单」页的应付金额一致。
+    others, ad_prepay_total = _reportable_other_expenses(others)
 
     # 入仓（入仓品卖到京东那条线）：与出库同属销售渠道，收入/成本一并计入本报表口径，
     # 这样「商品销售明细」里入仓品能作为单独的行列出，且明细合计 = 汇总。
@@ -1191,6 +1209,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         "expense": expense,
         "manual_expense": round(manual_expense, 2),
         "other_expense": other_total,
+        # 「广告费充值」合计：已从期间费用里剔出（广告费在「广告利润」页按实际消耗扣），
+        # 单列出来让页面能说清「这笔钱去哪了」，而不是凭空少一笔。
+        "ad_prepay_expense": ad_prepay_total,
         # 报表口径开关：exclude_other_expense=True = 已排除其他收支（只看商品售卖利润）
         "exclude_other_expense": bool(exclude_other),
         "excluded_other_expense": other_raw,   # 被排除掉的其他收支金额（仅供提示）
@@ -1401,6 +1422,8 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
         "expense": s("expense"),
         "manual_expense": s("manual_expense"),
         "other_expense": s("other_expense"),
+        # 广告费充值（各分仓已从期间费用剔出，广告利润页按实际消耗扣）：这里只做相加
+        "ad_prepay_expense": s("ad_prepay_expense"),
         # 全仓口径开关：任一分仓标记为「排除其他收支」即视为同一口径
         "exclude_other_expense": any(bool(p.get("exclude_other_expense")) for p in parts),
         "excluded_other_expense": s("excluded_other_expense"),
@@ -1711,7 +1734,8 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
         select(func.coalesce(func.sum(OtherExpense.amount), 0))
         .where(*_date_conds(OtherExpense), paid(OtherExpense),
                # 运费/装卸镜像行已计入批次成本，期间费用不重复扣（「其他收支」页仍可查）
-               func.coalesce(OtherExpense.ref_type, "") != INBOUND_FEE_REF)
+               func.coalesce(OtherExpense.ref_type, "") != INBOUND_FEE_REF,
+               _not_ad_prepay())   # 广告费充值是预付，广告利润页按实际消耗扣
     ).scalar() or 0.0), 2)
     # 部分付款：已付部分算本期进货，未付余额算待付款（与 /report/summary 同口径）
     inbound_landed = (Inbound.total_amount + func.coalesce(Inbound.freight, 0)
