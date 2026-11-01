@@ -258,6 +258,23 @@ def _validate_stock_schemes(db: Session, data: ProductIn) -> list[dict]:
     return out
 
 
+@router.get("/product-shops")
+def list_product_shops(limit: int = 60, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """出库单里出现过的店铺 / 客户名（按单量倒序）。
+
+    多端商品要按「店铺」把销量算到对应编码上，而出库单存的是完整店铺名
+    （如「梓云茶蔬菜源头直发京东自营专区」），这里给前端做下拉候选，避免手打简称对不上。
+    """
+    rows = db.execute(
+        select(func.trim(Outbound.customer), func.count())
+        .where(func.trim(func.coalesce(Outbound.customer, "")) != "")
+        .group_by(func.trim(Outbound.customer))
+        .order_by(func.count().desc())
+        .limit(max(1, min(limit, 200)))
+    ).all()
+    return [{"name": name, "count": int(n)} for name, n in rows]
+
+
 @router.get("/stocks")
 def list_stock_products(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """库存商品（大类）列表，供订单商品关联选择。"""

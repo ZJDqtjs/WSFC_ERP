@@ -145,33 +145,57 @@ def _code_entries(db: Session) -> dict[int, dict]:
     """
     out: dict[int, dict] = {}
     for p in db.execute(select(Product)).scalars():
-        entries: list[dict] = []
         main = (p.code or "").strip()
-        if main:
-            entries.append({"code": main, "shop": ""})
         multi = bool(getattr(p, "multi_code", False))
+        pairs: list[tuple[str, str]] = []
         if multi:
             for it in (getattr(p, "codes", None) or []):
                 if not isinstance(it, dict):
                     continue
                 c = str(it.get("code") or "").strip()
                 s = str(it.get("shop") or "").strip()
-                if c and all(e["code"] != c for e in entries):
-                    entries.append({"code": c, "shop": s})
+                if c and all(c != x[0] for x in pairs):
+                    pairs.append((c, s))
+        # 主编码的店铺绑定可能写在 codes 里（用户把主编码也登记了一条）——要保留，不能丢掉
+        main_shop = next((s for c, s in pairs if c == main), "")
+        entries: list[dict] = []
+        if main:
+            entries.append({"code": main, "shop": main_shop})
+        for c, s in pairs:
+            if c != main:
+                entries.append({"code": c, "shop": s})
         out[p.id] = {"entries": entries, "multi": multi}
     return out
 
 
+def _norm_shop(s: str) -> str:
+    """店铺名归一：去所有空白 + 小写（出库单里常写成「梓云茶蔬菜源头直发京东自营专区」这种全名）。"""
+    return re.sub(r"\s+", "", str(s or "")).lower()
+
+
 def _pick_code(info: dict | None, shop: str) -> str:
-    """按店铺挑编码：该店铺绑定的编码 → 通用编码（没绑店铺）→ 第一条编码。"""
+    """按店铺挑编码：店铺名一致 → 包含（简称/全称都算）→ 通用编码 → 第一条编码。
+
+    实际数据里商品上常填简称（如「梓云茶」），而出库单的客户是全名
+    （「梓云茶蔬菜源头直发京东自营专区」），所以除了完全一致还要做**包含**匹配：
+    谁的名字更长更具体就归谁，避免「梓云茶」把「梓云茶旗舰店」的单也吃掉。
+    """
     entries = (info or {}).get("entries") or []
     if not entries:
         return ""
-    sn = (shop or "").strip()
+    sn = _norm_shop(shop)
     if sn:
         for e in entries:
-            if e["shop"] and e["shop"] == sn:
+            if e["shop"] and _norm_shop(e["shop"]) == sn:
                 return e["code"]
+        cands = [
+            (len(_norm_shop(e["shop"])), e["code"])
+            for e in entries
+            if e["shop"] and (_norm_shop(e["shop"]) in sn or sn in _norm_shop(e["shop"]))
+        ]
+        if cands:
+            cands.sort(key=lambda x: -x[0])
+            return cands[0][1]
     for e in entries:
         if not e["shop"]:
             return e["code"]

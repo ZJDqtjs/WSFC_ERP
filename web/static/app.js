@@ -5649,9 +5649,10 @@ async function openProductModal(pid = 0, prefillName = "") {
           <input type="checkbox" id="pMultiCode" ${p?.multi_code ? "checked" : ""} onchange="pMultiToggle()" />
           多端商品（同一规格在多个店铺/端各有一个编码，如京东多家店的 skuId）
         </label>
-        <div class="field-hint">开启后可填「编码 + 店铺」多条：对外成本表 <code>/api/open/sku-costs</code> 按出库单的客户/店铺名把销量算到对应编码上（每个 SKU 拿到自己店铺的结算价与成本）；没填店铺的是通用编码。编码全局唯一（主编码 + 这里的编码）</div>
+        <div class="field-hint">开启后可填「编码 + 店铺」多条：对外成本表 <code>/api/open/sku-costs</code> 按出库单的客户/店铺名把销量算到对应编码上（每个 SKU 拿到自己店铺的结算价与成本）；没填店铺的是通用编码。店铺名建议从下拉选（出库单存的是完整店铺名，填简称也能包含匹配）。编码全局唯一（主编码 + 这里的编码）</div>
         <div id="pCodesBox" style="margin-top:8px;display:${p?.multi_code ? "" : "none"};">
           <div id="pCodeRows"></div>
+          <datalist id="shopList"></datalist>
           <button class="btn secondary sm" type="button" onclick="addCodeRow()">＋ 新增编码</button>
         </div>
       </div>
@@ -5696,6 +5697,7 @@ async function openProductModal(pid = 0, prefillName = "") {
     </div>`);
   initProductUnitSelect(ptype, curUnit);
   initCodeRows(p?.codes || [], !!(p && p.multi_code));   // 多端商品：多店铺多编码回填
+  ensureProductShops();                                   // 店铺名下拉候选（出库单里出现过的客户名）
   if ($("pMultiBox")) $("pMultiBox").style.display = ptype === "order" ? "" : "none";
   updateProductPriceLabels(du0, f0, up0.base_unit);   // 价格字段标签/提示按默认单位显示
   updateUnitChangeBox(up0);                            // 跨类别换单位时显示「换算关系」输入框（初始=没换，隐藏）
@@ -5942,9 +5944,23 @@ function collectPacks() {
 function codeRowHtml(code = "", shop = "") {
   return `<div class="code-row" style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
     <input class="pc-code" placeholder="编码（如京东 skuId 100157104844）" value="${esc(code)}" style="flex:1;" />
-    <input class="pc-shop" placeholder="店铺名（如 京东-旗舰店，留空=通用）" value="${esc(shop)}" style="flex:1;" />
+    <input class="pc-shop" list="shopList" placeholder="店铺名（选或填，留空=通用）" value="${esc(shop)}" style="flex:1;" />
     <button class="btn sm danger" type="button" onclick="this.closest('.code-row').remove()">删</button>
   </div>`;
+}
+
+/* 出库单里出现过的店铺名（供「店铺」下拉候选：出库单存的是完整店铺名，手打简称会匹配不上） */
+let PRODUCT_SHOPS = [];
+async function ensureProductShops() {
+  try {
+    if (!PRODUCT_SHOPS.length) {
+      const rows = await api("/api/product-shops");
+      PRODUCT_SHOPS = (rows || []).map((x) => x.name).filter(Boolean);
+    }
+  } catch (e) { /* 拉不到就退化成手填，不阻塞弹窗 */ }
+  const dl = $("shopList");
+  if (dl) dl.innerHTML = PRODUCT_SHOPS.map((s) => `<option value="${esc(s)}"></option>`).join("");
+  return PRODUCT_SHOPS;
 }
 
 /** 弹窗打开时回填编码行；开关打开但一条都没有时先给一行空输入 */
