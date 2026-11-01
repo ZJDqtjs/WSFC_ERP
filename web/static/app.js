@@ -1879,7 +1879,18 @@ async function aiProdChanged(i) {
   const sel = tr.querySelector(".ai-pid");
   const pid = +sel.value || 0;
   const line = AI_CONFIRM && AI_CONFIRM.lines ? AI_CONFIRM.lines[i] : null;
-  if (line) line.product_id = pid;
+  if (line) {
+    line.product_id = pid;
+    // 记住选中商品的名称：待办卡片/说明/单据里显示这个名字；切回「🆕 新建」时改回识别名
+    if (pid) {
+      const pp = PRODUCTS.find((x) => x.id === pid);
+      if (pp) line.product_name = pp.name;
+      line.manual_pick = true;          // 用户手选过已有商品（暂存时据此保留选择、不再当成待新增）
+    } else if (line.new_product && line.new_product.name) {
+      line.product_name = line.new_product.name;
+      line.manual_pick = false;
+    }
+  }
   // 选中「🆕 新建」：露出名字输入框，并把单位还原成票据上的原始单位（如 瓶）
   const nameEl = tr.querySelector(".ai-newname");
   if (nameEl) {
@@ -1917,9 +1928,14 @@ async function aiProdChanged(i) {
   }
   // 盘点行：换了商品/分类就必须重算「当前库存 → 盘点后」与增减量
   aiStockRefresh(i);
-  // 已选中真实商品：去掉「🆕 提交后新增」徽标（它是按识别时的"待新增"渲染的，换商品后就不对了）
+  // 已选中真实商品：去掉「🆕 提交后新增」徽标（它是按识别时的"待新增"渲染的，换商品后就不对了）；
+  // 切回「🆕 新建」时再补回来（暂存后重开的行已选真实商品，当时没渲染这个徽标）
   const newBadge = tr.querySelector(".ai-newbadge");
   if (newBadge) newBadge.style.display = pid ? "none" : "";
+  else if (!pid && line && line.new_product) {
+    const badgeWrap = tr.querySelector("td:nth-child(2) div");
+    if (badgeWrap) badgeWrap.insertAdjacentHTML("beforeend", '<span class="badge ai-newbadge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 提交后新增</span>');
+  }
   const priceEl = tr.querySelector(".ai-price");
   if (!pid || !priceEl) { aiPriceBadge(tr, line); return; }   // 待新增商品：暂无历史价
   // 用户手填的价格不动；自动填入的价格在换商品后要跟着换成新商品的价格
@@ -2010,9 +2026,11 @@ function openAiConfirm(r) {
     const cat = (["stock", "order", "pack", "labor"].includes(ln.category) ? ln.category : (isIn ? "stock" : "order"));
     const np = ln.new_product || null;
     let prodSel;
-    if (ln.ambiguous && ln.candidates && ln.candidates.length) {
+    // 用户在确认框里手动选过别的商品（不在候选里）→ 不能再被候选列表改回去（暂存后重新打开也要保留）
+    const manualOutside = ln.product_id && !(ln.candidates || []).some((c) => c.product_id === ln.product_id);
+    if (ln.ambiguous && ln.candidates && ln.candidates.length && !manualOutside) {
       // 相似商品：默认选中第一个候选，并在未识别到价格时回填该商品最近一次的录入价
-      if (!ln.candidates.some((c) => c.product_id === ln.product_id)) ln.product_id = ln.candidates[0].product_id;
+      if (!ln.product_id) ln.product_id = ln.candidates[0].product_id;
       const cur = ln.candidates.find((c) => c.product_id === ln.product_id) || ln.candidates[0];
       if (!(+ln.unit_price) && cur.last_price) { ln.unit_price = cur.last_price; ln.price_defaulted = true; }
       // searchable：和普通下拉一样支持「点击选择 / 输入筛选」（漏了它就只能滚原生下拉，无法输入搜索）
@@ -2020,15 +2038,21 @@ function openAiConfirm(r) {
           <option value="0">🆕 新建：${esc(ln.recognized_name || ln.product_name || "")}</option>
           ${ln.candidates.map((c) => `<option value="${c.product_id}" ${c.product_id === ln.product_id ? "selected" : ""} data-price="${c.last_price || 0}">〔${({ stock: "库存", order: "订单", pack: "包材", labor: "人工" }[c.category] || "库存")}〕${esc(c.name)}${c.last_price ? `（最近 ${c.last_price}）` : ""}</option>`).join("")}
         </select>`;
-    } else if (np) {
+    } else if (np && !ln.product_id) {
       // 待新增商品：仅在「确认提交」后才建档，取消不会污染商品资料
-      ln.product_id = 0;
       prodSel = `<select class="searchable ai-pid" onchange="aiProdChanged(${i})">${aiProductOptions(0, cat, `<option value="0" selected>🆕 新建：${esc(np.name)}</option>`)}</select>`;
+    } else if (np) {
+      // 待新增行里用户已经选了已有商品（暂存后重新打开也要保留这个选择）：
+      // 正常列出已有商品并选中它，同时保留「🆕 新建」选项，随时可以切回去
+      prodSel = `<select class="searchable ai-pid" onchange="aiProdChanged(${i})">${aiProductOptions(ln.product_id, cat, `<option value="0">🆕 新建：${esc(np.name)}</option>`)}</select>`;
     } else if (!isIn && !isStock && !ln.product_id && !ln.category) {
       // AI 没说是什么商品（也没能判断分类）：订单商品与库存大类一起列，选完下面的包材/快递会自动算
       prodSel = `<select class="searchable ai-pid" onchange="aiProdChanged(${i})">${aiProductOptionsWide(ln.product_id, '<option value="0" selected>— 请选择商品（订单 / 库存都在这里）—</option>')}</select>`;
     } else {
-      const head = ln.product_id ? "" : `<option value="0" selected>— 请选择商品 —</option>`;
+      // 已选真实商品、但这一行原本是「待新增 / 相似候选」时，保留一个「🆕 新建」选项，随时能切回去
+      const newLabel = np ? np.name : (ln.ambiguous ? (ln.recognized_name || ln.product_name || "") : "");
+      const keepNew = (ln.product_id && newLabel) ? `<option value="0">🆕 新建：${esc(newLabel)}</option>` : "";
+      const head = ln.product_id ? keepNew : `<option value="0" selected>— 请选择商品 —</option>`;
       prodSel = `<select class="searchable ai-pid" onchange="aiProdChanged(${i})">${aiProductOptions(ln.product_id, cat, head)}</select>`;
     }
     const ambiBadge = ln.ambiguous
@@ -2051,7 +2075,7 @@ function openAiConfirm(r) {
     const payCell = isStock ? "" : `<td>${aiPayHtml(ln, i)}</td>`;
     return `<tr data-idx="${i}">
       <td><select class="ai-cat" onchange="aiCatChanged(${i})" style="width:92px;">${aiCatOptions(cat)}</select></td>
-      <td style="min-width:250px;">${prodSel}${aiNewNameHtml(ln)}<div style="margin-top:4px;">${ambiBadge}${np ? '<span class="badge ai-newbadge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 提交后新增</span>' : ""}</div></td>
+      <td style="min-width:250px;">${prodSel}${aiNewNameHtml(ln)}<div style="margin-top:4px;">${ambiBadge}${np && !ln.product_id ? '<span class="badge ai-newbadge" style="background:var(--amber-light);color:#8a6d00;margin-left:6px;">🆕 提交后新增</span>' : ""}</div></td>
       <td><input type="date" class="ai-date" value="${esc(ln.date || docDate)}" style="width:138px;" title="这一行的单据日期（对账单/送货单逐行日期）" /></td>
       ${qtyCell}
       <td><input class="ai-unit" list="aiUnitList-${i}" value="${esc(ln.unit || (ln.matched ? "" : "个"))}" style="width:84px;" title="单位：可下拉选该商品已有单位，也可手填；改动会立即重算库存；未匹配到商品的待新增行若票据没写单位，默认「个」" onchange="aiUnitChanged(${i})" /><datalist id="aiUnitList-${i}">${aiUnitSuggest(ln.product_id, ln.unit)}</datalist>${unitBadge}</td>
@@ -2489,6 +2513,30 @@ function aiSaveDraft(silent) {
     if (payEl) ln.paid = !!payEl.checked;
     const nameEl = tr.querySelector(".ai-newname");
     if (nameEl && !ln.product_id) ln.recognized_name = nameEl.value.trim() || ln.recognized_name;
+    // 待新增行里已经选了已有商品：单位若不在该商品换算表里（如占位的「袋」），按商品默认单位保存 ——
+    // 否则重新打开后「当前库存 / 增减量」会按错单位算（与 aiProdChanged 里同一套规则）
+    if (ln.product_id) {
+      const p = PRODUCTS.find((x) => x.id === ln.product_id) || null;
+      if (p) {
+        const conv = p.conversions || {};
+        const cur = (ln.unit || "").trim();
+        const valid = !!cur && (cur in conv || cur === defaultUnit(p) || cur === p.base_unit);
+        if (!valid) {
+          const du = defaultUnit(p);
+          const fOld = +conv[cur] || 0, fNew = +conv[du] || 0;
+          if (du && du !== cur) {
+            if (ln.stock_counted != null && !ln.stock_count_cleared && fOld && fNew) {
+              ln.stock_counted = +((ln.stock_counted * fOld) / fNew).toFixed(4);
+              ln.unit_note = `单位已按商品「${p.name}」改为「${du}」（原单位「${cur || "空"}」不适用），数量已按换算表同步换算`;
+            } else {
+              ln.unit_note = `单位已按商品「${p.name}」改为「${du}」（原单位「${cur || "空"}」不适用），数量请核对`;
+            }
+            ln.unit = du;
+            ln.stock_unit = du;
+          }
+        }
+      }
+    }
     const hintEl = tr.querySelector(".ai-hint");
     if (hintEl) ln.hint = hintEl.textContent;
   });
