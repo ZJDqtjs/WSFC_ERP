@@ -394,13 +394,16 @@ def _merge_into(dst: dict, src: dict) -> dict:
     return dst
 
 
-def _collect(date_from: str, date_to: str) -> dict:
+def _collect(date_from: str, date_to: str, refresh: bool = False) -> dict:
     """跨全部分仓汇总（单仓读取失败只记一条，不影响其它仓）。
 
     带进程内缓存：方案 B 每次请求都要「区间」和「全量」两份汇总，全量那份很重。
     缓存按 (date_from, date_to) 分键保存，两份互不挤占，同一份在 TTL 内只算一次。
+    refresh=True（请求带 refresh=1）时先丢掉该分键，强制重算（改完商品资料不用等 10 分钟）。
     """
     ck = (date_from, date_to)
+    if refresh:
+        _SUMMARY_CACHE.pop(ck, None)
     now = datetime.now()
     # 惰性淘汰过期项即可，不要 clear 整张表：否则「区间」那份会把「全量历史」那份挤掉，
     # 每次换区间请求都得重算全量历史（实测 ~3.8s，是接口慢的主因）。
@@ -539,6 +542,7 @@ def sku_costs(
     request: Request,
     date_from: str = "",
     date_to: str = "",
+    refresh: int = 0,   # 1 = 跳过 10 分钟进程缓存，强制重算（改完商品编码/店铺后立即生效）
     x_api_token: str = Header(""),
     authorization: str = Header(""),
 ):
@@ -550,6 +554,7 @@ def sku_costs(
       入仓品不按区间过滤（采购价是快照，用最近已知价），但会给出 ``_lastDate`` 标明价格日期。
     - 区间内**没有出库记录**的商品不会出现在结果里；每个出库商品都带 ``_firstDate`` /
       ``_lastDate``，可用来确认数据到底落在哪几天。
+    - ``refresh=1``：跳过 10 分钟进程缓存强制重算（改完多端商品的编码/店铺后立即生效）。
 
     鉴权：请求头 ``X-Api-Token: <token>``（或 ``Authorization: Bearer <token>``）。
     令牌连续错误按客户端 IP 分级锁定（见 app/login_guard.py）。
@@ -568,6 +573,8 @@ def sku_costs(
     # 同 _collect：按区间分键缓存，过期项惰性淘汰，不要 clear 整张表
     for k in [k for k, (t, _) in _CACHE.items() if now - t >= _CACHE_TTL]:
         _CACHE.pop(k, None)
+    if refresh:
+        _CACHE.pop(ck, None)
     hit = _CACHE.get(ck)
     if hit is not None:
         return hit[1]
@@ -575,8 +582,8 @@ def sku_costs(
     # 方案 B：区间汇总 + 全量历史汇总。
     # 区间内没卖的商品也用全量历史给出成本（不让对方回落全店口径），并标 _period=all 让人看得见。
     has_range = bool(df or dt)
-    rng = _collect(df, dt) if has_range else None
-    full = _collect("", "")
+    rng = _collect(df, dt, refresh=bool(refresh)) if has_range else None
+    full = _collect("", "", refresh=bool(refresh))
     if rng is None:
         rng = full
 
