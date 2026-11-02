@@ -1236,6 +1236,47 @@ td.num, th.num {
   transform: translateX(-50%) translateY(0); 
 }
 
+/* ============ 报表加载遮罩 ============ */
+.rep-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.26);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.rep-loading-box {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 26px 34px;
+  min-width: 280px;
+  max-width: 90vw;
+  text-align: center;
+  box-shadow: var(--shadow-lg);
+}
+
+.rep-spinner {
+  width: 34px;
+  height: 34px;
+  margin: 0 auto 14px;
+  border: 3px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: repSpin 0.8s linear infinite;
+}
+
+@keyframes repSpin { to { transform: rotate(360deg); } }
+
+.rep-loading-title { font-size: 14.5px; font-weight: 600; }
+
+.rep-loading-sub { color: var(--muted); font-size: 12.5px; margin-top: 6px; line-height: 1.6; }
+
 /* ============ 停服公告滚动条 ============ */
 .notice-bar {
   position: fixed; 

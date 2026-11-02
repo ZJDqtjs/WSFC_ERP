@@ -604,6 +604,14 @@
 
       <!-- 财务报表（查询常驻 + 分区 tab：汇总 / 支出 / 商品 / 流水） -->
       <section id="page-report" class="page">
+        <!-- 加载遮罩：月度汇总属重接口，明确反馈进度并阻止连点（连点会让请求在并发闸里排队、越等越久） -->
+        <div class="rep-loading" id="repLoading" style="display:none;">
+          <div class="rep-loading-box">
+            <div class="rep-spinner"></div>
+            <div class="rep-loading-title">正在汇总报表数据…</div>
+            <div class="rep-loading-sub" id="repLoadingSub">区间越大耗时越长（整月约 3~6 秒），请勿重复点击</div>
+          </div>
+        </div>
         <div class="card">
           <div class="card-head">
             <h3>财务利润报表</h3>

@@ -519,6 +519,12 @@ _EXTRA_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_stock_movements_line ON stock_movements(line_id)",
     # 旧流水（line_id 为空）按「单」归属时用：ref_id 局部索引
     "CREATE INDEX IF NOT EXISTS idx_stock_movements_ref_null ON stock_movements(ref_id) WHERE line_id IS NULL",
+    # 报表汇总按「单 + 行类型」取销售/结算明细：复合索引让 line_type 过滤在索引内完成，
+    # 少掉大量「按 outbound_id 回表后再丢行」的无效读取（wh01 一个月 20 万行明细）。
+    "CREATE INDEX IF NOT EXISTS idx_outbound_lines_outbound_type ON outbound_lines(outbound_id, line_type)",
+    # 报表「支出流水」按 type/ref_type + 日期过滤（原来是 OR 条件，只能整表扫 + 逐行判日期）
+    "CREATE INDEX IF NOT EXISTS idx_finance_records_type_date ON finance_records(type, date)",
+    "CREATE INDEX IF NOT EXISTS idx_finance_records_ref_date ON finance_records(ref_type, date)",
 )
 
 

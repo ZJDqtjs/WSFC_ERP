@@ -8226,7 +8226,8 @@ let reportInited = false;
    主线程一冻就是几十秒，浏览器直接弹「页面无响应」；筛选框每敲一个字还要重来一遍。
    现在排序/筛选仍作用于完整数组，只是分批渲染，且筛选只重渲染、不再打接口。 */
 const FIN_PAGE = 300;
-const FIN = { rows: [], wh: false, limit: FIN_PAGE };
+// rows = 已从后端加载的流水；limit = 本地渲染窗口；total = 后端总条数（分页拉取）
+const FIN = { rows: [], wh: false, limit: FIN_PAGE, total: 0, qs: "" };
 
 function renderFinanceTable() {
   const ft = $("financeTable");
@@ -8256,9 +8257,12 @@ function renderFinanceTable() {
       <td>${esc(f.operator) || "—"}</td><td>${f.date}</td>
       <td class="muted">${esc(f.remark)}</td>
       <td>${f.ref_type === "manual" ? `<button class="btn sm danger" onclick="deleteFinance(${f.id})">删</button>` : ""}</td></tr>`).join("") +
-    (more > 0 ? `<tr><td colspan="${cols}" class="empty">已显示前 ${shown.length} / 共 ${rows.length} 条流水（全量渲染会把页面卡死）
-      <button class="btn sm" onclick="finMore()">再显示 ${Math.min(FIN_PAGE, more)} 条</button>
-      <button class="btn sm secondary" onclick="finAll()">显示全部 ${rows.length} 条</button></td></tr>` : "") + `</tbody>`;
+    ((moreLocal > 0 || moreRemote > 0)
+      ? `<tr><td colspan="${cols}" class="empty">已显示 ${shown.length} 条（共 ${FIN.total} 条）
+        ${moreLocal > 0 ? `<button class="btn sm" onclick="finMore()">再显示 ${Math.min(FIN_PAGE, moreLocal)} 条</button>` : ""}
+        ${moreRemote > 0 ? `<button class="btn sm secondary" onclick="finMore(true)">加载更多（已加载 ${FIN.rows.length}/${FIN.total}）</button>` : ""}
+        ${moreRemote > 0 ? `<button class="btn sm secondary" onclick="finAll()">加载全部</button>` : ""}</td></tr>`
+      : "") + `</tbody>`;
   if (!rows.length) ft.innerHTML = `<tr><td colspan="${cols}" class="empty">本期无财务流水</td></tr>`;
   ft._rows = rows;
   // 点表头排序：内存里的完整数组重排即可，不必再请求一次接口
@@ -8267,8 +8271,34 @@ function renderFinanceTable() {
   if (hint) hint.textContent = rows.length ? (kws.length ? `匹配 ${rows.length} / ${FIN.rows.length} 条` : `共 ${rows.length} 条`) : "";
 }
 
-function finMore() { FIN.limit += FIN_PAGE; renderFinanceTable(); }
-function finAll() { FIN.limit = FIN.rows.length; renderFinanceTable(); }
+/** 再显示一批：本地还有就直接渲染；本地没有了就向后端按 offset 续拉一批。 */
+async function finMore(remote) {
+  if (remote && FIN.rows.length < FIN.total) {
+    try {
+      const r = await api(`/api/finance?${FIN.qs}&limit=${FIN_PAGE}&offset=${FIN.rows.length}`);
+      FIN.rows = FIN.rows.concat(r.rows || []);
+      if (r.total != null) FIN.total = r.total;
+      FIN.limit += FIN_PAGE;
+      renderFinanceTable();
+    } catch (e) { toast("加载更多失败：" + e.message); }
+    return;
+  }
+  FIN.limit += FIN_PAGE;
+  renderFinanceTable();
+}
+
+/** 一次性加载整月流水：明确提示耗时，避免用户误以为卡死。 */
+async function finAll() {
+  if (FIN.rows.length >= FIN.total) { FIN.limit = FIN.rows.length; renderFinanceTable(); return; }
+  if (!confirm(`确认加载全部 ${FIN.total} 条流水？\n数据量较大（约需数秒），期间请勿重复操作。`)) return;
+  try {
+    const r = await api(`/api/finance?${FIN.qs}&limit=0`);
+    FIN.rows = Array.isArray(r) ? r : (r.rows || FIN.rows);
+    FIN.total = FIN.rows.length;
+    FIN.limit = FIN.rows.length;
+    renderFinanceTable();
+  } catch (e) { toast("加载失败：" + e.message); }
+}
 
 let _finSearchTimer = null;
 /** 流水筛选只作用于内存里的 FIN.rows：防抖后重渲染，不再整页重新请求 */
@@ -8277,7 +8307,35 @@ function finSearchInput() {
   _finSearchTimer = setTimeout(() => { FIN.limit = FIN_PAGE; renderFinanceTable(); }, 250);
 }
 
+let REP_LOADING = false;
+
+/** 报表加载遮罩 + 禁用「查询」按钮：重接口期间给明确反馈，避免连点（连点会在后端并发闸里排队）。 */
+function repShowLoading(on) {
+  const el = $("repLoading");
+  if (el) el.style.display = on ? "flex" : "none";
+  // 加载期间禁用报表页的查询/快捷区间/口径切换，避免「界面变了但数据没刷」的错位
+  document.querySelectorAll("#page-report .toolbar .btn, #page-report .seg-item").forEach((b) => {
+    b.disabled = !!on;
+    if ((b.getAttribute("onclick") || "").indexOf("loadReport()") >= 0) {
+      b.textContent = on ? "查询中…" : "查询";
+    }
+  });
+}
+
 async function loadReport() {
+  // 上一次还没回来就直接忽略：后端「重汇总」是全局串行的，连点只会让两个请求排队、等更久
+  if (REP_LOADING) return;
+  REP_LOADING = true;
+  repShowLoading(true);
+  try {
+    await _loadReportInner();
+  } finally {
+    REP_LOADING = false;
+    repShowLoading(false);
+  }
+}
+
+async function _loadReportInner() {
   // 首次进入沿用上次查过的区间（存本机，其他收支页会跟着它）；没存过才回落当天
   if (!reportInited) {
     reportInited = true;
@@ -8356,8 +8414,10 @@ async function loadReport() {
   renderSalesBySpec(from, to, whQs);   // 出库明细：每天 × 每种规格卖了多少单（含代发数量/代发成本）
 
   // 流水表：数据留在内存（FIN.rows），渲染按窗口分批，见 renderFinanceTable 的注释
-  FIN.rows = finance;
+  FIN.rows = finance.rows || finance;          // 兼容后端未分页时返回的数组
+  FIN.total = finance.total != null ? finance.total : FIN.rows.length;
   FIN.wh = !!rep.is_all;   // 全仓总览：流水来自多个分仓，需要标出来源
+  FIN.qs = `date_from=${from || ""}&date_to=${to || ""}${whQs}`;
   FIN.limit = FIN_PAGE;
   renderFinanceTable();
 
@@ -9850,7 +9910,6 @@ function renderDropshipBills() {
       <td class="num mono">${DS_NUM4(g.quantity)}${esc(g.unit || "")}</td>
       <td class="num mono">${fmtMoney(g.unit_price)}</td>
       <td class="num mono"><b style="color:var(--danger, #dc2626);">${fmtMoney(g.amount)}</b></td>
-      <td class="num muted">${g.order_count} 单</td>
       <td class="num">${paid
         ? `<button class="btn sm secondary" title="已付 ${esc(g.paid_at || "")}，点此撤销" onclick="dsMarkPaid(${idx}, false)">已付·撤销</button>`
         : `<button class="btn sm green" onclick="dsMarkPaid(${idx}, true)">已支付</button>`}</td>
@@ -9864,11 +9923,10 @@ function renderDropshipBills() {
       <th class="num" style="width:110px;">单量</th>
       <th class="num" style="width:100px;">单价</th>
       <th class="num" style="width:140px;">应付金额</th>
-      <th class="num" style="width:96px;">单据</th>
       <th style="width:96px;"></th>
     </tr></thead><tbody>` +
     (rows.length ? rows.join("")
-      : `<tr><td colspan="8" class="empty">${active
+      : `<tr><td colspan="7" class="empty">${active
         ? "没有符合筛选条件的代发应付（可点「清空筛选」看全部）"
         : (DS_VIEW === "all" ? "还没有代发应付账单" : "没有待结清的代发应付")}</td></tr>`) +
     `</tbody>` +
@@ -9878,7 +9936,7 @@ function renderDropshipBills() {
           <td><b>${active ? "筛选合计" : "列出合计"}</b></td>
           <td class="muted" colspan="3">${groups.length} 行 · ${days} 天 · 待结清 ${pend.length} 行 · ${orders} 单</td>
           <td class="num mono"><b>应付 ${fmtMoney(sum)}</b></td>
-          <td colspan="2"></td>
+          <td></td>
         </tr></tfoot>`
       : "");
 }
