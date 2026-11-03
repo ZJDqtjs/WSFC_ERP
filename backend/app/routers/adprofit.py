@@ -611,29 +611,33 @@ def ad_profit_summary(
     elif ads_total <= 0:
         warnings.append("所选区间没有任何可用的花费缓存，广告费按 0 计入；请到挂载服务「花费一览」按该区间抓取一次")
 
-    # ---- 有账号但该区间没有缓存：单列出来，提醒去抓取 ----
-    # 只提醒「曾经抓过花费」的账号（有缓存文件、但没覆盖本区间），
-    # 一次都没抓过的账号多半没在投广告，天天提示反而淹没真正需要补抓的。
+    # ---- 账号清单：所有已配置店铺都进列表；该区间没有缓存的单列提醒 ----
+    # 新加的店铺即使一次都没抓过，也要显示出来（0 + 无缓存），否则页面会一直停留在老账号。
     missing_accounts: list[dict] = []
+    all_accounts: list[dict] = []
     if service_ok:
         try:
             accounts = _load_accounts(bool(refresh))
         except Exception:  # noqa: BLE001
             accounts = []
-        known: set[str] = set()
-        for kind in ("cps", "spend"):
-            try:
-                for e in _load_entries(kind, bool(refresh)):
-                    k = str(e.get("account") or "")
-                    if k:
-                        known.add(k)
-            except Exception:  # noqa: BLE001
-                continue
-        seen = {a["key"] for a in cps["accounts"]} | {a["key"] for a in jzt["accounts"]}
+        seen_cps = {a["key"] for a in cps["accounts"]}
+        seen_jzt = {a["key"] for a in jzt["accounts"]}
+        seen = seen_cps | seen_jzt
         for acc in accounts:
             key_ = str(acc.get("key") or "")
-            if key_ and key_ not in seen and key_ in known:
-                missing_accounts.append({"key": key_, "label": str(acc.get("label") or key_)})
+            if not key_:
+                continue
+            label_ = str(acc.get("label") or key_)
+            # 所有已配置店铺都返回：新加的店铺即使一次都没抓过缓存，也要出现在
+            # 「按店铺账号的广告费」列表里（显示 0 + 无缓存提示），否则用户会以为没同步。
+            all_accounts.append({
+                "key": key_,
+                "label": label_,
+                "has_cps": key_ in seen_cps,
+                "has_jzt": key_ in seen_jzt,
+            })
+            if key_ not in seen:
+                missing_accounts.append({"key": key_, "label": label_})
         if missing_accounts:
             warnings.append("以下店铺账号该区间没有花费缓存（未计入广告费）："
                             + "、".join(a["label"] for a in missing_accounts))
@@ -669,6 +673,7 @@ def ad_profit_summary(
             "cps": cps,
             "jzt": jzt,
             "missing_accounts": missing_accounts,
+            "all_accounts": all_accounts,
         },
         "profit": {
             "ads_total": ads_total,

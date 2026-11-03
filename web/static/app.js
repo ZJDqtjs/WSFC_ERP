@@ -12361,6 +12361,12 @@ function renderAdAccounts(ads, days) {
   const t = $("adpAccTable");
   if (!t) return;
   const map = new Map();
+  // 先放入挂载服务里配置的全部店铺：新加的店铺即使还没有花费缓存也要显示出来，
+  // 否则页面会一直停留在「老几个」，用户以为没有同步。
+  ((ads && ads.all_accounts) || []).forEach((a) => {
+    const k = a.label || a.key;
+    if (!map.has(k)) map.set(k, { label: k, cps: null, jzt: null, configured: true });
+  });
   const merge = (kind, part) => {
     ((part && part.accounts) || []).forEach((a) => {
       const k = a.label || a.key;
@@ -12378,6 +12384,7 @@ function renderAdAccounts(ads, days) {
   const totalOf = (r) => (r.cps ? r.cps.total : 0) + (r.jzt ? r.jzt.total : 0);
   const covered = (a) => a ? `${a.covered_days}/${days}` : "—";
   const gapOf = (r) => {
+    if (!r.cps && !r.jzt) return r.configured ? "无花费缓存（去 jdfenxi 抓取）" : "";
     const g = [];
     if (r.cps && r.cps.gaps && r.cps.gaps.length) g.push(`CPS 缺 ${r.cps.gaps.join("、")}`);
     if (r.jzt && r.jzt.gaps && r.jzt.gaps.length) g.push(`京准通缺 ${r.jzt.gaps.join("、")}`);
