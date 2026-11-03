@@ -10051,7 +10051,8 @@ function dsRenderReconcile(d) {
       <span>系统代发成本（单据涉及商品） <b class="mono">${fmtMoney(s.system_total)}</b></span>
       <span>已匹配单量差异 <b class="mono" style="color:${qtyOk ? "var(--green,#16a34a)" : "var(--danger,#dc2626)"};">${fmtNum(matchedQtyDiff)}</b></span>
       <span>已匹配金额差异 <b class="mono" style="color:${diffOk ? "var(--green,#16a34a)" : "var(--danger,#dc2626)"};">${fmtMoney(matchedDiff)}</b></span>
-      <span>未归类单据 <b class="mono">${fmtNum(s.unmatched_doc_qty)} 单 / ${fmtMoney(s.unmatched_doc_total)}</b></span>
+      <span>未归类商品单量 <b class="mono">${fmtNum(s.unmatched_doc_qty_goods)}</b><span class="muted">（含包材另 ${fmtNum(s.unmatched_doc_qty_pack)}）</span></span>
+      <span>未归类单据金额 <b class="mono">${fmtMoney(s.unmatched_doc_total)}</b></span>
       <span class="muted">差异 ${s.diff_groups || 0} · 仅单据 ${s.only_doc || 0} · 仅系统 ${s.only_system || 0} · 一致 ${s.same || 0}</span>
     </div>
     <div class="muted" style="font-size:12px;margin:4px 0;">日期 ${esc(d.date_from || "-")} ~ ${esc(d.date_to || "-")}${aliasTxt ? "；别名：" + aliasTxt : ""}</div>

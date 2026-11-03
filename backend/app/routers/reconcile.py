@@ -506,6 +506,15 @@ def _build_reconciliation(doc_rows: list[dict], text: str, db: Session,
     matched_doc_qty = round(sum(r["doc_quantity"] for r in matched), 4)
     matched_sys_qty = round(sum(r["system_quantity"] for r in matched), 4)
     unmatched_doc_qty = round(sum(r["doc_quantity"] for r in rows if r["status"] == "仅单据"), 4)
+    # 包材按「个/件」计，不是订单单量；单量汇总只算商品，包材单独给参考
+    unmatched_pack_rows = [
+        r for r in rows
+        if r["status"] == "仅单据" and any(_is_packaging(n) for n in (r["doc_names"] or []))
+    ]
+    unmatched_doc_qty_goods = round(
+        sum(r["doc_quantity"] for r in rows if r["status"] == "仅单据"), 4
+    ) - round(sum(r["doc_quantity"] for r in unmatched_pack_rows), 4)
+    unmatched_doc_qty_pack = round(sum(r["doc_quantity"] for r in unmatched_pack_rows), 4)
     only_system_qty = round(sum(r["system_quantity"] for r in rows if r["status"] == "仅系统"), 4)
 
     if not include_only_system:
@@ -537,6 +546,8 @@ def _build_reconciliation(doc_rows: list[dict], text: str, db: Session,
             "matched_sys_qty": matched_sys_qty,
             "matched_qty_diff": round(matched_doc_qty - matched_sys_qty, 4),
             "unmatched_doc_qty": unmatched_doc_qty,
+            "unmatched_doc_qty_goods": round(unmatched_doc_qty_goods, 4),
+            "unmatched_doc_qty_pack": unmatched_doc_qty_pack,
             "only_system_qty": only_system_qty,
             "groups": len(rows),
             "diff_groups": sum(1 for r in rows if r["status"] == "金额差异"),
