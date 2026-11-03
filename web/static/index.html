@@ -121,6 +121,7 @@
             <button class="btn green" id="aiBtn" onclick="aiRun()"><svg class="ic"><use href="#i-ai"/></svg> 识别并录入</button>
             <button class="btn secondary" onclick="aiPickImage()"><svg class="ic"><use href="#i-paperclip"/></svg> 相册选图</button>
             <button class="btn secondary" onclick="aiCaptureImage()"><svg class="ic"><use href="#i-camera"/></svg> 拍照选图</button>
+            <button class="btn secondary" onclick="dsReconcileOpen()" title="上传供应商/分仓单据（图片或 Excel），与代发账单核对成本与单量差异"><svg class="ic"><use href="#i-receipt"/></svg> 代发单据核对</button>
             <input type="file" id="aiImgFile" accept="image/*" multiple style="display:none;" onchange="aiParseImage('file')" />
             <input type="file" id="aiCamFile" accept="image/*" capture="environment" style="display:none;" onchange="aiParseImage('cam')" />
           </div>
@@ -193,6 +194,7 @@
             <h3><svg class="ic"><use href="#i-ai"/></svg> AI 识别队列</h3>
             <span class="hint">粘贴/输入的识别任务在后台逐条跑（票据图片较慢，约 1~2 分钟一张）。失败的可以重新识别或删除；识别成功的会按业务类型自动落到「入库待办」「出库待办」，点任务按钮可先核对修改。</span>
             <div class="grow"></div>
+            <button class="btn secondary" onclick="dsReconcileOpen()" title="上传供应商/分仓单据（图片或 Excel），与代发账单核对成本与单量差异"><svg class="ic"><use href="#i-receipt"/></svg> 代发单据核对</button>
             <button class="btn secondary" id="evaJstBtn" onclick="openJstPending()" title="聚水潭待办：新商品没规则匹配 / 要验证码">聚水潭待办</button>
             <button class="btn secondary" onclick="evaRunQueue()"><svg class="ic"><use href="#i-ai"/></svg> 继续识别</button>
             <button class="btn secondary" onclick="evaRefresh()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
