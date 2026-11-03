@@ -9950,6 +9950,110 @@ function dsToggleAll(cb) {
   document.querySelectorAll("#dsTable .ds-pick").forEach((x) => { x.checked = cb.checked; });
 }
 
+/* ---------- 代发账单核对：上传供应商单据（图片/Excel）→ 与代发成本逐日逐商品比对 ---------- */
+function dsReconcileOpen() {
+  openModal(`<h3>代发单据核对 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="field"><label>单据文件（图片 / Excel）</label>
+      <input id="rcFile" type="file" accept="image/*,.xlsx,.xlsm,.csv" />
+      <div class="field-hint">支持 PNG/JPG 图片，或含「单据日期 / 商品名称 / 数量 / 单价 / 价税合计」列的 Excel。</div>
+    </div>
+    <div class="field"><label>日期范围（可选）</label>
+      <span class="date-range">
+        <span class="date-pick"><input id="rcFrom" type="date" /><span class="date-ph">开始</span></span>
+        <span class="muted">至</span>
+        <span class="date-pick"><input id="rcTo" type="date" /><span class="date-ph">结束</span></span>
+      </span>
+      <div class="field-hint">留空则按单据里的日期自动取范围。</div>
+    </div>
+    <div class="field"><label>商品别名（可选，把单据商品名对应到系统商品）</label>
+      <textarea id="rcText" rows="2" placeholder="如：电商果是老味道番茄，牧心果是牧心番茄"></textarea>
+    </div>
+    <div id="rcResult" style="margin-top:8px;"></div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn green" id="rcRun" onclick="dsReconcileRun()">开始核对</button>
+    </div>`);
+  datePhSync(["rcFrom", "rcTo"]);
+}
+
+async function dsReconcileRun() {
+  const f = $("rcFile") && $("rcFile").files[0];
+  if (!f) { toast("请先选择单据文件"); return; }
+  const btn = $("rcRun");
+  const out = $("rcResult");
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "核对中…";
+  out.innerHTML = `<div class="muted">正在提取单据并与代发账单比对，请稍候…</div>`;
+  try {
+    const fd = new FormData();
+    fd.append("file", f);
+    fd.append("text", $("rcText") ? $("rcText").value : "");
+    fd.append("date_from", $("rcFrom") ? $("rcFrom").value : "");
+    fd.append("date_to", $("rcTo") ? $("rcTo").value : "");
+    const res = await fetch(routePath("/api/reconcile/dropship"), { method: "POST", body: fd });
+    if (res.status === 401) { showLogin(); throw new Error("请先登录"); }
+    if (!res.ok) {
+      let msg = "核对失败";
+      try { const j = await res.json(); msg = j.detail || msg; } catch (e) {}
+      throw new Error(msg);
+    }
+    dsRenderReconcile(await res.json());
+  } catch (e) {
+    out.innerHTML = `<div class="alert warn">核对失败：${esc(e.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+function dsRenderReconcile(d) {
+  const s = d.summary || {};
+  const diff = s.diff || 0;
+  const diffOk = Math.abs(diff) <= 0.02;
+  const statusStyle = {
+    "一致": "background:#e8f5e9;color:#1b7f3b;",
+    "金额差异": "background:#fde2e0;color:#b3261e;",
+    "仅单据": "background:#fff3cd;color:#8a6d00;",
+    "仅系统": "background:#e8eefc;color:#2b4a9b;",
+  };
+  const rows = (d.rows || []).map((r) => {
+    const rowOk = Math.abs(r.amount_diff) <= 0.02;
+    return `<tr>
+      <td class="num mono">${esc(r.date || "")}</td>
+      <td><span class="badge" style="${statusStyle[r.status] || ""}">${esc(r.status)}</span></td>
+      <td>${esc((r.doc_names || []).join("、")) || '<span class="muted">—</span>'}</td>
+      <td class="num mono">${esc(r.doc_unit || "")}</td>
+      <td class="num mono">${fmtNum(r.doc_quantity)}</td>
+      <td class="num mono">${fmtMoney(r.doc_amount)}</td>
+      <td>${esc(r.system_name || "")}${r.system_spec ? `<span class="muted"> · ${esc(r.system_spec)}</span>` : ""}</td>
+      <td class="num mono">${esc(r.system_unit || "")}</td>
+      <td class="num mono">${fmtNum(r.system_quantity)}</td>
+      <td class="num mono">${fmtMoney(r.system_amount)}</td>
+      <td class="num mono"><b style="color:${rowOk ? "var(--green,#16a34a)" : "var(--danger,#dc2626)"};">${fmtMoney(r.amount_diff)}</b></td>
+    </tr>`;
+  }).join("");
+  const aliasTxt = (d.aliases || []).map((a) => `${esc(a.from)} → ${esc(a.to)}`).join("；");
+  $("rcResult").innerHTML = `
+    <div class="pay-sum" style="margin-top:6px;">
+      <span>单据 <b>${s.doc_rows || 0}</b> 行 / 金额 <b class="mono">${fmtMoney(s.doc_total)}</b></span>
+      <span>系统代发成本（单据涉及商品） <b class="mono">${fmtMoney(s.system_total)}</b></span>
+      <span>成本差异 <b class="mono" style="color:${diffOk ? "var(--green,#16a34a)" : "var(--danger,#dc2626)"};">${fmtMoney(diff)}</b></span>
+      <span class="muted">差异 ${s.diff_groups || 0} · 仅单据 ${s.only_doc || 0} · 仅系统 ${s.only_system || 0} · 一致 ${s.same || 0}</span>
+    </div>
+    <div class="muted" style="font-size:12px;margin:4px 0;">日期 ${esc(d.date_from || "-")} ~ ${esc(d.date_to || "-")}${aliasTxt ? "；别名：" + aliasTxt : ""}</div>
+    <div class="table-wrap" style="max-height:52vh;overflow:auto;"><table>
+      <thead><tr>
+        <th style="width:92px;">日期</th><th style="width:86px;">状态</th>
+        <th>单据商品</th><th style="width:54px;">单位</th><th style="width:76px;">数量</th><th style="width:92px;">金额</th>
+        <th>系统商品 / 规格</th><th style="width:54px;">单位</th><th style="width:76px;">数量</th><th style="width:92px;">成本</th>
+        <th style="width:92px;">差异</th>
+      </tr></thead>
+      <tbody>${rows || '<tr><td colspan="11" class="empty">没有可核对的数据</td></tr>'}</tbody>
+    </table></div>`;
+}
+
+
 /** 勾选的行 → 它们名下所有出库单的代发账单行 id（跨单合并后一行对应多张单） */
 function dsPickedBillIds() {
   return [...document.querySelectorAll("#dsTable .ds-pick")].filter((x) => x.checked)
