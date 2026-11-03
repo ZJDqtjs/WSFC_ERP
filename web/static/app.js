@@ -9885,12 +9885,17 @@ function renderDropshipBills() {
   const pend = groups.filter((g) => g.pay_status === "unpaid");
   const pendAmt = pend.reduce((a, g) => a + (g.amount || 0), 0);
   const orders = groups.reduce((a, g) => a + (g.order_count || 0), 0);
+  // 单量合计 = 各行「单量」相加（不是单据/出库单张数，两者在代发里经常不相等）
+  const qtySum = groups.reduce((a, g) => a + (Number(g.quantity) || 0), 0);
+  const units = new Set(groups.map((g) => (g.unit || "").trim()).filter(Boolean));
+  const qtyUnit = units.size === 1 ? [...units][0] : "";
+  const qtyText = `${fmtNum(qtySum)}${qtyUnit ? " " + qtyUnit : ""}`;
   const days = new Set(groups.map((g) => g.date).filter(Boolean)).size;   // 涉及多少个出库日期
   const sumEl = $("dsSum");
   if (sumEl) {
     sumEl.innerHTML =
       `<span class="pay-sum-label">${active ? "筛选结果" : "当前列表"}</span>` +
-      `<span><b>${groups.length}</b> 行 <span class="muted">/ ${days} 天 / ${orders} 单</span></span>` +
+      `<span><b>${groups.length}</b> 行 <span class="muted">/ ${days} 天 / 单量合计 ${qtyText} · ${orders} 张出库单</span></span>` +
       `<span class="pay-sum-total">合计 <b class="mono">${fmtMoney(sum)}</b></span>` +
       `<span class="muted">待结清 <b class="mono" style="color:var(--danger, #dc2626);">${fmtMoney(pendAmt)}</b></span>` +
       (DS_VIEW === "all" ? `<span class="muted">已结清 <b class="mono" style="color:var(--green, #16a34a);">${fmtMoney(sum - pendAmt)}</b></span>` : "") +
@@ -9934,7 +9939,7 @@ function renderDropshipBills() {
       ? `<tfoot><tr>
           <td></td>
           <td><b>${active ? "筛选合计" : "列出合计"}</b></td>
-          <td class="muted" colspan="3">${groups.length} 行 · ${days} 天 · 待结清 ${pend.length} 行 · ${orders} 单</td>
+          <td class="muted" colspan="3">${groups.length} 行 · ${days} 天 · 待结清 ${pend.length} 行 · 单量合计 ${qtyText}</td>
           <td class="num mono"><b>应付 ${fmtMoney(sum)}</b></td>
           <td></td>
         </tr></tfoot>`
@@ -9968,14 +9973,15 @@ async function submitDropshipPay(ids, paid, fee, date, okText) {
 async function dsMarkPaid(idx, paid) {
   const g = DS_ROWS[idx];
   if (!g) return;
-  const plain = `${g.product_name}${g.spec ? " · " + g.spec : ""}（${g.order_count} 单，代发成本 ${fmtMoney(g.amount)}）`;
+  const detail = `${g.order_count} 张出库单 · 单量 ${fmtNum(g.quantity)}${g.unit || ""}`;
+  const plain = `${g.product_name}${g.spec ? " · " + g.spec : ""}（${detail}，代发成本 ${fmtMoney(g.amount)}）`;
   if (!paid) {
     if (!confirm(`确认撤销已付标记？\n${plain}\n（只影响代发付款核对，不影响财务报表）`)) return;
     return submitDropshipPay(g.bill_ids || [], false, 0, "");
   }
   openPayModal({
     title: "代发成本已支付",
-    label: `<b>${esc(g.product_name)}</b>${g.spec ? " · " + esc(g.spec) : ""}（${g.order_count} 单，代发成本 <b class="mono">${fmtMoney(g.amount)}</b>）`,
+    label: `<b>${esc(g.product_name)}</b>${g.spec ? " · " + esc(g.spec) : ""}（${esc(detail)}，代发成本 <b class="mono">${fmtMoney(g.amount)}</b>）`,
     note: "只影响代发付款核对，不影响报表的收入成本；手续费照常记入「其他收支」。",
     onOk: (fee, day) => submitDropshipPay(g.bill_ids || [], true, fee, day),
   });
