@@ -55,7 +55,8 @@ HEADER_ALIASES = {
 _CORE_STRIP = (
     "净重", "礼盒装", "礼盒", "公斤", "千克", "kg", "斤", "克", "g",
     "袋", "包", "盒", "箱", "个", "件", "份", "装", "单", "桶", "瓶", "扎", "本",
-    "特大", "特果", "大果", "中果", "小果",
+    # 规格修饰按「长的先剥」：特大果/中小果 要先于 特大/中/小，避免留下「果」字
+    "特大果", "中小果", "特大", "特果", "大果", "中果", "小果",
 )
 
 
@@ -64,7 +65,7 @@ def _core(name: str) -> str:
     """商品家族核心名：去数字/单位/规格修饰，用于跨规格聚合核对。"""
     s = str(name or "").lower()
     s = re.sub(r"[\d.]+", "", s)
-    s = re.sub(r"\s+", "", s).replace("/", "").replace("+", "").replace("（", "").replace("）", "")
+    s = re.sub(r"\s+", "", s).replace("/", "").replace("+", "").replace("*", "").replace("（", "").replace("）", "")
     for w in _CORE_STRIP:
         s = s.replace(w, "")
     return s
@@ -267,17 +268,23 @@ def _reconcile_aliases(text: str) -> list[tuple[str, str]]:
 def _map_alias(name: str, aliases: list[tuple[str, str]]) -> tuple[str, str | None]:
     """按别名映射商品名；允许别名核心词（如「电商果」→「电商」）只匹配名称的一段。
 
+    多个别名同时命中时取「最靠右、最长」的那个：如「电商牧心」里 牧心 比 电商 更具体，
+    应归到牧心番茄而不是老味道番茄。
     返回 (映射后名称, 命中的别名目标)；未命中时目标为 None。
     """
     name = (name or "").strip()
+    best: tuple[int, int, str, str] | None = None  # (位置, 长度, 实际命中词, 目标)
     for src, dst in aliases:
         if not src:
             continue
-        if src in name:
-            return name.replace(src, dst), dst
-        core = src.rstrip(_ALIAS_TAIL)
-        if len(core) >= 2 and core in name:
-            return name.replace(core, dst), dst
+        for key in (src, src.rstrip(_ALIAS_TAIL)):
+            if len(key) < 2 or key not in name:
+                continue
+            pos, ln = name.rfind(key), len(key)
+            if best is None or (pos, ln) > (best[0], best[1]):
+                best = (pos, ln, key, dst)
+    if best:
+        return name.replace(best[2], best[3]), best[3]
     return name, None
 
 
@@ -292,7 +299,8 @@ def _anchor_key(target: str) -> str:
     return s.strip()
 
 
-_LEAD_NO_RE = re.compile(r"^(\d+(?:\.\d+)?)")
+# 只把「9号…」「11号…」这种箱号当作规格编号；「12孔泡沫托」的数字不是箱号
+_LEAD_NO_RE = re.compile(r"^(\d+)号")
 
 # 包材/耗材特征词（注意不能包含单独的「箱」，因为农产品也常以「/箱」为销售单位）
 _PACK_WORDS = ("纸箱", "号箱", "号纸", "泡沫", "托盘", "托", "包装", "膜", "胶带", "标签", "果托")
@@ -405,8 +413,13 @@ def _collect_dropship(db: Session, date_from: str, date_to: str) -> dict[tuple[s
 
 
 def _build_reconciliation(doc_rows: list[dict], text: str, db: Session,
-                          date_from: str, date_to: str) -> dict:
-    """单据行 × 代发账单 → 成本差异核对结果（纯同步逻辑，便于单测）。"""
+                          date_from: str, date_to: str,
+                          include_only_system: bool = True) -> dict:
+    """单据行 × 代发账单 → 成本差异核对结果（纯同步逻辑，便于单测）。
+
+    include_only_system=False 时隐藏「仅系统」行（系统里同日有、但单据没有的商品），
+    因为供应商账单通常只覆盖部分商品，全量展示会把别家供应商的商品混进来。
+    """
     aliases = _reconcile_aliases(text)
     products = list(db.execute(select(Product).where(Product.is_active.is_(True))).scalars())
 
@@ -476,6 +489,18 @@ def _build_reconciliation(doc_rows: list[dict], text: str, db: Session,
     order = {"金额差异": 0, "仅单据": 1, "仅系统": 2, "一致": 3}
     rows.sort(key=lambda r: (order.get(r["status"], 9), r["date"], r["family"]))
 
+    # 已匹配商品（一致/金额差异）的真实可比差异；未归类单据单独统计，避免把
+    # 「系统里根本没有对应商品」的金额也算成核对差额。
+    matched = [r for r in rows if r["status"] in ("一致", "金额差异")]
+    matched_doc_total = round(sum(r["doc_amount"] for r in matched), 2)
+    matched_sys_total = round(sum(r["system_amount"] for r in matched), 2)
+    unmatched_doc_total = round(sum(r["doc_amount"] for r in rows if r["status"] == "仅单据"), 2)
+    only_system_total = round(sum(r["system_amount"] for r in rows if r["status"] == "仅系统"), 2)
+    only_system_count = sum(1 for r in rows if r["status"] == "仅系统")
+
+    if not include_only_system:
+        rows = [r for r in rows if r["status"] != "仅系统"]
+
     doc_total = round(sum(r["amount"] for r in doc_rows), 2)
     # 系统合计只取「单据里出现过的商品」，避免把同日无关商品也算进差异；
     # system_all_total 保留同日全部代发成本，供参考。
@@ -493,10 +518,15 @@ def _build_reconciliation(doc_rows: list[dict], text: str, db: Session,
             "system_total": sys_total,
             "system_all_total": sys_all_total,
             "diff": round(doc_total - sys_total, 2),
+            "matched_doc_total": matched_doc_total,
+            "matched_sys_total": matched_sys_total,
+            "matched_diff": round(matched_doc_total - matched_sys_total, 2),
+            "unmatched_doc_total": unmatched_doc_total,
+            "only_system_total": only_system_total,
             "groups": len(rows),
             "diff_groups": sum(1 for r in rows if r["status"] == "金额差异"),
             "only_doc": sum(1 for r in rows if r["status"] == "仅单据"),
-            "only_system": sum(1 for r in rows if r["status"] == "仅系统"),
+            "only_system": only_system_count,
             "same": sum(1 for r in rows if r["status"] == "一致"),
         },
         "rows": rows,
@@ -509,6 +539,7 @@ async def reconcile_dropship(
     text: str = Form(""),
     date_from: str = Form(""),
     date_to: str = Form(""),
+    include_only_system: str = Form("0"),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -524,4 +555,5 @@ async def reconcile_dropship(
         doc_rows = _read_excel(data, filename)
     if not doc_rows:
         raise HTTPException(400, "未从文件中提取到商品明细，请检查表头或图片清晰度")
-    return _build_reconciliation(doc_rows, text, db, date_from, date_to)
+    include_sys = str(include_only_system).strip().lower() in ("1", "true", "yes", "on")
+    return _build_reconciliation(doc_rows, text, db, date_from, date_to, include_only_system=include_sys)

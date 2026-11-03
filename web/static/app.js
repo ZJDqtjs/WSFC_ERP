@@ -9968,6 +9968,10 @@ function dsReconcileOpen() {
     <div class="field"><label>商品别名（可选，把单据商品名对应到系统商品）</label>
       <textarea id="rcText" rows="2" placeholder="如：电商果是老味道番茄，牧心果是牧心番茄"></textarea>
     </div>
+    <div class="field"><label>显示范围</label>
+      <label style="font-weight:400;display:flex;gap:6px;align-items:center;"><input id="rcAllSys" type="checkbox" /> 同时列出系统内其他代发商品（仅系统）</label>
+      <div class="field-hint">默认只看单据涉及的商品；勾选后会把同日系统里其它代发商品也列出来。</div>
+    </div>
     <div id="rcResult" style="margin-top:8px;"></div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
@@ -9991,6 +9995,7 @@ async function dsReconcileRun() {
     fd.append("text", $("rcText") ? $("rcText").value : "");
     fd.append("date_from", $("rcFrom") ? $("rcFrom").value : "");
     fd.append("date_to", $("rcTo") ? $("rcTo").value : "");
+    fd.append("include_only_system", $("rcAllSys") && $("rcAllSys").checked ? "1" : "0");
     const res = await fetch(routePath("/api/reconcile/dropship"), { method: "POST", body: fd });
     if (res.status === 401) { showLogin(); throw new Error("请先登录"); }
     if (!res.ok) {
@@ -10009,8 +10014,8 @@ async function dsReconcileRun() {
 
 function dsRenderReconcile(d) {
   const s = d.summary || {};
-  const diff = s.diff || 0;
-  const diffOk = Math.abs(diff) <= 0.02;
+  const matchedDiff = s.matched_diff || 0;
+  const diffOk = Math.abs(matchedDiff) <= 0.02;
   const statusStyle = {
     "一致": "background:#e8f5e9;color:#1b7f3b;",
     "金额差异": "background:#fde2e0;color:#b3261e;",
@@ -10038,7 +10043,8 @@ function dsRenderReconcile(d) {
     <div class="pay-sum" style="margin-top:6px;">
       <span>单据 <b>${s.doc_rows || 0}</b> 行 / 金额 <b class="mono">${fmtMoney(s.doc_total)}</b></span>
       <span>系统代发成本（单据涉及商品） <b class="mono">${fmtMoney(s.system_total)}</b></span>
-      <span>成本差异 <b class="mono" style="color:${diffOk ? "var(--green,#16a34a)" : "var(--danger,#dc2626)"};">${fmtMoney(diff)}</b></span>
+      <span>已匹配商品差异 <b class="mono" style="color:${diffOk ? "var(--green,#16a34a)" : "var(--danger,#dc2626)"};">${fmtMoney(matchedDiff)}</b></span>
+      <span>未归类单据金额 <b class="mono">${fmtMoney(s.unmatched_doc_total)}</b></span>
       <span class="muted">差异 ${s.diff_groups || 0} · 仅单据 ${s.only_doc || 0} · 仅系统 ${s.only_system || 0} · 一致 ${s.same || 0}</span>
     </div>
     <div class="muted" style="font-size:12px;margin:4px 0;">日期 ${esc(d.date_from || "-")} ~ ${esc(d.date_to || "-")}${aliasTxt ? "；别名：" + aliasTxt : ""}</div>
