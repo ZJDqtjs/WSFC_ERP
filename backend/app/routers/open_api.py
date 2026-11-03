@@ -6,6 +6,10 @@
 SKU 口径（两边靠这个对上）：
 - **订单商品**：``products.code`` 存的就是京东 skuId。单件结算收入 = 出库明细 ``amount``
   （卖家实收，即京东结算给我们的钱）÷ 件数。
+- **多端商品（多店铺）**：同一规格在多个店铺各有一个 skuId 时，在商品上开启「多端商品」并维护
+  ``codes=[{code, shop}]``。出库单的店铺（= 客户名）命中哪个 shop，销量/结算额就归到那个 code：
+  每个 SKU 拿到的是**自己店铺**的结算价与成本，不是几家店的混合均价；
+  没匹配到店铺的订单归主编码 ``products.code``（主编码为空时归第一条编码）。
 - **入仓品**：``warehouse_products.sku`` 也是京东 skuId，入仓单的收入就是京东向我们下的
   采购单，毛利 = 收入 − 商品成本 − 运费 − 随货包材成本；对外输出时 ``package`` = 随货包材
   + 资料上的**固定成本**（每袋打包费 / 难量化的包材或额外费用），并另给 ``fixed`` 字段便于核对。
@@ -133,16 +137,90 @@ def _defaults() -> dict:
 
 
 # ---------------- 订单商品（聚水潭出库单） ----------------
+def _code_entries(db: Session) -> dict[int, dict]:
+    """商品 id → 编码清单：[{code, shop}]（主编码 shop 为空 = 通用兜底编码）。
+
+    多端商品（``multi_code``）的额外编码带店铺名：同一规格在多个店铺各有一个平台 SKU 时，
+    按出库单的店铺（= 客户名）把销量算到该店铺自己的 SKU 上，而不是混成一个均价。
+    """
+    out: dict[int, dict] = {}
+    for p in db.execute(select(Product)).scalars():
+        main = (p.code or "").strip()
+        multi = bool(getattr(p, "multi_code", False))
+        pairs: list[tuple[str, str]] = []
+        if multi:
+            for it in (getattr(p, "codes", None) or []):
+                if not isinstance(it, dict):
+                    continue
+                c = str(it.get("code") or "").strip()
+                s = str(it.get("shop") or "").strip()
+                if c and all(c != x[0] for x in pairs):
+                    pairs.append((c, s))
+        # 主编码的店铺绑定可能写在 codes 里（用户把主编码也登记了一条）——要保留，不能丢掉
+        main_shop = next((s for c, s in pairs if c == main), "")
+        entries: list[dict] = []
+        if main:
+            entries.append({"code": main, "shop": main_shop})
+        for c, s in pairs:
+            if c != main:
+                entries.append({"code": c, "shop": s})
+        out[p.id] = {"entries": entries, "multi": multi}
+    return out
+
+
+def _norm_shop(s: str) -> str:
+    """店铺名归一：去所有空白 + 小写（出库单里常写成「梓云茶蔬菜源头直发京东自营专区」这种全名）。"""
+    return re.sub(r"\s+", "", str(s or "")).lower()
+
+
+def _pick_code(info: dict | None, shop: str) -> str:
+    """按店铺挑编码：店铺名一致 → 包含（简称/全称都算）→ 通用编码 → 第一条编码。
+
+    实际数据里商品上常填简称（如「梓云茶」），而出库单的客户是全名
+    （「梓云茶蔬菜源头直发京东自营专区」），所以除了完全一致还要做**包含**匹配：
+    谁的名字更长更具体就归谁，避免「梓云茶」把「梓云茶旗舰店」的单也吃掉。
+    """
+    entries = (info or {}).get("entries") or []
+    if not entries:
+        return ""
+    sn = _norm_shop(shop)
+    if sn:
+        for e in entries:
+            if e["shop"] and _norm_shop(e["shop"]) == sn:
+                return e["code"]
+        cands = [
+            (len(_norm_shop(e["shop"])), e["code"])
+            for e in entries
+            if e["shop"] and (_norm_shop(e["shop"]) in sn or sn in _norm_shop(e["shop"]))
+        ]
+        if cands:
+            cands.sort(key=lambda x: -x[0])
+            return cands[0][1]
+    for e in entries:
+        if not e["shop"]:
+            return e["code"]
+    return entries[0]["code"]
+
+
 def _sku_rows_sale(db: Session, date_from: str, date_to: str, key: str) -> dict:
     """按商品编码汇总出库明细 → 单件结算收入 / 运费 / 包材 / 人工 / 扣点。
 
     直接复用报表的 ``_summary_of``：出库时结算的快递费、包材、人工的归属与分摊规则都在那儿
     （有关联销售商品的直接归它，无归属的按单内销售金额占比分摊），这里不另写一套口径。
+
+    多端商品（同一规格多店铺多编码）传 ``split_shop`` 让报表把销量按店铺拆行，
+    再按「店铺 → 编码」各自归集 —— 每个 SKU 拿到的是自己店铺的结算价与成本，不是混合均价。
     """
-    data = _summary_of(db, date_from, date_to, key, False)
+    codes_of = _code_entries(db)
+    multi_ids = {pid for pid, info in codes_of.items() if info.get("multi")}
+    data = _summary_of(db, date_from, date_to, key, False, split_shop=multi_ids or None)
     out: dict = {}
     for r in data.get("by_product") or []:
-        code = str(r.get("code") or "").strip()
+        pid = r.get("product_id")
+        # 多端商品按店铺选编码；普通商品只有主编码
+        code = _pick_code(codes_of.get(pid), r.get("shop") or "")
+        if not code:
+            code = str(r.get("code") or "").strip()
         if not code:
             continue  # 没填编码的订单商品对不上京东 SKU，跳过
         qty = float(r.get("qty") or 0)
@@ -165,28 +243,31 @@ def _sku_rows_sale(db: Session, date_from: str, date_to: str, key: str) -> dict:
             d["_name"] = r.get("name") or ""
 
     # 该商品在区间内**实际有出库**的日期范围：用来判断「数据是落在我选的那段时间，还是区间内根本没卖」。
-    # 这是另外查一次得到的（_summary_of 不返回日期），代价很小。
+    # 这是另外查一次得到的（_summary_of 不返回日期），代价很小。按「商品 × 店铺」取，再映射回编码。
     conds = [
         OutboundLine.line_type == "sale",
         func.coalesce(Outbound.pay_status, PAID) != "unpaid",
-        Product.code != "",
     ]
     if date_from:
         conds.append(Outbound.date >= date_from)
     if date_to:
         conds.append(Outbound.date <= date_to)
-    for code, d0, d1 in db.execute(
-        select(Product.code, func.min(Outbound.date), func.max(Outbound.date))
+    shop_expr = func.trim(func.coalesce(Outbound.customer, ""))
+    for pid, shop, d0, d1 in db.execute(
+        select(Product.id, shop_expr, func.min(Outbound.date), func.max(Outbound.date))
         .select_from(OutboundLine)
         .join(Outbound, Outbound.id == OutboundLine.outbound_id)
         .join(Product, Product.id == OutboundLine.product_id)
         .where(*conds)
-        .group_by(Product.code)
+        .group_by(Product.id, shop_expr)
     ):
-        d = out.get(str(code or "").strip())
-        if d is not None:
-            d["_firstDate"] = d0 or ""
-            d["_lastDate"] = d1 or ""
+        d = out.get(_pick_code(codes_of.get(pid), shop))
+        if d is None:
+            continue
+        # 同一个编码可能对应多行（普通商品按店铺拆了多次查询）：日期取并集
+        cur0, cur1 = d.get("_firstDate") or "", d.get("_lastDate") or ""
+        d["_firstDate"] = min(x for x in (cur0, d0 or "") if x) if (cur0 or d0) else ""
+        d["_lastDate"] = max(cur1, d1 or "")
     return out
 
 
@@ -313,13 +394,16 @@ def _merge_into(dst: dict, src: dict) -> dict:
     return dst
 
 
-def _collect(date_from: str, date_to: str) -> dict:
+def _collect(date_from: str, date_to: str, refresh: bool = False) -> dict:
     """跨全部分仓汇总（单仓读取失败只记一条，不影响其它仓）。
 
     带进程内缓存：方案 B 每次请求都要「区间」和「全量」两份汇总，全量那份很重。
     缓存按 (date_from, date_to) 分键保存，两份互不挤占，同一份在 TTL 内只算一次。
+    refresh=True（请求带 refresh=1）时先丢掉该分键，强制重算（改完商品资料不用等 10 分钟）。
     """
     ck = (date_from, date_to)
+    if refresh:
+        _SUMMARY_CACHE.pop(ck, None)
     now = datetime.now()
     # 惰性淘汰过期项即可，不要 clear 整张表：否则「区间」那份会把「全量历史」那份挤掉，
     # 每次换区间请求都得重算全量历史（实测 ~3.8s，是接口慢的主因）。
@@ -458,6 +542,7 @@ def sku_costs(
     request: Request,
     date_from: str = "",
     date_to: str = "",
+    refresh: int = 0,   # 1 = 跳过 10 分钟进程缓存，强制重算（改完商品编码/店铺后立即生效）
     x_api_token: str = Header(""),
     authorization: str = Header(""),
 ):
@@ -469,6 +554,7 @@ def sku_costs(
       入仓品不按区间过滤（采购价是快照，用最近已知价），但会给出 ``_lastDate`` 标明价格日期。
     - 区间内**没有出库记录**的商品不会出现在结果里；每个出库商品都带 ``_firstDate`` /
       ``_lastDate``，可用来确认数据到底落在哪几天。
+    - ``refresh=1``：跳过 10 分钟进程缓存强制重算（改完多端商品的编码/店铺后立即生效）。
 
     鉴权：请求头 ``X-Api-Token: <token>``（或 ``Authorization: Bearer <token>``）。
     令牌连续错误按客户端 IP 分级锁定（见 app/login_guard.py）。
@@ -487,6 +573,8 @@ def sku_costs(
     # 同 _collect：按区间分键缓存，过期项惰性淘汰，不要 clear 整张表
     for k in [k for k, (t, _) in _CACHE.items() if now - t >= _CACHE_TTL]:
         _CACHE.pop(k, None)
+    if refresh:
+        _CACHE.pop(ck, None)
     hit = _CACHE.get(ck)
     if hit is not None:
         return hit[1]
@@ -494,8 +582,8 @@ def sku_costs(
     # 方案 B：区间汇总 + 全量历史汇总。
     # 区间内没卖的商品也用全量历史给出成本（不让对方回落全店口径），并标 _period=all 让人看得见。
     has_range = bool(df or dt)
-    rng = _collect(df, dt) if has_range else None
-    full = _collect("", "")
+    rng = _collect(df, dt, refresh=bool(refresh)) if has_range else None
+    full = _collect("", "", refresh=bool(refresh))
     if rng is None:
         rng = full
 

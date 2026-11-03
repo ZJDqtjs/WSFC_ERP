@@ -16,7 +16,11 @@
           <van-field v-model="form.date" label="日期" type="date" />
           <van-field v-model="form.supplier" label="供应商" placeholder="可留空" />
           <OperatorField v-model="form.operator" />
-          <PayStatusField v-model="form.pay_status" hint="待付款：先进「待付款账单」，点「已支付」后才计入财务报表" />
+          <PayStatusField
+            v-model="form.pay_status"
+            allow-partial
+            hint="待付款：先进「待付款账单」，点「已支付」后才计入财务报表；部分付款：已付部分计入报表，未付余额留在待付款账单"
+          />
           <AttachmentField v-model="form.remark" />
         </van-cell-group>
 
@@ -24,8 +28,7 @@
         <div class="row" style="justify-content:space-between;">
           <span class="bold">入库明细（{{ rows.length }} 行）</span>
           <span class="muted">
-            合计 {{ fmtMoney(totalAmount) }}
-            <template v-if="totalAdjust"> · 实付 {{ fmtMoney(totalAmount + totalAdjust) }}</template>
+            {{ form.pay_status === 'partial' ? `应付 ${fmtMoney(totalDue)} · 已付 ${fmtMoney(totalPaid)} · 未付 ${fmtMoney(totalUnpaid)}` : `合计 ${fmtMoney(totalAmount)}${totalAdjust ? ` · 实付 ${fmtMoney(totalDue)}` : ''}` }}
           </span>
         </div>
 
@@ -47,6 +50,14 @@
           </div>
           <div v-if="r.product_id" class="row mt8">
             <van-field v-model="r.adjust" type="number" label="调整" placeholder="0.00" @update:model-value="calcRow(r)" />
+          </div>
+          <div v-if="form.pay_status === 'partial' && r.product_id" class="row mt8 partial-row">
+            <van-field v-model="r.paid" type="number" label="已付" placeholder="0.00" />
+            <span class="grow"></span>
+            <span class="muted" style="font-size:12px;text-align:right;">
+              应付 {{ fmtMoney(rowDue(r)) }}<br />
+              未付 {{ fmtMoney(Math.max(0, rowDue(r) - num(r.paid))) }} 进待付款账单
+            </span>
           </div>
           <div v-if="r.product_id" class="muted io-note">{{ adjustHint(r) }}</div>
         </div>
@@ -96,6 +107,8 @@
                 @click="toggleSel(r.id)"
               />
               <span class="grow item-title">{{ r.product_name }}</span>
+              <van-tag v-if="r.pay_status === 'partial'" type="warning" plain style="margin-right:6px;">部分付款</van-tag>
+              <van-tag v-else-if="r.pay_status === 'unpaid'" type="warning" plain style="margin-right:6px;">待付款</van-tag>
               <span class="bold">{{ fmtMoney(finalOf(r)) }}</span>
             </div>
             <div class="item-meta">
@@ -103,6 +116,12 @@
             </div>
             <div v-if="num(r.adjust_amount)" class="item-meta" style="color:#ed6a0c;">
               调整 {{ num(r.adjust_amount) > 0 ? '+' : '−' }}{{ fmtMoney(Math.abs(num(r.adjust_amount))) }} · 商品金额 {{ fmtMoney(r.total_amount) }}
+            </div>
+            <div v-if="r.pay_status === 'partial'" class="item-meta" style="color:#b45309;">
+              已付 {{ fmtMoney(r.paid_amount) }} · 未付 {{ fmtMoney(r.unpaid_amount) }}（应付 {{ fmtMoney(r.due_amount) }}，余额在待付款账单）
+            </div>
+            <div v-if="num(r.compensation)" class="item-meta" style="color:#07c160;">
+              供应商补偿 -{{ fmtMoney(r.compensation) }}（已记其他收支，冲减期间费用）
             </div>
             <div class="item-meta">
               {{ r.supplier || '无供应商' }}{{ r.operator ? ' · ' + r.operator : '' }}
@@ -141,10 +160,32 @@
         <van-cell-group inset>
           <van-field v-model="editForm.supplier" label="供应商" placeholder="可留空" />
           <van-field v-model="editForm.date" label="日期" type="date" />
-          <PayStatusField v-model="editForm.pay_status" hint="待付款：先进「待付款账单」，点「已支付」后才计入财务报表" />
+          <PayStatusField
+            v-model="editForm.pay_status"
+            allow-partial
+            hint="待付款：先进「待付款账单」，点「已支付」后才计入财务报表；部分付款：已付部分计入报表，未付余额留在待付款账单"
+          />
+          <van-field
+            v-if="editForm.pay_status === 'partial'"
+            v-model="editForm.paid_amount"
+            type="number"
+            label="已付金额"
+            placeholder="0.00"
+          >
+            <template #button><span class="muted">元</span></template>
+          </van-field>
+          <div v-if="editForm.pay_status === 'partial'" class="muted io-note" style="padding:0 16px 8px;">
+            应付 {{ fmtMoney(editDue) }} · 已付 {{ fmtMoney(editPaid) }} · 未付 {{ fmtMoney(editUnpaid) }}（余额进待付款账单）
+          </div>
+          <van-field v-model="editForm.compensation" type="number" label="供应商补偿" placeholder="0.00">
+            <template #button><span class="muted">元</span></template>
+          </van-field>
+          <div class="muted io-note" style="padding:0 16px 8px;">
+            选填：供应商退的钱 / 赔偿。保存后自动记一笔负数的「其他收支 → 供应商补偿」冲减期间费用；填 0 或清空即取消。不改货款与批次成本。
+          </div>
         </van-cell-group>
         <div class="muted io-note" style="margin:8px 4px;">
-          只能修改以上三项；保存后操作员记为当前登录账号。数量 / 单价 / 金额如需更正，请删除后重新入库。
+          只能修改以上几项；保存后操作员记为当前登录账号。数量 / 单价 / 金额如需更正，请删除后重新入库。
         </div>
         <div class="row" style="gap:8px;">
           <van-button block plain @click="editShow = false">取消</van-button>
@@ -223,19 +264,33 @@ const rows = ref([newRow()])
 const saving = ref(false)
 
 function newRow() {
-  return { product_id: '', name: '', unit: '', qty: '1', price: '0', adjust: '' }
+  return { product_id: '', name: '', unit: '', qty: '1', price: '0', adjust: '', paid: '' }
 }
+const round2 = (v) => Math.round((+v || 0) * 100) / 100
 const totalAmount = computed(() => rows.value.reduce((s, r) => s + rowAmount(r), 0))
 // 金额调整（抹零/凑整）：正=多付给供应商，负=少付。只影响实付，商品成本按原价不变
 const totalAdjust = computed(() => rows.value.reduce((s, r) => s + (r.product_id ? num(r.adjust) : 0), 0))
 const rowAmount = (r) => (r.product_id ? num(r.qty) * num(r.price) : 0)
+/** 本行应付合计 = 货款 + 金额调整（与后端 pay_due 口径一致） */
+const rowDue = (r) => round2(rowAmount(r) + num(r.adjust))
+const totalDue = computed(() => round2(totalAmount.value + totalAdjust.value))
+// 部分付款：已付金额是唯一真相；已付款=应付全额，待付款=0
+const totalPaid = computed(() => {
+  if (form.pay_status === 'paid') return totalDue.value
+  if (form.pay_status !== 'partial') return 0
+  const sum = rows.value
+    .filter((r) => r.product_id)
+    .reduce((s, r) => s + Math.min(Math.max(num(r.paid), 0), rowDue(r)), 0)
+  return round2(sum)
+})
+const totalUnpaid = computed(() => round2(Math.max(totalDue.value - totalPaid.value, 0)))
 const rowFinal = (r) => rowAmount(r) + num(r.adjust)
 const finalOf = (r) => num(r.final_amount != null ? r.final_amount : num(r.total_amount) + num(r.adjust_amount))
 function adjustHint(r) {
   const base = rowAmount(r)
   const adj = num(r.adjust)
-  if (!adj) return `实付 ${fmtMoney(base)}；正=多付，负=少付，差额自动记「金额调整」其他开支（商品成本不变）`
-  return `实付 ${fmtMoney(base + adj)}（商品金额 ${fmtMoney(base)} ${adj > 0 ? '+' : '−'} ${fmtMoney(Math.abs(adj))}）· 差额记「金额调整」其他开支`
+  if (!adj) return '正=多付，负=少付；差额自动记「金额调整」其他收支（商品成本不变）'
+  return `商品金额 ${fmtMoney(base)} ${adj > 0 ? '+' : '−'} ${fmtMoney(Math.abs(adj))} · 差额记「金额调整」其他收支`
 }
 function calcRow() {}
 
@@ -255,10 +310,21 @@ async function submit() {
   for (const r of lines) {
     if (!(num(r.qty) > 0)) { showToast(`「${r.name}」数量必须大于 0`); return }
   }
+  const partial = form.pay_status === 'partial'
+  // 部分付款：已付金额必须大于 0 且小于应付合计（等于 0 / 填满都该选「待付款」/「已付款」）
+  if (partial) {
+    for (const [i, r] of lines.entries()) {
+      const due = rowDue(r)
+      const paid = round2(num(r.paid))
+      if (!(paid > 0)) { showToast(`第 ${i + 1} 行选了「部分付款」，请填已付金额（应付 ${fmtMoney(due)}）`); return }
+      if (paid >= due - 0.005) { showToast(`第 ${i + 1} 行已付已够 ${fmtMoney(due)}，付款状态请选「已付款」`); return }
+    }
+  }
   saving.value = true
   try {
     const adjustTotal = lines.reduce((s, r) => s + num(r.adjust), 0)
     for (const r of lines) {
+      const paidAmount = partial ? round2(num(r.paid)) : 0
       await api('/api/inbounds', 'POST', {
         product_id: +r.product_id,
         unit: r.unit || '个',
@@ -269,13 +335,15 @@ async function submit() {
         date: form.date,
         remark: form.remark,
         pay_status: form.pay_status,
-        adjust_amount: num(r.adjust),   // 抹零/凑整：差额自动记「金额调整」其他开支
+        paid_amount: paidAmount,        // 部分付款：已付部分计入报表，余额进待付款账单
+        adjust_amount: num(r.adjust),   // 抹零/凑整：差额自动记「金额调整」其他收支
       })
     }
     showToast(
       '入库成功'
-      + (adjustTotal ? `（调整 ${adjustTotal > 0 ? '+' : '−'}${Math.abs(adjustTotal).toFixed(2)}，已记其他开支）` : '')
+      + (adjustTotal ? `（调整 ${adjustTotal > 0 ? '+' : '−'}${Math.abs(adjustTotal).toFixed(2)}，已记其他收支）` : '')
       + (form.pay_status === 'unpaid' ? '（待付款，已进待付款账单）' : '')
+      + (partial ? `（已付 ${fmtMoney(totalPaid)}，未付 ${fmtMoney(totalUnpaid)} 已进待付款账单）` : '')
     )
     clearRows()
     form.pay_status = 'paid'
@@ -409,8 +477,15 @@ const editShow = ref(false)
 const editSaving = ref(false)
 const editForm = reactive({
   id: null, code: '', product_name: '', total_amount: 0, adjust_amount: 0,
-  supplier: '', date: todayStr(), pay_status: 'paid',
+  supplier: '', date: todayStr(), pay_status: 'paid', paid_amount: '', compensation: '',
 })
+const editDue = computed(() => round2(num(editForm.total_amount) + num(editForm.adjust_amount)))
+const editPaid = computed(() => {
+  if (editForm.pay_status === 'paid') return editDue.value
+  if (editForm.pay_status !== 'partial') return 0
+  return round2(Math.min(Math.max(num(editForm.paid_amount), 0), editDue.value))
+})
+const editUnpaid = computed(() => round2(Math.max(editDue.value - editPaid.value, 0)))
 
 function openEdit(r) {
   Object.assign(editForm, {
@@ -421,22 +496,35 @@ function openEdit(r) {
     adjust_amount: num(r.adjust_amount),
     supplier: r.supplier || '',
     date: r.date || todayStr(),
-    pay_status: r.pay_status === 'unpaid' ? 'unpaid' : 'paid',
+    pay_status: ['paid', 'partial', 'unpaid'].includes(r.pay_status) ? r.pay_status : 'paid',
+    paid_amount: r.pay_status === 'partial' && num(r.paid_amount) > 0 ? String(num(r.paid_amount)) : '',
+    compensation: num(r.compensation) > 0 ? String(num(r.compensation)) : '',
   })
   editShow.value = true
 }
 
 async function saveEdit() {
   if (!editForm.date) { showToast('请选择入库日期'); return }
+  const compensation = round2(num(editForm.compensation))
+  if (compensation < 0) { showToast('供应商补偿不能为负数'); return }
+  let paidAmount = 0
+  if (editForm.pay_status === 'partial') {
+    paidAmount = round2(num(editForm.paid_amount))
+    if (!(paidAmount > 0)) { showToast(`部分付款请填已付金额（应付 ${fmtMoney(editDue.value)}）`); return }
+    if (paidAmount >= editDue.value - 0.005) { showToast(`已付已够 ${fmtMoney(editDue.value)}，付款状态请选「已付款」`); return }
+  }
   editSaving.value = true
   try {
     await api(`/api/inbounds/${editForm.id}`, 'PUT', {
       supplier: (editForm.supplier || '').trim(),
       date: editForm.date,
       pay_status: editForm.pay_status,
+      paid_amount: paidAmount,
+      compensation,
     })
     editShow.value = false
-    showToast('已保存，操作员记为当前登录账号')
+    showToast('已保存，操作员记为当前登录账号'
+      + (compensation > 0 ? `；供应商补偿 ${fmtMoney(compensation)} 已计入其他收支` : ''))
     loadList()
   } catch (e) { showToast('保存失败：' + e.message) }
   editSaving.value = false

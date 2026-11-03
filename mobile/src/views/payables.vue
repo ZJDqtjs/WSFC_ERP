@@ -57,16 +57,27 @@
 
       <div class="card">
         <div v-if="!rows.length" class="empty">{{ filtered ? '没有符合筛选条件的账单' : (view === 'all' ? '没有账单' : '没有待结清的账单') }}</div>
+        <div v-if="picked.length" class="batch-bar">
+          <span class="muted">已选 {{ picked.length }} 笔 · 合计 {{ fmtMoney(pickedAmount) }}</span>
+          <van-button size="mini" type="success" :loading="batchPaying" @click="batchPay(true)">批量已支付</van-button>
+          <van-button size="mini" plain :loading="batchPaying" @click="batchPay(false)">批量撤销</van-button>
+          <van-button size="mini" plain @click="picked = []">取消</van-button>
+        </div>
         <div v-for="r in rows" :key="r.kind + '-' + r.id" class="list-item" :style="r.pay_status === 'unpaid' ? '' : 'opacity:.55;'">
           <!-- 左边：具体事物 + 款项 -->
           <div class="row">
+            <van-checkbox :model-value="picked.includes(r.kind + '-' + r.id)" style="margin-right:8px;" @click="togglePick(r)" />
             <van-tag :type="TAG[r.source] || 'default'" plain>{{ r.source }}</van-tag>
+            <van-tag v-if="r.partial" type="warning" plain style="margin-left:4px;">部分付款</van-tag>
             <span class="grow item-title ellipsis" style="margin-left:6px;">{{ r.title }}</span>
           </div>
           <div class="item-meta">
             {{ r.date }}{{ r.code ? ' · ' + r.code : '' }}{{ r.sub ? ' · ' + r.sub : '' }}
           </div>
           <div v-if="r.remark" class="item-meta">{{ r.remark }}</div>
+          <div v-if="r.partial" class="item-meta" style="color:#b45309;">
+            应付 {{ fmtMoney(r.due_amount) }} · 已付 {{ fmtMoney(r.paid_amount) }} · 未付 {{ fmtMoney(r.amount) }}
+          </div>
           <div class="item-meta">
             操作员 {{ r.operator || '—' }} · <span :class="r.direction === 'in' ? 'up' : 'down'">{{ r.direction === 'in' ? '应收' : '应付' }} {{ fmtMoney(r.amount) }}</span>
           </div>
@@ -88,7 +99,7 @@
       </div>
 
       <div class="muted" style="font-size:12px;padding:4px 2px;">
-        入库 / 入仓 / 出库 / 其他开支 里勾了「待付款」的单据都会汇总到这里；点「已支付」后按原日期纳入财务报表。已结清只载入最近 30 天。
+        入库 / 入仓 / 出库 / 其他收支 里勾了「待付款」的单据都会汇总到这里；点「已支付」后按原日期纳入财务报表。已结清只载入最近 30 天。
       </div>
       </template>
 
@@ -176,15 +187,36 @@
         </div>
       </template>
     </div>
+
+    <!-- 已支付确认：可顺手记一笔转账手续费 → 其他收支 -->
+    <van-popup v-model:show="payShow" position="bottom" round>
+      <div class="sheet-body">
+        <div class="sheet-title">{{ payForm.title }}</div>
+        <div class="muted" style="margin-bottom:10px;line-height:1.5;">{{ payForm.label }}<br />{{ payForm.note }}</div>
+        <van-cell-group inset>
+          <van-field v-model="payForm.fee" type="number" label="转账手续费" placeholder="0.00（选填）">
+            <template #button><span class="muted">元</span></template>
+          </van-field>
+          <van-field v-model="payForm.date" label="手续费日期" type="date" />
+        </van-cell-group>
+        <div class="muted" style="font-size:12px;padding:6px 4px 8px;">
+          填了会自动记一笔「其他收支 → 手续费」（已付款），计入财务报表期间费用；不收手续费留空即可。
+        </div>
+        <div class="sheet-foot">
+          <van-button block plain @click="payShow = false">取消</van-button>
+          <van-button block type="success" :loading="paySubmitting" @click="confirmPayModal">确认已支付</van-button>
+        </div>
+      </div>
+    </van-popup>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import api from '../api'
-import { fmtMoney, fmtNum, num } from '../utils/format'
+import { fmtMoney, fmtNum, num, todayStr } from '../utils/format'
 
 const router = useRouter()
 function goBack() {
@@ -192,7 +224,7 @@ function goBack() {
   else router.replace('/mine')
 }
 
-const TAG = { 入库: 'primary', 入仓: 'success', 出库: 'warning', 其他开支: 'danger', 手动记账: 'default' }
+const TAG = { 入库: 'primary', 入仓: 'success', 出库: 'warning', 其他收支: 'danger', 手动记账: 'default' }
 const view = ref('unpaid')      // unpaid 只看待结清 / all 含最近已结清
 const items = ref([])
 const total = ref({})
@@ -246,21 +278,28 @@ function setView(v) {
   load()
 }
 
-/** 标记已支付（转入财务报表）/ 撤销 */
-async function pay(r) {
+/** 标记已支付（弹窗可填转账手续费）/ 撤销 */
+function pay(r) {
+  openPayModal({
+    title: '确认已支付',
+    label: `${r.source}「${r.title}」${fmtMoney(r.amount)}`,
+    note: r.partial
+      ? '这是该单未付的余额；确认后按原日期计入财务报表，未付余额结清。'
+      : '确认后这笔将按原日期计入财务报表。',
+    onOk: (fee, date) => submitPay({ kind: r.kind, id: r.id, paid: true, fee, date }, '已标记已支付'),
+  })
+}
+
+async function submitPay(body, okText = '已标记已支付') {
+  paying.value = body.kind + '-' + body.id
+  let ok = true
   try {
-    await showConfirmDialog({
-      title: '确认已支付',
-      message: `${r.source}「${r.title}」${fmtMoney(r.amount)}\n确认后这笔将按原日期计入财务报表。`,
-    })
-  } catch (e) { return }
-  paying.value = r.kind + '-' + r.id
-  try {
-    await api('/api/payables/pay', 'POST', { kind: r.kind, id: r.id, paid: true })
-    showToast('已标记已支付')
+    const res = await api('/api/payables/pay', 'POST', body)
+    showToast(okText + (res && res.fee ? `；手续费 ${fmtMoney(res.fee)} 已记「其他收支」` : ''))
     await load()
-  } catch (e) { showToast(e.message || '操作失败') }
+  } catch (e) { ok = false; showToast(e.message || '操作失败') }
   paying.value = ''
+  return ok
 }
 
 async function revoke(r) {
@@ -270,13 +309,90 @@ async function revoke(r) {
       message: `${r.source}「${r.title}」${fmtMoney(r.amount)}\n撤销后它会移出财务报表，回到待付款账单。`,
     })
   } catch (e) { return }
-  paying.value = r.kind + '-' + r.id
+  await submitPay({ kind: r.kind, id: r.id, paid: false, fee: 0, date: '' }, '已撤销，已移出财务报表')
+}
+
+/* ---------- 账单页签：勾选批量结清 / 撤销 ---------- */
+const picked = ref([])
+const batchPaying = ref(false)
+const pickedRows = computed(() => rows.value.filter((r) => picked.value.includes(r.kind + '-' + r.id)))
+const pickedAmount = computed(() => pickedRows.value.reduce((s, r) => s + (r.amount || 0), 0))
+
+function togglePick(r) {
+  const k = r.kind + '-' + r.id
+  picked.value = picked.value.includes(k) ? picked.value.filter((x) => x !== k) : [...picked.value, k]
+}
+
+async function batchPay(paid) {
+  const list = pickedRows.value
+  if (!list.length) { showToast('请先勾选要处理的账单'); return }
+  const amount = list.reduce((s, r) => s + (r.amount || 0), 0)
+  if (!paid) {
+    try {
+      await showConfirmDialog({
+        title: '批量撤销',
+        message: `${list.length} 笔，合计 ${fmtMoney(amount)}？\n撤销后会从财务报表移出。`,
+      })
+    } catch (e) { return }
+    await submitBatch(list, false, 0, '')
+    return
+  }
+  openPayModal({
+    title: '批量标记已支付',
+    label: `${list.length} 笔账单，合计 ${fmtMoney(amount)}`,
+    note: '确认后这些将按原日期计入财务报表。整批只记一笔手续费。',
+    onOk: (fee, date) => submitBatch(list, true, fee, date),
+  })
+}
+
+async function submitBatch(list, paid, fee, date) {
+  batchPaying.value = true
+  let ok = true
   try {
-    await api('/api/payables/pay', 'POST', { kind: r.kind, id: r.id, paid: false })
-    showToast('已撤销')
+    const byKind = new Map()
+    list.forEach((r) => {
+      if (!byKind.has(r.kind)) byKind.set(r.kind, [])
+      byKind.get(r.kind).push(r.id)
+    })
+    let updated = 0, missing = 0, feeTotal = 0, feeLeft = fee
+    for (const [kind, ids] of byKind) {
+      // 手续费只随第一组提交一次（后端每收到一次就记一笔其他收支）
+      const res = await api('/api/payables/pay-batch', 'POST', { kind, ids, paid, fee: feeLeft, date })
+      feeLeft = 0
+      updated += res.updated || 0
+      missing += res.missing || 0
+      feeTotal += res.fee || 0
+    }
+    showToast(`已处理 ${updated} 笔${missing ? `，${missing} 笔已不存在` : ''}`
+      + (feeTotal ? `；手续费 ${fmtMoney(feeTotal)} 已记「其他收支」` : ''))
+    picked.value = []
     await load()
-  } catch (e) { showToast(e.message || '操作失败') }
-  paying.value = ''
+  } catch (e) { ok = false; showToast(e.message || '批量操作失败') }
+  batchPaying.value = false
+  return ok
+}
+
+/* ---------- 已支付确认弹窗：可顺手记一笔转账手续费 → 其他收支 ---------- */
+const payShow = ref(false)
+const paySubmitting = ref(false)
+const payForm = reactive({ title: '', label: '', note: '', fee: '', date: todayStr() })
+let payAction = null
+
+function openPayModal(cfg) {
+  Object.assign(payForm, { title: '', label: '', note: '', fee: '', date: todayStr() }, cfg)
+  payAction = cfg.onOk
+  payShow.value = true
+}
+
+async function confirmPayModal() {
+  const fee = num(payForm.fee)
+  if (fee < 0) { showToast('手续费不能为负数'); return }
+  if (!payAction) return
+  paySubmitting.value = true
+  try {
+    const ok = await payAction(fee, payForm.date || todayStr())
+    if (ok !== false) payShow.value = false
+  } finally { paySubmitting.value = false }
 }
 
 function goSource(r) {
@@ -341,22 +457,42 @@ function dsToggle(i) {
     : [...dsSelected.value, i]
 }
 
+/** 代发成本付款提交：手续费 >0 时后端自动记一笔「其他收支 → 手续费」 */
+async function submitDs(ids, paid, fee, date) {
+  let ok = true
+  try {
+    const r = await api('/api/payables/pay-batch', 'POST', { kind: 'dropship_item', ids, paid, fee, date })
+    showToast((paid ? '已标记代发成本已支付' : '已撤销')
+      + (r && r.fee ? `；手续费 ${fmtMoney(r.fee)} 已记「其他收支」` : ''))
+    await loadDs()
+    await load()
+  } catch (e) { ok = false; showToast(e.message || '操作失败') }
+  return ok
+}
+
 /** 标记某款商品规格（可能跨多张出库单）的代发成本已付/撤销 */
 async function dsPay(g, i, paid) {
-  const label = `${g.product_name}${g.spec ? ' · ' + g.spec : ''}（${g.order_count} 单，代发成本 ${fmtMoney(g.amount)}）`
-  try {
-    await showConfirmDialog({
-      title: paid ? '确认这批代发成本已付清' : '撤销已付标记',
-      message: `${label}\n只影响代发付款核对，不影响财务报表。`,
-    })
-  } catch (e) { return }
-  dsPayingOne.value = i
-  try {
-    await api('/api/payables/pay-batch', 'POST', { kind: 'dropship_item', ids: g.bill_ids || [], paid })
-    showToast(paid ? '已标记代发成本已支付' : '已撤销')
-    await loadDs()
-  } catch (e) { showToast(e.message || '操作失败') }
-  dsPayingOne.value = -1
+  const plain = `${g.product_name}${g.spec ? ' · ' + g.spec : ''}（${g.order_count} 单，代发成本 ${fmtMoney(g.amount)}）`
+  if (!paid) {
+    try {
+      await showConfirmDialog({ title: '撤销已付标记', message: `${plain}\n只影响代发付款核对，不影响财务报表。` })
+    } catch (e) { return }
+    dsPayingOne.value = i
+    await submitDs(g.bill_ids || [], false, 0, '')
+    dsPayingOne.value = -1
+    return
+  }
+  openPayModal({
+    title: '代发成本已支付',
+    label: plain,
+    note: '只影响代发付款核对，不影响报表的收入成本；手续费照常记入「其他收支」。',
+    onOk: async (fee, date) => {
+      dsPayingOne.value = i
+      const ok = await submitDs(g.bill_ids || [], true, fee, date)
+      dsPayingOne.value = -1
+      return ok
+    },
+  })
 }
 
 async function dsBatchPay(paid) {
@@ -365,19 +501,29 @@ async function dsBatchPay(paid) {
   if (!ids.length) { showToast('请先勾选要处理的商品规格'); return }
   const amount = picked.reduce((a, g) => a + num(g.amount), 0)
   const orders = picked.reduce((a, g) => a + (g.order_count || 0), 0)
-  try {
-    await showConfirmDialog({
-      title: paid ? '批量标记已支付' : '批量撤销',
-      message: `${picked.length} 款商品规格 / ${orders} 张出库单，代发成本合计 ${fmtMoney(amount)}？\n只影响代发付款核对，不影响财务报表。`,
-    })
-  } catch (e) { return }
-  dsPaying.value = true
-  try {
-    const r = await api('/api/payables/pay-batch', 'POST', { kind: 'dropship_item', ids, paid })
-    showToast(`已处理 ${r.updated != null ? r.updated : ids.length} 行${r.missing ? `，${r.missing} 行已不存在` : ''}`)
-    await loadDs()
-  } catch (e) { showToast(e.message || '批量操作失败') }
-  dsPaying.value = false
+  if (!paid) {
+    try {
+      await showConfirmDialog({
+        title: '批量撤销',
+        message: `${picked.length} 款商品规格 / ${orders} 张出库单，代发成本合计 ${fmtMoney(amount)}？\n（只撤销付款核对标记，不影响财务报表）`,
+      })
+    } catch (e) { return }
+    dsPaying.value = true
+    await submitDs(ids, false, 0, '')
+    dsPaying.value = false
+    return
+  }
+  openPayModal({
+    title: '批量标记代发成本已支付',
+    label: `${picked.length} 款商品规格 / ${orders} 张出库单，代发成本合计 ${fmtMoney(amount)}`,
+    note: '只影响代发付款核对，不影响报表的收入成本；整批只记一笔手续费。',
+    onOk: async (fee, date) => {
+      dsPaying.value = true
+      const ok = await submitDs(ids, true, fee, date)
+      dsPaying.value = false
+      return ok
+    },
+  })
 }
 
 onMounted(load)

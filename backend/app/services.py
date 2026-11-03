@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import re
 from collections import deque
 
 from sqlalchemy import delete, func, select
@@ -31,6 +32,27 @@ STANDARD_COUNT_UNITS = ["个", "包", "袋", "盒", "箱", "件", "份"]
 
 DEFAULT_CONVERSIONS_BASE_WEIGHT = {"克": 1, "斤": 500, "公斤": 1000, "千克": 1000}
 DEFAULT_CONVERSIONS_BASE_COUNT = {"个": 1}
+
+# 搜索框多关键词：「；」分开的是平行条件（任一命中即可，每个词都从整张表里找）；
+# 同一段里用「：」「:」、空格、逗号、顿号、竖线分开的是递进条件（全部命中）。与前端 splitSearchKeywords 一致
+_SEARCH_OR_SPLIT = re.compile(r"[；;]+")
+_SEARCH_AND_SPLIT = re.compile(r"[：:，,、\s|｜]+")
+
+
+def split_search_keywords(raw: str) -> list[list[str]]:
+    """把搜索词拆成分组：外层列表是「或」，内层列表是「且」；空输入返回 []。"""
+    groups: list[list[str]] = []
+    for part in _SEARCH_OR_SPLIT.split(str(raw or "").strip().lower()):
+        kws = [k for k in _SEARCH_AND_SPLIT.split(part) if k]
+        if kws:
+            groups.append(kws)
+    return groups
+
+
+def search_hit(text: str, groups: list[list[str]]) -> bool:
+    """组内每个关键词都要出现在 text 里，组间任一命中即可；空条件视为全部命中。"""
+    t = str(text or "").lower()
+    return not groups or any(all(k in t for k in g) for g in groups)
 
 
 def seed_units(db: Session) -> None:
@@ -597,12 +619,31 @@ def fmt_qty(qty: float) -> str:
     return f"{qty:.4f}".rstrip("0").rstrip(".")
 
 
+def find_product_by_code(db: Session, code: str) -> Product | None:
+    """按编码找商品：主编码优先，其次多端商品（多店铺多编码）的额外编码。
+
+    多端商品启用后 codes=[{code, shop}] 里的编码同样是这个商品的平台 SKU，
+    聚水潭/Excel 导入按编码找商品时必须能命中，否则会报「商品不存在」或重复建商品。
+    """
+    code = (code or "").strip()
+    if not code:
+        return None
+    p = db.scalar(select(Product).where(Product.code == code))
+    if p:
+        return p
+    for cand in db.execute(select(Product).where(Product.multi_code == True)).scalars():  # noqa: E712 - SQL 布尔
+        for it in (getattr(cand, "codes", None) or []):
+            if isinstance(it, dict) and str(it.get("code") or "").strip() == code:
+                return cand
+    return None
+
+
 def resolve_product(db: Session, key: str) -> Product | None:
     """按商品编码或名称查找商品（导入用）。"""
     key = (key or "").strip()
     if not key:
         return None
-    p = db.scalar(select(Product).where(Product.code == key))
+    p = find_product_by_code(db, key)
     if p:
         return p
     return db.scalar(select(Product).where(Product.name == key))
@@ -645,9 +686,11 @@ def pay_fields(payload: dict, date: str = "") -> dict:
 PARTIAL = "partial"  # 部分付款（目前仅入库单支持）
 
 
-def pay_due(amount: float, adjust: float = 0.0, freight: float = 0.0, handling: float = 0.0) -> float:
-    """入库单「应付合计」= 货款 + 金额调整 + 运费 + 装卸（与「待付款账单」的应付口径一致）。"""
-    return round(float(amount or 0) + float(adjust or 0) + float(freight or 0) + float(handling or 0), 2)
+def pay_due(amount: float, adjust: float = 0.0, freight: float = 0.0, handling: float = 0.0, fee: float = 0.0) -> float:
+    """入库单「应付合计」= 货款 + 金额调整 + 运费 + 装卸 + 转账手续费（与「待付款账单」的应付口径一致）。"""
+    return round(
+        float(amount or 0) + float(adjust or 0) + float(freight or 0) + float(handling or 0) + float(fee or 0), 2
+    )
 
 
 def inbound_pay_fields(payload: dict, due: float, date: str = "") -> dict:
@@ -714,15 +757,25 @@ def sync_adjust_expense(db: Session, kind: str, ref_id: int, code: str, date: st
     ))
 
 
-# 入库「运费 / 装卸费」带出的其他收支镜像行的 ref_type（与金额调整的 "inbound" 区分，互不误伤）
+# 入库「运费 / 装卸费 / 转账手续费」带出的其他收支镜像行的 ref_type（与金额调整的 "inbound" 区分，互不误伤）
 INBOUND_FEE_REF = "inbound_fee"
-INBOUND_FEE_CATEGORIES = (("freight", "运费"), ("handling", "装卸费"))
+INBOUND_FEE_CATEGORIES = (("freight", "运费"), ("handling", "装卸费"), ("fee", "转账手续费"))
+
+# 「广告费充值」类其他收支的前缀：钱是充进京准通账户的预付款，不是本期费用。
+# 广告费在「广告利润」页按 CPS + 京准通**实际消耗**扣一次，再进期间费用就是同一笔钱扣两遍
+# （2026-10 两边合计 9.4 万）。前缀匹配是为了带上「广告费充值（京准通）」这类变体写法。
+AD_PREPAID_CATEGORY = "广告费充值"
+
+
+def is_ad_prepay(category: str | None) -> bool:
+    """该「其他收支」类型是否属于广告费预付（不进期间费用）。"""
+    return str(category or "").strip().startswith(AD_PREPAID_CATEGORY)
 
 
 def sync_inbound_fee_expenses(db: Session, rec: "Inbound", product_name: str, pay: dict) -> None:
-    """维护入库单「运费 / 装卸费」对应的其他收支镜像行：每项 >0 各生成一行，清零则删除。
+    """维护入库单「运费 / 装卸费 / 转账手续费」对应的其他收支镜像行：每项 >0 各生成一行，清零则删除。
 
-    这两项费用已计入批次到岸成本（FIFO 结转随销量扣减，体现在该品毛利上）；这里的镜像行
+    这几项费用已计入批次到岸成本（FIFO 结转随销量扣减，体现在该品毛利上）；这里的镜像行
     只供「其他收支」页按类型/日期查询，报表的期间费用聚合一律排除 ref_type="inbound_fee"
     （见 routers/report.py），避免「成本 + 期间费用」重复扣减。日期/付款状态随单据
     同步维护（sync_doc_edit / pay_bill / 删除级联）。
@@ -915,13 +968,14 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     adjust = round(float(payload.get("adjust_amount") or 0), 2)   # 抹零/凑整：正=多付，负=少付
     freight = round(float(payload.get("freight") or 0), 2)    # 运费（选填，计入批次成本）
     handling = round(float(payload.get("handling") or 0), 2)  # 装卸费（选填，计入批次成本）
-    if freight < 0 or handling < 0:
-        raise ValueError("运费 / 装卸费不能为负数")
-    landed = round(amount + freight + handling, 2)  # 批次到岸成本 = 货款 + 运费 + 装卸费（金额调整不计入）
+    fee = round(float(payload.get("fee") or 0), 2)            # 转账手续费（选填，计入批次成本）
+    if freight < 0 or handling < 0 or fee < 0:
+        raise ValueError("运费 / 装卸费 / 手续费不能为负数")
+    landed = round(amount + freight + handling + fee, 2)  # 批次到岸成本 = 货款 + 运费 + 装卸费 + 手续费（金额调整不计入）
     op = (payload.get("operator") or "").strip() or operator
 
-    # 应付合计（表单上的「实付」）= 货款 + 金额调整 + 运费 + 装卸：部分付款的已付金额按它收口
-    pay = inbound_pay_fields(payload, pay_due(amount, adjust, freight, handling), date)
+    # 应付合计（表单上的「实付」）= 货款 + 金额调整 + 运费 + 装卸 + 手续费：部分付款的已付金额按它收口
+    pay = inbound_pay_fields(payload, pay_due(amount, adjust, freight, handling, fee), date)
     # 关联的财务流水 / 其他收支没有「已付金额」，付款状态原样跟随单据（partial 时它们也只作标记，
     # 报表的入库口径由入库单自身按 paid_amount 计，待付款账单也只算入库单的未付余额）
     pay_link = {k: pay[k] for k in ("pay_status", "paid_at")}
@@ -936,6 +990,7 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
         adjust_amount=adjust,
         freight=freight,
         handling=handling,
+        fee=fee,
         supplier=(payload.get("supplier") or "").strip(),
         operator=op,
         date=date,
@@ -954,7 +1009,7 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
         ref_id=rec.id,
         date=date,
         operator=op,
-        remark=f"入库 {rec.code}" + (f"（含运费/装卸 ¥{round(freight + handling, 2)}）" if freight or handling else ""),
+        remark=f"入库 {rec.code}" + (f"（含运费/装卸/手续费 ¥{round(freight + handling + fee, 2)}）" if freight or handling or fee else ""),
     )
     db.add(mv)
     db.flush()

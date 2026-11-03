@@ -443,6 +443,8 @@ _EXTRA_COLUMNS = {
         ("paid_amount", "FLOAT DEFAULT 0"),
         # 供应商补偿：供应商退的钱/赔偿，镜像记「其他收支 → 供应商补偿」负数行冲减期间费用
         ("compensation", "FLOAT DEFAULT 0"),
+        # 转账手续费：付款给供应商产生的手续费，同运费/装卸费（计入到岸成本 + 镜像记其他收支备查）
+        ("fee", "FLOAT DEFAULT 0"),
     ),
     "outbounds": _PAY_COLUMNS + (
         ("adjust_amount", "FLOAT DEFAULT 0"),
@@ -455,9 +457,11 @@ _EXTRA_COLUMNS = {
         ("brush_auto_fee", "FLOAT DEFAULT 0"),
     ),
     # 其他收支：来源单据（入库/出库金额调整自动生成）——单据删除/改日期时按此同步
+    # fee：转账手续费（元），登记时已并入 amount，这里留档以便明细里看出「含手续费多少」
     "other_expenses": _PAY_COLUMNS + (
         ("ref_type", "VARCHAR(16) DEFAULT ''"),
         ("ref_id", "INTEGER"),
+        ("fee", "FLOAT DEFAULT 0"),
     ),
     "finance_records": _PAY_COLUMNS,
     "warehouse_ins": _PAY_COLUMNS + (
@@ -490,7 +494,9 @@ _EXTRA_COLUMNS = {
     # ⚠️ 新增列必须登记在这里：非默认分仓启动时只跑 ensure_schema（即本表），不跑 migrate()。
     #    这两列当初只加在 migrate() 里，导致 wh01 等分仓缺列，/api/products 等接口 500（表现为"数据全没了"）。
     "products": (("stock_links", "JSON"), ("free_shipping", "BOOLEAN DEFAULT 0"),
-                 ("stock_schemes", "JSON")),
+                 ("stock_schemes", "JSON"),
+                 # 多端商品：多店铺多编码。multi_code 开关 + codes=[{code, shop}]（主编码仍在 code）
+                 ("multi_code", "BOOLEAN DEFAULT 0"), ("codes", "JSON")),
     # 库存流水：出库行 id（一单多货时一行出库明细对应多条流水）
     "stock_movements": (("line_id", "INTEGER"),),
 }
@@ -513,6 +519,12 @@ _EXTRA_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_stock_movements_line ON stock_movements(line_id)",
     # 旧流水（line_id 为空）按「单」归属时用：ref_id 局部索引
     "CREATE INDEX IF NOT EXISTS idx_stock_movements_ref_null ON stock_movements(ref_id) WHERE line_id IS NULL",
+    # 报表汇总按「单 + 行类型」取销售/结算明细：复合索引让 line_type 过滤在索引内完成，
+    # 少掉大量「按 outbound_id 回表后再丢行」的无效读取（wh01 一个月 20 万行明细）。
+    "CREATE INDEX IF NOT EXISTS idx_outbound_lines_outbound_type ON outbound_lines(outbound_id, line_type)",
+    # 报表「支出流水」按 type/ref_type + 日期过滤（原来是 OR 条件，只能整表扫 + 逐行判日期）
+    "CREATE INDEX IF NOT EXISTS idx_finance_records_type_date ON finance_records(type, date)",
+    "CREATE INDEX IF NOT EXISTS idx_finance_records_ref_date ON finance_records(ref_type, date)",
 )
 
 

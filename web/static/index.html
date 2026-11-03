@@ -45,7 +45,10 @@
     <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></symbol>
     <symbol id="i-sliders" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></symbol>
     <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></symbol>
+    <symbol id="i-todo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2h6a1 1 0 0 1 1 1v2H8V3a1 1 0 0 1 1-1z"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 13 2 2 4-4"/></symbol>
+    <symbol id="i-basket" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 11l1.5-7h11L19 11"/><path d="M5 11h14v8a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z"/><path d="M9 15h6"/></symbol>
     <symbol id="i-coins" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/></symbol>
+    <symbol id="i-megaphone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 5 3 9v6l10 4V5z"/><path d="M17 7a5 5 0 0 1 0 10"/><path d="M20 4a9 9 0 0 1 0 16"/><rect x="4" y="14" width="3" height="5" rx="1"/></symbol>
     <symbol id="i-bill" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01"/><path d="M18 12h.01"/></symbol>
     <symbol id="i-paperclip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
     <symbol id="i-warehouse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 8.35V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8.35A2 2 0 0 1 3.26 6.5l8-3.2a2 2 0 0 1 1.48 0l8 3.2A2 2 0 0 1 22 8.35Z"/><path d="M6 18h12"/><path d="M6 14h12"/><rect width="12" height="12" x="6" y="10"/></symbol>
@@ -75,10 +78,11 @@
         <button class="nav-item" data-page="packrules"><span class="nav-ico"><svg class="ic"><use href="#i-link"/></svg></span>一单多货</button>
         <div class="nav-group">经营分析</div>
         <button class="nav-item" data-page="report"><span class="nav-ico"><svg class="ic"><use href="#i-chart"/></svg></span>财务报表</button>
+        <button class="nav-item" data-page="adprofit"><span class="nav-ico"><svg class="ic"><use href="#i-megaphone"/></svg></span>广告利润</button>
         <button class="nav-item" data-page="otherexp"><span class="nav-ico"><svg class="ic"><use href="#i-wallet"/></svg></span>其他收支</button>
         <button class="nav-item" data-page="payables"><span class="nav-ico"><svg class="ic"><use href="#i-bill"/></svg></span>待付款账单<span class="badge" id="payNavBadge" style="display:none;margin-left:auto;background:#f97316;color:#fff;"></span></button>
         <div class="nav-group">数据工具</div>
-        <button class="nav-item" data-page="fresh"><span class="nav-ico"><svg class="ic"><use href="#i-truck"/></svg></span>鲜货现采</button>
+        <button class="nav-item" data-page="fresh"><span class="nav-ico"><svg class="ic"><use href="#i-basket"/></svg></span>鲜货现采</button>
         <button class="nav-item" data-page="deduction"><span class="nav-ico"><svg class="ic"><use href="#i-coins"/></svg></span>扣点</button>
         <div class="nav-group">设置</div>
         <button class="nav-item" data-action="warehouses"><span class="nav-ico"><svg class="ic"><use href="#i-database"/></svg></span>切换分仓</button>
@@ -117,6 +121,7 @@
             <button class="btn green" id="aiBtn" onclick="aiRun()"><svg class="ic"><use href="#i-ai"/></svg> 识别并录入</button>
             <button class="btn secondary" onclick="aiPickImage()"><svg class="ic"><use href="#i-paperclip"/></svg> 相册选图</button>
             <button class="btn secondary" onclick="aiCaptureImage()"><svg class="ic"><use href="#i-camera"/></svg> 拍照选图</button>
+            <button class="btn secondary" onclick="dsReconcileOpen()" title="上传供应商/分仓单据（图片或 Excel），与代发账单核对成本与单量差异"><svg class="ic"><use href="#i-receipt"/></svg> 代发单据核对</button>
             <input type="file" id="aiImgFile" accept="image/*" multiple style="display:none;" onchange="aiParseImage('file')" />
             <input type="file" id="aiCamFile" accept="image/*" capture="environment" style="display:none;" onchange="aiParseImage('cam')" />
           </div>
@@ -189,6 +194,7 @@
             <h3><svg class="ic"><use href="#i-ai"/></svg> AI 识别队列</h3>
             <span class="hint">粘贴/输入的识别任务在后台逐条跑（票据图片较慢，约 1~2 分钟一张）。失败的可以重新识别或删除；识别成功的会按业务类型自动落到「入库待办」「出库待办」，点任务按钮可先核对修改。</span>
             <div class="grow"></div>
+            <button class="btn secondary" onclick="dsReconcileOpen()" title="上传供应商/分仓单据（图片或 Excel），与代发账单核对成本与单量差异"><svg class="ic"><use href="#i-receipt"/></svg> 代发单据核对</button>
             <button class="btn secondary" id="evaJstBtn" onclick="openJstPending()" title="聚水潭待办：新商品没规则匹配 / 要验证码">聚水潭待办</button>
             <button class="btn secondary" onclick="evaRunQueue()"><svg class="ic"><use href="#i-ai"/></svg> 继续识别</button>
             <button class="btn secondary" onclick="evaRefresh()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
@@ -250,7 +256,7 @@
           <div class="card">
             <div class="toolbar">
               <select id="stockCategory" onchange="renderStock()"><option value="">全部分类</option></select>
-              <input id="stockSearch" placeholder="🔍 搜索商品名称 / 分类..." oninput="renderStock()" />
+              <input id="stockSearch" placeholder="🔍 搜索商品名称 / 分类…（「；」任一命中，「：」同时命中）" oninput="renderStock()" />
               <div class="grow"></div>
               <button class="btn secondary" onclick="openAdjust()"><svg class="ic"><use href="#i-edit"/></svg> 盘点调整</button>
               <button class="btn secondary" onclick="loadStock()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
@@ -267,7 +273,7 @@
         <div id="stock-adjustments" style="display:none;">
           <div class="card">
             <div class="toolbar">
-              <input id="adjSearch" placeholder="🔍 搜索商品名称 / 备注 / 操作员" style="min-width:260px;" oninput="renderAdjustments()" />
+              <input id="adjSearch" placeholder="🔍 搜索商品名称 / 备注 / 操作员（「；」任一命中，「：」同时命中）" style="min-width:260px;" oninput="renderAdjustments()" />
               <input id="adjDateFrom" type="date" /><span>-</span><input id="adjDateTo" type="date" />
               <button class="btn" onclick="loadAdjustments()">查询</button>
               <div class="grow"></div>
@@ -282,7 +288,7 @@
             <div class="toolbar">
               <select id="mvProduct" onchange="mvResetPage(); loadMovements()"><option value="0">全部商品</option></select>
               <input id="mvDateFrom" type="date" /><span>-</span><input id="mvDateTo" type="date" />
-              <input id="mvSearch" placeholder="🔍 筛选流水..." oninput="onMvSearch()" />
+              <input id="mvSearch" placeholder="🔍 筛选流水…（「；」任一命中，「：」同时命中）" oninput="onMvSearch()" />
               <label class="check-inline" title="把同一商品、同一扣减量的出库行合并成一行（显示单数与合计出库量）">
                 <input type="checkbox" id="mvMergeOut" checked onchange="mvResetPage(); loadMovements()" /> 合并出库
               </label>
@@ -333,7 +339,7 @@
           <div class="card-head"><h3>入库记录</h3><span class="hint" id="inListHint"></span></div>
           <div class="toolbar">
             <input id="inDateFrom" type="date" /><span>-</span><input id="inDateTo" type="date" />
-            <input id="inSearch" placeholder="🔍 筛选单号/商品/供应商..." oninput="loadInbounds()" />
+            <input id="inSearch" placeholder="🔍 筛选单号/商品/供应商…（「；」任一命中，「：」同时命中）" oninput="loadInbounds()" />
             <button class="btn secondary" onclick="loadInbounds()">筛选</button>
           </div>
           <div class="batch-bar" id="inBatch" style="display:none;">
@@ -459,7 +465,7 @@
           <div class="card-head"><h3>出库记录</h3><span class="hint" id="outListHint"></span></div>
           <div class="toolbar">
             <input id="outDateFrom" type="date" /><span>-</span><input id="outDateTo" type="date" />
-            <input id="outSearch" placeholder="🔍 筛选单号/客户..." oninput="loadOutbounds()" />
+            <input id="outSearch" placeholder="🔍 筛选单号/客户…（「；」任一命中，「：」同时命中）" oninput="loadOutbounds()" />
             <button class="btn secondary" onclick="loadOutbounds()">筛选</button>
           </div>
           <div class="batch-bar" id="outBatch" style="display:none;">
@@ -496,7 +502,7 @@
           </div>
           <div class="toolbar">
             <input id="wInDateFrom" type="date" /><span>-</span><input id="wInDateTo" type="date" />
-            <input id="wInSearch" placeholder="🔍 筛选商品 / 采购单号 / 配送中心..." oninput="loadWarehouseIns()" />
+            <input id="wInSearch" placeholder="🔍 筛选商品 / 采购单号 / 配送中心…（「；」任一命中，「：」同时命中）" oninput="loadWarehouseIns()" />
             <button class="btn secondary" onclick="loadWarehouseIns()">筛选</button>
             <button class="btn secondary" onclick="wInThisMonth()">本月</button>
           </div>
@@ -540,7 +546,7 @@
               <button class="seg-item" data-panel="og-labor" onclick="switchOgSeg(this)">人工</button>
               <button class="seg-item" data-panel="og-laborpack" onclick="switchOgSeg(this)">打包人工 + 耗材</button>
             </div>
-            <input id="ogSearch" placeholder="🔍 搜索商品（可搜「代发」）..." oninput="renderOutGroup()" />
+            <input id="ogSearch" placeholder="🔍 搜索商品（可搜「代发」；「；」任一命中，「：」同时命中）…" oninput="renderOutGroup()" />
             <button class="btn secondary" onclick="renderOutGroup()">筛选</button>
             <div class="grow"></div>
             <button class="btn danger" onclick="deleteOutGroup()">🗑 删除本批（<span id="ogDelCount">0</span> 单）</button>
@@ -558,8 +564,8 @@
               <option value="">全部类型</option><option value="stock" selected>库存商品</option><option value="order">订单商品</option>
             </select>
             <select id="prodCategory" class="searchable" onchange="renderProducts()"><option value="">全部分类</option></select>
-            <input id="prodSearch" placeholder="🔍 搜索商品 / 分类 / 规格 / 代发…（多关键词用「：」隔开）"
-                   title="支持多关键词：用「：」「:」、空格、逗号或竖线隔开，多个关键词需同时命中。例：牛油果：代发"
+            <input id="prodSearch" placeholder="🔍 搜索商品 / 分类 / 规格 / 代发…（「；」任一命中，「：」同时命中）"
+                   title="多关键词：「；」隔开的词任一命中即显示（每个词都从全部商品里找，例：牛油果；代发）；同一段里用「：」「:」、空格、逗号、顿号隔开的词需同时命中（例：牛油果：进口）"
                    oninput="renderProducts()" />
             <div class="grow"></div>
             <button class="btn secondary" onclick="openUnitsModal()"><svg class="ic"><use href="#i-ruler"/></svg> 计量单位管理</button>
@@ -582,7 +588,7 @@
         <div class="card">
           <div class="card-head"><h3>一单多货（多货打包规则）</h3><span class="hint">区别于「关联结算/人工」的一单一货；此处维护一张订单含多种商品时的合并打包规则（纸箱 + 人工）</span></div>
           <div class="toolbar">
-            <input id="prSearch" placeholder="🔍 搜索组合 / 商品 / 纸箱..." oninput="renderPackRules()" />
+            <input id="prSearch" placeholder="🔍 搜索组合 / 商品 / 纸箱…（「；」任一命中，「：」同时命中）" oninput="renderPackRules()" />
             <select id="prBox" class="searchable" onchange="renderPackRules()"><option value="">全部纸箱型号</option></select>
             <div class="grow"></div>
             <button class="btn secondary" onclick="pdataDownload('pack_rules')"><svg class="ic"><use href="#i-download"/></svg> 导出JSON</button>
@@ -600,6 +606,14 @@
 
       <!-- 财务报表（查询常驻 + 分区 tab：汇总 / 支出 / 商品 / 流水） -->
       <section id="page-report" class="page">
+        <!-- 加载遮罩：月度汇总属重接口，明确反馈进度并阻止连点（连点会让请求在并发闸里排队、越等越久） -->
+        <div class="rep-loading" id="repLoading" style="display:none;">
+          <div class="rep-loading-box">
+            <div class="rep-spinner"></div>
+            <div class="rep-loading-title">正在汇总报表数据…</div>
+            <div class="rep-loading-sub" id="repLoadingSub">区间越大耗时越长（整月约 3~6 秒），请勿重复点击</div>
+          </div>
+        </div>
         <div class="card">
           <div class="card-head">
             <h3>财务利润报表</h3>
@@ -642,6 +656,17 @@
         <!-- 汇总 -->
         <div id="rep-panel-summary">
           <div class="stat-grid" id="repStats"></div>
+          <div class="card">
+            <div class="card-head">
+              <h3>利润桥</h3>
+              <span class="muted">收入 → 结转成本 → 毛利 → 期间费用 → 净利润；本页不扣广告费（广告费见「广告利润」）</span>
+            </div>
+            <div class="table-wrap"><table id="repBridge"></table></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>收入构成</h3><span class="muted" id="repRevHint"></span></div>
+            <div id="repRevBreak"></div>
+          </div>
           <div class="card">
             <div class="card-head"><h3>销售成本构成</h3><span class="muted" id="repCostHint"></span></div>
             <div id="repCostBreak"></div>
@@ -706,7 +731,7 @@
                 <option value="手工记账">手工记账</option>
                 <option value="刷单成本">刷单成本</option>
               </select>
-              <input id="repExpItemSearch" placeholder="🔍 筛选项目 / 备注 / 操作员..." oninput="renderExpenseItemRows()" />
+              <input id="repExpItemSearch" placeholder="🔍 筛选项目 / 备注 / 操作员…（「；」任一命中，「：」同时命中）" oninput="renderExpenseItemRows()" />
               <div class="grow"></div>
               <span class="muted" id="repExpItemSum"></span>
             </div>
@@ -719,7 +744,7 @@
           <div class="card">
             <div class="card-head">
               <h3>商品销售明细</h3>
-              <input id="repGoodsKw" placeholder="🔍 筛选 商品名称 / 规格 / 出库方式（入仓、代发）..." oninput="renderReportGoods()" style="min-width:230px;" />
+              <input id="repGoodsKw" placeholder="🔍 筛选 商品名称 / 规格 / 出库方式（入仓、代发）…（「；」任一命中，「：」同时命中）" oninput="renderReportGoods()" style="min-width:230px;" />
               <button class="btn sm secondary" onclick="clearRepGoodsKw()" title="清空商品筛选">清除</button>
               <span class="muted" id="repGoodsHint"></span>
               <div class="grow"></div>
@@ -746,11 +771,106 @@
               <div class="grow"></div>
               <button class="btn secondary" onclick="openFinanceModal()">＋ 手动记账</button>
             </div>
-            <div class="toolbar"><input id="repSearch" placeholder="🔍 筛选分类/商品/备注/操作员..." oninput="loadReport()" /></div>
+            <div class="toolbar"><input id="repSearch" placeholder="🔍 筛选分类/商品/备注/操作员…（「；」任一命中，「：」同时命中）" oninput="finSearchInput()" /><span id="repFinHint" class="muted" style="margin-left:10px;"></span></div>
             <div class="table-wrap"><table id="financeTable"></table></div>
           </div>
         </div>
         </div>  <!-- /#rep-one 单仓总览 -->
+      </section>
+
+      <!-- 广告利润：财务报表口径 + 挂载服务（/jdfenxi）的 CPS 花费与京准通花费 -->
+      <section id="page-adprofit" class="page">
+        <div class="card">
+          <div class="card-head">
+            <h3>含广告费利润</h3>
+            <label class="rep-switch" title="开启后不计入「其他收支」的款项，与财务报表口径一致">
+              <input type="checkbox" id="adpExcludeOtherChk" checked onchange="adpToggleExcludeOther(this)" />
+              <span>排除其他收支</span>
+            </label>
+            <span class="hint" id="adpRangeHint"></span>
+            <div class="grow"></div>
+            <div class="seg" id="adpScopeSeg" style="margin-bottom:0;">
+              <button class="seg-item active" data-scope="all" onclick="adpScope(this)">全仓总览</button>
+              <button class="seg-item" data-scope="one" onclick="adpScope(this)">单仓总览</button>
+            </div>
+          </div>
+          <div class="toolbar">
+            <input id="adpDateFrom" type="date" /><span>-</span><input id="adpDateTo" type="date" />
+            <button class="btn" onclick="loadAdProfit()">查询</button>
+            <button class="btn secondary" onclick="adpQuick('today')">今天</button>
+            <button class="btn secondary" onclick="adpQuick('month')">本月</button>
+            <button class="btn secondary" onclick="adpQuick('lastmonth')">上月</button>
+            <div class="grow"></div>
+            <button class="btn secondary" onclick="loadAdProfit(true)" title="忽略 60 秒缓存，重新读取挂载服务的花费缓存清单">↻ 刷新广告缓存</button>
+            <button class="btn secondary" onclick="adpOpenAdService()" title="打开京东广告分析（jdfenxi）">京东广告分析 →</button>
+          </div>
+          <div class="toolbar" id="adpWhBar" style="display:none;">
+            <label class="muted">查看分仓</label>
+            <select id="adpWhSel" onchange="adpWhChange()"></select>
+            <span class="muted">默认是你当前所在分仓；换一个只是换看谁的数据，不会改变你的工作分仓</span>
+          </div>
+        </div>
+
+        <div class="card" id="adpOverviewCard">
+          <div class="card-head">
+            <div class="seg" id="adpViewSeg" style="margin-bottom:0;">
+              <button class="seg-item active" data-view="overview" onclick="adpView(this)">利润概览</button>
+              <button class="seg-item" data-view="sku" onclick="adpView(this)">SKU 明细</button>
+            </div>
+            <span class="muted" id="adpStatHint"></span>
+            <div class="grow"></div>
+            <span class="muted" id="adpGeneratedAt"></span>
+          </div>
+          <div id="adpOverviewBody">
+            <div class="stat-grid" id="adpStats"></div>
+            <div id="adpWarn" class="alert warn" style="display:none;"></div>
+          </div>
+        </div>
+
+        <div class="card" id="adpBridgeCard">
+          <div class="card-head">
+            <h3>广告前后利润桥</h3>
+            <span class="muted">口径 = 财务报表（本页只额外扣减广告费，不改动原报表）</span>
+          </div>
+          <div class="table-wrap"><table id="adpBridge"></table></div>
+        </div>
+
+        <div class="card" id="adpAccountsCard">
+          <div class="card-head">
+            <h3>按店铺账号的广告费</h3>
+            <span class="muted">来自挂载服务「花费一览」的本地缓存（一次抓取 = 一个账号 + 一个区间）</span>
+            <div class="grow"></div>
+            <button class="btn secondary" onclick="adpOpenAdService()">去抓取花费 →</button>
+          </div>
+          <div class="table-wrap"><table id="adpAccTable"></table></div>
+          <p class="note">缓存只能按账号 + 区间整段读取：所选区间拼不满的日期会列在「缺口」里，并且不计入广告费（不会用区间外的数据凑数），此时广告费会被低估，请到挂载服务按该区间补抓一次。</p>
+        </div>
+
+        <div class="card" id="adpSkuCard" style="display:none;">
+          <div class="card-head">
+            <h3>按 SKU 明细</h3>
+            <span class="muted" id="adpSkuStat">按商品编码（京东 skuId）匹配挂载服务的 SKU 花费</span>
+            <div class="grow"></div>
+            <label class="rep-switch" title="只显示有广告花费的 SKU">
+              <input type="checkbox" id="adpSkuOnlyAds" onchange="renderAdProfitSku()" />
+              <span>只看有广告费</span>
+            </label>
+            <label class="rep-switch" title="只显示「广告后毛利」为负的 SKU（不含未匹配 ERP 的纯广告行）">
+              <input type="checkbox" id="adpSkuOnlyLoss" onchange="renderAdProfitSku()" />
+              <span>只看广告后亏损</span>
+            </label>
+            <select id="adpSkuSort" onchange="adpSkuSortBySel()" title="常用列快捷排序；点表格列头可按任意列升/降序">
+              <option value="ads">按广告费</option>
+              <option value="revenue">按销售额</option>
+              <option value="gross">按广告前毛利</option>
+              <option value="gross_after">按广告后毛利</option>
+              <option value="__col" hidden>按列头排序</option>
+            </select>
+            <input id="adpSkuSearch" type="search" placeholder="搜索 SKU / 商品名称（「；」任一命中，「：」同时命中）" oninput="renderAdProfitSku()" style="width:180px;" />
+          </div>
+          <div class="table-wrap"><table id="adpSkuTable"></table></div>
+          <p class="note">广告花费按缓存段整段读取后按 SKU 汇总；ERP 商品编码需填京东 skuId（如 100157104844）才能匹配。入仓品（ERP 里没有出库销售）的成交件数与毛利取 jdfenxi「月度利润」的本地缓存，利润 = 入仓品毛利 − 广告费；缓存只到某天时会在上方标注截止日，不会触发京东抓取。没匹配上的广告花费单列为「未匹配 ERP」行（收入按 0 计）。本表按成交口径统计：ERP 的入仓台账（备货入库结算）不是成交，不再计入本表，避免和入仓品行的成交重复，所以本表合计与上方财务卡片的收入口径不同。</p>
+        </div>
       </section>
 
       <!-- 其他收支 -->
@@ -767,7 +887,7 @@
         <div class="card">
           <div class="card-head">
             <h3><svg class="ic"><use href="#i-wallet"/></svg> <span id="oeFormTitle">登记其他支出</span></h3>
-            <span class="hint">仓库/经营中的零散支出与收入：网线费、安装费、机器费、样品费、供应商补偿等。保存后计入财务报表「期间费用」（收入为负数冲减），并影响净利（无需再到「手动记账」重复登记）</span>
+            <span class="hint">仓库/经营中的零散支出与收入：网线费、安装费、机器费、样品费、供应商补偿等。保存后计入财务报表「期间费用」（收入为负数冲减），并影响净利（无需再到「手动记账」重复登记）；转账产生的手续费填在「手续费」里，与金额一并计入开支</span>
           </div>
           <div class="form-grid">
             <div class="field">
@@ -775,7 +895,12 @@
               <input id="oeCategory" list="oeCategoryList" placeholder="如：网线费" onkeydown="if(event.key==='Enter')oeSubmit()" />
               <datalist id="oeCategoryList"></datalist>
             </div>
-            <div class="field"><label>金额（元）*</label><input id="oeAmount" type="number" min="0" step="any" placeholder="0.00" onkeydown="if(event.key==='Enter')oeSubmit()" /></div>
+            <div class="field"><label>金额（元）*</label><input id="oeAmount" type="number" min="0" step="any" placeholder="0.00" onkeydown="if(event.key==='Enter')oeSubmit()" oninput="oeSyncTotal()" /></div>
+            <div class="field" id="oeFeeField">
+              <label>手续费（元）</label>
+              <input id="oeFee" type="number" min="0" step="any" placeholder="0.00" onkeydown="if(event.key==='Enter')oeSubmit()" oninput="oeSyncTotal()" />
+              <div class="field-hint" id="oeTotalHint">转账手续费并入这笔开支，金额填「转出金额」即可</div>
+            </div>
             <div class="field"><label>日期 *</label><input id="oeDate" type="date" /></div>
             <div class="field"><label>操作员</label><input id="oeOperator" readonly title="默认当前登录账号，不可修改" /></div>
             <div class="field" id="oePayField">
@@ -842,7 +967,7 @@
           </div>
           <div class="toolbar">
             <select id="oeFilterCat" onchange="renderOtherExpenseList()"><option value="">全部类型</option></select>
-            <input id="oeSearch" placeholder="🔍 搜索类型 / 备注 / 操作员..." oninput="renderOtherExpenseList()" />
+            <input id="oeSearch" placeholder="🔍 搜索类型 / 备注 / 操作员…（「；」任一命中，「：」同时命中）" oninput="renderOtherExpenseList()" />
             <div class="grow"></div>
             <span class="muted" id="oeListSum"></span>
           </div>
@@ -877,7 +1002,7 @@
                 <button class="seg-item active" data-view="unpaid" onclick="paySwitchView(this)">待结清</button>
                 <button class="seg-item" data-view="all" onclick="paySwitchView(this)">含最近已结清</button>
               </div>
-              <input id="paySearch" placeholder="🔍 筛选 款项 / 单据 / 客户 / 操作员..." style="flex:1 1 220px;min-width:220px;" oninput="renderPayables()" />
+              <input id="paySearch" placeholder="🔍 筛选 款项 / 单据 / 客户 / 操作员…（「；」任一命中，「：」同时命中）" style="flex:1 1 220px;min-width:220px;" oninput="renderPayables()" />
               <span class="date-range" title="按单据日期筛选">
                 <span class="date-pick"><input id="payFrom" type="date" onchange="renderPayables()" /><span class="date-ph">开始</span></span>
                 <span class="muted">至</span>
@@ -901,13 +1026,14 @@
                 <button class="seg-item active" data-view="unpaid" onclick="dsSwitchView(this)">待结清</button>
                 <button class="seg-item" data-view="all" onclick="dsSwitchView(this)">含已结清</button>
               </div>
-              <input id="dsSearch" placeholder="🔍 筛选 商品 / 规格 / 出库单 / 操作员..." style="flex:1 1 220px;min-width:220px;" oninput="renderDropshipBills()" />
+              <input id="dsSearch" placeholder="🔍 筛选 商品 / 规格 / 出库单 / 操作员…（「；」任一命中，「：」同时命中）" style="flex:1 1 220px;min-width:220px;" oninput="renderDropshipBills()" />
               <span class="date-range" title="按出库单日期筛选">
                 <span class="date-pick"><input id="dsFrom" type="date" onchange="loadDropshipBills()" /><span class="date-ph">开始</span></span>
                 <span class="muted">至</span>
                 <span class="date-pick"><input id="dsTo" type="date" onchange="loadDropshipBills()" /><span class="date-ph">结束</span></span>
               </span>
               <button class="btn sm secondary" onclick="dsClearFilter()">清空筛选</button>
+              <button class="btn sm secondary" onclick="dsReconcileOpen()">单据核对</button>
               <span class="grow"></span>
               <button class="btn sm green" onclick="dsBatchPay(true)"><svg class="ic"><use href="#i-check"/></svg> 批量标记已支付</button>
               <button class="btn sm secondary" onclick="dsBatchPay(false)">批量撤销</button>
@@ -1073,7 +1199,7 @@
             <div class="card-head"><h3>③ 关联明细维护</h3><span class="hint">查看每条「聚水潭商品名 → 系统商品」映射，可编辑 / 删除 / 手动新增；顶部统计关联结算（订单商品）占比</span></div>
             <div id="mpMappingStats"></div>
             <div class="toolbar">
-              <input id="mpSearch" placeholder="🔍 搜索聚水潭商品名 / 系统商品..." oninput="renderMappings()" />
+              <input id="mpSearch" placeholder="🔍 搜索聚水潭商品名 / 系统商品…（「；」任一命中，「：」同时命中）" oninput="renderMappings()" />
               <select id="mpFilter" onchange="renderMappings()">
                 <option value="">全部关联</option>
                 <option value="linked">已关联</option>
@@ -1338,7 +1464,7 @@
             </div>
           </div>
           <div class="toolbar" style="margin-top:10px;">
-            <input id="finSearch" placeholder="🔍 筛选下面表格里的商品（只影响显示，已填数量不会丢）" oninput="renderFreshInbound()" style="flex:1 1 260px;min-width:220px;" />
+            <input id="finSearch" placeholder="🔍 筛选下面表格里的商品（只影响显示，已填数量不会丢；「；」任一命中，「：」同时命中）" oninput="renderFreshInbound()" style="flex:1 1 260px;min-width:220px;" />
             <button class="btn secondary" onclick="finClearAllQty()">清空已填数量</button>
             <div class="grow"></div>
             <span class="muted">填了数量的行会高亮；没填数量的行不会入库</span>

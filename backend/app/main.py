@@ -7,7 +7,9 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .database import (
     DEFAULT_WAREHOUSE_KEY,
@@ -17,7 +19,7 @@ from .database import (
 )
 from .initdb import ensure_schema, init_warehouse
 from .maintenance import on_service_start, record_request, should_record, start_activity_store
-from .routers import ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, jst_auto, maintenance, open_api, others, outbound, pack_rules, payables, product_data, products, report, uploads, warehouse_in, warehouses
+from .routers import adprofit, ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, jst_auto, maintenance, open_api, others, outbound, pack_rules, payables, product_data, products, reconcile, report, uploads, warehouse_in, warehouses
 from .routers.backup import create_backup_file, create_json_backup_file, load_config
 
 # 桌面 Web 前端目录（WSFC_ERP/web/static，前后端分离；SERVE_STATIC=1 时后端顺带托管）
@@ -158,6 +160,16 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="企业台账系统", lifespan=lifespan)
 
 
+@app.exception_handler(StarletteHTTPException)
+async def swallow_method_not_allowed(request, exc):
+    """路径存在但方法不对时，Starlette 默认返回 405 并在 Allow 头里写出可用方法——
+    等于替扫描器确认「这条路径是真的」。统一降为 404、不回显 Allow，
+    让猜中的路径和不存在的路径从外面看起来一模一样。业务代码自己抛的状态码原样保留。"""
+    if exc.status_code == 405:
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
+
+
 @app.middleware("http")
 async def normalize_api_route(request, call_next):
     if API_ROUTE != "/api" and request.scope["path"].startswith(API_ROUTE + "/"):
@@ -231,9 +243,11 @@ app.include_router(pack_rules.router)
 app.include_router(deductions.router)
 app.include_router(express.router)
 app.include_router(report.router)
+app.include_router(adprofit.router)      # 广告利润（报表口径 + 挂载服务 CPS/京准通花费）
 app.include_router(imports.router)
 app.include_router(backup.router)
 app.include_router(ai.router)
+app.include_router(reconcile.router)   # 代发账单核对：上传供应商单据（图片/Excel）与代发成本比对
 app.include_router(uploads.router)
 app.include_router(fresh.router)
 app.include_router(warehouse_in.router)

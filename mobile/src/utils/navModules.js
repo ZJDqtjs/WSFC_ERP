@@ -10,6 +10,7 @@ export const NAV_MODULES = [
   { key: 'products', label: '商品管理', icon: 'goods-collect-o', to: '/products' },
   { key: 'packrules', label: '一单多货', icon: 'logistics', to: '/packrules' },
   { key: 'report', label: '财务报表', icon: 'bar-chart-o', to: '/report' },
+  { key: 'adprofit', label: '广告利润', icon: 'chart-trending-o', to: '/adprofit' },
   { key: 'fresh', label: '鲜货现采', icon: 'bag-o', to: '/fresh' },
   { key: 'fresh_in', label: '鲜货入库', icon: 'shop-o', to: '/fresh?tab=in' },
   { key: 'deduction', label: '扣点', icon: 'gold-coin-o', to: '/deduction' },

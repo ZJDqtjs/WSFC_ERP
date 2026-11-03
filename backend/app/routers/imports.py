@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from openpyxl import Workbook, load_workbook
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
@@ -25,6 +25,7 @@ from ..services import (
     create_inbound,
     create_outbound,
     default_conversions,
+    find_product_by_code,
     fmt_qty,
     recompute_product,
     resolve_product,
@@ -56,9 +57,10 @@ INBOUND_ALIASES = {
     "unit": ["进货单位", "单位", "*单位"],
     "quantity": ["数量", "*数量"],
     "unit_price": ["单价", "进货单价", "*单价"],
-    # 运费/装卸费（选填列）：计入该批次到岸成本，并自动记入「其他收支」备查
+    # 运费/装卸费/手续费（选填列）：计入该批次到岸成本，并自动记入「其他收支」备查
     "freight": ["运费", "入库运费", "货运费"],
     "handling": ["装卸费", "装卸", "搬运费"],
+    "fee": ["手续费", "转账手续费", "汇费"],
     "supplier": ["供应商"],
     "date": ["日期", "入库日期"],
     "operator": ["操作员"],
@@ -108,11 +110,16 @@ def norm_date(v) -> str:
 
 def read_rows(file: UploadFile):
     try:
-        wb = load_workbook(file.file, data_only=True)
+        # read_only：普通模式逐格建对象，一份 400KB 出库单要占 30MB，导入几次 RSS 就降不下来了
+        wb = load_workbook(file.file, data_only=True, read_only=True)
     except Exception:
         raise HTTPException(400, "无法读取文件，请上传 .xlsx 格式")
-    ws = wb.worksheets[0]
-    return [list(r) for r in ws.iter_rows(values_only=True)]
+    try:
+        ws = wb.worksheets[0]
+        ws.reset_dimensions()  # 导出工具常不写 <dimension>，只读模式会按声明维度截断
+        return [list(r) for r in ws.iter_rows(values_only=True)]
+    finally:
+        wb.close()
 
 
 def _norm_cell(c) -> str:
@@ -308,7 +315,8 @@ def import_products(file: UploadFile, db: Session = Depends(get_db), user: User 
             continue
         try:
             code = cell(row, mapping.get("code"))
-            if db.scalar(select(Product).where(Product.name == name)) or (code and db.scalar(select(Product).where(Product.code == code))):
+            # 查重：同名商品，或该编码已被任何商品占用（含多端商品的额外编码）
+            if db.scalar(select(Product).where(Product.name == name)) or (code and find_product_by_code(db, code)):
                 skipped += 1
                 continue
             unit = cell(row, mapping.get("unit"))
@@ -367,9 +375,10 @@ class DraftInbound(BaseModel):
     unit: str
     quantity: float
     unit_price: float
-    # 运费 / 装卸费（选填，Excel 有对应列时随行解析）：计入批次成本并同步「其他收支」
+    # 运费 / 装卸费 / 手续费（选填，Excel 有对应列时随行解析）：计入批次成本并同步「其他收支」
     freight: float = 0.0
     handling: float = 0.0
+    fee: float = 0.0
     supplier: str = ""
     date: str
     operator: str = ""
@@ -411,13 +420,14 @@ def parse_inbound_draft(file: UploadFile, db: Session, user: User) -> tuple[list
             continue
         # 扣点折算：商品类别命中扣点规则时，实际入库单价 = 原价 × (1 - 扣点%)
         price = apply_deduction_price(price, product, deduction_map)
-        # 运费/装卸费为选填列：无列/空白按 0，负数视为无效（钳到 0）
+        # 运费/装卸费/手续费为选填列：无列/空白按 0，负数视为无效（钳到 0）
         freight = max(0.0, to_float(cell(row, mapping.get("freight")), 0.0))
         handling = max(0.0, to_float(cell(row, mapping.get("handling")), 0.0))
+        fee = max(0.0, to_float(cell(row, mapping.get("fee")), 0.0))
         items.append(
             DraftInbound(
                 product_id=product.id, product_name=product.name, unit=unit,
-                quantity=qty, unit_price=price, freight=freight, handling=handling,
+                quantity=qty, unit_price=price, freight=freight, handling=handling, fee=fee,
                 supplier=cell(row, mapping.get("supplier")),
                 operator=cell(row, mapping.get("operator")) or user.name,
                 date=norm_date(cell(row, mapping.get("date"))) or datetime.now().strftime("%Y-%m-%d"),
@@ -447,6 +457,7 @@ def confirm_import_inbounds(data: ConfirmInboundIn, db: Session = Depends(get_db
                     "product_id": it.product_id, "unit": it.unit, "quantity": it.quantity,
                     "unit_price": it.unit_price, "supplier": it.supplier,
                     "freight": max(0.0, it.freight or 0.0), "handling": max(0.0, it.handling or 0.0),
+                    "fee": max(0.0, it.fee or 0.0),
                     "operator": it.operator or user.name,
                     "date": it.date, "remark": it.remark,
                 },
@@ -496,6 +507,7 @@ def import_inbounds(file: UploadFile, db: Session = Depends(get_db), user: User 
                     "unit_price": price, "supplier": cell(row, mapping.get("supplier")),
                     "freight": max(0.0, to_float(cell(row, mapping.get("freight")), 0.0)),
                     "handling": max(0.0, to_float(cell(row, mapping.get("handling")), 0.0)),
+                    "fee": max(0.0, to_float(cell(row, mapping.get("fee")), 0.0)),
                     "operator": cell(row, mapping.get("operator")) or user.name,
                     "date": norm_date(cell(row, mapping.get("date"))) or datetime.now().strftime("%Y-%m-%d"),
                     "remark": cell(row, mapping.get("remark")),
@@ -764,8 +776,9 @@ def _resolve_jst_product(db: Session, mapping_by_code: dict[str, CodeMapping], e
         return same
     if mapped:
         return mapped
-    # 未配置编码关联时，回退按商品名称/编码精确匹配（如「佛手柑中果2个」）
-    return db.scalar(select(Product).where(or_(Product.name == ext_name, Product.code == ext_name)))
+    # 未配置编码关联时，回退按商品名称/编码精确匹配（如「佛手柑中果2个」）；
+    # 多端商品的额外编码（多店铺 skuId）也要能命中
+    return resolve_product(db, ext_name)
 
 
 def _collect_batch_unit_price(db: Session, orders: list[dict], mapping_by_code: dict[str, CodeMapping]) -> dict[int, float]:
@@ -1427,7 +1440,9 @@ def auto_suggest(name: str, products: list[Product]) -> tuple[int | None, float]
     n = _norm(name)
     best, best_score = None, 0.0
     for p in products:
-        for cand in (p.name, p.code):
+        extra = [str((it or {}).get("code") or "") for it in (getattr(p, "codes", None) or [])
+                 if isinstance(it, dict) and getattr(p, "multi_code", False)]
+        for cand in (p.name, p.code, *extra):
             c = _norm(cand)
             if not c:
                 continue

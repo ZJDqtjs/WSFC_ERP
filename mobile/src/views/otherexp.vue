@@ -1,7 +1,16 @@
 <template>
   <div class="sub-page">
-    <van-nav-bar title="其他开支" left-arrow fixed placeholder @click-left="goBack" />
+    <van-nav-bar title="其他收支" left-arrow fixed placeholder @click-left="goBack" />
     <div style="padding:12px;">
+      <!-- 页级切换：其他支出 / 其他收入 —— 登记、统计、明细整页跟随 -->
+      <div class="card scope-head">
+        <div class="seg">
+          <div class="seg-item" :class="{ active: scope === 'expense' }" @click="setScope('expense')">其他支出</div>
+          <div class="seg-item" :class="{ active: scope === 'income' }" @click="setScope('income')">其他收入</div>
+        </div>
+        <div class="muted scope-hint">{{ scopeHint }}</div>
+      </div>
+
       <!-- 统计区间 -->
       <div class="card">
         <div class="row wrap" style="gap:6px;">
@@ -16,8 +25,16 @@
 
       <!-- 汇总 -->
       <div class="stat-grid cols2" style="margin-bottom:12px;">
-        <div class="stat danger"><div class="label">今日开支</div><div class="value">{{ fmtMoney(stats.today_total) }}</div><div class="sub">{{ stats.today || '—' }}</div></div>
-        <div class="stat danger"><div class="label">本月开支</div><div class="value">{{ fmtMoney(stats.month_total) }}</div><div class="sub">{{ stats.month || '—' }} 月合计</div></div>
+        <div class="stat" :class="scope === 'income' ? 'success' : 'danger'">
+          <div class="label">今日{{ scopeWord }}</div>
+          <div class="value">{{ fmtMoney(stats.today_total) }}</div>
+          <div class="sub">{{ stats.today || '—' }}</div>
+        </div>
+        <div class="stat" :class="scope === 'income' ? 'success' : 'danger'">
+          <div class="label">本月{{ scopeWord }}</div>
+          <div class="value">{{ fmtMoney(stats.month_total) }}</div>
+          <div class="sub">{{ stats.month || '—' }} 月合计</div>
+        </div>
         <div class="stat warn"><div class="label">所选区间合计</div><div class="value">{{ fmtMoney(stats.range_total) }}</div><div class="sub">{{ stats.range_count || 0 }} 笔 · 日均 {{ fmtMoney(stats.range_daily_avg) }}</div></div>
         <div class="stat accent"><div class="label">区间天数</div><div class="value">{{ stats.range_days || 0 }}</div><div class="sub">最大类型：{{ topCatText }}</div></div>
       </div>
@@ -36,24 +53,24 @@
         </div>
 
         <template v-if="panel === 'day'">
-          <div v-if="!(stats.by_day || []).length" class="empty">该区间暂无开支</div>
+          <div v-if="!(stats.by_day || []).length" class="empty">该区间暂无{{ scopeWord }}</div>
           <template v-else>
             <div v-for="d in stats.by_day || []" :key="d.date" class="bar-row">
               <span class="bar-x">{{ d.date.slice(5) }}</span>
-              <span class="bar-track"><span class="bar-fill" :style="{ width: barW(d.amount) }" /></span>
-              <span class="bar-val">{{ fmtMoney(d.amount) }}</span>
+              <span class="bar-track"><span class="bar-fill" :class="scope === 'income' ? 'income' : ''" :style="{ width: barW(d.amount) }" /></span>
+              <span class="bar-val" :class="scope === 'income' ? 'income' : ''">{{ fmtMoney(d.amount) }}</span>
             </div>
             <div class="divider"></div>
-            <div class="row"><span class="grow bold">合计（{{ stats.range_count || 0 }} 笔 / {{ (stats.by_day || []).length }} 天）</span><span class="bold up">{{ fmtMoney(stats.range_total) }}</span></div>
+            <div class="row"><span class="grow bold">合计（{{ stats.range_count || 0 }} 笔 / {{ (stats.by_day || []).length }} 天）</span><span class="bold" :class="scope === 'income' ? 'down' : 'up'">{{ fmtMoney(stats.range_total) }}</span></div>
           </template>
         </template>
 
         <template v-else-if="panel === 'month'">
-          <div v-if="!(stats.by_month || []).length" class="empty">该区间暂无开支</div>
+          <div v-if="!(stats.by_month || []).length" class="empty">该区间暂无{{ scopeWord }}</div>
           <div v-for="(m, i) in stats.by_month || []" :key="m.month" class="list-item">
             <div class="row">
               <span class="grow item-title">{{ m.month }}</span>
-              <span class="bold up">{{ fmtMoney(m.amount) }}</span>
+              <span class="bold" :class="scope === 'income' ? 'down' : 'up'">{{ fmtMoney(m.amount) }}</span>
             </div>
             <div class="item-meta">
               {{ m.count }} 笔
@@ -62,45 +79,50 @@
           </div>
           <template v-if="(stats.by_month || []).length">
             <div class="divider"></div>
-            <div class="row"><span class="grow bold">合计</span><span class="bold up">{{ fmtMoney(stats.range_total) }}</span></div>
+            <div class="row"><span class="grow bold">合计</span><span class="bold" :class="scope === 'income' ? 'down' : 'up'">{{ fmtMoney(stats.range_total) }}</span></div>
           </template>
         </template>
 
         <template v-else>
-          <div v-if="!(stats.by_category || []).length" class="empty">该区间暂无开支</div>
+          <div v-if="!(stats.by_category || []).length" class="empty">该区间暂无{{ scopeWord }}</div>
           <div v-for="c in stats.by_category || []" :key="c.category" class="list-item">
             <div class="row">
-              <van-tag type="danger" plain>{{ c.category }}</van-tag>
+              <van-tag :type="scope === 'income' ? 'success' : 'danger'" plain>{{ c.category }}</van-tag>
               <span class="grow"></span>
-              <span class="bold up">{{ fmtMoney(c.amount) }}</span>
+              <span class="bold" :class="scope === 'income' ? 'down' : 'up'">{{ fmtMoney(c.amount) }}</span>
             </div>
             <div class="item-meta">{{ c.count }} 笔 · 占比 {{ pctOf(c.amount).toFixed(1) }}%</div>
-            <div class="bar-track" style="margin-top:6px;"><span class="bar-fill" :style="{ width: Math.max(3, pctOf(c.amount)) + '%' }" /></div>
+            <div class="bar-track" style="margin-top:6px;">
+              <span class="bar-fill" :class="scope === 'income' ? 'income' : ''" :style="{ width: Math.max(3, pctOf(c.amount)) + '%' }" />
+            </div>
           </div>
           <template v-if="(stats.by_category || []).length">
             <div class="divider"></div>
-            <div class="row"><span class="grow bold">合计</span><span class="bold up">{{ fmtMoney(stats.range_total) }}</span></div>
+            <div class="row"><span class="grow bold">合计</span><span class="bold" :class="scope === 'income' ? 'down' : 'up'">{{ fmtMoney(stats.range_total) }}</span></div>
           </template>
         </template>
       </div>
-
       </template>
 
       <!-- 明细 -->
       <template v-else>
       <div class="card">
         <div class="card-title">
-          <span class="grow">开支明细</span>
+          <span class="grow">{{ scope === 'income' ? '收入明细' : '支出明细' }}</span>
           <van-button size="mini" type="primary" icon="plus" @click="openForm()">登记</van-button>
         </div>
         <van-field v-model="kw" placeholder="筛选类型 / 备注 / 操作员" style="background:#f7f8fa;border-radius:6px;" />
-        <div v-if="!filteredRows.length" class="empty">该区间暂无开支，点右上角「登记」新增</div>
+        <div v-if="!filteredRows.length" class="empty">
+          该区间暂无{{ scopeWord }}，点右上角「登记」新增
+          <template v-if="scope === 'income'"><br />入库单的「供应商补偿」会自动出现在这里</template>
+        </div>
         <div v-for="r in filteredRows" :key="r.id" class="list-item">
           <div class="row">
-            <van-tag type="danger" plain>{{ r.category }}</van-tag>
-            <van-tag v-if="r.pay_status === 'unpaid'" type="warning" plain style="margin-left:6px;">待付款</van-tag>
+            <van-tag :type="scope === 'income' ? 'success' : 'danger'" plain>{{ r.category }}</van-tag>
+            <van-tag v-if="scope === 'expense' && r.pay_status === 'unpaid'" type="warning" plain style="margin-left:6px;">待付款</van-tag>
+            <van-tag v-if="r.ref_type" plain style="margin-left:6px;">{{ refLabel(r.ref_type) }}</van-tag>
             <span class="grow"></span>
-            <span class="bold up">{{ fmtMoney(r.amount) }}</span>
+            <span class="bold" :class="scope === 'income' ? 'down' : 'up'">{{ amountText(r) }}</span>
           </div>
           <div class="item-meta">{{ r.date }}{{ r.operator ? ' · ' + r.operator : '' }}</div>
           <RemarkView v-if="r.remark" :remark="r.remark" />
@@ -111,7 +133,7 @@
         </div>
         <div v-if="filteredRows.length" class="row" style="margin-top:8px;">
           <span class="grow muted">共 {{ filteredRows.length }} 笔</span>
-          <span class="bold up">合计 {{ fmtMoney(filteredSum) }}</span>
+          <span class="bold" :class="scope === 'income' ? 'down' : 'up'">合计 {{ fmtMoney(filteredSum) }}</span>
         </div>
       </div>
       </template>
@@ -120,15 +142,15 @@
     <!-- 登记 / 编辑 -->
     <van-popup v-model:show="show" position="bottom" round>
       <div class="sheet-body">
-        <div class="sheet-title">{{ form.id ? '编辑' : '登记' }}其他开支</div>
+        <div class="sheet-title">{{ form.id ? '编辑' : '登记' }}其他{{ scopeWord }}</div>
         <van-cell-group inset>
-          <van-field v-model="form.category" label="费用类型" placeholder="如 网线费 / 安装费 / 机器费 / 样品费" />
+          <van-field v-model="form.category" :label="scope === 'income' ? '收入类型' : '费用类型'" :placeholder="scope === 'income' ? '如 供应商补偿 / 返利 / 赔偿' : '如 网线费 / 安装费 / 机器费 / 样品费'" />
           <van-field v-model="form.amount" type="number" label="金额" placeholder="0.00">
             <template #button><span class="muted">元</span></template>
           </van-field>
           <van-field v-model="form.date" label="日期" type="date" />
           <OperatorField v-model="form.operator" />
-          <PayStatusField v-model="form.pay_status" hint="待付款：登记后先进「待付款账单」，点「已支付」才计入期间费用" />
+          <PayStatusField v-if="scope === 'expense'" v-model="form.pay_status" hint="待付款：登记后先进「待付款账单」，点「已支付」才计入期间费用" />
           <AttachmentField v-model="form.remark" placeholder="可留空，如收款方 / 用途（支持图片 / 附件）" />
         </van-cell-group>
         <template v-if="presets.length">
@@ -144,7 +166,9 @@
             >{{ c }}</van-tag>
           </div>
         </template>
-        <div class="muted" style="padding:0 4px 8px;">保存后计入财务报表「期间费用」，并从毛利中扣减得到净利。</div>
+        <div class="muted" style="padding:0 4px 8px;">
+          {{ scope === 'income' ? '收入会以负数冲减财务报表「期间费用」，影响净利；默认立即到账，不进待付款账单。' : '保存后计入财务报表「期间费用」，并从毛利中扣减得到净利。' }}
+        </div>
         <div class="sheet-foot">
           <van-button block plain @click="show = false">取消</van-button>
           <van-button block type="primary" :loading="saving" @click="save">保存</van-button>
@@ -185,6 +209,7 @@ const PANELS = [
   { key: 'cat', label: '按类型' },
 ]
 
+const scope = ref('expense')       // expense 其他支出 / income 其他收入
 const df = ref(monthStartStr())
 const dt = ref(todayStr())
 const quickKey = ref('month')
@@ -197,6 +222,10 @@ const show = ref(false)
 const saving = ref(false)
 const form = reactive({ id: null, category: '', amount: '', date: todayStr(), operator: '', remark: '', pay_status: 'paid' })
 
+const scopeWord = computed(() => (scope.value === 'income' ? '收入' : '支出'))
+const scopeHint = computed(() => (scope.value === 'income'
+  ? '当前：其他收入 —— 下方登记 / 统计 / 明细都只看收入（含入库单带出的供应商补偿）'
+  : '当前：其他支出 —— 下方登记 / 统计 / 明细都只看支出（网线费 / 安装费 / 样品费…）'))
 const presets = computed(() => stats.value.presets || [])
 const topCatText = computed(() => {
   const t = (stats.value.by_category || [])[0]
@@ -209,10 +238,19 @@ const filteredRows = computed(() => {
     [r.category, r.remark, r.operator, r.date].join(' ').toLowerCase().includes(s)
   )
 })
-const filteredSum = computed(() => filteredRows.value.reduce((a, r) => a + num(r.amount), 0))
+const filteredSum = computed(() => filteredRows.value.reduce((a, r) => a + Math.abs(num(r.amount)), 0))
 const maxDay = computed(() => Math.max(1, ...(stats.value.by_day || []).map((d) => num(d.amount))))
 const barW = (v) => Math.max(3, Math.round((num(v) / maxDay.value) * 100)) + '%'
 const pctOf = (v) => (num(stats.value.range_total) ? (num(v) / num(stats.value.range_total)) * 100 : 0)
+
+/** 明细金额：收入行后端存负数，展示为正数并加「+」 */
+const amountText = (r) => (num(r.amount) < 0 ? '+' : (scope.value === 'income' ? '+' : '')) + fmtMoney(Math.abs(num(r.amount)))
+const refLabel = (t) => ({
+  inbound_fee: '来自入库单·成本',
+  inbound_comp: '来自入库单·补偿',
+  inbound: '来自入库单',
+  outbound: '来自出库单',
+}[t] || '来自单据')
 
 /** 环比：by_month 为倒序，下一项即上一个月 */
 function mom(i) {
@@ -234,7 +272,7 @@ function lastMonthRange() {
 }
 
 async function load() {
-  const qs = `date_from=${df.value || ''}&date_to=${dt.value || ''}`
+  const qs = `date_from=${df.value || ''}&date_to=${dt.value || ''}&kind=${scope.value}`
   try {
     const [s, list] = await Promise.all([
       api(`/api/other-expenses/stats?${qs}`),
@@ -243,6 +281,12 @@ async function load() {
     stats.value = s || {}
     rows.value = list || []
   } catch (e) { showToast(e.message || '加载失败') }
+}
+
+function setScope(v) {
+  if (scope.value === v) return
+  scope.value = v
+  load()
 }
 
 function quick(kind) {
@@ -258,8 +302,10 @@ function quick(kind) {
 
 async function openForm(r) {
   if (r) {
+    // 编辑收入行自动切到收入页签，避免在支出页签里改收入
+    if (num(r.amount) < 0 && scope.value !== 'income') { scope.value = 'income'; load() }
     Object.assign(form, {
-      id: r.id, category: r.category, amount: r.amount, date: r.date, remark: r.remark || '', operator: '',
+      id: r.id, category: r.category, amount: Math.abs(num(r.amount)), date: r.date, remark: r.remark || '', operator: '',
       pay_status: r.pay_status === 'unpaid' ? 'unpaid' : 'paid',
     })
   } else {
@@ -273,7 +319,7 @@ async function openForm(r) {
 
 async function save() {
   const category = (form.category || '').trim()
-  if (!category) { showToast('请填写费用类型'); return }
+  if (!category) { showToast(scope.value === 'income' ? '请填写收入类型（如 供应商补偿 / 返利）' : '请填写费用类型'); return }
   if (!(num(form.amount) > 0)) { showToast('金额必须大于 0'); return }
   if (!form.date) { showToast('请选择日期'); return }
   saving.value = true
@@ -281,14 +327,15 @@ async function save() {
   try {
     const body = {
       category, amount: num(form.amount), date: form.date, remark: (form.remark || '').trim(),
-      pay_status: form.pay_status,   // paid 已付款（默认）/ unpaid 待付款
+      pay_status: form.pay_status,   // paid 已付款（默认）/ unpaid 待付款（收入恒为已付款）
+      kind: scope.value,             // expense 支出存正数 / income 收入存负数
     }
     if (editing) await api(`/api/other-expenses/${form.id}`, 'PUT', body)
     else await api('/api/other-expenses', 'POST', body)
     // 该日期若不在当前统计区间内，自动扩区间，避免"登记了却看不到"
     if (df.value && form.date < df.value) df.value = form.date
     if (dt.value && form.date > dt.value) dt.value = form.date
-    showToast((editing ? '已保存修改' : '已登记') + (form.pay_status === 'unpaid' ? '（待付款，已进待付款账单）' : ''))
+    showToast((editing ? '已保存修改' : '已登记') + (scope.value === 'expense' && form.pay_status === 'unpaid' ? '（待付款，已进待付款账单）' : ''))
     show.value = false
     await load()
   } catch (e) { showToast(e.message || '保存失败') }
@@ -296,7 +343,7 @@ async function save() {
 }
 
 async function delRow(r) {
-  try { await showConfirmDialog({ title: '删除开支', message: `确认删除 ${r.date}「${r.category}」${fmtMoney(r.amount)}？` }) } catch (e) { return }
+  try { await showConfirmDialog({ title: `删除其他${scopeWord.value}`, message: `确认删除 ${r.date}「${r.category}」${fmtMoney(Math.abs(num(r.amount)))}？` }) } catch (e) { return }
   try {
     await api(`/api/other-expenses/${r.id}`, 'DELETE')
     showToast('已删除')
@@ -309,9 +356,13 @@ onMounted(load)
 
 <style scoped>
 .sub-page { min-height: 100vh; background: #f7f8fa; }
+.scope-head { padding-bottom: 8px; }
+.scope-hint { padding: 6px 2px 0; font-size: 12px; line-height: 1.5; }
 .bar-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 .bar-x { width: 44px; flex: none; font-size: 11px; color: #969799; font-variant-numeric: tabular-nums; }
 .bar-track { flex: 1; height: 14px; background: #f2f3f5; border-radius: 7px; overflow: hidden; display: block; }
 .bar-fill { display: block; height: 100%; background: #ee0a24; border-radius: 7px; min-width: 3px; }
+.bar-fill.income { background: #07c160; }
 .bar-val { width: 84px; flex: none; text-align: right; font-size: 12px; color: #ee0a24; font-variant-numeric: tabular-nums; }
+.bar-val.income { color: #07c160; }
 </style>

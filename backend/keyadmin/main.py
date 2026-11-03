@@ -73,7 +73,9 @@ def _verify_token(token: str | None) -> bool:
         return False
 
 
-app = FastAPI(title="私钥管理工具")
+# 关掉 /docs、/redoc、/openapi.json：本服务直接开在公网端口上，默认文档端点会把全部管理接口
+# （含清库、恢复备份、重置管理员）连同参数结构一起公开，等于给外人一份攻击地图。
+app = FastAPI(title="私钥管理工具", docs_url=None, redoc_url=None, openapi_url=None)
 
 
 # ---------- 门禁：账号 + 口令 ----------

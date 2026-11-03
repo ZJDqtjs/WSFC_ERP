@@ -19,7 +19,8 @@
 
     <van-cell-group inset title="经营分析">
       <van-cell title="财务报表" icon="bar-chart-o" is-link to="/report" />
-      <van-cell title="其他开支" icon="balance-list-o" is-link to="/otherexp" />
+      <van-cell title="广告利润（含广告费）" icon="chart-trending-o" is-link to="/adprofit" />
+      <van-cell title="其他收支" icon="balance-list-o" is-link to="/otherexp" />
       <van-cell title="待付款账单" icon="bill-o" is-link to="/payables" />
       <van-cell :title="`库存管理（缺货 ${lowStockCount} 项）`" icon="shopping-cart-o" is-link to="/stock" />
     </van-cell-group>
@@ -53,7 +54,7 @@ import api from '../api'
 const router = useRouter()
 const user = ref({})
 const lowStockCount = ref(0)
-const version = '0.2.0'
+const version = '0.3.0'
 
 const roleText = computed(() => (user.value.role === 'admin' ? '管理员' : '业务员'))
 

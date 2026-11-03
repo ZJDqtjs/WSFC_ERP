@@ -36,7 +36,14 @@ class Product(Base):
     __tablename__ = "products"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(128), default="", index=True)  # 商品编码
+    code: Mapped[str] = mapped_column(String(128), default="", index=True)  # 商品编码（主编码）
+    # 多端商品：同一规格在多个店铺/端各有一个编码（如京东多店铺的 skuId）。
+    # 开关打开后 codes 生效；主编码 code 仍保留，作为「没匹配到店铺」时的兜底编码。
+    multi_code: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 额外编码：[{code, shop}]，shop = 该编码所属店铺（与出库单的客户/店铺名一致）。
+    # 对外成本表（/api/open/sku-costs）按「店铺 → 编码」把出库销量拆到各自的 SKU 上；
+    # shop 留空 = 通用编码（任何没匹配到店铺的订单都归它）。
+    codes: Mapped[list] = mapped_column(JSON, default=list)
     name: Mapped[str] = mapped_column(String(128), index=True)
     category: Mapped[str] = mapped_column(String(64), default="")  # 商品类型/分类
     product_type: Mapped[str] = mapped_column(String(8), default="stock")  # stock 库存 / order 订单
@@ -93,12 +100,13 @@ class Inbound(Base):
     # 金额调整（抹零/凑整）：正=多付给供应商，负=少付。实付金额 = total_amount + adjust_amount；
     # 商品成本仍按 total_amount（不变），差额自动记一笔「金额调整」的其他收支（见 services.create_inbound）
     adjust_amount: Mapped[float] = mapped_column(Float, default=0.0)
-    # 入库运费 / 装卸费（选填）：计入该批次的到岸成本（StockMovement.amount = 商品金额 + 这两项），
+    # 入库运费 / 装卸费 / 转账手续费（选填）：计入该批次的到岸成本（StockMovement.amount = 商品金额 + 这几项），
     # FIFO 结转后自动体现在该品的毛利与库存均价上；同时在「其他收支」生成 ref_type="inbound_fee"
     # 的镜像行供查询（报表期间费用会排除镜像行，避免与成本口径重复扣减，见 services/报告聚合）。
-    # 与金额调整不同：调整差额不改成本、只记开支；运费/装卸费改成本、镜像行不重复进期间费用。
+    # 与金额调整不同：调整差额不改成本、只记开支；这几项改成本、镜像行不重复进期间费用。
     freight: Mapped[float] = mapped_column(Float, default=0.0)
     handling: Mapped[float] = mapped_column(Float, default=0.0)
+    fee: Mapped[float] = mapped_column(Float, default=0.0)  # 付款给供应商产生的转账手续费（同运费口径）
     supplier: Mapped[str] = mapped_column(String(64), default="")
     operator: Mapped[str] = mapped_column(String(32), default="")
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
@@ -288,7 +296,8 @@ class OtherExpense(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     category: Mapped[str] = mapped_column(String(32), index=True)  # 费用类型：网线费/安装费/机器费/样品费…
-    amount: Mapped[float] = mapped_column(Float, default=0.0)  # 金额（元，正数）
+    amount: Mapped[float] = mapped_column(Float, default=0.0)  # 入账金额（元，正数；已含手续费）
+    fee: Mapped[float] = mapped_column(Float, default=0.0)  # 其中转账手续费（元，仅备查，已算进 amount）
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
     remark: Mapped[str] = mapped_column(String(255), default="")
     operator: Mapped[str] = mapped_column(String(32), default="")

@@ -42,10 +42,11 @@ class InboundIn(BaseModel):
     paid_amount: float = 0.0
     # 金额调整（抹零/凑整）：正=多付给供应商，负=少付。商品成本按原价不变，差额自动记「金额调整」其他收支
     adjust_amount: float = 0.0
-    # 运费 / 装卸费（选填，≥0）：计入该批次到岸成本（体现在这个品的毛利上），
+    # 运费 / 装卸费 / 转账手续费（选填，≥0）：计入该批次到岸成本（体现在这个品的毛利上），
     # 并自动在「其他收支」生成镜像行供查询（ref_type="inbound_fee"，报表期间费用不重复扣）
     freight: float = 0.0
     handling: float = 0.0
+    fee: float = 0.0
     # 供应商补偿（选填，≥0）：供应商退的钱/赔偿，自动记「其他收支 → 供应商补偿」负数行冲减期间费用
     compensation: float = 0.0
 
@@ -58,10 +59,11 @@ class InboundUpdate(BaseModel):
     pay_status: str = "paid"
     # 部分付款时的已付金额：None = 沿用单据上已有的已付金额（改其它字段时不至于把已付清空）
     paid_amount: float | None = None
-    # 运费 / 装卸费（选填，≥0）：None = 不修改；填了会重算批次到岸成本与该品均价/毛利，
+    # 运费 / 装卸费 / 转账手续费（选填，≥0）：None = 不修改；填了会重算批次到岸成本与该品均价/毛利，
     # 并同步「其他收支」镜像行（日期随入库单日期）。
     freight: float | None = None
     handling: float | None = None
+    fee: float | None = None
     # 供应商补偿（选填，≥0）：None = 不修改；填了/清零会同步「其他收支 → 供应商补偿」镜像行
     compensation: float | None = None
 
@@ -77,7 +79,8 @@ def _to_dict(r: Inbound) -> dict:
     adjust = round(getattr(r, "adjust_amount", 0.0) or 0.0, 2)
     freight = round(getattr(r, "freight", 0.0) or 0.0, 2)
     handling = round(getattr(r, "handling", 0.0) or 0.0, 2)
-    due = pay_due(r.total_amount, adjust, freight, handling)   # 应付合计（= 表单上的「实付」）
+    fee = round(getattr(r, "fee", 0.0) or 0.0, 2)
+    due = pay_due(r.total_amount, adjust, freight, handling, fee)   # 应付合计（= 表单上的「实付」）
     paid_amount = round(getattr(r, "paid_amount", 0.0) or 0.0, 2)
     if status == "paid":
         paid_amount = due
@@ -97,10 +100,11 @@ def _to_dict(r: Inbound) -> dict:
         "total_amount": r.total_amount,
         "adjust_amount": adjust,
         "final_amount": round((r.total_amount or 0.0) + adjust, 2),
-        # 运费/装卸费：已计入批次到岸成本（landed_amount = 货款 + 这两项），并在「其他收支」留有镜像行
+        # 运费/装卸费/手续费：已计入批次到岸成本（landed_amount = 货款 + 这几项），并在「其他收支」留有镜像行
         "freight": freight,
         "handling": handling,
-        "landed_amount": round((r.total_amount or 0.0) + freight + handling, 2),
+        "fee": fee,
+        "landed_amount": round((r.total_amount or 0.0) + freight + handling + fee, 2),
         "supplier": r.supplier,
         "operator": r.operator,
         "date": r.date,
@@ -190,14 +194,15 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
     rec.date = date
     rec.operator = user.name   # 记录为后来的修改人（忽略前端传值）
 
-    # 运费/装卸费：不传 = 保持原值；传了就按新值算（选填，≥0）
-    old_fee = round(float(rec.freight or 0.0) + float(rec.handling or 0.0), 2)
+    # 运费/装卸费/手续费：不传 = 保持原值；传了就按新值算（选填，≥0）
+    old_fee = round(float(rec.freight or 0.0) + float(rec.handling or 0.0) + float(getattr(rec, "fee", 0.0) or 0.0), 2)
     freight = round(float(data.freight), 2) if data.freight is not None else round(float(rec.freight or 0.0), 2)
     handling = round(float(data.handling), 2) if data.handling is not None else round(float(rec.handling or 0.0), 2)
-    if freight < 0 or handling < 0:
-        raise HTTPException(400, "运费 / 装卸费不能为负数")
-    rec.freight, rec.handling = freight, handling
-    new_fee = round(freight + handling, 2)
+    fee = round(float(data.fee), 2) if data.fee is not None else round(float(getattr(rec, "fee", 0.0) or 0.0), 2)
+    if freight < 0 or handling < 0 or fee < 0:
+        raise HTTPException(400, "运费 / 装卸费 / 手续费不能为负数")
+    rec.freight, rec.handling, rec.fee = freight, handling, fee
+    new_fee = round(freight + handling + fee, 2)
 
     # 供应商补偿：不传 = 保持原值；传了就按新值记（≥0）
     if data.compensation is not None:
@@ -207,7 +212,7 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
         rec.compensation = comp
 
     # 付款状态（含部分付款）：已付金额按新的应付合计收口
-    due = pay_due(rec.total_amount, getattr(rec, "adjust_amount", 0.0), freight, handling)
+    due = pay_due(rec.total_amount, getattr(rec, "adjust_amount", 0.0), freight, handling, fee)
     cur_status = getattr(rec, "pay_status", "paid") or "paid"
     new_status = (data.pay_status or "").strip() or "paid"
     paid_in = round(float(getattr(rec, "paid_amount", 0.0) or 0.0), 2)
@@ -231,7 +236,7 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
             select(StockMovement).where(StockMovement.ref_type == "inbound", StockMovement.ref_id == rid)
         ).scalars():
             m.amount = landed
-            m.remark = f"入库 {rec.code}" + (f"（含运费/装卸 ¥{new_fee}）" if new_fee else "")
+            m.remark = f"入库 {rec.code}" + (f"（含运费/装卸/手续费 ¥{new_fee}）" if new_fee else "")
         # 金额变了 → 重算该品 FIFO 批次/均价（后续出库的结转成本按新成本重放）
         recompute_product(db, rec.product_id)
     # 每项 >0 生成一行镜像、清零则删除（日期=入库单日期），幂等

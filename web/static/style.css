@@ -531,6 +531,22 @@ hr {
   margin-top: 6px; 
 }
 
+/* 广告利润概览：金额位数多（如 ¥1,699,912.35），卡片窄了 26px 的数字会被裁掉 */
+#adpStats { 
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); 
+}
+#adpStats .stat .value { 
+  font-size: clamp(18px, 1.6vw, 24px); 
+  white-space: nowrap; 
+  overflow: hidden; 
+  text-overflow: ellipsis;
+}
+
+/* 广告利润切到「SKU 明细」时，利润概览卡片只留标题栏，SKU 表紧贴在切换条下方 */
+#adpOverviewCard.adp-collapsed .card-head { 
+  margin-bottom: 0; 
+}
+
 .stat.accent::before { background: var(--primary); }
 .stat.success::before { background: var(--green); }
 .stat.warn::before { background: var(--amber); }
@@ -1219,6 +1235,47 @@ td.num, th.num {
   opacity: 1; 
   transform: translateX(-50%) translateY(0); 
 }
+
+/* ============ 报表加载遮罩 ============ */
+.rep-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.26);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.rep-loading-box {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 26px 34px;
+  min-width: 280px;
+  max-width: 90vw;
+  text-align: center;
+  box-shadow: var(--shadow-lg);
+}
+
+.rep-spinner {
+  width: 34px;
+  height: 34px;
+  margin: 0 auto 14px;
+  border: 3px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: repSpin 0.8s linear infinite;
+}
+
+@keyframes repSpin { to { transform: rotate(360deg); } }
+
+.rep-loading-title { font-size: 14.5px; font-weight: 600; }
+
+.rep-loading-sub { color: var(--muted); font-size: 12.5px; margin-top: 6px; line-height: 1.6; }
 
 /* ============ 停服公告滚动条 ============ */
 .notice-bar {
@@ -2645,4 +2702,171 @@ tr.draft-off {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* =====================================================================
+   ====== 体验优化补丁：全局一致性 / 缺失样式补全 / 暗色补全 ==========
+   ===================================================================== */
+
+/* ---------- 1. 补齐散落引用但从未定义的 token 与组件样式 ---------- */
+:root {
+  --bg-soft: #fafafa;      /* 柔底：待识别预览 / AI 记忆 / 思考折叠区 */
+  --card-alt: #f6f8fb;     /* 卡片内的浅色块 */
+  --bg-subtle: #f2f4f7;    /* 徽标 / 图表轨道底 */
+  --text-muted: #8a8f98;   /* 图表刻度等弱文字 */
+  --line: #ececec;         /* 通用分隔线 */
+}
+
+/* 「ghost」次级按钮：设置页「清空 Cookie / 只导出试跑」等在用，
+   此前未定义 → 退化成 .btn 蓝底主按钮，操作层级混乱 */
+.btn.ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  box-shadow: none;
+  font-weight: 500;
+  padding: 9px 17px; /* 1px 边框补偿，和其它 .btn 等高 */
+}
+.btn.ghost:hover {
+  background: var(--primary-50);
+  border-color: var(--primary);
+  color: var(--primary);
+  box-shadow: none;
+  transform: none;
+}
+.btn.ghost:active { transform: none; }
+.btn.sm.ghost { padding: 5px 11px; } /* .btn.ghost 的 padding 优先级更高，小尺寸单独补偿 */
+
+/* 长口径说明脚注（广告利润等页的「.note」在用，此前无样式） */
+.note {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+  background: var(--bg-soft);
+  border: 1px solid var(--border-light);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius);
+}
+
+/* 行内勾选项 / 行内字段（模块显示、备份设置、快递费等大量在用） */
+.check-inline,
+.field-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.check-inline input,
+.field-inline input { accent-color: var(--primary); }
+
+/* 工作台「本月其他收支」统计卡用的是 .stat.red，此前未定义 → 没有红色顶条 */
+.stat.red::before { background: var(--red); }
+
+/* ---------- 2. 键盘可达性 & 细节打磨 ---------- */
+.btn:focus-visible,
+.btn-link:focus-visible,
+.nav-item:focus-visible,
+.seg-item:focus-visible,
+.detail-toggle:focus-visible,
+.logout-btn:focus-visible,
+.modal .close:focus-visible,
+.sp-item:focus-visible,
+.eva-chip-main:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.nav-item.active:focus-visible { outline-color: var(--primary-dark); }
+::selection { background: var(--primary); color: #fff; }
+
+/* 分段切换窄屏 / 标签多时换行，不再把右侧按钮挤出卡片 */
+.seg { flex-wrap: wrap; }
+
+/* 数据表加一圈浅描边 + 表头贴合圆角：表格区域边界更清楚 */
+.table-wrap { border: 1px solid var(--border-light); border-radius: var(--radius-lg); }
+.table-wrap table { border-collapse: separate; border-spacing: 0; }
+.table-wrap thead th:first-child { border-top-left-radius: var(--radius-lg); }
+.table-wrap thead th:last-child { border-top-right-radius: var(--radius-lg); }
+tbody tr:last-child td { border-bottom: none; }
+
+/* 主内容区底部多留呼吸空间（最后一条记录不再顶在窗口边缘） */
+.main { padding-bottom: 48px; }
+
+/* 工作台 / 财务报表统计卡：金额位数多（¥1,699,912.35）时卡位加宽、字号自适应，
+   与「广告利润」卡同策略 */
+#dashStats, #repStats { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+#dashStats .stat .value, #repStats .stat .value {
+  font-size: clamp(18px, 1.6vw, 24px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 徽章对比度修正：#ffb900 橙黄字压 #fff4ce 浅黄底基本看不清 */
+.badge.pack { color: #b45309; }
+
+/* 付款状态单选：去掉写死的 #fff，跟随卡片底色 */
+.pay-radio { background: var(--card); }
+
+/* 条形图 / 摘要里写死的灰字统一走 token（同时修掉暗色模式黑底黑字） */
+.wl-name { color: var(--text-secondary); }
+.wl-val { color: var(--text); }
+.wl-empty, .mv-val, .mv-x { color: var(--muted); }
+.mp-sum-item { background: var(--card); color: var(--text-secondary); }
+.exp-bar { background: rgba(0, 0, 0, 0.08); }
+
+/* ---------- 3. 暗色模式补全：浅色 tint 在深底上会「发光」 ---------- */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --primary-light: rgba(96, 165, 250, 0.16);
+    --primary-50: rgba(96, 165, 250, 0.10);
+    --green-light: rgba(74, 222, 128, 0.14);
+    --red-light: rgba(248, 113, 113, 0.14);
+    --amber-light: rgba(251, 191, 36, 0.14);
+    --bg-soft: #262626;
+    --card-alt: #333a42;
+    --bg-subtle: #2d3339;
+    --text-muted: #9aa0a6;
+    --line: #3d3d3d;
+  }
+  /* 提示条 / 徽章：深底浅块配同色系亮字 */
+  .alert.warn { color: #fcd34d; border-color: rgba(251, 191, 36, 0.35); }
+  .alert.ok { color: #86efac; border-color: rgba(74, 222, 128, 0.35); }
+  .alert.err { color: #fca5a5; border-color: rgba(248, 113, 113, 0.35); }
+  .badge.in, .badge.income { background: rgba(74, 222, 128, 0.16); color: #4ade80; }
+  .badge.out, .badge.expense { background: rgba(248, 113, 113, 0.16); color: #f87171; }
+  .badge.pack { background: rgba(251, 191, 36, 0.16); color: #fbbf24; }
+  .badge.adjust { background: rgba(96, 165, 250, 0.16); color: #8fd0ff; }
+  .activity-ico.in { color: #4ade80; }
+  .activity-ico.out { color: #8fd0ff; }
+  .mp-sum-item.ok { color: #4ade80; }
+  .mp-sum-item.warn { color: #fbbf24; }
+  /* 主蓝 #0067c0 字在深底上对比不足：统一提到 Fluent 深色主题强调蓝 */
+  .btn-link, .detail-toggle, .ai-think-head, .ai-pending-head, .scombo-item:hover,
+  .batch-bar b, .draft-head b, .pay-sum .pay-sum-total b,
+  .fc-opt.on, #finTable tr.fin-row.fin-on b, .exp-link:hover { color: #8fd0ff; }
+  .btn-link:hover { color: #b3e0ff; }
+  .ai-think-body::after { color: #8fd0ff; }
+  .pay-tag { background: rgba(249, 115, 22, 0.16); color: #fb923c; border-color: rgba(249, 115, 22, 0.35); }
+  .pay-tag.part { background: rgba(96, 165, 250, 0.16); color: #8fd0ff; border-color: rgba(96, 165, 250, 0.35); }
+  .ai-sw-label.on { color: #4ade80; }
+  .ai-sw-label.off { color: #fbbf24; }
+  .ai-sw-track { background: #3a3f45; }
+  .exp-bar { background: rgba(255, 255, 255, 0.14); }
+  .table-wrap { border-color: var(--border); }
+  .btn.ghost:hover { border-color: var(--primary); color: #8fd0ff; }
+  .note { border-left-color: #8fd0ff; }
+  /* 输入聚焦光圈：rgba tint 在深底太弱，换亮蓝 */
+  .field input:focus, .field select:focus, .field textarea:focus,
+  .toolbar input:focus, .toolbar select:focus, .scombo-input:focus {
+    box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.35);
+  }
+  /* 主蓝字在深底上对比不足的高频处：选中分段 / 选中付款状态 / 附件链接 / 维护信息 */
+  .seg-item.active, .pay-radio.on, .attach-link, .maintain-info b { color: #8fd0ff; }
+  .pay-radio.on { border-color: rgba(96, 165, 250, 0.5); }
 }

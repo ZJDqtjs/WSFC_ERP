@@ -29,7 +29,7 @@ from ..models import (
     WarehouseProduct,
 )
 from .warehouse_in import net_weight_kg
-from ..services import INBOUND_FEE_REF
+from ..services import AD_PREPAID_CATEGORY, INBOUND_FEE_REF, is_ad_prepay
 
 router = APIRouter(prefix="/api", tags=["report"])
 
@@ -42,15 +42,20 @@ router = APIRouter(prefix="/api", tags=["report"])
 #   ② 并发闸：全局同一时刻只跑一个重汇总，其余排队，绝不叠加；
 #   ③ 短缓存：结果缓存 _HEAVY_TTL 秒，反复刷新秒回。
 _HEAVY_GATE = threading.Semaphore(1)
+# 财务流水只是「一条走索引的查询」（实测 wh01 本月 0.29 秒），和逐仓重汇总不是一个量级。
+# 让它挤同一把全局闸，等于排在 5~8 秒的汇总后面干等，所以给它独立的、可并发的闸。
+_FIN_GATE = threading.Semaphore(4)
 _HEAVY_LOCK = threading.Lock()
 _HEAVY_CACHE: dict = {}
 _HEAVY_INFLIGHT: dict = {}
 _HEAVY_TTL = 60.0
 _HEAVY_CACHE_MAX = 32
+# 行列表超过这个条数就不进缓存：全仓流水一条结果能占几十 MB，缓存 32 条足以吃掉整台 1.6G 机器
+_HEAVY_CACHE_LIST_MAX = 2000
 
 
-def _heavy_cached(key, compute):
-    """带单飞 + 全局并发闸 + 短缓存的汇总计算。key 必须能唯一标识「同一次结果」。"""
+def _heavy_cached(key, compute, gate=_HEAVY_GATE):
+    """带单飞 + 并发闸 + 短缓存的汇总计算。key 必须能唯一标识「同一次结果」。"""
     hit = _HEAVY_CACHE.get(key)
     if hit and time.time() - hit[0] < _HEAVY_TTL:
         return hit[1]
@@ -72,13 +77,14 @@ def _heavy_cached(key, compute):
         if hit:
             return hit[1]
         # 领导者异常退出且无缓存：退回自己算一次兜底（放弃单飞，避免死等）
-        with _HEAVY_GATE:
+        with gate:
             return compute()
     try:
-        with _HEAVY_GATE:
+        with gate:
             result = compute()
         with _HEAVY_LOCK:
-            _HEAVY_CACHE[key] = (time.time(), result)
+            if not isinstance(result, list) or len(result) <= _HEAVY_CACHE_LIST_MAX:
+                _HEAVY_CACHE[key] = (time.time(), result)
             while len(_HEAVY_CACHE) > _HEAVY_CACHE_MAX:
                 oldest = min(_HEAVY_CACHE, key=lambda k: _HEAVY_CACHE[k][0])
                 _HEAVY_CACHE.pop(oldest, None)
@@ -124,6 +130,23 @@ def _split_paid(rows: list) -> tuple[list, list]:
     return paid, unpaid
 
 
+def _reportable_other_expenses(others: list) -> tuple[list, float]:
+    """从「其他收支」行里拆出 (计入期间费用的行, 被剔出的广告费充值合计)。
+
+    剔掉两类，都不是「本期费用」：
+    - 入库运费/装卸镜像行（ref_type=inbound_fee）：已计入批次到岸成本，再扣就是重复；
+    - 广告费充值：是充进京准通账户的预付款，广告费在「广告利润」页按实际消耗扣。
+    """
+    fee_rows = [e for e in others if e.ref_type != INBOUND_FEE_REF]
+    ad_rows = [e for e in fee_rows if is_ad_prepay(e.category)]
+    return [e for e in fee_rows if not is_ad_prepay(e.category)], round(sum(e.amount or 0.0 for e in ad_rows), 2)
+
+
+def _not_ad_prepay():
+    """SQL 侧条件：排除「广告费充值」类预付，与 _reportable_other_expenses 的对象侧口径同源。"""
+    return func.coalesce(OtherExpense.category, "").notlike(f"{AD_PREPAID_CATEGORY}%")
+
+
 # ---------------- 出库「收入」口径 ----------------
 # 收入 = 销售收入（商品） + 客户代收的关联结算（settle_income：包材/人工/快递费）。
 # 成本侧 total_cogs 本来就含关联结算（出库就结转掉了），收入侧一起计，毛利才不会被包材/快递吃成负数。
@@ -136,6 +159,17 @@ def _income_expr():
 def _income_of(o) -> float:
     """单据对象侧收入：销售收入 + 客户代收的关联结算。"""
     return (o.total_amount or 0.0) + (getattr(o, "settle_income", 0.0) or 0.0)
+
+
+# 报表读出库单只用到这几列：整行 ORM 实例化在 wh01 一个月就要造 3.3 万个对象
+# （实测占 _summary_of 一半耗时，光InstanceState.__init__ 就 1.5 秒）。
+# 列查询返回的 Row 同样支持 o.total_amount / getattr(o, "brush_cost", 0) 这种属性访问，
+# 所以下游口径代码一行都不用改。
+OUTBOUND_COLS = (
+    Outbound.id, Outbound.code, Outbound.date, Outbound.operator, Outbound.remark,
+    Outbound.total_amount, Outbound.total_cogs, Outbound.settle_income, Outbound.pay_status,
+    Outbound.brush_cost, Outbound.brush_fee, Outbound.brush_auto_fee,
+)
 
 
 def _not_return(model):
@@ -263,7 +297,8 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
             .where(OtherExpense.date >= f, OtherExpense.date <= t,
                    func.coalesce(OtherExpense.pay_status, PAID) != "unpaid",
                    # 运费/装卸镜像行已计入批次成本，期间费用不重复扣（「其他收支」页仍可查）
-                   func.coalesce(OtherExpense.ref_type, "") != INBOUND_FEE_REF)
+                   func.coalesce(OtherExpense.ref_type, "") != INBOUND_FEE_REF,
+                   _not_ad_prepay())   # 广告费充值是预付，广告利润页按实际消耗扣
         ).scalar() or 0.0), 2)
 
         packs: dict[str, float] = {}
@@ -385,7 +420,7 @@ def summary(
     date_from: str = "",
     date_to: str = "",
     wh: str = "",   # 可选：指定查看哪个分仓（单仓总览手动切换用），缺省=本登录会话的分仓；wh=all = 全仓合计
-    exclude_other: int = 0,   # 1 = 排除「其他收支」，报表只看商品售卖利润（默认 0：含其他收支）
+    exclude_other: int = 1,   # 1 = 排除「其他收支」（与前端默认开关、/adprofit 一致）
     db: Session = Depends(get_db_wh),
     user: User = Depends(get_current_user),
 ):
@@ -407,21 +442,23 @@ def summary(
 
 
 def _inbound_landed(i) -> float:
-    """入库实际支出 = 货款 + 运费 + 装卸费（运费/装卸已计入批次成本，故期间费用不重复扣）。
+    """入库实际支出 = 货款 + 运费 + 装卸费 + 手续费（这几项已计入批次成本，故期间费用不重复扣）。
 
-    部分付款时只算已经付掉的那部分：已付金额按应付合计（含调整/运费/装卸）记，
-    这里按「货款 + 运费 + 装卸」封顶（金额调整另走「其他收支」，不计入采购桶）。
+    部分付款时只算已经付掉的那部分：已付金额按应付合计（含调整/运费/装卸/手续费）记，
+    这里按「货款 + 运费 + 装卸 + 手续费」封顶（金额调整另走「其他收支」，不计入采购桶）。
     """
-    landed = round((i.total_amount or 0.0) + (getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0), 2)
+    landed = round((i.total_amount or 0.0) + (getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0)
+                   + (getattr(i, "fee", 0.0) or 0.0), 2)
     if (getattr(i, "pay_status", PAID) or PAID) == "partial":
         return round(max(0.0, min(getattr(i, "paid_amount", 0.0) or 0.0, landed)), 2)
     return landed
 
 
 def _inbound_due(i) -> float:
-    """入库单应付合计 = 货款 + 金额调整 + 运费 + 装卸（与「待付款账单」页的应付口径一致）。"""
+    """入库单应付合计 = 货款 + 金额调整 + 运费 + 装卸 + 手续费（与「待付款账单」页的应付口径一致）。"""
     return round((i.total_amount or 0.0) + (getattr(i, "adjust_amount", 0.0) or 0.0)
-                 + (getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0), 2)
+                 + (getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0)
+                 + (getattr(i, "fee", 0.0) or 0.0), 2)
 
 
 def _inbound_unpaid(i) -> float:
@@ -431,11 +468,16 @@ def _inbound_unpaid(i) -> float:
     return round(i.total_amount or 0.0, 2)
 
 
-def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_other: bool = False) -> dict:
+def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_other: bool = False,
+                split_shop: set[int] | None = None) -> dict:
     """单个分仓的经营汇总（「单仓总览」各分区的数据源）。
 
     exclude_other=True 时不计入「其他收支」（other_expenses 表）：期间费用只剩手工记账支出，
     净利润即「只看商品售卖」的利润；被排除的金额仍以 excluded_other_expense 返回，供前端提示。
+
+    split_shop：需要按**店铺**拆行的商品 id 集合（多端商品 / 多店铺多编码）。
+    传入后这些商品的 by_product 行会多一个 ``shop`` 维度（店铺名 = 出库单的 customer），
+    让对外成本表能把销量算到各店铺各自的 SKU 上；报表自己不传它，行数与口径完全不变。
     """
     def scope(model):
         q = select(model)
@@ -445,10 +487,14 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             q = q.where(model.date <= date_to)
         return q
 
-    # 出库单只取单据本身：明细（单仓 2 万行）改成下面的列查询 + 按单分组处理，
-    # 不再把每张单的 lines/product 都实例化成 ORM 对象（这一步实测 0.9 秒，线上放大到 4 秒+）。
+    # 出库单只取用到的那几列（见 OUTBOUND_COLS），不再整行实例化 ORM 对象。
     # 「待付款」的单据不进报表：先拆出来，单独汇总给报表页提示（在「待付款账单」点「已支付」后转入报表）
-    outbounds, unpaid_outbounds = _split_paid(list(db.execute(scope(Outbound)).scalars()))
+    ob_q = select(*OUTBOUND_COLS)
+    if date_from:
+        ob_q = ob_q.where(Outbound.date >= date_from)
+    if date_to:
+        ob_q = ob_q.where(Outbound.date <= date_to)
+    outbounds, unpaid_outbounds = _split_paid(list(db.execute(ob_q)))
     # 采购明细要显示商品名，预载 product 避免逐条懒加载
     inbounds, unpaid_inbounds = _split_paid(
         list(db.execute(scope(Inbound).options(selectinload(Inbound.product))).scalars())
@@ -456,13 +502,27 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     # 部分付款：已付的那部分算进报表（_inbound_landed 按 paid_amount 计），
     # 没付的余额仍算「待付款」（跟着 unpaid_inbounds 一起进 pending）
     partial_inbounds = [i for i in inbounds if (getattr(i, "pay_status", PAID) or PAID) == "partial"]
-    finances, unpaid_finances = _split_paid(list(db.execute(scope(FinanceRecord)).scalars()))
+    # 流水只取两类行：支出桶要 type=expense，待收/待付桶要 ref_type=manual。
+    # 每张出库单都会自动产一条「销售收入」流水（wh01 本月 3.3 万行），本函数一处都不读它，
+    # 在 SQL 侧就滤掉：3.3 万个 ORM 对象 → 493 个。
+    # 只取汇总用到的列：全月 1.6 万条整行 ORM 实例化是这里的一笔明显开销
+    # （列查询返回 Row，下游 f.type / f.amount / f.date 等属性访问用法不变）。
+    fin_q = select(
+        FinanceRecord.type, FinanceRecord.category, FinanceRecord.amount,
+        FinanceRecord.ref_type, FinanceRecord.pay_status,
+        FinanceRecord.date, FinanceRecord.operator, FinanceRecord.remark,
+    ).where(
+        or_(FinanceRecord.type == "expense", FinanceRecord.ref_type == "manual")
+    )
+    finances, unpaid_finances = _split_paid(
+        list(db.execute(_date_filter(fin_q, date_from, date_to)))
+    )
     others, unpaid_others = _split_paid(list(db.execute(scope(OtherExpense)).scalars()))
-    # 入库「运费/装卸费」镜像行已计入批次到岸成本（FIFO 结转随销量扣减，体现在该品毛利上），
-    # 期间费用口径（others → other_raw/other_fees/支出分区/excluded_other_expense）剔除它，
-    # 避免「成本 + 期间费用」重复扣减；待付款口径（unpaid_others → _pending_stats）保留，
-    # 与「待付款账单」页的应付金额（货款 + 调整 + 运费/装卸）保持一致。
-    others = [e for e in others if e.ref_type != INBOUND_FEE_REF]
+    # 期间费用口径（others → other_raw/other_fees/支出分区/excluded_other_expense）剔掉两类：
+    # 入库「运费/装卸费」镜像行已计入批次到岸成本（FIFO 结转随销量扣减，体现在该品毛利上）；
+    # 「广告费充值」是充进京准通的预付款，广告费在「广告利润」页按 CPS + 京准通实际消耗扣。
+    # 待付款口径（unpaid_others → _pending_stats）保留，与「待付款账单」页的应付金额一致。
+    others, ad_prepay_total = _reportable_other_expenses(others)
 
     # 入仓（入仓品卖到京东那条线）：与出库同属销售渠道，收入/成本一并计入本报表口径，
     # 这样「商品销售明细」里入仓品能作为单独的行列出，且明细合计 = 汇总。
@@ -477,15 +537,26 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     wi_cogs = round(wi_goods + wi_freight + wi_pack + wi_fixed, 2)
 
     # 收入 = 销售收入 + 客户代收的关联结算（包材/人工/快递费）：与出库单「实收金额」同口径
-    revenue = sum(_income_of(o) for o in outbounds) + wi_revenue
-    cogs = sum(o.total_cogs for o in outbounds) + wi_cogs
+    # 注意：以下 5 个指标原来各写了一个生成器 sum（出库单动辄 3~5 万行，等于把整月单据走 5 遍），
+    # 这里合并成一次遍历；累加顺序与 sum() 完全一致，浮点结果不变。
+    ob_revenue = ob_cogs = ob_brush_cost = ob_brush_total = ob_brush_fee = 0.0
+    for o in outbounds:
+        ob_revenue += (o.total_amount or 0.0) + (o.settle_income or 0.0)
+        ob_cogs += o.total_cogs or 0.0
+        ob_brush_cost += float(o.brush_cost or 0.0)
+        adj = brush_adjust(o)
+        if adj:
+            ob_brush_total += adj
+        ob_brush_fee += brush_fee_of(o)
+    revenue = ob_revenue + wi_revenue
+    cogs = ob_cogs + wi_cogs
     # 芳谊放单仓刷单结算：刷单成本（我填的）+ 固定费覆盖差；非放单仓订单都是 0。
     # 注意 cogs 里**不**含这笔钱（cogs 仍是商品/包材/快递的结转成本），毛利单独扣它，
     # 这样「商品成本 goods_cogs」不会被刷单成本污染。
-    brush_cost = round(sum(float(getattr(o, "brush_cost", 0.0) or 0.0) for o in outbounds), 2)
-    brush_total = round(sum(brush_adjust(o) for o in outbounds), 2)
+    brush_cost = round(ob_brush_cost, 2)
+    brush_total = round(ob_brush_total, 2)
     # 其中「快递+包装固定费」：逐单手填（默认 3.6），与刷单成本一起构成刷单单的全部成本
-    brush_fee_total = round(sum(brush_fee_of(o) for o in outbounds), 2)
+    brush_fee_total = round(ob_brush_fee, 2)
     gross = round(revenue - cogs - brush_total, 2)
     # 期间费用 = 财务流水里手工登记的支出（不含采购支出，采购已计入库存成本）+ 其他收支
     manual_expense = sum(f.amount for f in finances if f.type == "expense" and f.category != "采购支出")
@@ -498,7 +569,10 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     # 本期进货 = 货款 + 入库运费/装卸费（与「支出」分区的采购桶、支出合计口径一致）
     purchase_db = sum(_inbound_landed(i) for i in inbounds)
     net = round(gross - expense, 2)
-    stock_value = round(sum(p.stock_value for p in db.execute(select(Product)).scalars()), 2)
+    # 库存总值直接让 SQL 求和：不必把全部商品实例化成 ORM 对象再在 Python 里加
+    stock_value = round(float(db.execute(
+        select(func.coalesce(func.sum(Product.stock_value), 0.0))
+    ).scalar() or 0.0), 2)
 
     # 商品维度：销售数量/收入/商品成本，并把出库时自动结算的关联成本（人工打包/包材/快递）
     # 归属到具体商品，得到该商品的「总成本 = 商品成本 + 打包人工+耗材 + 快递费」。
@@ -510,37 +584,48 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     #      单内只有一条 sale 行时全部归它，与该单口径一致，不会丢账。
     by_product: dict = {}
 
-    def _bucket(pid, spec, dropship, name=""):
-        """按「商品 + 规格 + 是否代发」分桶：出库明细里代发与库存商品不混在一起，也按规格区分。
+    def _bucket(pid, spec, dropship, name="", shop=""):
+        """按「商品 + 规格 + 是否代发（+ 多端商品的店铺）」分桶：出库明细里代发与库存商品不混在一起，也按规格区分。
 
         注意：这里**不能**把空规格就地归一成商品名——结算行（owned_rows/_spread）调用时
         拿不到商品名（name 传空），就地归一会让结算行找不到销售行那个桶、关联成本丢失。
         规格归一统一放在输出阶段做（见下方 _merge_by_name）。
+
+        店铺维度只在 split_shop 指定了该商品时生效（多端商品多店铺多编码，对外成本表按店铺拆）；
+        其它商品一律 shop="" 入桶，报表口径与行数完全不变。
         """
-        return by_product.setdefault(
-            (pid, spec, dropship),
-            {
-                "product_id": pid,
-                "spec": spec,
-                "is_dropship": dropship,
-                "name": name,
-                "code": "",  # 商品编码：订单商品上一般填的是平台 SKU（京东 skuId），对外成本表按它对账
-                "unit": "",  # 销量单位（商品的默认单位，如 单 / 袋 / 公斤）
-                "srcs": set(),  # 该行的来源集合：手动出库 / 聚水潭出库 / 导入出库 / 入仓
-                "qty": 0.0,
-                "amount": 0.0,
-                "gross_sales": 0.0,
-                "cogs": 0.0,  # 兼容旧字段：仅商品本身的结算成本
-                "goods_cogs": 0.0,  # 商品本身的先进先出结转成本
-                "pack_cogs": 0.0,  # 打包人工费 + 包材耗材（= 人工 + 耗材 + 其他，兼容旧字段）
-                "labor_cogs": 0.0,  # 打包人工费
-                "material_cogs": 0.0,  # 包材 / 耗材
-                "other_cogs": 0.0,  # 其他关联结算
-                "express_cogs": 0.0,  # 快递运费
-                "brush_cogs": 0.0,  # 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差，按销售金额占比分摊到单内商品）
-                "settle_income": 0.0,  # 客户代收的关联结算（包材/人工/快递费，按销售金额占比分摊到单内商品）
-            },
-        )
+        key_shop = shop if (split_shop and pid in split_shop) else ""
+        key = (pid, spec, dropship, key_shop)
+        d = by_product.get(key)
+        if d is not None:
+            return d
+        # 只有首次入桶才构造 dict：原来用 dict.setdefault(key, {...})，{...} 每次调用都会先
+        # 构造一遍（一个月 7 万次调用 × 18 个键），临时对象和 GC 是这里最贵的部分。
+        d = {
+            "product_id": pid,
+            "spec": spec,
+            "is_dropship": dropship,
+            # 店铺（多端商品才非空）：对外成本表据此把销量算到该店铺的 SKU 上
+            "shop": key_shop,
+            "name": name,
+            "code": "",  # 商品编码：订单商品上一般填的是平台 SKU（京东 skuId），对外成本表按它对账
+            "unit": "",  # 销量单位（商品的默认单位，如 单 / 袋 / 公斤）
+            "srcs": set(),  # 该行的来源集合：手动出库 / 聚水潭出库 / 导入出库 / 入仓
+            "qty": 0.0,
+            "amount": 0.0,
+            "gross_sales": 0.0,
+            "cogs": 0.0,  # 兼容旧字段：仅商品本身的结算成本
+            "goods_cogs": 0.0,  # 商品本身的先进先出结转成本
+            "pack_cogs": 0.0,  # 打包人工费 + 包材耗材（= 人工 + 耗材 + 其他，兼容旧字段）
+            "labor_cogs": 0.0,  # 打包人工费
+            "material_cogs": 0.0,  # 包材 / 耗材
+            "other_cogs": 0.0,  # 其他关联结算
+            "express_cogs": 0.0,  # 快递运费
+            "brush_cogs": 0.0,  # 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差，按销售金额占比分摊到单内商品）
+            "settle_income": 0.0,  # 客户代收的关联结算（包材/人工/快递费，按销售金额占比分摊到单内商品）
+        }
+        by_product[key] = d
+        return d
 
     # ---- 商品维度：交给 SQL 按「单 × 桶」聚合，Python 只做最后合并与分摊 ----
     # 明细动辄两万行，逐行在 Python 里跑是这里最大的开销（实测 0.7 秒，线上放大到几秒）。
@@ -579,12 +664,15 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             # 来源：手动建单（无导入分组）/ 聚水潭导入（备注带「聚水潭」）/ 其他批量导入
             func.max(func.coalesce(Outbound.import_group, "")).label("ig"),
             func.max(case((Outbound.remark.like("%聚水潭%"), 1), else_=0)).label("jst"),
+            # 店铺名（= 出库单的客户/店铺）：多端商品按店铺拆行时才用，见 _bucket
+            func.trim(func.coalesce(Outbound.customer, "")).label("shop"),
         )
         .select_from(OutboundLine)
         .join(Outbound, Outbound.id == OutboundLine.outbound_id)
         .join(Product, Product.id == OutboundLine.product_id, isouter=True)
         .where(OutboundLine.line_type == "sale", *line_conds, paid_out)
-        .group_by(OutboundLine.outbound_id, OutboundLine.product_id, spec_expr, dr_expr)
+        .group_by(OutboundLine.outbound_id, OutboundLine.product_id, spec_expr, dr_expr,
+                  func.trim(func.coalesce(Outbound.customer, "")))
     ).all()
 
     # ② 有关联对象的结算行：归到「本单该销售商品所在的桶」
@@ -604,6 +692,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             func.coalesce(owner.is_dropship, 0).label("dr"),
             field_expr.label("field"),
             func.coalesce(func.sum(OutboundLine.cogs), 0).label("amt"),
+            # 结算成本也要落到「该单店铺」的桶里（多端商品按店铺拆行时才生效）
+            func.trim(func.coalesce(Outbound.customer, "")).label("shop"),
         )
         .select_from(OutboundLine)
         .join(Outbound, Outbound.id == OutboundLine.outbound_id)
@@ -613,7 +703,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         .join(pk, pk.id == OutboundLine.product_id, isouter=True)
         .where(OutboundLine.line_type == "pack", *line_conds, paid_out)
         .group_by(owner.product_id, func.trim(func.coalesce(owner.spec, "")),
-                  func.coalesce(owner.is_dropship, 0), field_expr)
+                  func.coalesce(owner.is_dropship, 0), field_expr,
+                  func.trim(func.coalesce(Outbound.customer, "")))
     ).all()
 
     # ③ 无归属的结算成本：按「单 × 类别」聚合，稍后按销售金额占比分摊
@@ -651,7 +742,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             du_of[_p.id] = (_du, _f)
 
     for r in sale_rows:
-        d = _bucket(r.pid, r.spec, bool(r.dr), r.pname or "")
+        d = _bucket(r.pid, r.spec, bool(r.dr), r.pname or "", r.shop or "")
         if r.pname:  # 名称以销售行自身的商品为准（结算行只累加金额，不参与命名）
             d["name"] = r.pname
         if r.pcode:  # 同理带上商品编码（对外成本表按平台 SKU 对账用）
@@ -668,35 +759,51 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         d["cogs"] += float(r.goods or 0.0)
 
     for r in owned_rows:
-        d = _bucket(r.pid, r.spec, bool(r.dr), "")
+        d = _bucket(r.pid, r.spec, bool(r.dr), "", r.shop or "")
         d[r.field] += float(r.amt or 0.0)
 
     # 分摊无归属的关联成本（按单内销售金额占比；金额为 0 时按销售行数平均）——
     # 与原来逐行分摊等价：同一桶内多行累加后即为「桶金额占比 × 无归属金额」
     per_order: dict[int, list] = {}
+    # 每单的分摊基数（销售金额合计 / 销售行数合计）在分桶时顺手累加：
+    # 原来每次 _spread 都要对同一单重新 sum 两遍，一单会被分摊 2~4 次（刷单 + 代收 + 无归属），
+    # 相当于把整月销售行多扫了 3 遍。
+    per_order_base: dict[int, list] = {}
     for r in sale_rows:
-        per_order.setdefault(r.oid, []).append(r)
+        lst = per_order.get(r.oid)
+        amt_x = float(r.amt or 0.0)
+        n_x = int(r.n or 0)
+        if lst is None:
+            per_order[r.oid] = [r]
+            per_order_base[r.oid] = [amt_x, n_x]
+        else:
+            lst.append(r)
+            base = per_order_base[r.oid]
+            base[0] += amt_x
+            base[1] += n_x
 
     def _spread(oid, field: str, amt: float) -> None:
         """把一单上的整单金额按单内各销售行的销售金额占比分摊（金额为 0 时按行数平均）。"""
         rows_o = per_order.get(oid)
         if not rows_o or not amt:
             return
-        tot_amt = sum(float(x.amt or 0.0) for x in rows_o)
-        tot_n = sum(int(x.n or 0) for x in rows_o)
+        base = per_order_base.get(oid) or (0.0, 0)
+        tot_amt, tot_n = base[0], base[1]
         for x in rows_o:
             share = (float(x.amt or 0.0) / tot_amt) if tot_amt else ((int(x.n or 0) / tot_n) if tot_n else 0.0)
-            _bucket(x.pid, x.spec, bool(x.dr), "")[field] += float(amt or 0.0) * share
+            _bucket(x.pid, x.spec, bool(x.dr), "", x.shop or "")[field] += float(amt or 0.0) * share
 
     for r in unowned_rows:
         _spread(r.oid, r.field, float(r.amt or 0.0))
-    # 芳谊放单仓的刷单结算也按同一套算法归到该单的商品上，商品毛利才能扣掉它
+    # 刷单结算与客户代收的关联结算都按同一套算法归到该单商品上（毛利口径需要）：
+    # 合并成一次遍历，且只对非 0 金额调用 _spread（绝大多数单据这两项都是 0）。
     for o in outbounds:
-        _spread(o.id, "brush_cogs", brush_adjust(o))
-    # 客户代收的关联结算（包材/人工/快递费）同样归到该单的商品上：
-    # 成本侧的包材/快递本来就算在这行成本里，收入侧要把它计回来，商品毛利才不被吃成负数
-    for o in outbounds:
-        _spread(o.id, "settle_income", float(getattr(o, "settle_income", 0.0) or 0.0))
+        adj = brush_adjust(o)
+        if adj:
+            _spread(o.id, "brush_cogs", adj)
+        settle_in = float(o.settle_income or 0.0)
+        if settle_in:
+            _spread(o.id, "settle_income", settle_in)
 
     # ---- 重量（净重 kg）：与出库结算快递费同一口径 ----
     # 由该销售行实际扣减的库存流水反推：重量类库存商品（基础单位 克）按 扣减量 ÷ 1000；
@@ -810,6 +917,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 # 规格 + 是否代发：前端据此把「代发」单独标出、并按规格区分
                 "spec": d["spec"],
                 "is_dropship": d["is_dropship"],
+                # 店铺：只有对外成本表（多端商品按店铺拆行）会用，报表页不显示（默认全为空串）
+                "shop": d.get("shop") or "",
                 "name": d["name"],
                 # 商品编码：订单商品上一般填的是平台 SKU（京东为数字 skuId）
                 "code": d.get("code") or "",
@@ -852,7 +961,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     #   多个非空规格（真有规格差异）→ 空规格单独成行，规格标为「未标注规格」，不丢数据。
     _by_pid: dict[tuple, list[dict]] = {}
     for r in product_rows:
-        _by_pid.setdefault((r["product_id"], bool(r["is_dropship"])), []).append(r)
+        # 多端商品按店铺拆行时，规格归一只能在同一个店铺内做，否则会把不同店铺的行并回去
+        _by_pid.setdefault((r["product_id"], bool(r["is_dropship"]), r.get("shop") or ""), []).append(r)
     _merged: list[dict] = []
     for _rows in _by_pid.values():
         _named = [r for r in _rows if (r["spec"] or "").strip()]
@@ -986,9 +1096,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         cat_key = _pack_cost_category_of(pcat, pname)   # 注意别用 key：那是分仓标识参数
         pack_costs[cat_key] = round(pack_costs.get(cat_key, 0.0) + float(amt or 0.0), 2)
     pack_total = round(sum(pack_costs.values()), 2)
-    # 商品本身成本 = 总成本 − 出库关联结算成本 − 入仓运费/随货包材
-    # （入仓的运费/包材单独列在 warehouse_in_* 字段里，不混进「关联结算」口径）
-    goods_cogs = round(cogs - pack_total - wi_freight - wi_pack, 2)
+    # 商品本身成本 = 总成本 − 出库关联结算成本 − 入仓运费/随货包材/固定成本
+    # （入仓的运费/包材/固定成本单独列在 warehouse_in_* 字段里，不混进「关联结算」和「商品成本」口径）
+    goods_cogs = round(cogs - pack_total - wi_freight - wi_pack - wi_fixed, 2)
 
     # 账外费用（finance_records 中登记的手工支出），按类别归集
     manual_fees: dict[str, float] = {}
@@ -1067,15 +1177,18 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
 
     expense_items: list[dict] = []
     for i in inbounds:
-        fee = round((getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0), 2)
+        fee = round((getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0)
+                    + (getattr(i, "fee", 0.0) or 0.0), 2)
         note = i.supplier or i.remark or ""
         if fee:
-            # 运费/装卸费已计入批次成本，这里并入采购支出金额并注明，和「逐日支出」的采购桶口径一致
+            # 运费/装卸费/手续费已计入批次成本，这里并入采购支出金额并注明，和「逐日支出」的采购桶口径一致
             parts = []
             if getattr(i, "freight", 0.0):
                 parts.append(f"运费 ¥{round(i.freight, 2)}")
             if getattr(i, "handling", 0.0):
                 parts.append(f"装卸费 ¥{round(i.handling, 2)}")
+            if getattr(i, "fee", 0.0):
+                parts.append(f"手续费 ¥{round(i.fee, 2)}")
             note = (note + " · " if note else "") + "、".join(parts) + "（已计入成本）"
         if (getattr(i, "pay_status", PAID) or PAID) == "partial":
             # 部分付款：这里只列已付部分，未付余额在「待付款账单」里
@@ -1157,6 +1270,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         "expense": expense,
         "manual_expense": round(manual_expense, 2),
         "other_expense": other_total,
+        # 「广告费充值」合计：已从期间费用里剔出（广告费在「广告利润」页按实际消耗扣），
+        # 单列出来让页面能说清「这笔钱去哪了」，而不是凭空少一笔。
+        "ad_prepay_expense": ad_prepay_total,
         # 报表口径开关：exclude_other_expense=True = 已排除其他收支（只看商品售卖利润）
         "exclude_other_expense": bool(exclude_other),
         "excluded_other_expense": other_raw,   # 被排除掉的其他收支金额（仅供提示）
@@ -1367,6 +1483,8 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
         "expense": s("expense"),
         "manual_expense": s("manual_expense"),
         "other_expense": s("other_expense"),
+        # 广告费充值（各分仓已从期间费用剔出，广告利润页按实际消耗扣）：这里只做相加
+        "ad_prepay_expense": s("ad_prepay_expense"),
         # 全仓口径开关：任一分仓标记为「排除其他收支」即视为同一口径
         "exclude_other_expense": any(bool(p.get("exclude_other_expense")) for p in parts),
         "excluded_other_expense": s("excluded_other_expense"),
@@ -1677,11 +1795,12 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
         select(func.coalesce(func.sum(OtherExpense.amount), 0))
         .where(*_date_conds(OtherExpense), paid(OtherExpense),
                # 运费/装卸镜像行已计入批次成本，期间费用不重复扣（「其他收支」页仍可查）
-               func.coalesce(OtherExpense.ref_type, "") != INBOUND_FEE_REF)
+               func.coalesce(OtherExpense.ref_type, "") != INBOUND_FEE_REF,
+               _not_ad_prepay())   # 广告费充值是预付，广告利润页按实际消耗扣
     ).scalar() or 0.0), 2)
     # 部分付款：已付部分算本期进货，未付余额算待付款（与 /report/summary 同口径）
     inbound_landed = (Inbound.total_amount + func.coalesce(Inbound.freight, 0)
-                      + func.coalesce(Inbound.handling, 0))
+                      + func.coalesce(Inbound.handling, 0) + func.coalesce(Inbound.fee, 0))
     inbound_due = inbound_landed + func.coalesce(Inbound.adjust_amount, 0)
     inbound_paid = func.coalesce(Inbound.paid_amount, 0)
     inb_partial = func.coalesce(Inbound.pay_status, PAID) == "partial"
@@ -1760,7 +1879,7 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
 def all_warehouses(
     date_from: str = "",
     date_to: str = "",
-    exclude_other: int = 0,   # 1 = 排除「其他收支」（与 /report/summary 同口径）
+    exclude_other: int = 1,   # 1 = 排除「其他收支」（与 /report/summary 同口径）
     user: User = Depends(get_current_user),
 ):
     """全仓总览：把所有分仓的收入 / 支出 / 利润汇总成一张表 + 合计。"""
@@ -1841,18 +1960,29 @@ def list_finance(
     date_from: str = "",
     date_to: str = "",
     wh: str = "",   # 可选：查看指定分仓（与 /report/summary 的 wh 保持一致）；wh=all = 全仓流水
+    limit: int = 0,   # >0 时只回传该窗口（返回 {rows,total}）；0 = 全量数组（兼容移动端旧调用）
+    offset: int = 0,
     db: Session = Depends(get_db_wh),
     user: User = Depends(get_current_user),
 ):
     if wh == ALL_WH:
-        return _heavy_cached(
+        rows = _heavy_cached(
             ("finance", "all", date_from, date_to),
             lambda: _finance_all(date_from, date_to),
+            gate=_FIN_GATE,
         )
-    return _heavy_cached(
-        ("finance", resolve_key(wh), date_from, date_to),
-        lambda: _finance_of(db, date_from, date_to),
-    )
+    else:
+        rows = _heavy_cached(
+            ("finance", resolve_key(wh), date_from, date_to),
+            lambda: _finance_of(db, date_from, date_to),
+            gate=_FIN_GATE,
+        )
+    # 分页只影响「回传多少」：计算仍是整月一次（结果进 60 秒缓存），
+    # 但一个月 5~6 万条流水序列化 + gzip + 公网传输要 3 秒左右，首屏没必要全拿。
+    if limit and limit > 0:
+        start = max(0, int(offset or 0))
+        return {"rows": rows[start:start + int(limit)], "total": len(rows)}
+    return rows
 
 
 def _finance_of(db: Session, date_from: str, date_to: str, wh_name: str = "") -> list[dict]:

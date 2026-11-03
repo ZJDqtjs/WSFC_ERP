@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from ..auth import get_current_user
 from ..database import get_current_key, get_db
 from ..models import Deduction, Product, StockMovement, User, WarehouseIn, WarehouseProduct
-from ..services import fifo_state, fifo_take, pay_fields, recompute_product, unit_to_base
+from ..services import fifo_state, fifo_take, pay_fields, recompute_product, search_hit, split_search_keywords, unit_to_base
 
 router = APIRouter(prefix="/api/warehouse-in", tags=["warehouse-in"])
 
@@ -201,9 +201,16 @@ def _detect_header(rows, aliases) -> tuple[dict, int]:
 
 def _load_workbook(file: UploadFile):
     try:
-        return load_workbook(file.file, data_only=True)
+        # read_only：普通模式逐格建对象，账单/贴单动辄几万格，1.6G 小机上会把内存顶死
+        return load_workbook(file.file, data_only=True, read_only=True)
     except Exception:
         raise HTTPException(400, "无法读取文件，请上传 .xlsx 格式")
+
+
+def _sheet_rows(ws) -> list[list]:
+    """取一张表的全部行。只读模式必须先 reset_dimensions，否则按声明维度截断。"""
+    ws.reset_dimensions()
+    return [list(r) for r in ws.iter_rows(values_only=True)]
 
 
 # 库存成本：库存均价(先进先出)优先，无库存时回退参考成本 unit_cost。
@@ -609,6 +616,55 @@ def _apply_pack_settlement(db: Session, rec: WarehouseIn) -> None:
         recompute_product(db, pid)
 
 
+# 入仓发货（货离开本仓）的库存流水来源标记：与「随货包材」的 warehouse_in 区分开
+GOODS_REF = "warehouse_in_goods"
+
+
+def _apply_goods_out(db: Session, rec: WarehouseIn) -> set[int]:
+    """入仓 = 备货发到京东仓，货确实离开本仓 → 按「袋数 × 每袋数量」扣减关联库存商品。
+
+    - 只对「关联了库存商品 + 每袋数量 > 0」的入仓记录生效；未关联（代发/直发）不扣，与改造前一致；
+    - 每袋数量是按「库存商品的默认单位」记的，这里换算成基础单位再扣；
+    - 成本由 FIFO 重放给出（金额先写 0，recompute_product 会按批次回写），与出库同一套口径；
+    - 幂等：流水挂 ref_type=warehouse_in_goods + ref_id，改单/删单由 _clear_goods_out 先清后建。
+    """
+    sp = db.get(Product, rec.stock_product_id) if rec.stock_product_id else None
+    qty = float(rec.quantity or 0)
+    bw = float(rec.bag_weight or 0)
+    if not sp or qty <= 0 or bw <= 0:
+        return set()
+    du = sp.default_unit or sp.base_unit
+    f = float((sp.conversions or {}).get(du) or 1) or 1.0
+    qty_base = round(qty * bw * f, 6)
+    if qty_base <= 0:
+        return set()
+    db.add(StockMovement(
+        product_id=sp.id,
+        move_type="out",
+        quantity_base=-qty_base,
+        amount=0.0,
+        ref_type=GOODS_REF,
+        ref_id=rec.id,
+        date=rec.date,
+        operator=rec.operator or "",
+        remark=f"入仓发货 {rec.code}（{qty:g}袋 × {bw:g}{du}）",
+    ))
+    db.flush()
+    recompute_product(db, sp.id)
+    return {sp.id}
+
+
+def _clear_goods_out(db: Session, rec_id: int) -> set[int]:
+    """删除某入仓记录的「入仓发货」流水（改单 / 删单时先清），返回受影响商品 id。"""
+    affected: set[int] = set()
+    for m in db.execute(
+        select(StockMovement).where(StockMovement.ref_type == GOODS_REF, StockMovement.ref_id == rec_id)
+    ).scalars():
+        affected.add(m.product_id)
+        db.delete(m)
+    return affected
+
+
 def _clear_pack_settlement(db: Session, rec_id: int) -> set[int]:
     """删除某入仓记录的随货包材流水，返回受影响商品 id 集合（供调用方重算）。"""
     affected: set[int] = set()
@@ -687,6 +743,7 @@ def _create_record(db: Session, payload: dict, operator: str, import_group: str 
     db.add(rec)
     db.flush()
     _apply_pack_settlement(db, rec)
+    _apply_goods_out(db, rec)   # 入仓=发货到京东仓：扣减关联库存商品的库存
     return rec
 
 
@@ -701,11 +758,11 @@ def list_inbounds(
     if date_to:
         query = query.where(WarehouseIn.date <= date_to)
     rows = list(db.execute(query).scalars())
-    kw = (q or "").strip().lower()
-    if kw:
-        rows = [r for r in rows if kw in " ".join(
+    kws = split_search_keywords(q)
+    if kws:
+        rows = [r for r in rows if search_hit(" ".join(
             [r.code, r.product_name, r.purchase_no, r.center, r.operator]
-        ).lower()]
+        ), kws)]
     items = [_in_dict(db, r) for r in rows]
     total = {
         "amount": round(sum(r.amount or 0 for r in rows), 2),  # 收入
@@ -781,12 +838,14 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
     # 固定成本：跟着入仓品资料的当前值走（没关联入仓品时保留原值）
     rec.fixed_cost = float(getattr(product, "fixed_cost", 0.0) or 0.0) if product else (rec.fixed_cost or 0.0)
     rec.fixed_total = round(rec.quantity * rec.fixed_cost, 2)
-    # 随货包材：先清除旧结算流水，再按新入仓品/数量重算
+    # 随货包材 + 入仓发货：先清除旧流水，再按新入仓品/数量/每袋数量重算
     old_affected = _clear_pack_settlement(db, rec.id)
+    old_affected |= _clear_goods_out(db, rec.id)
     rec.pack_items, rec.pack_cost = _settle_pack_items(db, product, quantity)
     rec.profit = round(rec.amount - rec.cogs - rec.freight_total - rec.pack_cost - rec.fixed_total, 2)
     _apply_pack_settlement(db, rec)
-    for pid in old_affected:  # 从清单里移除的旧包材也要重算回库存
+    _apply_goods_out(db, rec)   # 改数量/换入仓品后，入仓发货的扣减量跟着变
+    for pid in old_affected:  # 从清单里移除的旧包材 / 换掉的库存商品也要重算回库存
         recompute_product(db, pid)
     db.commit()
     db.refresh(rec)
@@ -799,6 +858,7 @@ def delete_inbound(rid: int, db: Session = Depends(get_db), user: User = Depends
     if not rec:
         raise HTTPException(404, "入仓记录不存在")
     affected = _clear_pack_settlement(db, rid)
+    affected |= _clear_goods_out(db, rid)   # 入仓发货扣掉的库存要退回来
     db.delete(rec)
     for pid in affected:
         recompute_product(db, pid)
@@ -818,6 +878,7 @@ def batch_delete(data: BatchIds, db: Session = Depends(get_db), user: User = Dep
         rec = db.get(WarehouseIn, rid)
         if rec:
             affected |= _clear_pack_settlement(db, rid)
+            affected |= _clear_goods_out(db, rid)
             db.delete(rec)
             deleted += 1
     for pid in affected:
@@ -865,15 +926,17 @@ def import_preview(
     user: User = Depends(get_current_user),
 ):
     wb = _load_workbook(file)
-    sheets = wb.sheetnames
-    # 工作表按当前分仓自动选：wh02=冷冻贴单，其余（奥斯迪/昆明蔬菜仓）=常温贴单；
-    # 前端下拉显式选过则用所选那张
-    wh_key = get_current_key()
-    sheet_name = _pick_sheet(sheets, sheet, wh_key)
-    if not sheet_name:
-        raise HTTPException(400, "Excel 中没有可读取的工作表")
-    ws = wb[sheet_name]
-    rows = [list(r) for r in ws.iter_rows(values_only=True)]
+    try:
+        sheets = wb.sheetnames
+        # 工作表按当前分仓自动选：wh02=冷冻贴单，其余（奥斯迪/昆明蔬菜仓）=常温贴单；
+        # 前端下拉显式选过则用所选那张
+        wh_key = get_current_key()
+        sheet_name = _pick_sheet(sheets, sheet, wh_key)
+        if not sheet_name:
+            raise HTTPException(400, "Excel 中没有可读取的工作表")
+        rows = _sheet_rows(wb[sheet_name])
+    finally:
+        wb.close()
     mapping, start = _detect_header(rows, WH_ALIASES)
     if not mapping or "product" not in mapping:
         raise HTTPException(400, "未识别到表头（需包含「商品名称」等列），请确认工作表内容")
@@ -1044,7 +1107,7 @@ def _parse_freight_bill(wb) -> dict:
     used: list[str] = []
     row_count = 0
     for name in wb.sheetnames:
-        rows = [list(r) for r in wb[name].iter_rows(values_only=True)]
+        rows = _sheet_rows(wb[name])
         mapping, start = _detect_header(rows, FREIGHT_ALIASES)
         if not mapping.get("purchase_no") or "amount" not in mapping:
             continue
@@ -1087,7 +1150,10 @@ def freight_preview(
 ):
     """解析运输账单，按采购单号对上入仓记录，返回预览（含未命中清单与费用类型明细）。"""
     wb = _load_workbook(file)
-    bill = _parse_freight_bill(wb)
+    try:
+        bill = _parse_freight_bill(wb)
+    finally:
+        wb.close()
     if not bill["by_po"]:
         raise HTTPException(400, "没在文件里找到「采购单号 + 结算金额」两列，请确认上传的是运输转运费账单")
     by_pn = _bill_records_map(db)
@@ -1180,7 +1246,8 @@ def freight_apply(data: FreightApplyIn, db: Session = Depends(get_db), user: Use
             r.freight_total = amt
             r.freight = round(amt / float(r.quantity or 1), 6)
             r.freight_source = "actual"
-            r.profit = round(float(r.amount or 0) - float(r.cogs or 0) - amt - float(r.pack_cost or 0), 2)
+            r.profit = round(float(r.amount or 0) - float(r.cogs or 0) - amt - float(r.pack_cost or 0)
+                             - float(getattr(r, "fixed_total", 0.0) or 0.0), 2)
             new_sum += amt
             updated += 1
         orders += 1

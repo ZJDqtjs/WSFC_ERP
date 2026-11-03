@@ -8,6 +8,7 @@ import Stock from './views/stock.vue'
 import Products from './views/products.vue'
 import PackRules from './views/packrules.vue'
 import Report from './views/report.vue'
+import AdProfit from './views/adprofit.vue'
 import OtherExp from './views/otherexp.vue'
 import Payables from './views/payables.vue'
 import Deduction from './views/deduction.vue'
@@ -32,7 +33,8 @@ const routes = [
   { path: '/products', component: Products, meta: { title: '商品管理' } },
   { path: '/packrules', component: PackRules, meta: { title: '一单多货' } },
   { path: '/report', component: Report, meta: { title: '财务报表' } },
-  { path: '/otherexp', component: OtherExp, meta: { title: '其他开支' } },
+  { path: '/adprofit', component: AdProfit, meta: { title: '广告利润' } },
+  { path: '/otherexp', component: OtherExp, meta: { title: '其他收支' } },
   { path: '/payables', component: Payables, meta: { title: '待付款账单' } },
   { path: '/deduction', component: Deduction, meta: { title: '扣点设置' } },
   { path: '/express', component: Express, meta: { title: '快递费规则' } },
