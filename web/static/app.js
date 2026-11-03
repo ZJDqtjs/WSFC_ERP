@@ -8238,7 +8238,8 @@ function renderFinanceTable() {
   rows = applyTableSort(ft, rows);
   const cols = FIN.wh ? 9 : 8;
   const shown = rows.slice(0, FIN.limit);
-  const more = rows.length - shown.length;
+  const moreLocal = Math.max(0, rows.length - shown.length);          // 本地已加载但还没渲染出来的
+  const moreRemote = Math.max(0, FIN.total - FIN.rows.length);       // 后端还有、本地没拉的
   ft.innerHTML = `<thead><tr>
     ${FIN.wh ? "<th>分仓</th>" : ""}
     <th>类型</th>
@@ -8265,8 +8266,20 @@ function renderFinanceTable() {
       : "") + `</tbody>`;
   if (!rows.length) ft.innerHTML = `<tr><td colspan="${cols}" class="empty">本期无财务流水</td></tr>`;
   ft._rows = rows;
-  // 点表头排序：内存里的完整数组重排即可，不必再请求一次接口
-  ft._render = () => { FIN.limit = FIN_PAGE; renderFinanceTable(); };
+  // 点表头排序：首屏只拉了 300 条，只排这一屏会像「排序没生效」，所以先把剩下的补全再排；
+  // 后端整月结果已在 60 秒缓存里，续拉只是传输。
+  ft._render = async () => {
+    FIN.limit = FIN_PAGE;
+    if (FIN.total > FIN.rows.length) {
+      toast("正在加载全部流水用于排序…");
+      try {
+        const r = await api(`/api/finance?${FIN.qs}&limit=0`);
+        FIN.rows = Array.isArray(r) ? r : (r.rows || FIN.rows);
+        FIN.total = FIN.rows.length;
+      } catch (e) { toast("加载全部流水失败：" + e.message); }
+    }
+    renderFinanceTable();
+  };
   const hint = $("repFinHint");
   if (hint) hint.textContent = rows.length ? (kws.length ? `匹配 ${rows.length} / ${FIN.rows.length} 条` : `共 ${rows.length} 条`) : "";
 }
@@ -8353,7 +8366,9 @@ async function _loadReportInner() {
   try {
     [rep, finance] = await Promise.all([
       api(`/api/report/summary?date_from=${from || ""}&date_to=${to || ""}${whQs}${excludeOtherQs()}`),
-      api(`/api/finance?date_from=${from || ""}&date_to=${to || ""}${whQs}`),
+      // 流水先只拿一屏（300 条）：整月 5~6 万条一次性序列化 + gzip + 传输要 3 秒左右，
+      // 剩下的按 offset 由「加载更多 / 加载全部」续拉（后端计算结果已进 60 秒缓存，续拉很快）
+      api(`/api/finance?date_from=${from || ""}&date_to=${to || ""}${whQs}&limit=${FIN_PAGE}&offset=0`),
     ]);
   } catch (e) {
     toast("加载报表失败：" + e.message);
