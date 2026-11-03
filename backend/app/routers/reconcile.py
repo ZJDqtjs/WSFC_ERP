@@ -467,21 +467,26 @@ def _build_reconciliation(doc_rows: list[dict], text: str, db: Session,
             status = "仅系统"
         doc_units = sorted(d["units"]) if d else []
         sys_units = sorted(s["units"]) if s else []
-        qty_comparable = bool(doc_units and sys_units and doc_units == sys_units)
+        doc_qty = round(d["quantity"], 4) if d else 0.0
+        sys_qty = round(s["quantity"], 4) if s else 0.0
+        # 单量差异：单据是箱/件、系统是单，单位不同也照样算差值（1箱≈1单），
+        # 另用 qty_unit_same 标记单位是否一致，前端可提示。
+        qty_unit_same = bool(doc_units and sys_units and doc_units == sys_units)
         rows.append({
             "date": day,
             "family": family,
             "status": status,
             "doc_names": sorted(d["product_names"]) if d else [],
             "doc_unit": " / ".join(doc_units),
-            "doc_quantity": round(d["quantity"], 4) if d else 0.0,
+            "doc_quantity": doc_qty,
             "doc_amount": doc_amt,
             "system_name": "、".join(sorted(x for x in s["product_names"] if x)) if s else "",
             "system_spec": "、".join(sorted(s["specs"])) if s else "",
             "system_unit": " / ".join(sys_units),
-            "system_quantity": round(s["quantity"], 4) if s else 0.0,
+            "system_quantity": sys_qty,
             "system_amount": sys_amt,
-            "qty_diff": round(d["quantity"] - s["quantity"], 4) if (d and s and qty_comparable) else None,
+            "qty_diff": round(doc_qty - sys_qty, 4),
+            "qty_unit_same": qty_unit_same,
             "amount_diff": diff,
         })
 
@@ -497,6 +502,11 @@ def _build_reconciliation(doc_rows: list[dict], text: str, db: Session,
     unmatched_doc_total = round(sum(r["doc_amount"] for r in rows if r["status"] == "仅单据"), 2)
     only_system_total = round(sum(r["system_amount"] for r in rows if r["status"] == "仅系统"), 2)
     only_system_count = sum(1 for r in rows if r["status"] == "仅系统")
+    # 单量口径：已匹配商品的可比单量差异；未归类的单据/系统单量单独统计
+    matched_doc_qty = round(sum(r["doc_quantity"] for r in matched), 4)
+    matched_sys_qty = round(sum(r["system_quantity"] for r in matched), 4)
+    unmatched_doc_qty = round(sum(r["doc_quantity"] for r in rows if r["status"] == "仅单据"), 4)
+    only_system_qty = round(sum(r["system_quantity"] for r in rows if r["status"] == "仅系统"), 4)
 
     if not include_only_system:
         rows = [r for r in rows if r["status"] != "仅系统"]
@@ -523,6 +533,11 @@ def _build_reconciliation(doc_rows: list[dict], text: str, db: Session,
             "matched_diff": round(matched_doc_total - matched_sys_total, 2),
             "unmatched_doc_total": unmatched_doc_total,
             "only_system_total": only_system_total,
+            "matched_doc_qty": matched_doc_qty,
+            "matched_sys_qty": matched_sys_qty,
+            "matched_qty_diff": round(matched_doc_qty - matched_sys_qty, 4),
+            "unmatched_doc_qty": unmatched_doc_qty,
+            "only_system_qty": only_system_qty,
             "groups": len(rows),
             "diff_groups": sum(1 for r in rows if r["status"] == "金额差异"),
             "only_doc": sum(1 for r in rows if r["status"] == "仅单据"),

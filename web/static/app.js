@@ -10016,6 +10016,8 @@ function dsRenderReconcile(d) {
   const s = d.summary || {};
   const matchedDiff = s.matched_diff || 0;
   const diffOk = Math.abs(matchedDiff) <= 0.02;
+  const matchedQtyDiff = s.matched_qty_diff || 0;
+  const qtyOk = Math.abs(matchedQtyDiff) <= 1e-6;
   const statusStyle = {
     "一致": "background:#e8f5e9;color:#1b7f3b;",
     "金额差异": "background:#fde2e0;color:#b3261e;",
@@ -10024,6 +10026,9 @@ function dsRenderReconcile(d) {
   };
   const rows = (d.rows || []).map((r) => {
     const rowOk = Math.abs(r.amount_diff) <= 0.02;
+    const qtyRowOk = Math.abs(r.qty_diff || 0) <= 1e-6;
+    const unitNote = (r.doc_unit && r.system_unit && !r.qty_unit_same)
+      ? '<span class="muted" title="单据单位与系统单位不同（箱/件 vs 单），按 1箱≈1单 比较">*</span>' : "";
     return `<tr>
       <td class="num mono">${esc(r.date || "")}</td>
       <td><span class="badge" style="${statusStyle[r.status] || ""}">${esc(r.status)}</span></td>
@@ -10035,6 +10040,7 @@ function dsRenderReconcile(d) {
       <td class="num mono">${esc(r.system_unit || "")}</td>
       <td class="num mono">${fmtNum(r.system_quantity)}</td>
       <td class="num mono">${fmtMoney(r.system_amount)}</td>
+      <td class="num mono"><b style="color:${qtyRowOk ? "var(--green,#16a34a)" : "var(--danger,#dc2626)"};">${fmtNum(r.qty_diff)}</b>${unitNote}</td>
       <td class="num mono"><b style="color:${rowOk ? "var(--green,#16a34a)" : "var(--danger,#dc2626)"};">${fmtMoney(r.amount_diff)}</b></td>
     </tr>`;
   }).join("");
@@ -10043,8 +10049,9 @@ function dsRenderReconcile(d) {
     <div class="pay-sum" style="margin-top:6px;">
       <span>单据 <b>${s.doc_rows || 0}</b> 行 / 金额 <b class="mono">${fmtMoney(s.doc_total)}</b></span>
       <span>系统代发成本（单据涉及商品） <b class="mono">${fmtMoney(s.system_total)}</b></span>
-      <span>已匹配商品差异 <b class="mono" style="color:${diffOk ? "var(--green,#16a34a)" : "var(--danger,#dc2626)"};">${fmtMoney(matchedDiff)}</b></span>
-      <span>未归类单据金额 <b class="mono">${fmtMoney(s.unmatched_doc_total)}</b></span>
+      <span>已匹配单量差异 <b class="mono" style="color:${qtyOk ? "var(--green,#16a34a)" : "var(--danger,#dc2626)"};">${fmtNum(matchedQtyDiff)}</b></span>
+      <span>已匹配金额差异 <b class="mono" style="color:${diffOk ? "var(--green,#16a34a)" : "var(--danger,#dc2626)"};">${fmtMoney(matchedDiff)}</b></span>
+      <span>未归类单据 <b class="mono">${fmtNum(s.unmatched_doc_qty)} 单 / ${fmtMoney(s.unmatched_doc_total)}</b></span>
       <span class="muted">差异 ${s.diff_groups || 0} · 仅单据 ${s.only_doc || 0} · 仅系统 ${s.only_system || 0} · 一致 ${s.same || 0}</span>
     </div>
     <div class="muted" style="font-size:12px;margin:4px 0;">日期 ${esc(d.date_from || "-")} ~ ${esc(d.date_to || "-")}${aliasTxt ? "；别名：" + aliasTxt : ""}</div>
@@ -10053,9 +10060,9 @@ function dsRenderReconcile(d) {
         <th style="width:92px;">日期</th><th style="width:86px;">状态</th>
         <th>单据商品</th><th style="width:54px;">单位</th><th style="width:76px;">数量</th><th style="width:92px;">金额</th>
         <th>系统商品 / 规格</th><th style="width:54px;">单位</th><th style="width:76px;">数量</th><th style="width:92px;">成本</th>
-        <th style="width:92px;">差异</th>
+        <th style="width:82px;">单量差异</th><th style="width:92px;">金额差异</th>
       </tr></thead>
-      <tbody>${rows || '<tr><td colspan="11" class="empty">没有可核对的数据</td></tr>'}</tbody>
+      <tbody>${rows || '<tr><td colspan="12" class="empty">没有可核对的数据</td></tr>'}</tbody>
     </table></div>`;
 }
 
