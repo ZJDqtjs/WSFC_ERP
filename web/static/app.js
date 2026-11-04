@@ -6811,14 +6811,71 @@ async function submitInbound() {
     }
   } catch (e) { toast("入库失败：" + e.message); }
 }
+/** 入库记录汇总数字：页顶汇总条与表格页脚共用（数量按单位分组，金额按应付口径） */
+function inboundSum(rows) {
+  const num = (v) => Number(v) || 0;
+  const sum = (k) => rows.reduce((a, r) => a + num(r[k]), 0);
+  // 数量按单位分组：公斤/箱/袋不能直接相加，分别累计
+  const qtyMap = new Map();
+  rows.forEach((r) => {
+    const u = (r.unit || "").trim();
+    qtyMap.set(u, (qtyMap.get(u) || 0) + num(r.quantity));
+  });
+  const adjust = sum("adjust_amount");
+  const freight = sum("freight");
+  const handling = sum("handling");
+  const fee = sum("fee");
+  return {
+    qtyText: [...qtyMap.entries()].map(([u, q]) => `${fmtNum(q)}${u ? " " + u : ""}`).join(" / ") || "0",
+    goods: sum("total_amount"),          // 货款
+    adjust, freight, handling, fee,
+    due: sum("due_amount"),              // 应付合计（货款 + 调整 + 运费 + 装卸 + 手续费）
+    paid: sum("paid_amount"),
+    unpaid: sum("unpaid_amount"),
+    pend: rows.filter((r) => (r.pay_status || "paid") !== "paid").length,
+    extras: [
+      adjust ? `调整 ${adjust > 0 ? "+" : "-"}${fmtMoney(Math.abs(adjust))}` : "",
+      freight ? `运费 ${fmtMoney(freight)}` : "",
+      handling ? `装卸 ${fmtMoney(handling)}` : "",
+      fee ? `手续费 ${fmtMoney(fee)}` : "",
+    ].filter(Boolean).join(" · "),
+  };
+}
+
+/** 入库记录：筛选后实时汇总（页顶汇总条 + 表格页脚共用同一组数字） */
+function renderInSum(rows, allCount, active, from, to) {
+  const el = $("inSum");
+  if (!el) return;
+  const s = inboundSum(rows);
+  const range = (from || to) ? `日期 ${from || "最早"} ~ ${to || "最新"}` : "";
+  const kwRaw = $("inSearch") ? $("inSearch").value.trim() : "";
+  const cond = [range, kwRaw ? `关键词「${kwRaw}」` : ""].filter(Boolean).join(" + ");
+  el.innerHTML =
+    `<span class="pay-sum-label">${active ? "筛选结果" : "当前列表"}</span>` +
+    `<span><b>${rows.length}</b> 笔${rows.length === allCount ? "" : ` <span class="muted">/ 共 ${allCount} 笔</span>`}</span>` +
+    `<span>数量合计 <b class="mono">${s.qtyText}</b></span>` +
+    `<span class="pay-sum-total">合计（应付）<b class="mono">${fmtMoney(s.due)}</b></span>` +
+    `<span class="muted">已付 <b class="mono" style="color:var(--green, #16a34a);">${fmtMoney(s.paid)}</b>`
+    + ` ／ 未付 <b class="mono" style="color:var(--danger, #dc2626);">${fmtMoney(s.unpaid)}</b>`
+    + (s.pend ? `（待结算 ${s.pend} 笔）` : "") + `</span>` +
+    `<span class="muted">货款 <b class="mono">${fmtMoney(s.goods)}</b>${s.extras ? ` · ${s.extras}` : ""}</span>` +
+    `<span class="grow"></span>` +
+    (active && cond ? `<span class="muted">已按 ${cond} 筛选</span>` : "");
+}
+
 async function loadInbounds() {
   const from = $("inDateFrom").value, to = $("inDateTo").value;
-  let rows = await api(`/api/inbounds?date_from=${from || ""}&date_to=${to || ""}`);
+  const all = await api(`/api/inbounds?date_from=${from || ""}&date_to=${to || ""}`);
   const kws = splitSearchKeywords($("inSearch")?.value);
+  let rows = all;
   if (kws.length) rows = rows.filter((r) => searchHit([r.code, r.product_name, r.supplier, r.operator].join(" "), kws));
   const t = $("inTable");
   rows = applyTableSort(t, rows);
-  $("inListHint").textContent = `共 ${rows.length} 条`;
+  const active = !!(kws.length || from || to);
+  $("inListHint").textContent = kws.length
+    ? `筛选出 ${rows.length} 条 / 共 ${all.length} 条`
+    : `共 ${all.length} 条`;
+  const s = inboundSum(rows);   // 页脚与页顶汇总条用同一组数字（排序不影响合计）
   t.innerHTML = `<thead><tr>
     <th class="cb-col"><input type="checkbox" onclick="toggleAll(this,'in')" /></th>
     <th data-key="code">单号${sortArrow("inTable", "code")}</th>
@@ -6842,9 +6899,20 @@ async function loadInbounds() {
       <td>${esc(r.operator) || "—"}</td>
       <td>${r.date}</td>
       <td class="muted" style="max-width:150px;">${renderRemarkHtml(r.remark)}</td>
-      <td style="white-space:nowrap;"><button class="btn sm secondary" onclick="editInbound(${r.id})">改</button> <button class="btn sm danger" onclick="deleteInbound(${r.id})">删</button></td></tr>`).join("") + `</tbody>`;
+      <td style="white-space:nowrap;"><button class="btn sm secondary" onclick="editInbound(${r.id})">改</button> <button class="btn sm danger" onclick="deleteInbound(${r.id})">删</button></td></tr>`).join("") + `</tbody>` +
+    (rows.length
+      ? `<tfoot><tr>
+          <td></td>
+          <td colspan="2"><b>${active ? "筛选合计" : "列出合计"}</b></td>
+          <td class="num mono">${s.qtyText}</td>
+          <td></td>
+          <td class="num mono"><b>应付 ${fmtMoney(s.due)}</b><div class="muted" style="font-size:11px;font-weight:400;">已付 ${fmtMoney(s.paid)} · 未付 ${fmtMoney(s.unpaid)}</div></td>
+          <td colspan="5" class="muted">货款 ${fmtMoney(s.goods)}${s.extras ? ` · ${s.extras}` : ""}</td>
+        </tr></tfoot>`
+      : "");
   t._rows = rows;
   t._render = loadInbounds;
+  renderInSum(rows, all.length, active, from, to);
   updateBatchBar("in");
 }
 async function deleteInbound(id) {
