@@ -241,13 +241,19 @@ def _collect(db: Session, *, include_paid: bool = False, cutoff: str = "") -> li
             # 部分付款：账单上只留没付的余额，已付多少写在副标题上，方便核对
             paid_amount = max(0.0, min(paid_amount, due))
             sub += f" · 部分付款：应付 ¥{due:.2f}，已付 ¥{paid_amount:.2f}"
+            amount = round(due - paid_amount, 2)
+        elif status == "unpaid":
+            paid_amount = 0.0
+            amount = due
         else:
-            paid_amount = due if status != "unpaid" else 0.0
+            # 已结清：金额取结清值（不能是 0），否则「含最近已结清」视图里筛选合计全是 0
+            paid_amount = due
+            amount = due
         row = _row(
             "inbound", r.id, r.date,
             f"{name} × {_qty(r.quantity)}{r.unit or ''}".strip(),
             sub,
-            round(due - paid_amount, 2),
+            amount,
             # 部分付款对外仍报「待付款」：老客户端（手机 App）只认 已付/待付 两档，
             # 报 partial 会被它当成都结清了；前端用 partial 标记显示「部分付款」徽标
             "out", "unpaid" if status == "partial" else status,
@@ -372,6 +378,9 @@ def list_payables(
             "payables_amount": _sum(unpaid, "out"),      # 待付款（要付出去）
             "receivables_amount": _sum(unpaid, "in"),    # 待收款（要收进来）
             "paid_count": len(paid),
+            # 最近已结清的金额（按结清值，不是剩余 0）：供页面顶部统计卡展示
+            "paid_payables_amount": _sum(paid, "out"),
+            "paid_receivables_amount": _sum(paid, "in"),
         },
     }
 
