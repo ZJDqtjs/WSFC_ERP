@@ -2777,6 +2777,7 @@ async function aiSubmit() {
       type, party, remark, imageUrl: (AI_CONFIRM && AI_CONFIRM.image_url) || "", rows, op,
       charges: type === "outbound" ? aiChargesFromModal() : null,   // 包材/快递/固定成本（服务端口径）
     });
+    if (n === null) { toast("已取消：入库单价与最近价不同，请改回原价或确认后再提交"); return; }
     // 这次是从「待办处理」打开的：提交成功就把该待办标记为已完成，从待办列表消失
     if (AI_QUEUE_CURRENT) {
       const job = AI_QUEUE.find((x) => x.id === AI_QUEUE_CURRENT);
@@ -3143,7 +3144,12 @@ async function evaSubmitChecked(type) {
   const tip = type === "stocktake"
     ? "：按增减量调整库存（可在「库存 → 盘点记录」回退）"
     : "，日期用每行自己的单据日期";
-  if (!confirm(`批量提交 ${jobs.length} 条${label}待办？\n（按识别结果直接提交${tip}；要改明细请点「审核提交」）`)) return;
+  const baseMsg = `批量提交 ${jobs.length} 条${label}待办？\n（按识别结果直接提交${tip}；要改明细请点「审核提交」）`;
+  // 入库批量提交：把所有待提交行的单价与最近入库价差异合并成一次确认，避免逐条弹框
+  const priceWarn = type === "inbound"
+    ? inboundPriceWarnings(jobs.flatMap((j) => evaRowsOf(j)))
+    : [];
+  if (!confirm(priceWarn.length ? priceConfirmText(priceWarn, baseMsg) : baseMsg)) return;
   const op = (CURRENT_USER && (CURRENT_USER.name || CURRENT_USER.username)) || "";
   let okN = 0;
   for (const j of jobs) {
@@ -3155,6 +3161,7 @@ async function evaSubmitChecked(type) {
         remark: r.remark || "", imageUrl: r.image_url || "", rows: evaRowsOf(j), op,
         // 出库：带上识别阶段算好的包材/快递/固定成本（口径与确认框一致）
         charges: type === "outbound" ? aiChargesFromResult(r) : null,
+        skipPriceCheck: true,   // 上面已按整批差异确认过
       });
       j.status = "submitted";
       j.submitted_at = new Date().toISOString();
@@ -3171,8 +3178,15 @@ async function evaSubmitChecked(type) {
 
 /* ---------- 提交单据（确认框 & 待办批量提交共用） ----------
    rows: [{ product_id, new_product, quantity, unit, unit_price, paid, date, auto_created }] */
-async function submitDocRows({ type, party, remark, imageUrl, rows, op, charges }) {
+async function submitDocRows({ type, party, remark, imageUrl, rows, op, charges, skipPriceCheck = false }) {
   const inv = imageUrl ? `[票据] ${imageUrl}` : "";
+  // 入库单价变动确认放在「创建新商品」之前：用户取消时不会留下半成品商品档案
+  if (type === "inbound" && !skipPriceCheck) {
+    const priceWarn = inboundPriceWarnings(rows.map((r) => ({
+      product_id: r.product_id, unit: r.unit, unit_price: r.unit_price,
+    })));
+    if (priceWarn.length && !confirm(priceConfirmText(priceWarn, `${rows.length} 行入库`))) return null;
+  }
   // 1) 先创建确认为新物品的商品档案（同名已存在则复用）
   const pend = rows.filter((r) => !r.product_id && r.new_product);
   if (pend.length) {
@@ -3910,7 +3924,9 @@ async function submitFreshInbound(rows) {
   if (!items.length) { toast("还没填数量：先把今天要入库的数量填进「数量」列"); return; }
   const goods = items.reduce((s, it) => s + it.quantity * it.unit_price, 0);
   const fee = items.reduce((s, it) => s + it.freight + it.handling + it.fee, 0);
-  if (!confirm(`确认入库 ${items.length} 个商品？\n日期 ${date}，货款 ¥${goods.toFixed(2)}${fee ? ` + 运费/装卸/手续费 ¥${fee.toFixed(2)}` : ""}，共 ${items.length} 张入库单`)) return;
+  const priceWarn = inboundPriceWarnings(items);
+  const baseMsg = `确认入库 ${items.length} 个商品？\n日期 ${date}，货款 ¥${goods.toFixed(2)}${fee ? ` + 运费/装卸/手续费 ¥${fee.toFixed(2)}` : ""}，共 ${items.length} 张入库单`;
+  if (!confirm(priceWarn.length ? priceConfirmText(priceWarn, baseMsg) : baseMsg)) return;
   const btn = $("finSubmitBtn");
   if (btn) { btn.disabled = true; btn.textContent = "⏳ 正在入库…"; }
   try {
@@ -6667,6 +6683,37 @@ function fillInboundRowPrice(scope) {
     }
   }
 }
+/* 入库单价变动二次确认：本次录入价与「该商品最近一次入库价」不同时，列出差异让用户确认。
+   PRODUCTS.last_in_price 是「每基础单位」价格，比较前先按本次单位换算。 */
+function inboundPriceWarnings(items) {
+  const out = [];
+  (items || []).forEach((it) => {
+    const pid = +(it.product_id || 0);
+    if (!pid) return;
+    const cur = Number(it.unit_price);
+    if (!isFinite(cur) || cur <= 0) return;   // 未填价（AI 识别允许留空）不提示，提交后再补
+    const p = PRODUCTS.find((x) => x.id === pid);
+    if (!p) return;
+    const u = it.unit || defaultUnit(p);
+    const lastBase = Number(p.last_in_price) || 0;
+    if (!(lastBase > 0)) return;               // 该商品还没入过库，不提示
+    const f = (p.conversions || {})[u] || 1;
+    const last = +(lastBase * f).toFixed(6);
+    if (Math.abs(cur - last) <= 1e-4) return;  // 只差浮点误差，视为同价
+    const pct = last ? (cur - last) / last * 100 : 0;
+    out.push(`${p.name}：最近入库 ¥${fmtNum(last)}/${u}（${p.last_in_date || "日期未知"}）`
+      + ` → 本次 ¥${fmtNum(cur)}/${u}（${pct >= 0 ? "涨" : "降"} ${Math.abs(pct).toFixed(1)}%）`);
+  });
+  return out;
+}
+function priceConfirmText(warnings, prefix) {
+  const list = warnings.slice(0, 10);
+  const more = warnings.length > list.length ? `\n…另有 ${warnings.length - list.length} 个商品存在差异` : "";
+  return `⚠ 入库单价与最近一次入库价不同：\n\n${list.join("\n")}${more}\n\n`
+    + (prefix ? prefix + "\n\n" : "")
+    + "确认价格无误、仍按本次单价入库吗？";
+}
+
 async function submitInbound() {
   const blocks = inboundBlocks();
   if (!blocks.length) { toast("请先点「＋ 添加一行」"); return; }
@@ -6714,6 +6761,8 @@ async function submitInbound() {
   const goods = items.reduce((a, it) => a + it.quantity * it.unit_price, 0);
   const fee = items.reduce((a, it) => a + it.freight + it.handling + it.fee, 0);
   const adj = items.reduce((a, it) => a + it.adjust_amount, 0);
+  const priceWarn = inboundPriceWarnings(items);
+  if (priceWarn.length && !confirm(priceConfirmText(priceWarn, `共 ${items.length} 行待入库`))) return;
   const alertBox = $("inAlert");
   if (alertBox) { alertBox.style.display = "none"; alertBox.innerHTML = ""; }
   try {
@@ -9613,20 +9662,26 @@ function payFilterRows() {
   return { rows, undated, active: !!(kws.length || f.from || f.to), f };
 }
 
-/** 筛选结果实时合计：笔数 + 总金额（应付 + 应收）+ 拆分；关键词 / 日期一变就重算 */
+/** 筛选结果实时合计：笔数 + 总金额（应付 + 应收）+ 已结清拆分；关键词 / 日期一变就重算 */
 function renderPaySum(rows, undated, active, f) {
   const el = $("paySum");
   if (!el) return;
   const outSum = rows.filter((r) => r.direction !== "in").reduce((a, r) => a + r.amount, 0);
   const inSum = rows.filter((r) => r.direction === "in").reduce((a, r) => a + r.amount, 0);
+  // 已结清的行同样按结清金额参与汇总（后端对已结清单据返回结清值，不是剩余 0）
+  const paidRows = rows.filter((r) => (r.pay_status || "paid") === "paid");
+  const paidSum = paidRows.reduce((a, r) => a + (r.amount || 0), 0);
   const range = (f.from || f.to) ? `${f.from || "最早"} ~ ${f.to || "最新"}` : "";
   const cond = [range ? `日期 ${range}` : "", f.kwRaw ? `关键词「${f.kwRaw}」` : ""].filter(Boolean).join(" + ");
   el.innerHTML =
     `<span class="pay-sum-label">${active ? "筛选结果" : "当前列表"}</span>` +
     `<span><b>${rows.length}</b> 笔${rows.length === PAY_ROWS.length ? "" : ` <span class="muted">/ 共 ${PAY_ROWS.length} 笔</span>`}</span>` +
-    `<span class="pay-sum-total">合计 <b class="mono">${fmtMoney(outSum + inSum)}</b></span>` +
+    `<span class="pay-sum-total">合计${paidRows.length ? "（含已结清）" : ""} <b class="mono">${fmtMoney(outSum + inSum)}</b></span>` +
     `<span class="muted">应付 <b class="mono" style="color:var(--danger, #dc2626);">${fmtMoney(outSum)}</b>`
     + ` ／ 应收 <b class="mono" style="color:var(--green, #16a34a);">${fmtMoney(inSum)}</b></span>` +
+    (paidRows.length
+      ? `<span class="muted">已结清 <b>${paidRows.length}</b> 笔 <b class="mono" style="color:var(--green, #16a34a);">${fmtMoney(paidSum)}</b></span>`
+      : "") +
     (undated ? `<span class="muted">${undated} 笔无日期未计入</span>` : "") +
     `<span class="grow"></span>` +
     (cond ? `<span class="muted">已按 ${cond} 筛选</span>` : "");
@@ -9644,11 +9699,13 @@ function renderPayStats(t) {
   if (!box) return;
   const payable = t.payables_amount || 0;
   const recv = t.receivables_amount || 0;
+  const paidOut = t.paid_payables_amount || 0;
+  const paidIn = t.paid_receivables_amount || 0;
   box.innerHTML = `
     <div class="stat red"><div class="label">待付款（应付）</div><div class="value">${fmtMoney(payable)}</div><div class="sub">要付出去的钱</div></div>
     <div class="stat"><div class="label">待收款（应收）</div><div class="value">${fmtMoney(recv)}</div><div class="sub">要收进来的钱</div></div>
     <div class="stat amber"><div class="label">待结清笔数</div><div class="value">${t.unpaid_count || 0}</div><div class="sub">合计 ${fmtMoney(payable + recv)}</div></div>
-    <div class="stat"><div class="label">最近已结清</div><div class="value">${t.paid_count || 0}</div><div class="sub">最近 30 天内（可撤销）</div></div>`;
+    <div class="stat"><div class="label">最近已结清</div><div class="value">${t.paid_count || 0}</div><div class="sub">应付 ${fmtMoney(paidOut)} ／ 应收 ${fmtMoney(paidIn)}（最近 30 天，可撤销）</div></div>`;
 }
 
 function renderPayables() {
@@ -9656,6 +9713,9 @@ function renderPayables() {
   if (!t) return;
   const { rows, undated, active, f } = payFilterRows();
   paySyncDatePh();
+  // 已结清的行按结清金额单独汇总（后端口径：已结清返回结清值，不是剩余 0）
+  const settledRows = rows.filter((r) => (r.pay_status || "paid") === "paid");
+  const settledSum = settledRows.reduce((a, r) => a + (r.amount || 0), 0);
   t.innerHTML = `<thead><tr>
       <th style="width:34px;"><input type="checkbox" onchange="payToggleAll(this)" /></th>
       <th style="width:102px;">日期</th><th style="width:96px;">来源</th><th>具体事物 / 款项</th>
@@ -9693,7 +9753,8 @@ function renderPayables() {
           <td><b>${active ? "筛选合计" : "列出合计"}</b></td>
           <td class="muted" colspan="2">${rows.length} 笔${PAY_VIEW === "all" ? "（含已结清）" : ""}</td>
           <td class="num mono"><b>应付 ${fmtMoney(rows.filter((r) => r.direction !== "in").reduce((a, r) => a + r.amount, 0))}
-            ／ 应收 ${fmtMoney(rows.filter((r) => r.direction === "in").reduce((a, r) => a + r.amount, 0))}</b></td>
+            ／ 应收 ${fmtMoney(rows.filter((r) => r.direction === "in").reduce((a, r) => a + r.amount, 0))}</b>
+            ${settledRows.length ? `<div class="muted" style="font-size:12px;font-weight:400;">其中已结清 ${settledRows.length} 笔 ${fmtMoney(settledSum)}</div>` : ""}</td>
           <td colspan="2"></td></tr></tfoot>`
       : "");
   renderPaySum(rows, undated, active, f);
@@ -11948,6 +12009,8 @@ async function confirmInbound(kind) {
     if (qty > 0) items.push({ ...it, quantity: qty, unit_price: price, freight: fee, handling: hand, fee: tf });
   });
   if (!items.length) { toast("没有可入库的数据"); return; }
+  const priceWarn = inboundPriceWarnings(items);
+  if (priceWarn.length && !confirm(priceConfirmText(priceWarn, `共 ${items.length} 行批量入库`))) return;
   try {
     const r = await api(BATCH_MODAL[kind].confirm, "POST", { items });
     let html = `<div class="alert ok">✓ 已入库 <b>${r.created}</b> 条`;
