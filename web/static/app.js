@@ -8362,13 +8362,18 @@ async function _loadReportInner() {
   const all = REP_SCOPE === "all";
   // 全仓总览：wh=all 让后端把各分仓（各自独立账套）的结果合并；单仓总览：可切换查看指定分仓
   const whQs = all ? "&wh=all" : (REP_WH ? `&wh=${encodeURIComponent(REP_WH)}` : "");
-  let rep, finance;
+  let rep, finance, bal = null;
+  const balQs = REP_WH ? `&wh=${encodeURIComponent(REP_WH)}` : "";
   try {
-    [rep, finance] = await Promise.all([
+    [rep, finance, bal] = await Promise.all([
       api(`/api/report/summary?date_from=${from || ""}&date_to=${to || ""}${whQs}${excludeOtherQs()}`),
       // 流水先只拿一屏（300 条）：整月 5~6 万条一次性序列化 + gzip + 传输要 3 秒左右，
       // 剩下的按 offset 由「加载更多 / 加载全部」续拉（后端计算结果已进 60 秒缓存，续拉很快）
       api(`/api/finance?date_from=${from || ""}&date_to=${to || ""}${whQs}&limit=${FIN_PAGE}&offset=0`),
+      // 余额表：单独取，不参与上面的重汇总；失败只影响这张卡，不影响损益
+      all ? Promise.resolve(null)
+          : api(`/api/report/balances?date_from=${from || ""}&date_to=${to || ""}${balQs}`)
+              .catch((e) => { console.warn("余额表加载失败", e); return null; }),
     ]);
   } catch (e) {
     toast("加载报表失败：" + e.message);
@@ -8416,6 +8421,7 @@ async function _loadReportInner() {
     <div class="stat blue"><div class="label">${pre}当前库存总值</div><div class="value">${fmtMoney(rep.stock_value)}</div></div>`;
 
   renderReportBridge(rep);
+  renderBalances(bal, all);
   renderRevenueBreakdown(rep);
   renderCostBreakdown(rep);
   renderExpenseSummary(rep);
@@ -8438,6 +8444,57 @@ async function _loadReportInner() {
 
   // 全仓总览：额外加载「各分仓收入 / 支出 / 利润」明细表（汇总分区里）
   if (all) await loadAllWarehouses(from, to);
+}
+
+/* 余额表：把「资产 / 往来 / 预付 / 盘点差异」从损益里独立出来。
+   损益回答「这段时间赚没赚」，余额回答「钱和货现在在哪」——两张表不互相解释，只并列展示。 */
+function renderBalances(bal, all) {
+  const card = $("repBalCard"), t = $("repBalTable"), hint = $("repBalHint");
+  if (!card || !t) return;
+  if (all) { card.style.display = "none"; return; }
+  card.style.display = "";
+  if (!bal || !bal.ok) {
+    t.innerHTML = `<tbody><tr><td class="muted">余额表加载失败（不影响上面的损益数据；可稍后点「查询」重试）</td></tr></tbody>`;
+    return;
+  }
+  const inv = bal.inventory || {};
+  const pay = bal.payables || {};
+  const rec = bal.receivables || {};
+  const ad = bal.ad_prepay || {};
+  const cd = bal.count_diff || {};
+  const neg = Number(inv.negative_count || 0);
+  const srcText = (m) => Object.entries(m || {})
+    .filter(([, v]) => Math.abs(Number(v) || 0) >= 0.005)
+    .map(([k, v]) => `${esc(k)} ${fmtMoney(v)}`).join(" · ");
+  if (hint) {
+    hint.textContent = `截至 ${bal.as_of || "今天"}`
+      + (bal.warehouse && bal.warehouse.name ? ` · ${bal.warehouse.name}` : "")
+      + "；只回答「钱和货还在哪」，不改变上面的损益口径";
+  }
+  const rows = [
+    { kind: "资产", name: "库存结存总值", value: inv.stock_value,
+      desc: neg ? `其中 ${neg} 个商品为负库存（数量 ${fmtNum(inv.negative_qty)}），说明有超卖/漏入库，需盘点冲正` : "按 FIFO 批次结存；已含本期盘点调整" },
+    { kind: "资产", name: "广告充值预付余额", value: ad.balance == null ? null : ad.balance,
+      desc: ad.balance == null
+        ? `累计充值 ${fmtMoney(ad.recharged_total)}；实际消耗读不到，见「广告利润」页`
+        : `累计充值 ${fmtMoney(ad.recharged_total)} − 累计消耗 ${fmtMoney(ad.spent_total)}` },
+    { kind: "负债", name: "应付未付（要付出去）", value: pay.total || 0,
+      desc: srcText(pay.by_source) || "没有未结清的应付款" },
+    { kind: "应收", name: "应收未收（要收进来）", value: rec.total || 0,
+      desc: srcText(rec.by_source) || "没有未回款的应收款" },
+    { kind: "盘点", name: "区间内盘点差异（未计入损益）", value: cd.net_value || 0,
+      desc: `盘盈入账 ${fmtMoney(cd.gain_value)} / 盘亏成本 ${fmtMoney(cd.loss_value)}；盘亏目前只冲库存，未记「库存损耗」费用` },
+  ];
+  const warn = (ad.warnings || []).join("；");
+  t.innerHTML = `
+    <thead><tr><th>类别</th><th>项目</th><th class="num">金额</th><th>说明</th></tr></thead>
+    <tbody>${rows.map((r) => `<tr>
+      <td><span class="badge">${esc(r.kind)}</span></td>
+      <td>${esc(r.name)}</td>
+      <td class="num mono">${r.value == null ? "—" : fmtMoney(r.value)}</td>
+      <td class="muted">${r.desc}</td>
+    </tr>`).join("")}</tbody>
+    ${warn ? `<tfoot><tr><td colspan="4" class="muted">广告花费缓存提示：${esc(warn)}</td></tr></tfoot>` : ""}`;
 }
 
 /* 销售成本构成：商品成本 vs 出库自动结算的包材/人工/快递 */

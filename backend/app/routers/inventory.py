@@ -423,21 +423,32 @@ def adjust_stock(data: AdjustIn, db: Session = Depends(get_db), user: User = Dep
         unit = data.unit or du
         f = conv.get(unit, 1) or 1
         delta_base = round(delta_disp * f, 6)
-        # 盘盈金额：按“保持均价不变”的原则入账。若按现均价(sum = qty×avg)入账，
-        # 在负库存(库存价值被截到0)时会把均价抬高（如 -0.17kg 盘盈 +3kg → 1060.07元/kg）。
-        # 改为 amount = 目标均价×(调整后库存) - 现库存价值，使均价(含同期均价重估)保持不变。
+        # 盘盈金额：按「单位成本 × 盘盈数量」入账，单价取现均价；负库存/零库存时现均价
+        # 可能已被历史暂估拉到 0 附近，此时改用「最近一次真实入库」的单价。
+        # 之前的写法（amount = 目标均价×调整后库存 − 现库存价值）在负库存时会把盘盈金额算到
+        # 接近于 0，FIFO 再用这个超低单价回补历史超卖，就会把过去几个月的出库成本整批改写
+        # （2026-10-31 奥斯迪仓盘点实测把 10 月成本调低了 1.08 万）。
         amount = 0.0
         if delta_base > 0:
-            S0 = p.stock or 0.0
-            V_eff = p.stock_value or 0.0  # 现库存价值（负库存时为0）
-            A_eff = p.avg_cost or 0.0     # 现均价（每基础单位）
+            A_eff = p.avg_cost or 0.0
+            if (p.stock or 0.0) <= 1e-9:
+                # 负库存时 p.avg_cost 是 FIFO 的兜底单价，可能已是上一次低价盘盈留下的值，
+                # 不能直接拿来给本次盘盈定价 → 一律回退到「最近一次真实入库」单价。
+                last = db.execute(
+                    select(StockMovement.amount, StockMovement.quantity_base)
+                    .where(
+                        StockMovement.product_id == p.id,
+                        StockMovement.move_type == "in",
+                        StockMovement.quantity_base > 0,
+                    )
+                    .order_by(StockMovement.id.desc())
+                    .limit(1)
+                ).first()
+                if last and last[0] and last[1]:
+                    A_eff = float(last[0]) / float(last[1])
             if avg_str:                   # 与均价重估流水同步：先重估再盘盈
-                A_eff += avg_delta_base   # 均价重估在库存<=0 时也会生效
-                if S0 > 0:                # 仅库存>0 时重估同步改变库存价值
-                    V_eff += S0 * avg_delta_base
-            ns = S0 + delta_base
-            if ns > 0:
-                amount = round(A_eff * ns - V_eff, 2)
+                A_eff += avg_delta_base
+            amount = round(max(A_eff, 0.0) * delta_base, 2)
         movements.append(
             StockMovement(
                 product_id=p.id,
