@@ -5854,6 +5854,9 @@ function pTypeChanged() {
   // 多端商品（多店铺多编码）只对订单商品有意义（平台 SKU 是卖出商品的编码）
   if ($("pMultiBox")) $("pMultiBox").style.display = t === "order" ? "" : "none";
   initProductUnitSelect(t, $("pUnit").value);
+  // 切换类型会改变默认单位（订单商品固定「单」），必须同步换算系数与价格标签，
+  // 否则 PM_UNIT_F 还停留在旧单位（如 斤=500），保存时售价/参考成本会被按旧单位折回基础单位（除以 500）。
+  pUnitChanged();
   if (t === "order" && !STOCKS.length) {
     api("/api/stocks").then((stocks) => {
       STOCKS = stocks || [];
@@ -8168,11 +8171,13 @@ const adPrepayNote = (o) => {
 
 /* =============== 报表统计区间偏好 ===============
    财务报表选过的区间存本机，其他收支页打开时直接跟随。
-   之前两边各用各的默认值（报表=当天，其他收支=本月），对账时经常出现
-   「报表算 10 月、其他收支算 11 月」，看不出差异从哪来。
+   默认统一为「最近 7 天」（含今天），避免一打开就停在很久以前的区间、
+   新发生的收支/单据看不到。
    只有财务报表写、其他收支读：其他收支页有「全部」（清空区间），
-   写回去会把财务报表也拉成无界区间，所以不反向同步。 */
-const REPORT_RANGE_KEY = "erp_report_range";
+   写回去会把财务报表也拉成无界区间，所以不反向同步。
+   key 加 v2：让浏览器里旧版存下的历史区间（如 10 月整月）失效一次，
+   老用户升级后也能直接落到新的「最近 7 天」默认值；之后用户改的区间照常记住。 */
+const REPORT_RANGE_KEY = "erp_report_range_v2";
 const DATE_STR = /^\d{4}-\d{2}-\d{2}$/;
 
 function saveReportRange(from, to) {
@@ -8466,11 +8471,11 @@ async function loadReport() {
 }
 
 async function _loadReportInner() {
-  // 首次进入沿用上次查过的区间（存本机，其他收支页会跟着它）；没存过才回落当天
+  // 首次进入沿用上次查过的区间（存本机，其他收支页会跟着它）；没存过默认最近 7 天
   if (!reportInited) {
     reportInited = true;
     const saved = savedReportRange();
-    if (!$("repDateFrom").value) $("repDateFrom").value = saved ? saved[0] : today();
+    if (!$("repDateFrom").value) $("repDateFrom").value = saved ? saved[0] : daysAgo(6);
     if (!$("repDateTo").value) $("repDateTo").value = saved ? saved[1] : today();
     await repEnsureWhOptions();
   }
@@ -9405,9 +9410,9 @@ async function loadOtherExpensePage() {
   if (!oeInited) {
     oeInited = true;
     if (!$("oeDate").value) $("oeDate").value = today();
-    // 默认跟随财务报表查过的区间，两边对得上账；没存过才回落本月
+    // 默认跟随财务报表查过的区间，两边对得上账；没存过默认最近 7 天
     const saved = savedReportRange();
-    if (!$("oeDateFrom").value) $("oeDateFrom").value = saved ? saved[0] : monthStart();
+    if (!$("oeDateFrom").value) $("oeDateFrom").value = saved ? saved[0] : daysAgo(6);
     if (!$("oeDateTo").value) $("oeDateTo").value = saved ? saved[1] : today();
   }
   if ($("oeOperator")) $("oeOperator").value = operatorName();
