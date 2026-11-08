@@ -4,7 +4,13 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
-from ..database import get_db
+from ..database import (
+    current_warehouse_name,
+    get_current_key,
+    get_db,
+    get_sessionmaker,
+    key_exists,
+)
 from ..models import (
     CodeMapping,
     FinanceRecord,
@@ -628,6 +634,20 @@ class BatchProductUpdate(BaseModel):
     free_shipping: bool | None = None
 
 
+class CopyToWarehouseIn(BaseModel):
+    """把当前仓的商品资料复制到另一个分仓（不复制库存数量/均价/历史单据）。
+
+    - include_dependencies=True：连同「关联结算清单 / 扣减库存 / 多套方案」里引用的商品一起复制；
+      目标仓已有同名商品的直接复用，避免重复建。
+    - disable_source=True：复制成功后把当前仓选中的商品停用（迁移场景，源仓不再显示）。
+    """
+
+    target_wh: str
+    ids: list[int] = []
+    include_dependencies: bool = True
+    disable_source: bool = False
+
+
 def _names_brief(names: list[str], limit: int = 4) -> str:
     """名称列表缩略展示：最多 limit 个，超出用「…」。（引用来源里动辄几十个商品，列全了没法看）"""
     names = [str(n or "—") for n in names]
@@ -760,3 +780,242 @@ def batch_update_products(data: BatchProductUpdate, db: Session = Depends(get_db
         updated += 1
     db.commit()
     return {"ok": True, "updated": updated}
+
+
+def _product_ref_ids(p: Product) -> set[int]:
+    """商品引用的其他商品 id（关联结算清单 / 扣减库存 / 多套方案）。"""
+    refs: set[int] = set()
+    for it in (p.pack_items or []):
+        pid = (it or {}).get("product_id")
+        if pid:
+            refs.add(int(pid))
+    links = list(p.stock_links or [])
+    if not links and p.stock_product_id:
+        links = [{"product_id": p.stock_product_id}]
+    for it in links:
+        pid = (it or {}).get("product_id")
+        if pid:
+            refs.add(int(pid))
+    for s in (getattr(p, "stock_schemes", None) or []):
+        if isinstance(s, dict):
+            for it in (s.get("links") or []):
+                pid = (it or {}).get("product_id")
+                if pid:
+                    refs.add(int(pid))
+    return refs
+
+
+def _collect_copy_order(db: Session, ids: list[int]) -> list[Product]:
+    """按依赖先后排序（被引用的商品排在前），保证复制时关联 id 已映射到目标仓。"""
+    seen: set[int] = set()
+    out: list[Product] = []
+
+    def visit(pid: int) -> None:
+        if pid in seen:
+            return
+        p = db.get(Product, pid)
+        if not p:
+            return
+        seen.add(pid)
+        for ref in _product_ref_ids(p):
+            visit(ref)
+        out.append(p)
+
+    for pid in ids:
+        visit(int(pid))
+    return out
+
+
+def _remap_ref_items(items: list | None, mapping: dict[int, int]) -> list[dict]:
+    """把 [{product_id, ...}] 里的商品 id 换成目标仓的 id；目标仓没有的项直接丢弃。"""
+    out: list[dict] = []
+    for it in (items or []):
+        if not isinstance(it, dict):
+            continue
+        pid = it.get("product_id")
+        tpid = mapping.get(int(pid)) if pid else None
+        if not tpid:
+            continue
+        d = dict(it)
+        d["product_id"] = tpid
+        out.append(d)
+    return out
+
+
+def _remap_schemes(schemes: list | None, mapping: dict[int, int]) -> list[dict]:
+    out: list[dict] = []
+    for s in (schemes or []):
+        if not isinstance(s, dict):
+            continue
+        links = _remap_ref_items(s.get("links") or [], mapping)
+        if links:
+            out.append({"name": s.get("name") or "", "links": links})
+    return out
+
+
+def _target_code_owners(target: Session) -> dict[str, Product]:
+    """目标仓各编码的占用者（编码全局唯一，复制前先算一遍）。"""
+    owners: dict[str, Product] = {}
+    for p in target.execute(select(Product)).scalars():
+        for c in _all_codes_of(p):
+            owners.setdefault(c, p)
+    return owners
+
+
+@router.post("/products/copy-to-warehouse")
+def copy_products_to_warehouse(
+    data: CopyToWarehouseIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """把当前仓选中的商品复制到目标分仓。
+
+    目标仓已有同名商品 → 直接复用（不覆盖）；没有 → 新建。
+    勾选「同时复制关联商品」时，把关联结算清单/扣减库存里引用的商品也按名称复用或新建，
+    这样复制过去的订单商品关联不会断。库存数量、均价、出入库历史不复制（各仓自己的账）。
+    """
+    src_key = get_current_key()
+    target_key = (data.target_wh or "").strip()
+    if not target_key:
+        raise HTTPException(400, "请选择目标分仓")
+    if not key_exists(target_key):
+        raise HTTPException(404, "目标分仓不存在")
+    if target_key == src_key:
+        raise HTTPException(400, "目标分仓不能与当前分仓相同")
+    if not data.ids:
+        raise HTTPException(400, "请选择要复制的商品")
+
+    src_products = _collect_copy_order(db, data.ids)
+    if not src_products:
+        raise HTTPException(400, "选中的商品不存在")
+
+    target = get_sessionmaker(target_key)()
+    created: list[dict] = []
+    mapped: list[dict] = []
+    skipped: list[dict] = []
+    warnings: list[str] = []
+    mapping: dict[int, int] = {}
+    selected = {int(x) for x in data.ids}
+    owners = _target_code_owners(target)
+    try:
+        for src in src_products:
+            is_main = src.id in selected
+            if not is_main and not data.include_dependencies:
+                # 未勾选「同时复制关联商品」：目标仓有同名就复用，没有就跳过（引用会被丢弃）
+                existing = target.scalar(select(Product).where(Product.name == src.name))
+                if existing:
+                    mapping[src.id] = existing.id
+                else:
+                    skipped.append({
+                        "source_id": src.id, "name": src.name,
+                        "reason": "目标仓缺少该关联商品（未勾选「同时复制关联商品」）",
+                    })
+                continue
+            existing = target.scalar(select(Product).where(Product.name == src.name))
+            if existing:
+                mapping[src.id] = existing.id
+                mapped.append({
+                    "source_id": src.id, "target_id": existing.id,
+                    "name": src.name, "product_type": src.product_type, "is_main": is_main,
+                })
+                continue
+
+            # 编码全局唯一：目标仓已被别的商品占用时清空/跳过，避免复制失败
+            code = (src.code or "").strip()
+            if code and code in owners:
+                warnings.append(
+                    f"「{src.name}」编码「{code}」已被目标仓商品「{owners[code].name}」占用，已清空该编码"
+                )
+                code = ""
+            multi = bool(getattr(src, "multi_code", False))
+            codes: list[dict] = []
+            if multi:
+                for it in (src.codes or []):
+                    c, shop = _code_pair(it)
+                    if not c:
+                        continue
+                    if c in owners:
+                        warnings.append(
+                            f"「{src.name}」多端编码「{c}」已被目标仓商品「{owners[c].name}」占用，已跳过"
+                        )
+                        continue
+                    codes.append({"code": c, "shop": shop})
+
+            src_packs = [it for it in (src.pack_items or []) if isinstance(it, dict)]
+            pack_items = _remap_ref_items(src_packs, mapping)
+            if len(pack_items) < len(src_packs):
+                warnings.append(
+                    f"「{src.name}」有 {len(src_packs) - len(pack_items)} 项关联结算商品在目标仓没有对应商品，已丢弃"
+                )
+            src_links = list(src.stock_links or [])
+            if not src_links and src.stock_product_id:
+                src_links = [{"product_id": src.stock_product_id, "multiplier": src.multiplier}]
+            stock_links = _remap_ref_items(src_links, mapping)
+            if len(stock_links) < len(src_links):
+                warnings.append(
+                    f"「{src.name}」有 {len(src_links) - len(stock_links)} 项扣减库存商品在目标仓没有对应商品，已丢弃"
+                )
+            first = stock_links[0] if stock_links else None
+            np = Product(
+                code=code,
+                multi_code=multi,
+                codes=codes,
+                name=src.name,
+                category=src.category or "",
+                product_type=src.product_type,
+                base_unit=src.base_unit,
+                default_unit=src.default_unit or src.base_unit,
+                spec=src.spec or "",
+                sale_price=src.sale_price or 0.0,
+                unit_cost=src.unit_cost or 0.0,
+                weight_kg=src.weight_kg or 0.0,
+                free_shipping=bool(src.free_shipping),
+                conversions=dict(src.conversions or default_conversions(src.base_unit)),
+                pack_items=pack_items,
+                pack_fee=src.pack_fee or 0.0,
+                stock_product_id=first["product_id"] if first else None,
+                multiplier=float(first["multiplier"]) if first else 1.0,
+                stock_links=stock_links,
+                stock_schemes=_remap_schemes(getattr(src, "stock_schemes", None), mapping),
+                is_active=bool(src.is_active),
+                stock=0.0, avg_cost=0.0, stock_value=0.0, workload=0.0,
+            )
+            target.add(np)
+            target.flush()
+            mapping[src.id] = np.id
+            for c in _all_codes_of(np):
+                owners.setdefault(c, np)
+            created.append({
+                "source_id": src.id, "target_id": np.id,
+                "name": np.name, "product_type": np.product_type, "is_main": is_main,
+            })
+        target.commit()
+    except HTTPException:
+        target.rollback()
+        raise
+    except Exception as e:  # noqa: BLE001 - 复制失败要把目标仓回滚干净，再报给前端
+        target.rollback()
+        raise HTTPException(500, f"复制失败：{e}")
+    finally:
+        target.close()
+
+    disabled: list[str] = []
+    if data.disable_source:
+        for pid in data.ids:
+            p = db.get(Product, int(pid))
+            if p and p.is_active:
+                p.is_active = False
+                disabled.append(p.name)
+        if disabled:
+            db.commit()
+
+    return {
+        "ok": True,
+        "source": {"key": src_key, "name": current_warehouse_name(src_key)},
+        "target": {"key": target_key, "name": current_warehouse_name(target_key)},
+        "created": created,
+        "mapped": mapped,
+        "skipped": skipped,
+        "warnings": warnings,
+        "disabled": disabled,
+    }

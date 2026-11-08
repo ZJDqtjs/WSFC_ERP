@@ -8130,6 +8130,78 @@ async function submitBatchProduct() {
     toast(`已修改 ${r.updated} 个商品`);
   } catch (e) { toast("批量修改失败：" + e.message); }
 }
+/* ---------- 复制商品到其他分仓 ---------- */
+async function openCopyToWarehouseModal() {
+  if (!prodSel.size) { toast("请先勾选要复制的商品"); return; }
+  let whs = [];
+  try {
+    const r = await api("/api/warehouses");
+    whs = (r.warehouses || []).filter((w) => !w.is_current);
+  } catch (e) { toast("读取分仓列表失败：" + e.message); return; }
+  if (!whs.length) { toast("没有其他分仓可复制"); return; }
+  openModal(`
+    <h3>复制商品到其他仓（${prodSel.size} 个） <button class="close" onclick="closeModal()">✕</button></h3>
+    <p class="hint" style="margin-bottom:12px;">把选中商品的资料复制到目标仓；目标仓已有同名商品会直接复用，不会覆盖。库存数量、均价与出入库历史不复制。</p>
+    <div class="form-grid">
+      <div class="field"><label>目标分仓</label>
+        <select id="cpTargetWh">${whs.map((w) => `<option value="${esc(w.key)}">${esc(w.name)}（${esc(w.key)}）</option>`).join("")}</select>
+      </div>
+      <div class="field"><label>复制范围</label>
+        <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="cpDeps" checked/> 同时复制关联商品（包材 / 人工 / 库存大类）</label>
+        <div class="field-hint">不勾选时，目标仓缺少的关联商品会被丢弃，订单商品的关联结算 / 扣减库存可能不完整。</div>
+      </div>
+      <div class="field"><label>复制后</label>
+        <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="cpDisable"/> 在当前仓停用选中的商品</label>
+        <div class="field-hint">适合把某个商品的经营从当前仓迁到目标仓。</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="submitCopyToWarehouse()">开始复制</button>
+    </div>`);
+}
+async function submitCopyToWarehouse() {
+  const target = $("cpTargetWh").value;
+  if (!target) { toast("请选择目标分仓"); return; }
+  const payload = {
+    target_wh: target,
+    ids: [...prodSel],
+    include_dependencies: $("cpDeps").checked,
+    disable_source: $("cpDisable").checked,
+  };
+  try {
+    const r = await api("/api/products/copy-to-warehouse", "POST", payload);
+    closeModal();
+    prodSel.clear();
+    PRODUCTS = await api("/api/products");
+    renderProducts();
+    showCopyResult(r);
+  } catch (e) { toast("复制失败：" + e.message); }
+}
+function showCopyResult(r) {
+  const created = r.created || [];
+  const mapped = r.mapped || [];
+  const mainCreated = created.filter((x) => x.is_main).length;
+  const depCreated = created.length - mainCreated;
+  const mainMapped = mapped.filter((x) => x.is_main).length;
+  const depMapped = mapped.length - mainMapped;
+  const lines = [];
+  if (mainCreated) lines.push(`新建 ${mainCreated} 个商品`);
+  if (depCreated) lines.push(`新建 ${depCreated} 个关联商品（包材 / 人工 / 库存大类）`);
+  if (mainMapped) lines.push(`复用目标仓已有同名商品 ${mainMapped} 个`);
+  if (depMapped) lines.push(`复用目标仓已有同名关联商品 ${depMapped} 个`);
+  if ((r.disabled || []).length) lines.push(`已在当前仓停用 ${r.disabled.length} 个商品`);
+  const skipped = r.skipped || [];
+  const warnings = r.warnings || [];
+  openModal(`
+    <h3>复制完成 <button class="close" onclick="closeModal()">✕</button></h3>
+    <p class="hint">从「${esc(r.source.name)}」复制到「${esc(r.target.name)}」</p>
+    ${lines.length ? `<ul class="copy-result" style="margin:10px 0 14px 20px;line-height:1.9;">${lines.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+    ${skipped.length ? `<div class="alert warn" style="margin-bottom:10px;">${skipped.length} 个关联商品未复制：${esc(skipped.slice(0, 6).map((x) => x.name).join("、"))}${skipped.length > 6 ? "…" : ""}</div>` : ""}
+    ${warnings.length ? `<div class="alert warn" style="margin-bottom:10px;">${warnings.slice(0, 6).map((x) => esc(x)).join("<br>")}${warnings.length > 6 ? "<br>…" : ""}</div>` : ""}
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">知道了</button></div>`);
+}
+
 async function batchDeleteInbounds() {
   if (!inSel.size) return;
   if (!confirm(`确认删除选中的 ${inSel.size} 条入库单？将回退库存与成本。`)) return;
