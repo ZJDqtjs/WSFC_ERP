@@ -8548,6 +8548,8 @@ function finSearchInput() {
 }
 
 let REP_LOADING = false;
+let REP_CASH = null;        // 现金流量表缓存（按区间+分仓 key）
+let REP_CASH_KEY = "";
 
 /** 报表加载遮罩 + 禁用「查询」按钮：重接口期间给明确反馈，避免连点（连点会在后端并发闸里排队）。 */
 function repShowLoading(on) {
@@ -8576,6 +8578,7 @@ async function loadReport() {
 }
 
 async function _loadReportInner() {
+  REP_CASH = null;   // 区间/分仓变了，现金流缓存作废（切到现金流页时再按需加载）
   // 首次进入沿用上次查过的区间（存本机，其他收支页会跟着它）；没存过默认最近 7 天
   if (!reportInited) {
     reportInited = true;
@@ -8670,6 +8673,87 @@ async function _loadReportInner() {
 
   // 全仓总览：额外加载「各分仓收入 / 支出 / 利润」明细表（汇总分区里）
   if (all) await loadAllWarehouses(from, to);
+  // 当前正停在「现金流」分区：报表重查后顺带刷新它
+  const cashPanel = $("rep-panel-cash");
+  if (cashPanel && cashPanel.style.display !== "none") await loadCashflow();
+}
+
+/* ---------------- 现金流量表（实收实付） ---------------- */
+async function loadCashflow(force) {
+  const from = $("repDateFrom") ? $("repDateFrom").value : "";
+  const to = $("repDateTo") ? $("repDateTo").value : "";
+  const all = REP_SCOPE === "all";
+  const whQs = all ? "&wh=all" : (REP_WH ? `&wh=${encodeURIComponent(REP_WH)}` : "");
+  const key = `${from}|${to}|${whQs}`;
+  const t = $("repCashTable");
+  if (!force && REP_CASH && REP_CASH_KEY === key) { renderCashflow(REP_CASH, all); return; }
+  if (t) t.innerHTML = `<tbody><tr><td class="muted">加载中…</td></tr></tbody>`;
+  try {
+    const d = await api(`/api/report/cashflow?date_from=${from || ""}&date_to=${to || ""}${whQs}`);
+    REP_CASH = d; REP_CASH_KEY = key;
+    renderCashflow(d, all);
+  } catch (e) {
+    REP_CASH = null;
+    if (t) t.innerHTML = `<tbody><tr><td class="muted">现金流量表加载失败：${esc(e.message)}</td></tr></tbody>`;
+  }
+}
+
+function renderCashflow(d, all) {
+  const t = $("repCashTable"), wt = $("repCashWhTable"), stats = $("repCashStats"), hint = $("repCashHint");
+  if (!d || !d.ok) {
+    if (t) t.innerHTML = `<tbody><tr><td class="muted">现金流量表加载失败</td></tr></tbody>`;
+    return;
+  }
+  const inf = d.inflow || {}, out = d.outflow || {};
+  const rng = d.range || {};
+  const net = Number(d.net) || 0;
+  if (hint) {
+    hint.textContent = `统计区间 ${rng.date_from || "最早"} ~ ${rng.date_to || "最新"}`
+      + (d.is_all ? ` · 全仓合计（${d.warehouse_count || 0} 个分仓）` : (d.warehouse && d.warehouse.name ? ` · ${d.warehouse.name}` : ""))
+      + " · 只认已收付的钱";
+  }
+  if (stats) {
+    stats.innerHTML = `
+      <div class="stat blue"><div class="label">期初账面现金</div><div class="value">${fmtMoney(d.opening_cash)}</div><div class="sub">已录入流水的累计净现金流</div></div>
+      <div class="stat green"><div class="label">经营流入</div><div class="value">${fmtMoney(inf.total)}</div><div class="sub">销售回款 / 入仓结算 / 其他收入</div></div>
+      <div class="stat red"><div class="label">经营流出</div><div class="value">${fmtMoney(out.total)}</div><div class="sub">采购 / 代发 / 广告 / 费用</div></div>
+      <div class="stat ${net >= 0 ? "green" : "red"}"><div class="label">本期净现金流</div><div class="value">${fmtMoney(net)}</div><div class="sub">流入 − 流出</div></div>
+      <div class="stat blue"><div class="label">期末账面现金</div><div class="value">${fmtMoney(d.closing_cash)}</div><div class="sub">期初 + 本期净现金流</div></div>`;
+  }
+  const row = (label, v, desc, kind) => `<tr>
+      <td>${kind ? `<span class="badge">${esc(kind)}</span>` : ""}</td>
+      <td>${esc(label)}</td>
+      <td class="num mono" style="color:${Number(v) < 0 ? "var(--danger)" : ""};">${fmtMoney(v)}</td>
+      <td class="muted">${esc(desc || "")}</td></tr>`;
+  const section = (label) => `<tr><td colspan="4" class="muted" style="background:var(--bg);font-weight:600;">${esc(label)}</td></tr>`;
+  t.innerHTML = `<thead><tr><th>类别</th><th>项目</th><th class="num">金额</th><th>说明</th></tr></thead><tbody>
+    ${row("期初账面现金", d.opening_cash, "上期累计净现金流（不是银行余额）", "时点")}
+    ${section("经营活动现金流入")}
+    ${row("销售回款（退货已净掉）", inf.sales, "已回款出库单的实收金额", "流入")}
+    ${row("入仓结算回款", inf.warehouse_in, "京东支付入仓货款", "流入")}
+    ${row("手工记账收入", inf.manual_income, "财务流水页登记的收入", "流入")}
+    ${row("其他收入（补偿/退款）", inf.other_income, "供应商补偿、负数其他收支", "流入")}
+    <tr><td></td><td><b>流入合计</b></td><td class="num mono"><b>${fmtMoney(inf.total)}</b></td><td></td></tr>
+    ${section("经营活动现金流出")}
+    ${row("采购付款", out.purchase, "已付入库单（含运费/装卸/手续费/金额调整）", "流出")}
+    ${row("代发付款", out.dropship, "已付代发账单", "流出")}
+    ${row("广告充值", out.ad_prepay, "充进京准通账户的预付款", "流出")}
+    ${row("其他收支支出", out.other_expense, "手工登记的其他支出与赔付", "流出")}
+    ${row("人工打包费", out.pack_fee, "出库带出的打包人工费", "流出")}
+    ${row("手工记账支出", out.manual_expense, "财务流水页登记的支出", "流出")}
+    <tr><td></td><td><b>流出合计</b></td><td class="num mono"><b>${fmtMoney(out.total)}</b></td><td></td></tr>
+    <tr><td></td><td><b>本期净现金流</b></td><td class="num mono"><b style="color:${net >= 0 ? "var(--green)" : "var(--danger)"};">${fmtMoney(net)}</b></td><td></td></tr>
+    ${row("期末账面现金", d.closing_cash, "期初 + 本期净现金流（不是银行余额）", "时点")}
+  </tbody>`;
+  const whs = d.warehouses || [];
+  if (wt) {
+    wt.innerHTML = (all && whs.length) ? `<thead><tr><th>分仓</th><th class="num">期初账面现金</th>
+        <th class="num">本期净现金流</th><th class="num">期末账面现金</th></tr></thead><tbody>${whs.map((w) => `<tr>
+          <td>${esc(w.name || w.key)}</td>
+          <td class="num mono">${fmtMoney(w.opening_cash)}</td>
+          <td class="num mono" style="color:${Number(w.net) >= 0 ? "var(--green)" : "var(--danger)"};">${fmtMoney(w.net)}</td>
+          <td class="num mono">${fmtMoney(w.closing_cash)}</td></tr>`).join("")}</tbody>` : "";
+  }
 }
 
 /* 余额表：把「资产 / 往来 / 预付 / 盘点差异」从损益里独立出来。
@@ -9078,11 +9162,12 @@ async function renderSalesBySpec(from, to, whQs) {
 }
 
 /* 报表分区 tab：汇总 / 支出 / 商品 / 流水（日期条件常驻，作用于所有分区） */
-const REP_PANELS = ["rep-panel-summary", "rep-panel-expense", "rep-panel-goods", "rep-panel-flow"];
+const REP_PANELS = ["rep-panel-summary", "rep-panel-cash", "rep-panel-expense", "rep-panel-goods", "rep-panel-flow"];
 function repTab(btn) {
   btn.closest(".seg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
   const p = btn.dataset.panel;
   REP_PANELS.forEach((id) => { const el = $(id); if (el) el.style.display = id === p ? "" : "none"; });
+  if (p === "rep-panel-cash") loadCashflow();   // 现金流按需加载，不拖慢默认的汇总页
 }
 /* 支出下钻（二级页面）：点「按日/按月」表里的日期或金额，展开该时段该来源的逐笔构成。
    数据直接用当前区间已加载的 REP_EXP_ITEMS，不再请求接口；key 为空表示整个查询区间（合计行）。 */

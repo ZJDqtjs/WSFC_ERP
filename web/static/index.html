@@ -641,6 +641,7 @@
             <div class="grow"></div>
             <div class="seg" id="repSeg" style="margin-bottom:0;">
               <button class="seg-item active" data-panel="rep-panel-summary" onclick="repTab(this)">汇总</button>
+              <button class="seg-item" data-panel="rep-panel-cash" onclick="repTab(this)">现金流</button>
               <button class="seg-item" data-panel="rep-panel-expense" onclick="repTab(this)">支出</button>
               <button class="seg-item" data-panel="rep-panel-goods" onclick="repTab(this)">商品</button>
               <button class="seg-item" data-panel="rep-panel-flow" onclick="repTab(this)">流水</button>
@@ -698,6 +699,22 @@
               <div id="repAllWarn" class="alert warn" style="display:none;"></div>
               <div class="table-wrap"><table id="repAllTable"></table></div>
             </div>
+          </div>
+        </div>
+
+        <!-- 现金流量表（实收实付，与损益分开） -->
+        <div id="rep-panel-cash" style="display:none;">
+          <div class="stat-grid" id="repCashStats"></div>
+          <div class="card">
+            <div class="card-head">
+              <h3>现金流量表（经营收付）</h3>
+              <span class="muted" id="repCashHint"></span>
+              <div class="grow"></div>
+              <button class="btn secondary" onclick="loadCashflow(true)">刷新</button>
+            </div>
+            <div class="table-wrap"><table id="repCashTable"></table></div>
+            <div class="table-wrap"><table id="repCashWhTable"></table></div>
+            <p class="note">只认已经收付的钱：付款状态为「已付款」的单据按付款日期（无付款日期用单据日期）计入；未付款的进「待付款账单」，不出现在本表。采购付款、代发付款、广告充值、其他收支都算流出，销售回款与入仓结算回款算流入；金额调整/运费等随单镜像流水已含在单据实付里，不重复计。「期初/期末」是按已录入流水累计的净现金流，不是银行账户实际余额（期初资金/资本没录入时会有偏差）。</p>
           </div>
         </div>
 

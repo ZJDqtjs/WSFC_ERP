@@ -836,6 +836,245 @@ def balances(
     return _heavy_cached(key, _compute)
 
 
+# ---------------- 现金流量表（实收实付） ----------------
+# 口径：只认真金白银已经收/付的记录（付款状态 paid；有 paid_at 按 paid_at 落到现金流日期，
+# 没有则用单据日期）。采购/代发/广告充值/费用都算经营流出，销售回款与入仓结算回款算经营流入。
+# 文档联动自动生成的镜像流水（入库金额调整/运费、出库金额调整）已包含在单据实付/实收里，不再重复计。
+def _cash_date(model):
+    return func.coalesce(func.nullif(model.paid_at, ""), model.date)
+
+
+def _cash_paid(model):
+    return func.coalesce(model.pay_status, "paid").in_(("paid",))
+
+
+def _cash_range(model, start: str, end: str):
+    conds = [_cash_date(model) <= end]
+    if start:
+        conds.append(_cash_date(model) >= start)
+    return conds
+
+
+def _cash_components(db: Session, start: str, end: str) -> dict:
+    """区间内各项实收/实付明细（不含非现金的镜像/损耗记录）。"""
+    sales = db.execute(
+        select(func.coalesce(func.sum(
+            Outbound.total_amount + Outbound.adjust_amount + Outbound.settle_income), 0.0))
+        .where(_cash_paid(Outbound), *_cash_range(Outbound, start, end),
+               func.coalesce(Outbound.is_return, 0) == 0)
+    ).scalar()
+    refunds = db.execute(
+        select(func.coalesce(func.sum(
+            Outbound.total_amount + Outbound.adjust_amount + Outbound.settle_income), 0.0))
+        .where(_cash_paid(Outbound), *_cash_range(Outbound, start, end),
+               func.coalesce(Outbound.is_return, 0) == 1)
+    ).scalar()
+    warehouse_in = db.execute(
+        select(func.coalesce(func.sum(WarehouseIn.amount), 0.0))
+        .where(_cash_paid(WarehouseIn), *_cash_range(WarehouseIn, start, end))
+    ).scalar()
+
+    status = func.coalesce(Inbound.pay_status, "paid")
+    inb_amt = case(
+        (status == "partial", Inbound.paid_amount),
+        (status == "paid", Inbound.total_amount + Inbound.adjust_amount
+         + Inbound.freight + Inbound.handling + Inbound.fee),
+        else_=0.0,
+    )
+    purchase = db.execute(
+        select(func.coalesce(func.sum(inb_amt), 0.0))
+        .where(status.in_(("paid", "partial")), *_cash_range(Inbound, start, end))
+    ).scalar()
+    dropship = db.execute(
+        select(func.coalesce(func.sum(DropshipBill.amount), 0.0))
+        .where(_cash_paid(DropshipBill), *_cash_range(DropshipBill, start, end))
+    ).scalar()
+
+    manual_ref = func.coalesce(OtherExpense.ref_type, "")
+    manual = db.execute(
+        select(func.coalesce(func.sum(OtherExpense.amount), 0.0))
+        .where(manual_ref == "", _cash_paid(OtherExpense), *_cash_range(OtherExpense, start, end))
+    ).scalar()
+    ad_prepay = db.execute(
+        select(func.coalesce(func.sum(OtherExpense.amount), 0.0))
+        .where(manual_ref == "",
+               OtherExpense.category.like(f"{AD_PREPAID_CATEGORY}%"),
+               _cash_paid(OtherExpense), *_cash_range(OtherExpense, start, end))
+    ).scalar()
+    comp = db.execute(
+        select(func.coalesce(func.sum(OtherExpense.amount), 0.0))
+        .where(func.coalesce(OtherExpense.ref_type, "") == "inbound_comp",
+               _cash_paid(OtherExpense), *_cash_range(OtherExpense, start, end))
+    ).scalar()
+
+    fr = db.execute(
+        select(FinanceRecord.type, FinanceRecord.ref_type, FinanceRecord.category,
+               func.coalesce(func.sum(FinanceRecord.amount), 0.0))
+        .where(_cash_paid(FinanceRecord), *_cash_range(FinanceRecord, start, end))
+        .group_by(FinanceRecord.type, FinanceRecord.ref_type, FinanceRecord.category)
+    ).all()
+    manual_income = sum(float(a or 0) for t, rt, _c, a in fr if t == "income" and rt == "manual")
+    manual_expense = sum(float(a or 0) for t, rt, _c, a in fr if t == "expense" and rt == "manual")
+    # 出库带出来的打包人工费：这是实付给打包方的钱；销售/关联结算流水已含在单据实收里，不能重复
+    pack_fee = sum(float(a or 0) for t, rt, c, a in fr
+                   if t == "expense" and rt == "outbound" and c == "人工打包费")
+
+    return {
+        "sales": float(sales or 0),
+        "refunds": float(refunds or 0),
+        "warehouse_in": float(warehouse_in or 0),
+        "purchase": float(purchase or 0),
+        "dropship": float(dropship or 0),
+        "manual_oe": float(manual or 0),
+        "ad_prepay": float(ad_prepay or 0),
+        "comp": float(comp or 0),
+        "manual_income": float(manual_income or 0),
+        "manual_expense": float(manual_expense or 0),
+        "pack_fee": float(pack_fee or 0),
+    }
+
+
+def _cash_summary(c: dict) -> dict:
+    """把明细归成「流入 / 流出 / 净额」，并保持正负号（负数即反向现金流）。"""
+    ad = c["ad_prepay"]
+    other_manual = c["manual_oe"] - ad
+    other_in = max(-other_manual, 0.0) + max(-c["comp"], 0.0) + max(-ad, 0.0)
+    other_out = max(other_manual, 0.0) + max(c["comp"], 0.0)
+
+    inflow = {
+        "sales": round(c["sales"] + c["refunds"], 2),   # 销售回款（退货退款已净掉）
+        "warehouse_in": round(c["warehouse_in"], 2),    # 入仓结算回款（京东付给我们）
+        "manual_income": round(c["manual_income"], 2),
+        "other_income": round(other_in, 2),
+    }
+    inflow["total"] = round(sum(inflow.values()), 2)
+    outflow = {
+        "purchase": round(c["purchase"], 2),
+        "dropship": round(c["dropship"], 2),
+        "ad_prepay": round(max(ad, 0.0), 2),
+        "other_expense": round(other_out, 2),
+        "pack_fee": round(c["pack_fee"], 2),
+        "manual_expense": round(c["manual_expense"], 2),
+    }
+    outflow["total"] = round(sum(outflow.values()), 2)
+    return {
+        "inflow": inflow,
+        "outflow": outflow,
+        "net": round(inflow["total"] - outflow["total"], 2),
+    }
+
+
+def _cashflow_one(db: Session, wh_key: str, date_from: str, date_to: str) -> dict:
+    from datetime import date as _date, timedelta
+
+    end = date_to or _date.today().isoformat()
+    period = _cash_summary(_cash_components(db, date_from, end))
+    opening = 0.0
+    if date_from:
+        before = (_date.fromisoformat(date_from) - timedelta(days=1)).isoformat()
+        opening = _cash_summary(_cash_components(db, "", before))["net"]
+    return {
+        "ok": True,
+        "warehouse": {"key": wh_key, "name": current_warehouse_name(wh_key)},
+        **period,
+        "opening_cash": round(opening, 2),
+        "closing_cash": round(opening + period["net"], 2),
+        "range": {"date_from": date_from, "date_to": end},
+    }
+
+
+def _cashflow_all(date_from: str, date_to: str) -> dict:
+    from datetime import date as _date
+
+    end = date_to or _date.today().isoformat()
+    parts: list[dict] = []
+    sessions: list[tuple[str, Session]] = []
+    errors: list[str] = []
+    try:
+        for w in get_warehouses():
+            key = str(w.get("key") or "")
+            if not key:
+                continue
+            try:
+                sessions.append((key, get_sessionmaker(key)()))
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{w.get('name') or key} 打开失败：{exc}")
+        for key, session in sessions:
+            try:
+                parts.append(_cashflow_one(session, key, date_from, end))
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{current_warehouse_name(key)} 现金流计算失败：{exc}")
+    finally:
+        for _k, session in sessions:
+            session.close()
+
+    def _sum(field: str, sub: str) -> float:
+        return round(sum(float(p.get(field, {}).get(sub, 0.0) or 0.0) for p in parts), 2)
+
+    inflow = {
+        "sales": _sum("inflow", "sales"),
+        "warehouse_in": _sum("inflow", "warehouse_in"),
+        "manual_income": _sum("inflow", "manual_income"),
+        "other_income": _sum("inflow", "other_income"),
+    }
+    inflow["total"] = round(sum(inflow.values()), 2)
+    outflow = {
+        "purchase": _sum("outflow", "purchase"),
+        "dropship": _sum("outflow", "dropship"),
+        "ad_prepay": _sum("outflow", "ad_prepay"),
+        "other_expense": _sum("outflow", "other_expense"),
+        "pack_fee": _sum("outflow", "pack_fee"),
+        "manual_expense": _sum("outflow", "manual_expense"),
+    }
+    outflow["total"] = round(sum(outflow.values()), 2)
+    return {
+        "ok": True,
+        "is_all": True,
+        "warehouse": {"key": ALL_WH, "name": "全仓合计"},
+        "warehouse_count": len(parts),
+        "range": {"date_from": date_from, "date_to": end},
+        "inflow": inflow,
+        "outflow": outflow,
+        "net": round(inflow["total"] - outflow["total"], 2),
+        "opening_cash": round(sum(float(p["opening_cash"]) for p in parts), 2),
+        "closing_cash": round(sum(float(p["closing_cash"]) for p in parts), 2),
+        "warehouses": [
+            {
+                "key": p["warehouse"]["key"],
+                "name": p["warehouse"]["name"],
+                "net": p["net"],
+                "opening_cash": p["opening_cash"],
+                "closing_cash": p["closing_cash"],
+            }
+            for p in parts
+        ],
+        "warnings": errors,
+    }
+
+
+@router.get("/report/cashflow")
+def cashflow(
+    date_from: str = "",
+    date_to: str = "",
+    wh: str = "",
+    db: Session = Depends(get_db_wh),
+    user: User = Depends(get_current_user),
+):
+    """现金流量表（直接法·实收实付）：经营流入 / 经营流出 / 净现金流 / 期初期末账面现金。"""
+    from datetime import date as _date
+
+    end = date_to or _date.today().isoformat()
+    wh_key = ALL_WH if wh == ALL_WH else resolve_key(wh)
+    key = ("cashflow", wh_key, date_from, end)
+
+    def _compute() -> dict:
+        if wh_key == ALL_WH:
+            return _cashflow_all(date_from, end)
+        return _cashflow_one(db, wh_key, date_from, end)
+
+    return _heavy_cached(key, _compute, gate=_FIN_GATE)
+
+
 def _inbound_landed(i) -> float:
     """入库实际支出 = 货款 + 运费 + 装卸费 + 手续费（这几项已计入批次成本，故期间费用不重复扣）。
 
