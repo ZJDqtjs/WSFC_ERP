@@ -564,16 +564,25 @@ def resolve_username(uid: int | None) -> str | None:
     return name
 
 
+# 只有来自本机反向代理（nginx）的连接才可能带可信的转发头。
+# 服务一旦被直接暴露，任何人都能自带 X-Real-IP / X-Forwarded-For，
+# 既能绕过「账号 + IP」登录锁定（每请求换一个假 IP），也能把日志写成任意值。
+_TRUSTED_PROXY_HOSTS = ("127.0.0.1", "::1", "localhost")
+
+
 def client_ip(request) -> str:
-    """真实客户端 IP：nginx 反代时优先取 X-Real-IP / X-Forwarded-For。"""
+    """真实客户端 IP：仅当直连对端是本机反代时才信任转发头，否则用 TCP 对端地址。"""
     try:
+        peer = request.client.host if request.client else ""
+        if peer not in _TRUSTED_PROXY_HOSTS:
+            return peer
         xri = request.headers.get("x-real-ip")
         if xri:
             return xri.strip()
         xff = request.headers.get("x-forwarded-for")
         if xff:
             return xff.split(",")[0].strip()
-        return request.client.host if request.client else ""
+        return peer
     except Exception:
         return ""
 

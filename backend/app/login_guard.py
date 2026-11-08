@@ -20,9 +20,15 @@
 带上 IP 是为了避免「知道用户名就能把别人锁死」：攻击者从自己的 IP 连续失败，只会锁住
 「该账号 + 该 IP」这一条，其他人换个 IP 仍能正常登录。
 
+另有 IP 维度的 ``scope:@ip#IP`` 计数（record_ip_fail / ip_locked_left）：攻击者每请求换一个
+用户名时，账号维度永远到不了档位，必须再按 IP 累计，才能挡住用户名喷洒式爆破。
+
 对外接口：
     locked_left(scope, username, ip="") -> int   剩余锁定秒数（0 = 未锁定）
     record_fail(scope, username, ip="") -> int   记一次失败；返回本次触发的锁定秒数
+    ip_locked_left(scope, ip) -> int             同一 IP 的跨账号锁定剩余秒数
+    record_ip_fail(scope, ip) -> int             记一次该 IP 的失败（不限账号）
+    reset_ip(scope, ip)                          登录成功时清零该 IP 的跨账号失败
     reset(scope, username)                       登录成功时清零该账号所有 IP 的条目
     locked_list(scope) -> list[dict]             当前锁定中的账号（含 ip 字段）
     clear(scope, username="")                    手动解锁（username 为空 = 清空该 scope）
@@ -43,6 +49,13 @@ SCOPE_OPEN_API = "open_api"
 
 FAILS_PER_STEP = 3
 LADDER_SECONDS = (60, 180, 300, 3600, 86400)
+
+# 同一 IP 的跨账号累计失败（防「换用户名绕过」）：
+# 攻击者每请求换一个用户名时，上面的「账号 + IP」计数永远不会到档，
+# 所以再按 IP 单独计数：累计 10 次 → 10 分钟，再 10 次 → 1 小时，再 10 次 → 24 小时。
+IP_FAILS_PER_STEP = 10
+IP_LADDER_SECONDS = (600, 3600, 86400)
+_IP_MARK = "@ip"
 
 # 超过这个时间没有任何失败记录就丢弃（避免文件无限增长）
 _STALE_SECONDS = 7 * 86400
@@ -125,31 +138,72 @@ def _record(records: dict, key: str) -> dict:
     return rec
 
 
-def locked_left(scope: str, username: str, ip: str = "") -> int:
-    """剩余锁定秒数；0 表示当前未锁定（失败次数会被保留，下次再错继续进档）。"""
-    rec = _load().get(_key(scope, username, ip))
+def _bump(records: dict, key: str, fails_per_step: int, ladder: tuple[int, ...]) -> int:
+    """计数 +1，到达档位时写入 until 并返回本次锁定时长。"""
+    rec = _record(records, key)
+    rec["fails"] = int(rec["fails"]) + 1
+    rec["ts"] = time.time()
+    wait = 0
+    if rec["fails"] % fails_per_step == 0:
+        level = rec["fails"] // fails_per_step
+        wait = ladder[min(level, len(ladder)) - 1]
+        rec["level"] = level
+        rec["until"] = time.time() + wait
+    records[key] = rec
+    return wait
+
+
+def _left(rec) -> int:
     if not isinstance(rec, dict):
         return 0
     left = int(float(rec.get("until", 0) or 0) - time.time())
     return left if left > 0 else 0
 
 
+def locked_left(scope: str, username: str, ip: str = "") -> int:
+    """剩余锁定秒数；0 表示当前未锁定（失败次数会被保留，下次再错继续进档）。"""
+    return _left(_load().get(_key(scope, username, ip)))
+
+
 def record_fail(scope: str, username: str, ip: str = "") -> int:
     """记一次失败。返回本次新触发的锁定秒数（0 = 还没到档位，不锁定）。"""
     records = _load()
-    key = _key(scope, username, ip)
-    rec = _record(records, key)
-    rec["fails"] = int(rec["fails"]) + 1
-    rec["ts"] = time.time()
-    wait = 0
-    if rec["fails"] % FAILS_PER_STEP == 0:
-        level = rec["fails"] // FAILS_PER_STEP
-        wait = LADDER_SECONDS[min(level, len(LADDER_SECONDS)) - 1]
-        rec["level"] = level
-        rec["until"] = time.time() + wait
-    records[key] = rec
+    wait = _bump(records, _key(scope, username, ip), FAILS_PER_STEP, LADDER_SECONDS)
     _save(records)
     return wait
+
+
+# ---------- 同一 IP 的跨账号锁定（防换用户名绕过） ----------
+def _ip_key(scope: str, ip: str) -> str:
+    """IP 计数键：``scope:@ip#IP``；locked_list 会跳过这类条目。"""
+    return f"{scope}:{_IP_MARK}#{(ip or '').strip()}"
+
+
+def ip_locked_left(scope: str, ip: str) -> int:
+    """该 IP 在指定 scope 下的剩余锁定秒数。"""
+    if not ip:
+        return 0
+    return _left(_load().get(_ip_key(scope, ip)))
+
+
+def record_ip_fail(scope: str, ip: str) -> int:
+    """记一次该 IP 的失败（无论用户名是否为空）。返回本次锁定时长。"""
+    if not ip:
+        return 0
+    records = _load()
+    wait = _bump(records, _ip_key(scope, ip), IP_FAILS_PER_STEP, IP_LADDER_SECONDS)
+    _save(records)
+    return wait
+
+
+def reset_ip(scope: str, ip: str) -> None:
+    """该 IP 登录成功：清零它的跨账号失败计数。"""
+    if not ip:
+        return
+    records = _load()
+    if records.pop(_ip_key(scope, ip), None) is not None:
+        _save(records)
+
 
 
 def reset(scope: str, username: str) -> None:
@@ -171,6 +225,8 @@ def locked_list(scope: str) -> list[dict]:
             continue
         sc, user, ip = _split(key)
         if sc != scope:
+            continue
+        if user == _IP_MARK:          # IP 维度的跨账号计数不当作"账号"展示
             continue
         left = int(float(rec.get("until", 0) or 0) - now)
         if left <= 0:
