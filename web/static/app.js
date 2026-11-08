@@ -4043,12 +4043,12 @@ function stockProductOptions(selId) {
 function wPackRowsHtml(items) {
   const list = items || [];
   const opts = PRODUCTS.filter((p) => p.is_active)
-    .map((p) => `<option value="${p.id}">${esc(p.name)}（${esc(p.category || "—")}）</option>`).join("");
+    .map((p) => `<option value="${p.id}">${esc(p.name)}${p.warehouse_party ? " · " + esc(p.warehouse_party) : ""}（${esc(p.category || "—")}）</option>`).join("");
   const unitSel = (m, u) => unitOptions(m, u) || `<option>${esc(u || "个")}</option>`;
   return list.map((it) => {
     const m = PRODUCTS.find((x) => x.id === it.product_id);
     return `<div class="pack-row">
-      <input value="${esc(m ? m.name : it.product_id)}" readonly style="background:#f9fafb;" />
+      <input value="${esc(m ? m.name : it.product_id)}" data-pid="${it.product_id || ""}" readonly style="background:#f9fafb;" />
       <select class="pack-unit" onchange="packUnitChanged(this)">${unitSel(m, it.unit)}</select>
       <input type="number" step="any" value="${it.quantity}" class="pack-qty" />
       <button class="btn danger sm" onclick="this.closest('.pack-row').remove()">删</button>
@@ -4077,9 +4077,9 @@ function wPackAddRow() {
   if (!sel || !sel.value || !(parseFloat(qty) > 0)) { toast("请选择随货包材并填数量"); return; }
   const m = PRODUCTS.find((x) => x.id === +sel.value);
   const opts = PRODUCTS.filter((p) => p.is_active)
-    .map((p) => `<option value="${p.id}">${esc(p.name)}（${esc(p.category || "—")}）</option>`).join("");
+    .map((p) => `<option value="${p.id}">${esc(p.name)}${p.warehouse_party ? " · " + esc(p.warehouse_party) : ""}（${esc(p.category || "—")}）</option>`).join("");
   last.innerHTML = `
-    <input value="${esc(m.name)}" readonly style="background:#f9fafb;" />
+    <input value="${esc(m.name)}" data-pid="${m.id}" readonly style="background:#f9fafb;" />
     <select class="pack-unit" onchange="packUnitChanged(this)">${unitOptions(m, unit) || `<option>${esc(unit)}</option>`}</select>
     <input type="number" step="any" value="${qty}" class="pack-qty" />
     <button class="btn danger sm" onclick="this.closest('.pack-row').remove()">删</button>`;
@@ -4102,9 +4102,13 @@ function wCollectPacks() {
     const sel = row.querySelector(".pack-product");
     let pid = null;
     if (nameInput) {
-      const n = nameInput.value.trim();
-      const m = PRODUCTS.find((x) => x.name === n);
-      pid = m ? m.id : null;
+      // 只读行优先读 data-pid（同名商品可能有多条）
+      pid = nameInput.dataset.pid ? +nameInput.dataset.pid : null;
+      if (!pid) {
+        const n = nameInput.value.trim();
+        const m = PRODUCTS.find((x) => x.name === n);
+        pid = m ? m.id : null;
+      }
     } else if (sel) {
       pid = sel.value ? +sel.value : null;
     }
@@ -5439,7 +5443,7 @@ async function renderProducts() {
     const extraCodes = p.multi_code
       ? (p.codes || []).map((it) => `${it.code || ""} ${it.shop || ""}`).join(" ")
       : "";
-    return [p.name, p.category, p.spec, p.code, extraCodes, p.unit, p.base_unit, way, packs]
+    return [p.name, p.category, p.spec, p.code, extraCodes, p.warehouse_party || "", p.unit, p.base_unit, way, packs]
       .join(" ").toLowerCase();
   };
   const kwHit = (p) => searchHit(hayOf(p), kws);   // 多个关键词：全部命中才算匹配
@@ -5496,7 +5500,8 @@ async function renderProducts() {
       return `<tr>
         <td class="cb-col"><input type="checkbox" value="${p.id}" ${prodSel.has(p.id) ? "checked" : ""} onchange="toggleSel('prod',${p.id},this.checked)" /></td>
         <td class="muted mono">${codeCellHtml(p)}</td>
-        <td><b>${typeBadge} ${esc(p.name)}</b><div class="muted" style="font-size:12px;">${linkInfo}</div></td>
+        <td><b>${typeBadge} ${esc(p.name)}</b>${p.warehouse_party
+          ? ` <span class="badge adjust" title="仓储方：聚水潭导入按它区分同名商品">${esc(p.warehouse_party)}</span>` : ""}<div class="muted" style="font-size:12px;">${linkInfo}</div></td>
         <td>${esc(p.category) ? `<span class="badge adjust">${esc(p.category)}</span>` : "—"}</td>
         <td class="muted" style="max-width:170px;">${esc(packs) || "—"}</td>
         <td class="num mono" title="${esc(refCostTitle(p))}">${refCostHtml(p)}</td>
@@ -5580,7 +5585,7 @@ function packRowsHtml(packItems) {
     const m = PRODUCTS.find((x) => x.id === it.product_id);
     const unitSel = m ? unitOptions(m, it.unit) : `<option>个</option>`;
     return `<div class="pack-row">
-      <input value="${esc(m ? m.name : it.product_id)}" readonly style="background:#f9fafb;" />
+      <input value="${esc(m ? m.name : it.product_id)}" data-pid="${it.product_id || ""}" readonly style="background:#f9fafb;" />
       <select class="pack-unit searchable" onchange="packUnitChanged(this)">${unitSel}</select>
       <input type="number" step="any" value="${it.quantity}" class="pack-qty" />
       <button class="btn danger sm" onclick="this.closest('.pack-row').remove()">删</button>
@@ -5589,7 +5594,7 @@ function packRowsHtml(packItems) {
     <div class="pack-row">
       <select class="pack-product searchable" onchange="packProductChanged(this)">
         <option value="">选择关联商品…</option>
-        ${PRODUCTS.filter((p) => p.is_active).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}
+        ${PRODUCTS.filter((p) => p.is_active).map((p) => `<option value="${p.id}">${esc(p.name)}${p.warehouse_party ? " · " + esc(p.warehouse_party) : ""}</option>`).join("")}
       </select>
       <select class="pack-unit searchable"><option>个</option></select>
       <input type="number" step="any" value="1" class="pack-qty" />
@@ -5615,7 +5620,7 @@ function addProductPackRow() {
   const m = PRODUCTS.find((x) => x.id === +sel.value);
   // 把已填的行转为只读展示，再追加一行
   last.innerHTML = `
-    <input value="${esc(m.name)}" readonly style="background:#f9fafb;" />
+    <input value="${esc(m.name)}" data-pid="${m.id}" readonly style="background:#f9fafb;" />
     <select class="pack-unit searchable" onchange="packUnitChanged(this)">${unitOptions(m, unit)}</select>
     <input type="number" step="any" value="${qty}" class="pack-qty" />
     <button class="btn danger sm" onclick="this.closest('.pack-row').remove()">删</button>`;
@@ -5623,7 +5628,7 @@ function addProductPackRow() {
     <div class="pack-row">
       <select class="pack-product searchable" onchange="packProductChanged(this)">
         <option value="">选择关联商品…</option>
-        ${PRODUCTS.filter((p) => p.is_active).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}
+        ${PRODUCTS.filter((p) => p.is_active).map((p) => `<option value="${p.id}">${esc(p.name)}${p.warehouse_party ? " · " + esc(p.warehouse_party) : ""}</option>`).join("")}
       </select>
       <select class="pack-unit searchable"><option>个</option></select>
       <input type="number" step="any" value="1" class="pack-qty" />
@@ -5671,6 +5676,14 @@ async function openProductModal(pid = 0, prefillName = "") {
           <datalist id="shopList"></datalist>
           <button class="btn secondary sm" type="button" onclick="addCodeRow()">＋ 新增编码</button>
         </div>
+        <div class="field" style="margin-top:12px;">
+          <label>仓储方</label>
+          <input id="pWarehouseParty" list="warehousePartyList" value="${esc(p?.warehouse_party || "")}" placeholder="如 云南芳谊昆明（干货）仓；多个用、分隔；留空=不限" />
+          <datalist id="warehousePartyList"></datalist>
+          <div class="field-hint">聚水潭出库单的「仓储方」列。出库单没有 SKU 时，系统只能靠商品名称找商品；
+            <b>同名商品</b>（如 松茸干片50g 既在芳谊仓代发、又在自营仓扣库存）请建两条，并在这里填不同的仓储方，
+            导入时按每行的仓储方精确匹配。留空 = 不限（任何仓储方都能匹配）。</div>
+        </div>
       </div>
       <div class="field"><label>分类</label><input id="pCategory" value="${esc(curCat)}" placeholder="如：蔬菜" /></div>
       <div class="field"><label>商品类型 *</label>
@@ -5714,6 +5727,7 @@ async function openProductModal(pid = 0, prefillName = "") {
   initProductUnitSelect(ptype, curUnit);
   initCodeRows(p?.codes || [], !!(p && p.multi_code));   // 多端商品：多店铺多编码回填
   ensureProductShops();                                   // 店铺名下拉候选（出库单里出现过的客户名）
+  ensureProductWarehouses();                              // 仓储方下拉候选（同名商品按它区分渠道）
   if ($("pMultiBox")) $("pMultiBox").style.display = ptype === "order" ? "" : "none";
   updateProductPriceLabels(du0, f0, up0.base_unit);   // 价格字段标签/提示按默认单位显示
   updateUnitChangeBox(up0);                            // 跨类别换单位时显示「换算关系」输入框（初始=没换，隐藏）
@@ -5946,10 +5960,13 @@ function collectPacks() {
     const sel = row.querySelector(".pack-product");
     let pid = null;
     if (nameInput) {
-      // 只读行：需要从显示名反查，或从原数据拿 —— 用 data 属性更稳，这里从 PRODUCTS 按名匹配
-      const n = nameInput.value.trim();
-      const m = PRODUCTS.find((x) => x.name === n);
-      pid = m ? m.id : null;
+      // 只读行：优先读 data-pid（同名商品可以有多条，按名称反查会取错）
+      pid = nameInput.dataset.pid ? +nameInput.dataset.pid : null;
+      if (!pid) {
+        const n = nameInput.value.trim();
+        const m = PRODUCTS.find((x) => x.name === n);
+        pid = m ? m.id : null;
+      }
     } else if (sel) {
       pid = sel.value ? +sel.value : null;
     }
@@ -5980,6 +5997,20 @@ async function ensureProductShops() {
   const dl = $("shopList");
   if (dl) dl.innerHTML = PRODUCT_SHOPS.map((s) => `<option value="${esc(s)}"></option>`).join("");
   return PRODUCT_SHOPS;
+}
+
+/* 商品里已经用过的「仓储方」（聚水潭出库单的列）候选：同名商品靠它区分渠道，手打不一致就匹配不上 */
+let PRODUCT_WAREHOUSES = [];
+async function ensureProductWarehouses() {
+  try {
+    if (!PRODUCT_WAREHOUSES.length) {
+      const rows = await api("/api/product-warehouses");
+      PRODUCT_WAREHOUSES = (rows || []).map((x) => x.name).filter(Boolean);
+    }
+  } catch (e) { /* 拉不到就退化成手填，不阻塞弹窗 */ }
+  const dl = $("warehousePartyList");
+  if (dl) dl.innerHTML = PRODUCT_WAREHOUSES.map((s) => `<option value="${esc(s)}"></option>`).join("");
+  return PRODUCT_WAREHOUSES;
 }
 
 /** 弹窗打开时回填编码行；开关打开但一条都没有时先给一行空输入 */
@@ -6034,6 +6065,8 @@ async function saveProduct(pid, opts) {
     // 多端商品：多店铺多编码（开关关着时后端不使用这些编码，但仍然保存，重新打开不用重填）
     multi_code: multiCode,
     codes: collectCodes(),
+    // 仓储方：聚水潭导入按它区分同名商品（空 = 不限）
+    warehouse_party: (($("pWarehouseParty") || {}).value || "").trim(),
     name: $("pName").value,
     category: $("pCategory").value,
     product_type: ptype,

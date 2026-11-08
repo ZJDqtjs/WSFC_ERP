@@ -38,6 +38,19 @@ DEFAULT_CONVERSIONS_BASE_COUNT = {"个": 1}
 _SEARCH_OR_SPLIT = re.compile(r"[；;]+")
 _SEARCH_AND_SPLIT = re.compile(r"[：:，,、\s|｜]+")
 
+# 商品「仓储方」（聚水潭出库单的列）：一个商品可绑定多个，用 、,; 分隔；空 = 不限。
+_WAREHOUSE_SPLIT_RE = re.compile(r"[,，、;；]")
+
+
+def warehouse_tokens(v: str | None) -> set[str]:
+    """仓储方字段 → 去空白后的集合。"""
+    return {t.strip() for t in _WAREHOUSE_SPLIT_RE.split(str(v or "")) if t.strip()}
+
+
+def warehouse_party_key(v: str | None) -> str:
+    """仓储方规范化（去重排序），用于判断两条商品的匹配范围是否相同。"""
+    return ",".join(sorted(warehouse_tokens(v)))
+
 
 def split_search_keywords(raw: str) -> list[list[str]]:
     """把搜索词拆成分组：外层列表是「或」，内层列表是「且」；空输入返回 []。"""

@@ -23,7 +23,14 @@ from ..models import (
     User,
     WarehouseProduct,
 )
-from ..services import _latest_inbound_dates, default_conversions, recompute_product, seed_units
+from ..services import (
+    _latest_inbound_dates,
+    default_conversions,
+    recompute_product,
+    seed_units,
+    warehouse_party_key,
+    warehouse_tokens,
+)
 
 router = APIRouter(prefix="/api", tags=["products"])
 
@@ -80,6 +87,9 @@ class ProductIn(BaseModel):
     multi_code: bool | None = None
     # 额外编码：[{code, shop}]；None = 未提供（保留原值）；[] = 清空
     codes: list[CodeEntry] | None = None
+    # 仓储方（聚水潭出库单的「仓储方」列）：出库单没有 SKU 时用它区分同名商品。
+    # 空 = 不限；多个用 、,; 分隔。None = 未提供（保留原值，兼容未升级客户端）
+    warehouse_party: str | None = None
     # 改基础单位（计数「个」↔ 重量「克」）时的换算关系：1（旧）基础单位 = unit_change_ratio（新）基础单位。
     # 商品已有库存流水/入库记录/库存时必须给（见 _rescale_base_unit_change）；没有历史数据时可省。
     unit_change_ratio: float | None = None
@@ -171,6 +181,8 @@ def _to_dict(p: Product, db: Session | None = None, last_in: dict[int, dict] | N
         # 多端商品：多店铺多编码。codes=[{code, shop}]，shop 为空 = 通用编码（没匹配到店铺的订单归它）
         "multi_code": bool(getattr(p, "multi_code", False)),
         "codes": [dict(it) for it in (getattr(p, "codes", None) or []) if isinstance(it, dict)],
+        # 仓储方（聚水潭导入按它区分同名商品；空 = 不限）
+        "warehouse_party": getattr(p, "warehouse_party", "") or "",
         "name": p.name,
         "category": p.category,
         "product_type": p.product_type,
@@ -279,6 +291,22 @@ def list_product_shops(limit: int = 60, db: Session = Depends(get_db), user: Use
         .limit(max(1, min(limit, 200)))
     ).all()
     return [{"name": name, "count": int(n)} for name, n in rows]
+
+
+@router.get("/product-warehouses")
+def list_product_warehouses(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """商品里已经用过的「仓储方」候选（供商品弹窗下拉，避免手打不一致）。
+
+    仓储方可能一个商品填多个（、,; 分隔），这里拆开去重后按使用次数倒序返回。
+    """
+    counts: dict[str, int] = {}
+    rows = db.execute(
+        select(Product.warehouse_party).where(func.trim(func.coalesce(Product.warehouse_party, "")) != "")
+    ).scalars().all()
+    for v in rows:
+        for t in warehouse_tokens(v):
+            counts[t] = counts.get(t, 0) + 1
+    return [{"name": k, "count": n} for k, n in sorted(counts.items(), key=lambda x: (-x[1], x[0]))]
 
 
 @router.get("/stocks")
@@ -427,10 +455,34 @@ def _take_codes(db: Session, codes: list[str], exclude_id: int | None = None, ta
                        if str((it or {}).get("code") or "").strip() != c]
 
 
+def _assert_product_name_available(
+    db: Session, name: str, warehouse_party: str | None, exclude_id: int | None = None
+) -> None:
+    """同名商品只允许按「不同仓储方」并存。
+
+    聚水潭出库单没有 SKU 列，同名商品只能靠「仓储方」区分（如 芳谊干货仓=代发 / 自营仓=扣库存）。
+    仓储方留空表示不限（通用），所以「通用 + 通用」仍算重名，而「通用 + 芳谊仓」可以并存。
+    """
+    want = warehouse_party_key(warehouse_party)
+    rows = db.execute(
+        select(Product).where(Product.name == name.strip())
+    ).scalars().all()
+    for p in rows:
+        if exclude_id and p.id == exclude_id:
+            continue
+        if warehouse_party_key(getattr(p, "warehouse_party", "")) == want:
+            scope = f"（仓储方：{warehouse_party.strip()}）" if want else ""
+            raise HTTPException(
+                400,
+                f"商品「{name.strip()}」已存在{scope}。\n"
+                f"如果要按渠道区分同名商品，请在「多端商品」里给两条商品填写不同的「仓储方」"
+                f"（如一条填 云南芳谊昆明（干货）仓、另一条留空）。",
+            )
+
+
 @router.post("/products")
 def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    if db.scalar(select(Product).where(Product.name == data.name.strip())):
-        raise HTTPException(400, f"商品「{data.name}」已存在")
+    _assert_product_name_available(db, data.name, data.warehouse_party)
     if data.product_type not in ("stock", "order"):
         raise HTTPException(400, "商品类型必须为 stock 或 order")
     multi = bool(data.multi_code) if data.multi_code is not None else False
@@ -449,6 +501,7 @@ def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = 
         code=data.code.strip(),
         multi_code=multi,
         codes=codes,
+        warehouse_party=(data.warehouse_party or "").strip(),
         name=data.name.strip(),
         category=data.category.strip(),
         product_type=data.product_type,
@@ -537,9 +590,10 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
     p = db.get(Product, pid)
     if not p:
         raise HTTPException(404, "商品不存在")
-    dup = db.scalar(select(Product).where(Product.name == data.name.strip(), Product.id != pid))
-    if dup:
-        raise HTTPException(400, f"商品「{data.name}」已存在")
+    # 未传（None）= 保留原值，兼容未升级客户端（手机 App 不带这个字段）
+    wp = (data.warehouse_party if data.warehouse_party is not None
+          else (getattr(p, "warehouse_party", "") or "")).strip()
+    _assert_product_name_available(db, data.name, wp, exclude_id=pid)
     if data.product_type not in ("stock", "order"):
         raise HTTPException(400, "商品类型必须为 stock 或 order")
     # 多端商品：未传（None）= 保留原值 / 原编码清单，兼容未升级客户端（手机 App）
@@ -573,6 +627,7 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
     p.code = data.code.strip()
     p.multi_code = multi
     p.codes = codes
+    p.warehouse_party = wp
     p.name = data.name.strip()
     p.category = data.category.strip()
     p.product_type = data.product_type

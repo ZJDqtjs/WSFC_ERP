@@ -30,6 +30,7 @@ from ..services import (
     recompute_product,
     resolve_product,
     unit_to_base,
+    warehouse_tokens,
 )
 
 router = APIRouter(prefix="/api", tags=["import"])
@@ -756,26 +757,64 @@ def _line_deduct_stock_category(db: Session, p: Product | None, stock_product_id
     return (p.category if p else "") or ""
 
 
-def _resolve_jst_product(db: Session, mapping_by_code: dict[str, CodeMapping], ext_name: str) -> Product | None:
+def _same_name_order_products(db: Session, name: str) -> list[Product]:
+    return list(db.execute(
+        select(Product).where(Product.name == name, Product.product_type == "order").order_by(Product.id)
+    ).scalars())
+
+
+def _pick_by_warehouse(cands: list[Product], warehouse: str | None) -> Product | None:
+    """在若干同名订单商品里按「仓储方」挑一条。
+
+    先精确命中本行的仓储方；没有命中则回退到「未绑定仓储方」的通用商品（空 = 不限）。
+    如果同名商品都绑定了别的仓储方，返回 None —— 宁可让这行显示「未关联」，
+    也不要猜错成另一个渠道的代发/库存商品。
+    """
+    w = str(warehouse or "").strip()
+    if w:
+        for p in cands:
+            if w in warehouse_tokens(getattr(p, "warehouse_party", "")):
+                return p
+    generic = [p for p in cands if not warehouse_tokens(getattr(p, "warehouse_party", ""))]
+    if len(generic) == 1:
+        return generic[0]
+    return None
+
+
+def _resolve_jst_product(
+    db: Session, mapping_by_code: dict[str, CodeMapping], ext_name: str, warehouse: str | None = None
+) -> Product | None:
     """聚水潭商品名 → 系统商品。
 
     优先级：
-    1) 编码关联指向的**订单商品（小类）**：以用户维护的映射为准；
+    1) 编码关联指向的**订单商品（小类）**：以用户维护的映射为准；但该商品若绑定了仓储方，
+       必须与本行的仓储方一致，否则视为别的渠道的记录，继续按名称找；
     2) 编码关联指向**库存大类**（或没关联）时，若存在**同名的订单商品（小类）**，优先用小类
        —— 小类才有规格、关联结算与「代发」语义（出库时仍按它关联的库存大类扣减），
           否则出库明细里不同规格会挤在同一个大类里、代发商品也标不出来；
+       同名有多条时按行的「仓储方」精确区分（见 _pick_by_warehouse）；
     3) 再回退按名称/编码精确匹配。
     """
     m = mapping_by_code.get(ext_name)
     pid = m.product_id if m else None
     mapped = db.get(Product, pid) if pid else None
+    w = str(warehouse or "").strip()
     if mapped and mapped.product_type != "stock":
-        return mapped
-    same = db.scalar(select(Product).where(Product.name == ext_name, Product.product_type == "order"))
+        wt = warehouse_tokens(getattr(mapped, "warehouse_party", ""))
+        if not wt or not w or w in wt:
+            return mapped
+    same = _same_name_order_products(db, ext_name)
+    picked = _pick_by_warehouse(same, w)
+    if picked:
+        return picked
     if same:
-        return same
+        # 同名商品存在，但都绑定了别的仓储方：不猜，交给「未关联商品」让用户明确建一条
+        return None
     if mapped:
-        return mapped
+        wt = warehouse_tokens(getattr(mapped, "warehouse_party", ""))
+        if not wt or not w or w in wt:
+            return mapped
+        return None
     # 未配置编码关联时，回退按商品名称/编码精确匹配（如「佛手柑中果2个」）；
     # 多端商品的额外编码（多店铺 skuId）也要能命中
     return resolve_product(db, ext_name)
@@ -795,7 +834,7 @@ def _collect_batch_unit_price(db: Session, orders: list[dict], mapping_by_code: 
         pid = None
         total_qb = 0.0
         for ext_name, qty in items:
-            p = _resolve_jst_product(db, mapping_by_code, ext_name)
+            p = _resolve_jst_product(db, mapping_by_code, ext_name, o.get("warehouse"))
             if not p:
                 pid = None
                 break
@@ -911,7 +950,7 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
             continue
         lines = []
         for ext_name, qty in order_items:
-            p = _resolve_jst_product(db, mapping_by_code, ext_name)
+            p = _resolve_jst_product(db, mapping_by_code, ext_name, o.get("warehouse"))
             if not p:
                 unmapped_codes.add(ext_name)
                 d = unmapped_detail.setdefault(ext_name, {"external_code": ext_name, "count": 0})
@@ -919,6 +958,14 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
                 if d["count"] == 1:
                     su, sq = parse_jst_spec(ext_name)
                     d["spec"] = f"{fmt_qty(sq)} {su}/件" if su and sq else ""
+                    same = _same_name_order_products(db, ext_name)
+                    w = str(o.get("warehouse") or "").strip()
+                    if same and w:
+                        d["reason"] = (
+                            f"已有 {len(same)} 个同名商品，但都没有绑定仓储方「{w}」"
+                            f"（请到商品里把仓储方填成这个值，导入时才能按仓储方区分代发/库存）"
+                        )
+                        d["warehouse"] = w
                 continue
             if (p.product_type or "stock") == "stock":
                 # 平台商品名只匹配到「库存大类」⇒ 这一行没有关联结算清单（大类在商品编辑页不允许配关联）。

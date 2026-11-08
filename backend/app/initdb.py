@@ -532,7 +532,9 @@ _EXTRA_COLUMNS = {
     "products": (("stock_links", "JSON"), ("free_shipping", "BOOLEAN DEFAULT 0"),
                  ("stock_schemes", "JSON"),
                  # 多端商品：多店铺多编码。multi_code 开关 + codes=[{code, shop}]（主编码仍在 code）
-                 ("multi_code", "BOOLEAN DEFAULT 0"), ("codes", "JSON")),
+                 ("multi_code", "BOOLEAN DEFAULT 0"), ("codes", "JSON"),
+                 # 仓储方：聚水潭出库单的「仓储方」列，用于区分同名但不同渠道的商品（空=不限）
+                 ("warehouse_party", "VARCHAR(128) DEFAULT ''")),
     # 库存流水：出库行 id（一单多货时一行出库明细对应多条流水）
     "stock_movements": (("line_id", "INTEGER"),),
 }
