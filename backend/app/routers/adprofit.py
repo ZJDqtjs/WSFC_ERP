@@ -371,11 +371,10 @@ def _bf_run_one(task: dict) -> tuple[bool, str]:
     """跑一个（账号 + 类型 + 区间）任务：等空闲 → 启动 → 轮询到结束。"""
     kind = task["kind"]
 
-    def _record_zero(rows: int = 0) -> None:
-        # 京准通确认 0 元时没有可列出的缓存行，记进本地零花费清单，避免下次又判定为缺口
-        if kind == "spend":
-            _save_zero_span(kind, task["account"], task["start"], task["end"],
-                            label=task.get("account_label") or "")
+    def _record_zero() -> None:
+        # 0 元缓存不会出现在 jdfenxi 的缓存清单里，记进本地零花费清单，避免下次又判定为缺口
+        _save_zero_span(kind, task["account"], task["start"], task["end"],
+                        label=task.get("account_label") or "")
 
     # 等两个花费任务和定时抓取都空闲（夜间 catchup 会占浏览器登录态，可能十几分钟）
     deadline = time.time() + 1200
@@ -402,7 +401,7 @@ def _bf_run_one(task: dict) -> tuple[bool, str]:
         # 已经命中缓存 / 无需再抓：直接算完成
         if r.get("cached") or (r.get("jobId") and not r.get("error") and r.get("rows") is not None):
             if int(r.get("rows") or 0) == 0:
-                _record_zero()
+                _record_zero()   # exact 0 元缓存（CPS 与京准通都可能有）
             return True, "命中本地缓存，无需补抓"
         last_err = str(r.get("error") or "启动抓取失败")
         time.sleep(30)
@@ -420,6 +419,7 @@ def _bf_run_one(task: dict) -> tuple[bool, str]:
             if s.get("error"):
                 return False, str(s.get("error"))
             msg = str(s.get("message") or "完成")
+            # CPS 抓不到行时不会落盘，只有京准通会写 noSpend 空表，所以这里只给 spend 记零
             if kind == "spend" and ("没有任何花费数据" in msg
                                    or (int(s.get("done") or 0) == 0 and int(s.get("total") or 0) == 0)):
                 _record_zero()
