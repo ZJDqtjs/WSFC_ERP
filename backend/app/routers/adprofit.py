@@ -105,8 +105,61 @@ def _ad_cached(key: str, loader, refresh: bool = False):
     return got
 
 
+# 零花费缓存：jdfenxi 的「花费一览」清单只列有行的缓存，京准通 0 元时写的 noSpend 空表
+# 不会出现在 /api/paycomm/spend/cache 里。ERP 之前因此一直把这类账号当成「缺缓存」反复补抓。
+# 补抓时一旦确认某账号某区间是 0 元，就记到 data/ad_zero_spend.json，后续按「已覆盖、0 元」处理。
+AD_ZERO_SPEND_FILE = DATA_DIR / "ad_zero_spend.json"
+_ZERO_LOCK = threading.Lock()
+
+
+def _load_zero_spans(kind: str) -> list[dict]:
+    try:
+        data = json.loads(AD_ZERO_SPEND_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return []
+    items = data.get(kind) if isinstance(data, dict) else None
+    return items if isinstance(items, list) else []
+
+
+def _save_zero_span(kind: str, account: str, start: str, end: str,
+                    label: str = "", saved_at: str = "") -> None:
+    """记录一个「确认 0 元」的账号区间（幂等）。"""
+    with _ZERO_LOCK:
+        try:
+            data = json.loads(AD_ZERO_SPEND_FILE.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except Exception:  # noqa: BLE001
+            data = {}
+        items = data.get(kind) if isinstance(data.get(kind), list) else []
+        items = [x for x in items if not (
+            str(x.get("account")) == account and x.get("start") == start and x.get("end") == end
+        )]
+        items.append({
+            "mode": kind, "account": account, "accountLabel": label or account,
+            "start": start, "end": end, "rows": 0, "total": 0.0,
+            "savedAt": saved_at or datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "zeroSpend": True,
+        })
+        data[kind] = items
+        tmp = AD_ZERO_SPEND_FILE.with_suffix(".json.tmp")
+        try:
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, AD_ZERO_SPEND_FILE)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _zero_entries(kind: str) -> list[dict]:
+    """把已确认的 0 元区间补成缓存清单条目，让拼区间时把它们当成已覆盖。"""
+    return [dict(x, zeroSpend=True) for x in _load_zero_spans(kind)]
+
+
 def _load_entries(kind: str, refresh: bool = False) -> list[dict]:
-    """花费缓存清单（按账号+区间去重）。kind: cps / spend。"""
+    """花费缓存清单（按账号+区间去重）。kind: cps / spend。
+
+    真实缓存优先；noSpend 空表（0 元）用本地 ad_zero_spend.json 补进来。
+    """
     path = "/api/paycomm/cache" if kind == "cps" else "/api/paycomm/spend/cache"
 
     def _load():
@@ -114,7 +167,17 @@ def _load_entries(kind: str, refresh: bool = False) -> list[dict]:
         entries = data.get("entries") if isinstance(data, dict) else None
         return entries if isinstance(entries, list) else []
 
-    return _ad_cached("entries:" + kind, _load, refresh)
+    entries = _ad_cached("entries:" + kind, _load, refresh)
+    zeros = _zero_entries(kind)
+    if not zeros:
+        return entries
+    # 同一账号+区间已经有真实缓存（非 0 元）时，以真实缓存为准
+    real = {(str(e.get("account") or ""), e.get("start"), e.get("end")) for e in entries}
+    merged = list(entries) + [
+        z for z in zeros
+        if (str(z.get("account") or ""), z.get("start"), z.get("end")) not in real
+    ]
+    return merged
 
 
 def _load_accounts(refresh: bool = False) -> list[dict]:
@@ -250,6 +313,16 @@ def _ad_busy() -> bool:
     return False
 
 
+def _ad_scrape_busy() -> bool:
+    """定时/夜间抓取是否占着浏览器（jdfenxi 的 scrape.lock）。"""
+    try:
+        st = _ad_get("/api/status")
+    except Exception:  # noqa: BLE001
+        return False
+    sc = st.get("scrape") or {}
+    return bool(sc.get("active") or (sc.get("lock") or {}).get("locked"))
+
+
 def _bf_tasks(start: date, end: date) -> list[dict]:
     """按账号 + 花费类型算出所选区间缺失的缓存段（交给 jdfenxi 逐个补抓）。"""
     try:
@@ -297,17 +370,25 @@ def _bf_tasks(start: date, end: date) -> list[dict]:
 def _bf_run_one(task: dict) -> tuple[bool, str]:
     """跑一个（账号 + 类型 + 区间）任务：等空闲 → 启动 → 轮询到结束。"""
     kind = task["kind"]
-    deadline = time.time() + 300
+
+    def _record_zero(rows: int = 0) -> None:
+        # 京准通确认 0 元时没有可列出的缓存行，记进本地零花费清单，避免下次又判定为缺口
+        if kind == "spend":
+            _save_zero_span(kind, task["account"], task["start"], task["end"],
+                            label=task.get("account_label") or "")
+
+    # 等两个花费任务和定时抓取都空闲（夜间 catchup 会占浏览器登录态，可能十几分钟）
+    deadline = time.time() + 1200
     while time.time() < deadline:
-        if not _ad_busy():
+        if not _ad_busy() and not _ad_scrape_busy():
             break
-        time.sleep(5)
+        time.sleep(30)
     else:
-        return False, "jdfenxi 有其它抓取任务在跑，等待空闲超时"
+        return False, "jdfenxi 有其它抓取任务/定时任务在跑，等待空闲超时"
 
     last_err = ""
     started = False
-    for _ in range(4):
+    for _ in range(8):
         try:
             r = _ad_post(_BF_RUN_PATH[kind], {
                 "account": task["account"], "start": task["start"],
@@ -320,9 +401,11 @@ def _bf_run_one(task: dict) -> tuple[bool, str]:
             break
         # 已经命中缓存 / 无需再抓：直接算完成
         if r.get("cached") or (r.get("jobId") and not r.get("error") and r.get("rows") is not None):
+            if int(r.get("rows") or 0) == 0:
+                _record_zero()
             return True, "命中本地缓存，无需补抓"
         last_err = str(r.get("error") or "启动抓取失败")
-        time.sleep(15)
+        time.sleep(30)
     if not started:
         return False, last_err or "启动抓取失败"
 
@@ -336,7 +419,11 @@ def _bf_run_one(task: dict) -> tuple[bool, str]:
         if not (s.get("active") or s.get("running")):
             if s.get("error"):
                 return False, str(s.get("error"))
-            return True, str(s.get("message") or "完成")
+            msg = str(s.get("message") or "完成")
+            if kind == "spend" and ("没有任何花费数据" in msg
+                                   or (int(s.get("done") or 0) == 0 and int(s.get("total") or 0) == 0)):
+                _record_zero()
+            return True, msg
     return False, "补抓超时（30 分钟）"
 
 
