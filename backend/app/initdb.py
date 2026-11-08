@@ -14,8 +14,11 @@ from .models import Deduction, FinanceRecord, Outbound, OutboundLine, PackRule, 
 from .services import recompute_product, seed_units
 
 
-def migrate(engine: Engine, maker: sessionmaker) -> None:
-    """轻量迁移：为已存在的库补充新增列（幂等，新库 create_all 已含全部列自动跳过）。"""
+def migrate(engine: Engine, maker: sessionmaker, key: str = "") -> None:
+    """轻量迁移：为已存在的库补充新增列（幂等，新库 create_all 已含全部列自动跳过）。
+
+    key 用于给「历史出库回填」打按分仓的一次性标记：老数据补齐后不再每次启动全表重扫。
+    """
     with engine.connect() as conn:
         cols = [r[1] for r in conn.execute(text("PRAGMA table_info(products)")).fetchall()]
         if "code" not in cols:
@@ -84,8 +87,6 @@ def migrate(engine: Engine, maker: sessionmaker) -> None:
         if "gross_sales" not in lcols:
             conn.execute(text("ALTER TABLE outbound_lines ADD COLUMN gross_sales FLOAT DEFAULT 0"))
         conn.commit()
-    _backfill_sale_product(maker)
-    _backfill_pack_rule(maker)
 
     # 一单多货规则表：箱型号关联清单（新增列）
     with engine.connect() as conn:
@@ -93,8 +94,6 @@ def migrate(engine: Engine, maker: sessionmaker) -> None:
         if "box_items" not in prcols:
             conn.execute(text("ALTER TABLE pack_rules ADD COLUMN box_items JSON"))
             conn.commit()
-    _backfill_pack_rule_box_items(maker)
-    _backfill_gross_sales(maker)
 
     # 入仓表：入仓品新增「关联库存商品 / 每袋净重」，入仓记录新增「收入/成本/运费/毛利」口径（新增列，幂等）
     with engine.connect() as conn:
@@ -121,8 +120,34 @@ def migrate(engine: Engine, maker: sessionmaker) -> None:
                     conn.execute(text(f"ALTER TABLE warehouse_ins ADD COLUMN {col} {ddl}"))
             conn.commit()
 
+    _backfill_outbounds_once(maker, key)
 
-def _backfill_gross_sales(maker: sessionmaker) -> None:
+
+# 历史出库回填的「一次性」标记版本：这些回填只用于补齐老数据，新出库单在创建时
+# 已直接写入对应字段（sale_product_id / gross_sales / pack_rule_name）。
+# 不打标记的话每次启动都会全表重扫（wh01 6 万单实测约 2 分钟，且随历史增长越来越慢）。
+_BACKFILL_OUTBOUNDS_VERSION = "v1"
+
+
+def _backfill_outbounds_once(maker: sessionmaker, key: str) -> None:
+    """按分仓只执行一次历史出库回填；四项全部成功才写标记，失败则下次启动重试。"""
+    marker = DATA_DIR / f".backfill_outbounds_{_BACKFILL_OUTBOUNDS_VERSION}_{key or 'default'}"
+    if marker.exists():
+        return
+    ok = all([
+        _backfill_sale_product(maker),
+        _backfill_pack_rule(maker),
+        _backfill_pack_rule_box_items(maker),
+        _backfill_gross_sales(maker),
+    ])
+    if ok:
+        try:
+            marker.write_text("done\n", encoding="utf-8")
+        except OSError:
+            pass
+
+
+def _backfill_gross_sales(maker: sessionmaker) -> bool:
     """历史出库销售行回填「扣点前销售金额」：按备注里的店铺扣点把 gross_sales=0 的扣点单行还原（幂等）。"""
     db = maker()
     try:
@@ -147,11 +172,16 @@ def _backfill_gross_sales(maker: sessionmaker) -> None:
             if changed:
                 db.flush()
         db.commit()
+        return True
+    except Exception as e:  # 回填失败不影响主流程
+        print("[迁移] 回填 gross_sales 失败:", e)
+        db.rollback()
+        return False
     finally:
         db.close()
 
 
-def _backfill_pack_rule_box_items(maker: sessionmaker) -> None:
+def _backfill_pack_rule_box_items(maker: sessionmaker) -> bool:
     """回填 pack_rules.box_items：把旧 box_type 文本解析并关联到包材纸箱（幂等）。"""
     db = maker()
     try:
@@ -181,9 +211,11 @@ def _backfill_pack_rule_box_items(maker: sessionmaker) -> None:
             if items:
                 r.box_items = items
         db.commit()
+        return True
     except Exception as e:  # 回填失败不影响主流程
         print("[迁移] 回填 pack_rules.box_items 失败:", e)
         db.rollback()
+        return False
     finally:
         db.close()
 
@@ -197,7 +229,7 @@ def _box_model_name(pname: str) -> str:
     return n
 
 
-def _backfill_pack_rule(maker: sessionmaker) -> None:
+def _backfill_pack_rule(maker: sessionmaker) -> bool:
     """回填出库单的 pack_rule_name / pack_rule_id（幂等）：从 remark 解析「一单多货·规则：xxx）」。"""
     db = maker()
     try:
@@ -212,14 +244,16 @@ def _backfill_pack_rule(maker: sessionmaker) -> None:
             o.pack_rule_name = seg
             o.pack_rule_id = rules.get(seg)
         db.commit()
+        return True
     except Exception as e:  # 回填失败不影响主流程
         print("[迁移] 回填 pack_rule 失败:", e)
         db.rollback()
+        return False
     finally:
         db.close()
 
 
-def _backfill_sale_product(maker: sessionmaker) -> None:
+def _backfill_sale_product(maker: sessionmaker) -> bool:
     """回填 pack 行的 sale_product_id（幂等）：按同单内销售商品的 pack_items 匹配，无匹配保持空。"""
     db = maker()
     try:
@@ -247,9 +281,11 @@ def _backfill_sale_product(maker: sessionmaker) -> None:
                         break
         if changed:
             db.commit()
+        return True
     except Exception as e:  # 回填失败不影响主流程
         print("[迁移] 回填 sale_product_id 失败:", e)
         db.rollback()
+        return False
     finally:
         db.close()
 
@@ -555,7 +591,7 @@ def init_warehouse(key: str, copy_users_from: str | None = None, seed_catalog: b
     Base.metadata.create_all(bind=eng)
     ensure_columns(eng)
     maker = get_sessionmaker(key)
-    migrate(eng, maker)
+    migrate(eng, maker, key)
     db = maker()
     try:
         seed_units(db)
