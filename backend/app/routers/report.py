@@ -561,6 +561,7 @@ def _ad_prepay_of(dbs: list[Session], date_from: str, as_of: str, wh_key: str,
 
         spent = 0.0
         seen: set[str] = set()
+        by_acc: dict[str, dict] = {}
         for part_name, part in (("CPS", cps), ("京准通", jzt)):
             for acc in part.get("accounts") or []:
                 key = str(acc.get("key") or "")
@@ -572,16 +573,18 @@ def _ad_prepay_of(dbs: list[Session], date_from: str, as_of: str, wh_key: str,
                     continue
                 amount = round(float(acc.get("total") or 0), 2)
                 spent += amount
-                ad["by_account"].append({
+                row = by_acc.setdefault(key, {
                     "key": key,
                     "label": str(acc.get("label") or key),
                     "warehouse": target,
-                    "spend": amount,
+                    "spend": 0.0,
                 })
+                row["spend"] = round(float(row["spend"]) + amount, 2)
                 for gap in acc.get("gaps") or []:
                     ad["warnings"].append(
                         f"{part_name} · {acc.get('label') or key} 缺 {gap}"
                     )
+        ad["by_account"] = sorted(by_acc.values(), key=lambda x: -float(x["spend"]))
 
         # 有店铺一次缓存都没有：明确列出来，避免余额偏高被当成真的
         if wh_key != ALL_WH:
