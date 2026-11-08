@@ -25,6 +25,7 @@ import io
 import json
 import os
 import re
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -208,6 +209,220 @@ def _spend_part(kind: str, start: date, end: date, refresh: bool):
         })
     accounts.sort(key=lambda a: -a["total"])
     return {"ok": True, "error": None, "total": round(total, 2), "accounts": accounts}
+
+
+# ---------------------------------------------------------------- 缺失花费自动补抓
+# 「刷新广告缓存」只是让 ERP 重新读一遍挂载服务的缓存清单，**不会**触发抓取。
+# 真正的补抓要调用 jdfenxi 现有的 /api/paycomm/run（CPS）与 /api/paycomm/spend/run（京准通）：
+# 这两个接口发现该账号+区间没有缓存时会启动浏览器抓取并写回缓存；两者共用浏览器登录态，
+# 因此这里用后台线程串行排队，一次只跑一个任务，结束后再刷 ERP 的缓存清单。
+_BF_LOCK = threading.Lock()
+_BF_STATE: dict = {
+    "running": False, "jobId": None, "message": "", "error": None,
+    "startedAt": None, "finishedAt": None, "done": 0, "total": 0,
+    "current": None, "tasks": [], "results": [],
+}
+_BF_STATUS_PATH = {"cps": "/api/paycomm/status", "spend": "/api/paycomm/spend/status"}
+_BF_RUN_PATH = {"cps": "/api/paycomm/run", "spend": "/api/paycomm/spend/run"}
+_BF_LABEL = {"cps": "CPS 花费", "spend": "京准通花费"}
+
+
+def _ad_post(path: str, params: dict):
+    """POST 到挂载服务（启动抓取任务用）；异常由调用方降级处理。"""
+    qs = urllib.parse.urlencode(params)
+    req = urllib.request.Request(
+        AD_SERVICE_URL + path + "?" + qs, method="POST",
+        headers={"Accept": "application/json", "User-Agent": "WSFC-ERP"},
+    )
+    with urllib.request.urlopen(req, timeout=max(AD_TIMEOUT, 15)) as resp:  # noqa: S310
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _ad_busy() -> bool:
+    """jdfenxi 的 CPS/京准通两个抓取器是否已有任务在跑（两者共用浏览器登录态）。"""
+    for kind in ("cps", "spend"):
+        try:
+            s = _ad_get(_BF_STATUS_PATH[kind])
+        except Exception:  # noqa: BLE001
+            continue
+        if s.get("active") or s.get("running"):
+            return True
+    return False
+
+
+def _bf_tasks(start: date, end: date) -> list[dict]:
+    """按账号 + 花费类型算出所选区间缺失的缓存段（交给 jdfenxi 逐个补抓）。"""
+    try:
+        accounts = [str(a.get("key")) for a in _load_accounts(True) if a.get("key")]
+    except Exception:  # noqa: BLE001
+        accounts = []
+    labels: dict[str, str] = {}
+    try:
+        for a in _load_accounts(False):
+            labels[str(a.get("key"))] = str(a.get("label") or a.get("key"))
+    except Exception:  # noqa: BLE001
+        pass
+
+    tasks: list[dict] = []
+    for kind, label in (("cps", "CPS 花费"), ("spend", "京准通花费")):
+        try:
+            entries = _load_entries(kind, True)
+        except Exception:  # noqa: BLE001
+            continue
+        slots_by_acc: dict[str, dict[tuple[date, date], dict]] = {}
+        for e in entries:
+            s, t = _day(e.get("start")), _day(e.get("end"))
+            if not s or not t or s > t:
+                continue
+            acc = str(e.get("account") or "")
+            slot = slots_by_acc.setdefault(acc, {})
+            old = slot.get((s, t))
+            if old is None or str(e.get("savedAt") or "") >= str(old.get("savedAt") or ""):
+                slot[(s, t)] = e
+        accs = accounts or sorted(slots_by_acc)
+        for acc in accs:
+            _chosen, gaps = _tile_spans(sorted(slots_by_acc.get(acc, {})), start, end)
+            for gs, ge in gaps:
+                tasks.append({
+                    "kind": kind,
+                    "label": label,
+                    "account": acc,
+                    "account_label": labels.get(acc) or acc,
+                    "start": gs.isoformat(),
+                    "end": ge.isoformat(),
+                })
+    return tasks
+
+
+def _bf_run_one(task: dict) -> tuple[bool, str]:
+    """跑一个（账号 + 类型 + 区间）任务：等空闲 → 启动 → 轮询到结束。"""
+    kind = task["kind"]
+    deadline = time.time() + 300
+    while time.time() < deadline:
+        if not _ad_busy():
+            break
+        time.sleep(5)
+    else:
+        return False, "jdfenxi 有其它抓取任务在跑，等待空闲超时"
+
+    last_err = ""
+    started = False
+    for _ in range(4):
+        try:
+            r = _ad_post(_BF_RUN_PATH[kind], {
+                "account": task["account"], "start": task["start"],
+                "end": task["end"], "force": 0,
+            })
+        except Exception as exc:  # noqa: BLE001
+            r = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        if r.get("ok") and r.get("jobId"):
+            started = True
+            break
+        # 已经命中缓存 / 无需再抓：直接算完成
+        if r.get("cached") or (r.get("jobId") and not r.get("error") and r.get("rows") is not None):
+            return True, "命中本地缓存，无需补抓"
+        last_err = str(r.get("error") or "启动抓取失败")
+        time.sleep(15)
+    if not started:
+        return False, last_err or "启动抓取失败"
+
+    deadline = time.time() + 1800  # 单个任务最多 30 分钟
+    while time.time() < deadline:
+        time.sleep(5)
+        try:
+            s = _ad_get(_BF_STATUS_PATH[kind])
+        except Exception:  # noqa: BLE001
+            continue
+        if not (s.get("active") or s.get("running")):
+            if s.get("error"):
+                return False, str(s.get("error"))
+            return True, str(s.get("message") or "完成")
+    return False, "补抓超时（30 分钟）"
+
+
+def _bf_worker(tasks: list[dict]) -> None:
+    results: list[dict] = []
+    try:
+        for i, task in enumerate(tasks, 1):
+            with _BF_LOCK:
+                _BF_STATE.update({
+                    "done": i - 1,
+                    "current": task,
+                    "message": (f"正在补抓 {i}/{len(tasks)}：{task['label']} · "
+                                f"{task['account_label']} {task['start']} ~ {task['end']}"),
+                })
+            ok, msg = _bf_run_one(task)
+            results.append({**task, "ok": ok, "message": msg})
+            # 每完成一个就把该类型的缓存清单重新读一遍，后续任务能看到最新覆盖
+            try:
+                _load_entries(task["kind"], True)
+            except Exception:  # noqa: BLE001
+                pass
+            with _BF_LOCK:
+                _BF_STATE["results"] = list(results)
+    except Exception as exc:  # noqa: BLE001
+        with _BF_LOCK:
+            _BF_STATE["error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        ok_n = sum(1 for r in results if r.get("ok"))
+        try:
+            _load_entries("cps", True)
+            _load_entries("spend", True)
+        except Exception:  # noqa: BLE001
+            pass
+        _SKU_ROWS_CACHE.clear()
+        with _BF_LOCK:
+            _BF_STATE.update({
+                "running": False,
+                "done": len(tasks),
+                "total": len(tasks),
+                "finishedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "current": None,
+                "results": list(results),
+                "message": (f"补抓完成：成功 {ok_n}/{len(tasks)}；"
+                            + ("失败项见下方明细" if ok_n < len(tasks) else "缓存已更新")),
+            })
+
+
+@router.post("/adprofit/backfill")
+def ad_profit_backfill(
+    date_from: str = "",
+    date_to: str = "",
+    db: Session = Depends(get_db_wh),
+    user: User = Depends(get_current_user),
+):
+    """补齐所选区间缺失的 CPS / 京准通花费缓存（调用 jdfenxi 已有的抓取接口）。"""
+    start, end = _parse_range(date_from, date_to)
+    with _BF_LOCK:
+        if _BF_STATE["running"]:
+            return {"ok": False, "error": "已有补抓任务在运行，请等它结束"}
+    tasks = _bf_tasks(start, end)
+    if not tasks:
+        return {"ok": True, "count": 0, "tasks": [], "message": "所选区间没有缺失的花费缓存"}
+    if len(tasks) > 50:
+        return {"ok": False,
+                "error": f"缺失区间太多（{len(tasks)} 个），请把日期范围缩小后再补抓"}
+    with _BF_LOCK:
+        if _BF_STATE["running"]:
+            return {"ok": False, "error": "已有补抓任务在运行，请等它结束"}
+        job_id = datetime.now().strftime("%Y%m%d%H%M%S") + "-adbackfill"
+        _BF_STATE.update({
+            "running": True, "jobId": job_id, "message": "准备补抓…", "error": None,
+            "startedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "finishedAt": None, "done": 0, "total": len(tasks),
+            "current": None, "tasks": tasks, "results": [],
+        })
+    threading.Thread(target=_bf_worker, args=(tasks,), name="adprofit-backfill", daemon=True).start()
+    return {"ok": True, "count": len(tasks), "jobId": job_id, "tasks": tasks}
+
+
+@router.get("/adprofit/backfill/status")
+def ad_profit_backfill_status(user: User = Depends(get_current_user)):
+    with _BF_LOCK:
+        state = dict(_BF_STATE)
+        state["tasks"] = list(_BF_STATE.get("tasks") or [])
+        state["results"] = list(_BF_STATE.get("results") or [])
+    return {"ok": True, **state}
 
 
 # SKU 明细要用挂载服务「花费一览」的导出接口（现成的按 SKU 报表），

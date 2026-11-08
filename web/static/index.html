@@ -832,6 +832,8 @@
             <button class="btn secondary" onclick="adpQuick('lastmonth')">上月</button>
             <div class="grow"></div>
             <button class="btn secondary" onclick="loadAdProfit(true)" title="忽略 60 秒缓存，重新读取挂载服务的花费缓存清单">↻ 刷新广告缓存</button>
+            <button class="btn secondary" id="adpBackfillBtn" onclick="adpBackfill()" title="调用 jdfenxi 的抓取接口，补齐所选区间缺失的 CPS / 京准通花费缓存（共用浏览器登录态，任务会排队）">补抓缺失花费</button>
+            <span class="muted" id="adpBfHint" style="font-size:12px;"></span>
             <button class="btn secondary" onclick="adpOpenAdService()" title="打开京东广告分析（jdfenxi）">京东广告分析 →</button>
           </div>
           <div class="toolbar" id="adpWhBar" style="display:none;">

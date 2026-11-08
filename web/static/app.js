@@ -12494,6 +12494,7 @@ let ADP_WH = "";         // 单仓总览查看的分仓 key；"" = 当前分仓
 let ADP_SKU = null;      // 按 SKU 明细接口的返回（搜索/排序只在前端重排，不重复请求）
 let ADP_SKU_FULL = false; // 是否展开「显示全部」
 let adpInited = false;
+let ADP_BF_TIMER = null;  // 补抓进度轮询定时器
 let adpWhLoaded = false;
 
 const adpYmd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -12587,6 +12588,73 @@ async function loadAdProfit(refresh) {
   }
   renderAdProfit(d);
   loadAdProfitSku(from, to, whQs, refresh);
+}
+
+/* ---------------- 缺失花费自动补抓（调用 jdfenxi 抓取接口） ---------------- */
+async function adpBackfill() {
+  if (ADP_BF_TIMER) return;
+  const from = $("adpDateFrom").value, to = $("adpDateTo").value;
+  const btn = $("adpBackfillBtn"), hint = $("adpBfHint");
+  if (btn) btn.disabled = true;
+  if (hint) hint.textContent = "正在检查缺失区间…";
+  let d;
+  try {
+    d = await api(`/api/adprofit/backfill?date_from=${from}&date_to=${to}`, "POST");
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    if (hint) hint.textContent = "";
+    toast("补抓启动失败：" + e.message);
+    return;
+  }
+  if (!d.ok) {
+    if (btn) btn.disabled = false;
+    if (hint) hint.textContent = "";
+    toast(d.error || "补抓启动失败");
+    return;
+  }
+  if (!d.count) {
+    if (btn) btn.disabled = false;
+    if (hint) hint.textContent = d.message || "所选区间没有缺失的花费缓存";
+    toast(d.message || "所选区间没有缺失的花费缓存");
+    return;
+  }
+  if (hint) hint.textContent = `已启动 ${d.count} 个补抓任务…`;
+  toast(`开始补抓 ${d.count} 个缺失区间（jdfenxi 会打开浏览器抓取，可能要几分钟）`);
+  ADP_BF_TIMER = setInterval(adpBackfillPoll, 3000);
+  adpBackfillPoll();
+}
+
+async function adpBackfillPoll() {
+  const btn = $("adpBackfillBtn"), hint = $("adpBfHint");
+  let s;
+  try {
+    s = await api("/api/adprofit/backfill/status");
+  } catch (e) {
+    stopAdpBackfillPoll();
+    if (btn) btn.disabled = false;
+    toast("查询补抓进度失败：" + e.message);
+    return;
+  }
+  if (s.running) {
+    if (hint) hint.textContent = s.message || `补抓中 ${s.done}/${s.total}`;
+    return;
+  }
+  stopAdpBackfillPoll();
+  if (btn) btn.disabled = false;
+  const fails = (s.results || []).filter((r) => !r.ok);
+  if (hint) {
+    hint.textContent = (s.message || "补抓完成")
+      + (fails.length ? `；失败：${fails.map((f) => `${f.label}·${f.account_label} ${f.start}~${f.end}`).join("、")}` : "");
+  }
+  toast(s.message || "补抓完成");
+  loadAdProfit(true);
+}
+
+function stopAdpBackfillPoll() {
+  if (ADP_BF_TIMER) {
+    clearInterval(ADP_BF_TIMER);
+    ADP_BF_TIMER = null;
+  }
 }
 
 /* ---------------- 按 SKU 明细 ---------------- */
