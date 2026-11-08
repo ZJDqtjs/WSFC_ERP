@@ -35,7 +35,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
-from ..database import get_db_wh, get_sessionmaker, load_warehouses, resolve_key
+from ..database import DATA_DIR, get_db_wh, get_sessionmaker, load_warehouses, resolve_key
 from ..models import Product, User, WarehouseProduct
 from .report import ALL_WH, _heavy_cached, _summary_all, _summary_of
 
@@ -51,6 +51,27 @@ _AD_CACHE: dict[str, tuple[float, object]] = {}
 
 # 各缓存只在读取时判断 TTL、过期项从不删除，长跑下来条目只增不减；写入时顺带清扫并封顶。
 _CACHE_MAX = 200
+
+# 店铺账号 → 分仓 key 的对照表（余额表按仓算「广告充值预付余额」用）。
+# 路径：backend/data/ad_account_wh.json，内容 {"main":"aosidi","b":"wh01",...}；
+# 文件缺失 = 未配置，此时单仓余额表不计算广告预付（避免拿全公司花费去减单仓充值）。
+AD_ACCOUNT_WH_FILE = DATA_DIR / "ad_account_wh.json"
+
+
+def load_account_warehouses() -> dict[str, str]:
+    """读取店铺账号 → 分仓 key 对照表；文件缺失/格式不对时返回空表。"""
+    try:
+        data = json.loads(AD_ACCOUNT_WH_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - 未配置属正常情况
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in data.items():
+        key, wh = str(k or "").strip(), str(v or "").strip()
+        if key and wh:
+            out[key] = wh
+    return out
 
 
 def _cache_put(cache: dict, key, value, ttl: float) -> None:

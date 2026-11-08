@@ -29,7 +29,7 @@ from ..models import (
     WarehouseProduct,
 )
 from .warehouse_in import net_weight_kg
-from ..services import AD_PREPAID_CATEGORY, INBOUND_FEE_REF, is_ad_prepay
+from ..services import AD_PREPAID_CATEGORY, INBOUND_FEE_REF, _fifo_replay, is_ad_prepay
 
 router = APIRouter(prefix="/api", tags=["report"])
 
@@ -441,58 +441,74 @@ def summary(
     return _heavy_cached(key, _compute)
 
 
-@router.get("/report/balances")
-def balances(
-    date_from: str = "",
-    date_to: str = "",
-    wh: str = "",              # 同 /report/summary：空=本登录会话分仓；不支持 all（余额需逐仓看）
-    with_ads: int = 1,         # 1 = 读挂载服务的广告花费缓存，算「广告充值预付余额」
-    db: Session = Depends(get_db_wh),
-    user: User = Depends(get_current_user),
-):
-    """余额表：截至 date_to（含）还剩什么资产 / 欠多少往来 / 预付还剩多少。
+# ---------------- 余额表 ----------------
+# 时点库存按 FIFO 重放回算（选 10 月不能拿今天的库存冒充 10-31），结果按（仓, 截止日）短缓存。
+_STOCK_ASOF_TTL = 60.0
+_STOCK_ASOF_CACHE: dict[tuple, tuple[float, dict]] = {}
 
-    与「损益」彻底分开：损益只回答「这段时间赚没赚」，余额回答「钱和货现在在哪」。
-    - 库存：商品结存价值；负库存单独标出（说明有超卖/漏入库，需盘点冲正）
-    - 往来：复用「待付款账单」的未结清口径（采购 / 入仓 / 代发 / 其他收支 / 出库回款）
-    - 广告：充值记为预付资产，实际消耗读挂载服务花费缓存；余额 = 累计充值 - 累计消耗
-    - 盘点：区间内的盘盈入账价值与盘亏成本，并明确「未计入损益」
+
+def _stock_value_at(db: Session, wh_key: str, as_of: str) -> dict:
+    """按库存流水 FIFO 重放到 as_of（含）的结存价值与负库存统计。"""
+    cache_key = (wh_key, as_of)
+    now = time.time()
+    hit = _STOCK_ASOF_CACHE.get(cache_key)
+    if hit and now - hit[0] < _STOCK_ASOF_TTL:
+        return hit[1]
+    rows = db.execute(
+        select(
+            StockMovement.product_id, StockMovement.id, StockMovement.move_type,
+            StockMovement.quantity_base, StockMovement.amount,
+            StockMovement.ref_type, StockMovement.ref_id,
+        )
+        .where(StockMovement.date <= as_of)
+        .order_by(StockMovement.product_id, StockMovement.id)
+    ).all()
+    costs = dict(db.execute(select(Product.id, Product.unit_cost)).all())
+    byp: dict[int, list] = {}
+    for r in rows:
+        byp.setdefault(int(r.product_id), []).append(r)
+    value = 0.0
+    count = 0
+    neg_count = 0
+    neg_qty = 0.0
+    for pid, moves in byp.items():
+        stock, val, _layers, _base, _out = _fifo_replay(
+            moves, fallback=float(costs.get(pid, 0.0) or 0.0)
+        )
+        value += val
+        if abs(stock) > 1e-9:
+            count += 1
+        if stock < 0:
+            neg_count += 1
+            neg_qty += stock
+    result = {
+        "stock_value": round(value, 2),
+        "product_count": count,
+        "negative_count": neg_count,
+        "negative_qty": round(neg_qty, 4),
+        "negative_value": 0.0,
+        "basis": "as_of",
+        "as_of": as_of,
+    }
+    _STOCK_ASOF_CACHE[cache_key] = (now, result)
+    while len(_STOCK_ASOF_CACHE) > 32:
+        oldest = min(_STOCK_ASOF_CACHE, key=lambda k: _STOCK_ASOF_CACHE[k][0])
+        _STOCK_ASOF_CACHE.pop(oldest, None)
+    return result
+
+
+def _ad_prepay_of(dbs: list[Session], date_from: str, as_of: str, wh_key: str,
+                  with_ads: bool, account_wh: dict[str, str]) -> dict:
+    """广告充值预付余额：累计充值 − 该仓（或全仓）实际消耗。
+
+    单仓必须依赖「店铺账号 → 分仓」对照表：充值按仓记账，花费按店铺抓取；
+    没有映射时不能拿全公司的消耗去减一个仓的充值（会算出 −10 万这种假余额）。
     """
-    import datetime as _dt
+    from datetime import date as _date
 
-    if wh == ALL_WH:
-        raise HTTPException(400, "余额表不支持全仓合计，请切到单仓查看")
-
-    as_of = date_to or _dt.date.today().isoformat()
-    key = ("balances", resolve_key(wh), date_from, as_of, int(with_ads))
-
-    def _compute() -> dict:
-        # ---- 库存（资产） ----
-        stock_value = round(float(db.execute(
-            select(func.coalesce(func.sum(Product.stock_value), 0.0))
-        ).scalar() or 0.0), 2)
-        neg_count, neg_qty, neg_value = db.execute(
-            select(func.count(), func.coalesce(func.sum(Product.stock), 0.0),
-                   func.coalesce(func.sum(Product.stock_value), 0.0))
-            .where(Product.stock < 0)
-        ).one()
-        stock_doc_count = int(db.execute(
-            select(func.count()).select_from(Product).where(Product.stock != 0)
-        ).scalar() or 0)
-
-        # ---- 往来（负债 / 应收）----
-        # 口径与「待付款账单」完全同源：未结清（待付款 + 部分付款的未付余额）
-        from .payables import _collect
-        pending = _collect(db)
-        payables: dict[str, float] = {}
-        receivables: dict[str, float] = {}
-        for r in pending:
-            bucket = payables if r["direction"] == "out" else receivables
-            bucket[r["source"]] = round(bucket.get(r["source"], 0.0) + float(r["amount"] or 0), 2)
-
-        # ---- 广告充值预付 ----
-        # SQL 侧按前缀过滤，避免把整张 other_expenses 拉进内存
-        recharges = [
+    recharges: list[tuple[str, float]] = []
+    for db in dbs:
+        recharges.extend(
             (e.date or "", float(e.amount or 0.0))
             for e in db.execute(
                 select(OtherExpense).where(
@@ -501,104 +517,318 @@ def balances(
                 )
             ).scalars()
             if is_ad_prepay(e.category)
-        ]
-        recharge_total = round(sum(a for d, a in recharges if (not as_of or d <= as_of)), 2)
-        recharge_period = round(sum(
-            a for d, a in recharges
-            if (not date_from or d >= date_from) and (not as_of or d <= as_of)
-        ), 2)
-        ad = {
-            "recharged_total": recharge_total,
-            "recharged_period": recharge_period,
-            "spent_total": None,
-            "balance": None,
-            "ok": False,
-            "warnings": [],
-        }
-        if with_ads and recharge_total > 0:
-            first = min((d for d, a in recharges if a > 0 and (not as_of or d <= as_of)), default="")
-            if first:
-                try:
-                    from .adprofit import _spend_part
-                    start = _dt.date.fromisoformat(first)
-                    end = _dt.date.fromisoformat(as_of)
-                    cps = _spend_part("cps", start, end, False)
-                    jzt = _spend_part("spend", start, end, False)
-                    if cps.get("ok") and jzt.get("ok"):
-                        spent = round(float(cps.get("total") or 0) + float(jzt.get("total") or 0), 2)
-                        ad.update({
-                            "spent_total": spent,
-                            "balance": round(recharge_total - spent, 2),
-                            "ok": True,
-                        })
-                        for part_name, part in (("CPS", cps), ("京准通", jzt)):
-                            for acc in part.get("accounts") or []:
-                                if acc.get("gaps"):
-                                    ad["warnings"].append(
-                                        f"{acc.get('label') or acc.get('key')} {part_name}花费缺 "
-                                        + "、".join(acc["gaps"])
-                                    )
-                    else:
-                        ad["warnings"].append(
-                            (cps.get("error") or "") if not cps.get("ok") else (jzt.get("error") or "")
-                        )
-                except Exception as exc:  # noqa: BLE001 - 挂载服务不可用时降级
-                    ad["warnings"].append(f"广告花费缓存读取失败：{exc}")
-
-        # ---- 盘点差异（未计入损益）----
-        q = select(StockMovement).where(
-            StockMovement.move_type == "adjust",
-            StockMovement.ref_type == "manual",
         )
-        if date_from:
-            q = q.where(StockMovement.date >= date_from)
-        if as_of:
-            q = q.where(StockMovement.date <= as_of)
-        gain = loss = 0.0
-        gain_n = loss_n = 0
-        for m in db.execute(q).scalars():
-            amt = float(m.amount or 0.0)
-            if float(m.quantity_base or 0.0) >= 0:
-                gain += amt
-                gain_n += 1
-            else:
-                loss += amt
-                loss_n += 1
-        booked = round(float(db.execute(
-            select(func.coalesce(func.sum(OtherExpense.amount), 0.0))
-            .where(OtherExpense.category == "库存损耗")
-        ).scalar() or 0.0), 2)
+    recharge_total = round(sum(a for d, a in recharges if (not as_of or d <= as_of)), 2)
+    recharge_period = round(sum(
+        a for d, a in recharges
+        if (not date_from or d >= date_from) and (not as_of or d <= as_of)
+    ), 2)
+    ad = {
+        "recharged_total": recharge_total,
+        "recharged_period": recharge_period,
+        "spent_total": None,
+        "balance": None,
+        "ok": False,
+        "warnings": [],
+        "by_account": [],
+        "unmapped_accounts": [],
+        "scope": "all" if wh_key == ALL_WH else "warehouse",
+    }
+    if not with_ads or recharge_total <= 0:
+        return ad
 
-        return {
+    first = min((d for d, a in recharges if a > 0 and (not as_of or d <= as_of)), default="")
+    if not first:
+        return ad
+
+    try:
+        from .adprofit import _load_accounts, _spend_part
+        start, end = _date.fromisoformat(first), _date.fromisoformat(as_of)
+        cps = _spend_part("cps", start, end, False)
+        jzt = _spend_part("spend", start, end, False)
+        if not (cps.get("ok") and jzt.get("ok")):
+            ad["warnings"].append(
+                (cps.get("error") or "") if not cps.get("ok") else (jzt.get("error") or "")
+            )
+            return ad
+
+        if wh_key != ALL_WH and not account_wh:
+            ad["warnings"].append(
+                "未配置「店铺账号 → 分仓」对照表（backend/data/ad_account_wh.json），"
+                "本仓广告预付余额不计算（否则会拿全公司花费减单仓充值）"
+            )
+            return ad
+
+        spent = 0.0
+        seen: set[str] = set()
+        for part_name, part in (("CPS", cps), ("京准通", jzt)):
+            for acc in part.get("accounts") or []:
+                key = str(acc.get("key") or "")
+                seen.add(key)
+                target = account_wh.get(key) or ""
+                if wh_key != ALL_WH and target != wh_key:
+                    if not target:
+                        ad["unmapped_accounts"].append(str(acc.get("label") or key))
+                    continue
+                amount = round(float(acc.get("total") or 0), 2)
+                spent += amount
+                ad["by_account"].append({
+                    "key": key,
+                    "label": str(acc.get("label") or key),
+                    "warehouse": target,
+                    "spend": amount,
+                })
+                for gap in acc.get("gaps") or []:
+                    ad["warnings"].append(
+                        f"{part_name} · {acc.get('label') or key} 缺 {gap}"
+                    )
+
+        # 有店铺一次缓存都没有：明确列出来，避免余额偏高被当成真的
+        if wh_key != ALL_WH:
+            try:
+                for acc in _load_accounts(False):
+                    key = str(acc.get("key") or "")
+                    if key in seen or (account_wh.get(key) or "") != wh_key:
+                        continue
+                    ad["warnings"].append(f"{acc.get('label') or key} 该区间没有花费缓存，消耗按 0 计入")
+            except Exception:  # noqa: BLE001
+                pass
+
+        ad.update({
+            "spent_total": round(spent, 2),
+            "balance": round(recharge_total - spent, 2),
             "ok": True,
-            "as_of": as_of,
-            "range": {"date_from": date_from, "date_to": as_of},
-            "warehouse": {"key": resolve_key(wh), "name": current_warehouse_name(resolve_key(wh))},
-            "inventory": {
-                "stock_value": stock_value,
-                "product_count": stock_doc_count,
-                "negative_count": int(neg_count or 0),
-                "negative_qty": round(float(neg_qty or 0.0), 4),
-                "negative_value": round(float(neg_value or 0.0), 2),
-            },
-            "payables": {
-                "total": round(sum(payables.values()), 2),
-                "by_source": dict(sorted(payables.items(), key=lambda kv: -kv[1])),
-            },
-            "receivables": {
-                "total": round(sum(receivables.values()), 2),
-                "by_source": dict(sorted(receivables.items(), key=lambda kv: -kv[1])),
-            },
-            "ad_prepay": ad,
-            "count_diff": {
-                "gain_value": round(gain, 2),
-                "gain_lines": gain_n,
-                "loss_value": round(loss, 2),
-                "loss_lines": loss_n,
-                "net_value": round(gain - loss, 2),
-                "booked_expense": booked,
-            },
-        }
+        })
+    except Exception as exc:  # noqa: BLE001 - 挂载服务不可用时降级
+        ad["warnings"].append(f"广告花费缓存读取失败：{exc}")
+    return ad
+
+
+def _balances_one(db: Session, wh_key: str, date_from: str, as_of: str,
+                  with_ads: bool, account_wh: dict[str, str]) -> dict:
+    """单个分仓的余额表：库存 / 往来 / 广告预付 / 盘点差异。"""
+    from datetime import date as _date
+
+    # ---- 库存（资产）：as_of 不是今天时按 FIFO 重放到该日 ----
+    cur_value = round(float(db.execute(
+        select(func.coalesce(func.sum(Product.stock_value), 0.0))
+    ).scalar() or 0.0), 2)
+    stock = {
+        "stock_value": cur_value,
+        "stock_value_current": cur_value,
+        "product_count": int(db.execute(
+            select(func.count()).select_from(Product).where(Product.stock != 0)
+        ).scalar() or 0),
+        "negative_count": 0,
+        "negative_qty": 0.0,
+        "negative_value": 0.0,
+        "basis": "current",
+        "as_of": as_of,
+    }
+    neg_count, neg_qty, neg_value = db.execute(
+        select(func.count(), func.coalesce(func.sum(Product.stock), 0.0),
+               func.coalesce(func.sum(Product.stock_value), 0.0))
+        .where(Product.stock < 0)
+    ).one()
+    stock.update({
+        "negative_count": int(neg_count or 0),
+        "negative_qty": round(float(neg_qty or 0.0), 4),
+        "negative_value": round(float(neg_value or 0.0), 2),
+    })
+    if as_of < _date.today().isoformat():
+        hist = _stock_value_at(db, wh_key, as_of)
+        stock.update({
+            "stock_value": hist["stock_value"],
+            "product_count": hist["product_count"],
+            "negative_count": hist["negative_count"],
+            "negative_qty": hist["negative_qty"],
+            "negative_value": hist["negative_value"],
+            "basis": "as_of",
+        })
+
+    # ---- 往来（负债 / 应收）----
+    # 口径与「待付款账单」完全同源：未结清（待付款 + 部分付款的未付余额）
+    from .payables import _collect
+    pending = _collect(db)
+    payables: dict[str, float] = {}
+    receivables: dict[str, float] = {}
+    for r in pending:
+        bucket = payables if r["direction"] == "out" else receivables
+        bucket[r["source"]] = round(bucket.get(r["source"], 0.0) + float(r["amount"] or 0), 2)
+
+    # ---- 广告充值预付 ----
+    ad = _ad_prepay_of([db], date_from, as_of, wh_key, with_ads, account_wh)
+
+    # ---- 盘点差异（未计入损益）----
+    q = select(StockMovement).where(
+        StockMovement.move_type == "adjust",
+        StockMovement.ref_type == "manual",
+    )
+    if date_from:
+        q = q.where(StockMovement.date >= date_from)
+    if as_of:
+        q = q.where(StockMovement.date <= as_of)
+    gain = loss = 0.0
+    gain_n = loss_n = 0
+    for m in db.execute(q).scalars():
+        amt = float(m.amount or 0.0)
+        if float(m.quantity_base or 0.0) >= 0:
+            gain += amt
+            gain_n += 1
+        else:
+            loss += amt
+            loss_n += 1
+    booked = round(float(db.execute(
+        select(func.coalesce(func.sum(OtherExpense.amount), 0.0))
+        .where(OtherExpense.category == "库存损耗")
+    ).scalar() or 0.0), 2)
+
+    return {
+        "ok": True,
+        "as_of": as_of,
+        "range": {"date_from": date_from, "date_to": as_of},
+        "warehouse": {"key": wh_key, "name": current_warehouse_name(wh_key)},
+        "is_all": False,
+        "inventory": stock,
+        "payables": {
+            "total": round(sum(payables.values()), 2),
+            "by_source": dict(sorted(payables.items(), key=lambda kv: -kv[1])),
+        },
+        "receivables": {
+            "total": round(sum(receivables.values()), 2),
+            "by_source": dict(sorted(receivables.items(), key=lambda kv: -kv[1])),
+        },
+        "ad_prepay": ad,
+        "count_diff": {
+            "gain_value": round(gain, 2),
+            "gain_lines": gain_n,
+            "loss_value": round(loss, 2),
+            "loss_lines": loss_n,
+            "net_value": round(gain - loss, 2),
+            "booked_expense": booked,
+        },
+    }
+
+
+def _balances_all(date_from: str, as_of: str, with_ads: bool) -> dict:
+    """全仓余额表：逐仓算完再合计；广告预付在全仓口径下按全部门店汇总。"""
+    from .adprofit import load_account_warehouses
+
+    account_wh = load_account_warehouses()
+    parts: list[dict] = []
+    sessions: list[tuple[str, Session]] = []
+    errors: list[str] = []
+    try:
+        for w in get_warehouses():
+            key = str(w.get("key") or "")
+            if not key:
+                continue
+            try:
+                sessions.append((key, get_sessionmaker(key)()))
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{w.get('name') or key} 打开失败：{exc}")
+        for key, session in sessions:
+            try:
+                parts.append(_balances_one(session, key, date_from, as_of, with_ads, account_wh))
+            except Exception as exc:  # noqa: BLE001 - 单个仓坏了不拖垮全仓
+                errors.append(f"{current_warehouse_name(key)} 余额计算失败：{exc}")
+        ad = _ad_prepay_of([s for _, s in sessions], date_from, as_of,
+                           ALL_WH, with_ads, account_wh)
+    finally:
+        for _key, session in sessions:
+            session.close()
+
+    def _sum(field: str, sub: str) -> float:
+        return round(sum(float(p.get(field, {}).get(sub, 0.0) or 0.0) for p in parts), 2)
+
+    payables: dict[str, float] = {}
+    receivables: dict[str, float] = {}
+    for p in parts:
+        for src, amt in (p["payables"].get("by_source") or {}).items():
+            payables[src] = round(payables.get(src, 0.0) + float(amt or 0), 2)
+        for src, amt in (p["receivables"].get("by_source") or {}).items():
+            receivables[src] = round(receivables.get(src, 0.0) + float(amt or 0), 2)
+
+    want_asof = any(p["inventory"].get("basis") == "as_of" for p in parts)
+    inventory = {
+        "stock_value": _sum("inventory", "stock_value"),
+        "stock_value_current": _sum("inventory", "stock_value_current"),
+        "product_count": int(sum(int(p["inventory"].get("product_count") or 0) for p in parts)),
+        "negative_count": int(sum(int(p["inventory"].get("negative_count") or 0) for p in parts)),
+        "negative_qty": round(sum(float(p["inventory"].get("negative_qty") or 0) for p in parts), 4),
+        "negative_value": round(sum(float(p["inventory"].get("negative_value") or 0) for p in parts), 2),
+        "basis": "as_of" if want_asof else "current",
+        "as_of": as_of,
+    }
+    count_diff = {
+        "gain_value": _sum("count_diff", "gain_value"),
+        "gain_lines": int(sum(int(p["count_diff"].get("gain_lines") or 0) for p in parts)),
+        "loss_value": _sum("count_diff", "loss_value"),
+        "loss_lines": int(sum(int(p["count_diff"].get("loss_lines") or 0) for p in parts)),
+        "net_value": _sum("count_diff", "net_value"),
+        "booked_expense": _sum("count_diff", "booked_expense"),
+    }
+    warnings = list(ad.get("warnings") or []) + errors
+    return {
+        "ok": True,
+        "as_of": as_of,
+        "range": {"date_from": date_from, "date_to": as_of},
+        "warehouse": {"key": ALL_WH, "name": "全仓合计"},
+        "is_all": True,
+        "warehouse_count": len(parts),
+        "inventory": inventory,
+        "payables": {"total": round(sum(payables.values()), 2),
+                     "by_source": dict(sorted(payables.items(), key=lambda kv: -kv[1]))},
+        "receivables": {"total": round(sum(receivables.values()), 2),
+                        "by_source": dict(sorted(receivables.items(), key=lambda kv: -kv[1]))},
+        "ad_prepay": ad,
+        "count_diff": count_diff,
+        "warehouses": [
+            {
+                "key": p["warehouse"]["key"],
+                "name": p["warehouse"]["name"],
+                "inventory": p["inventory"],
+                "payables_total": p["payables"]["total"],
+                "receivables_total": p["receivables"]["total"],
+                "count_diff": p["count_diff"],
+                "ad_prepay": p["ad_prepay"],
+            }
+            for p in parts
+        ],
+        "warnings": warnings,
+    }
+
+
+@router.get("/report/balances")
+def balances(
+    date_from: str = "",
+    date_to: str = "",
+    wh: str = "",              # 空=本登录会话分仓；all=全仓合计
+    with_ads: int = 1,         # 1 = 读挂载服务的广告花费缓存，算「广告充值预付余额」
+    db: Session = Depends(get_db_wh),
+    user: User = Depends(get_current_user),
+):
+    """余额表：截至 date_to（含）还剩什么资产 / 欠多少往来 / 预付还剩多少。
+
+    与「损益」彻底分开：损益只回答「这段时间赚没赚」，余额回答「钱和货现在在哪」。
+    - 库存：截至日期末的结存价值（按 FIFO 流水重放，历史区间不会拿今天的库存冒充）
+    - 往来：复用「待付款账单」的未结清口径（采购 / 入仓 / 代发 / 其他收支 / 出库回款）
+    - 广告：充值记为预付资产，实际消耗读挂载服务花费缓存；单仓按店铺→分仓对照表分摊
+    - 盘点：区间内的盘盈入账价值与盘亏成本，并明确「未计入损益」
+    - 全仓（wh=all）：逐仓汇总，并返回各分仓明细
+    """
+    from datetime import date as _date
+
+    as_of = date_to or _date.today().isoformat()
+    wh_key = ALL_WH if wh == ALL_WH else resolve_key(wh)
+    key = ("balances", wh_key, date_from, as_of, int(with_ads))
+
+    def _compute() -> dict:
+        if wh_key == ALL_WH:
+            return _balances_all(date_from, as_of, bool(with_ads))
+        from .adprofit import load_account_warehouses
+        return _balances_one(db, wh_key, date_from, as_of, bool(with_ads),
+                             load_account_warehouses())
 
     return _heavy_cached(key, _compute)
 
