@@ -17,6 +17,7 @@ from ..database import (
     resolve_key,
 )
 from ..models import (
+    DropshipBill,
     FinanceRecord,
     Inbound,
     OtherExpense,
