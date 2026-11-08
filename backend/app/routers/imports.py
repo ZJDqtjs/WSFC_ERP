@@ -787,23 +787,35 @@ def _resolve_jst_product(
     """聚水潭商品名 → 系统商品。
 
     优先级：
-    1) 编码关联指向的**订单商品（小类）**：以用户维护的映射为准；但该商品若绑定了仓储方，
-       必须与本行的仓储方一致，否则视为别的渠道的记录，继续按名称找；
-    2) 编码关联指向**库存大类**（或没关联）时，若存在**同名的订单商品（小类）**，优先用小类
-       —— 小类才有规格、关联结算与「代发」语义（出库时仍按它关联的库存大类扣减），
-          否则出库明细里不同规格会挤在同一个大类里、代发商品也标不出来；
-       同名有多条时按行的「仓储方」精确区分（见 _pick_by_warehouse）；
-    3) 再回退按名称/编码精确匹配。
+    1) **仓储方精确命中的同名订单商品**：最高优先。编码关联/名称映射都只按商品名字存，
+       分不出「同名商品」是芳谊仓代发还是自营仓扣库存；若先认映射，就会把代发单错扣到库存商品上；
+    2) 编码关联指向的**订单商品（小类）**：该商品未绑定仓储方（通用）或与本行仓储方一致时采用；
+       绑定了别的仓储方则视为别的渠道的记录，继续按名称找；
+    3) 同名的**通用**订单商品（未绑定仓储方）——小类才有规格、关联结算与「代发」语义；
+    4) 同名商品都存在但都绑定了别的仓储方 → 不猜，返回 None 交给「未关联商品」；
+    5) 再回退按名称/编码精确匹配。
     """
     m = mapping_by_code.get(ext_name)
     pid = m.product_id if m else None
     mapped = db.get(Product, pid) if pid else None
     w = str(warehouse or "").strip()
+    same = _same_name_order_products(db, ext_name)
+
+    # 1) 仓储方精确命中优先（含映射指向的那条）
+    if w:
+        for p in same:
+            if w in warehouse_tokens(getattr(p, "warehouse_party", "")):
+                return p
+        if mapped and mapped.product_type != "stock" and w in warehouse_tokens(getattr(mapped, "warehouse_party", "")):
+            return mapped
+
+    # 2) 编码关联（通用商品，或本行没有仓储方）
     if mapped and mapped.product_type != "stock":
         wt = warehouse_tokens(getattr(mapped, "warehouse_party", ""))
-        if not wt or not w or w in wt:
+        if not wt or not w:
             return mapped
-    same = _same_name_order_products(db, ext_name)
+
+    # 3) 同名订单商品里的通用商品
     picked = _pick_by_warehouse(same, w)
     if picked:
         return picked
