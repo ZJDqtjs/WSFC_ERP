@@ -8723,7 +8723,7 @@ function renderCashflow(d, all) {
   const row = (label, v, desc, kind) => `<tr>
       <td>${kind ? `<span class="badge">${esc(kind)}</span>` : ""}</td>
       <td>${esc(label)}</td>
-      <td class="num mono" style="color:${Number(v) < 0 ? "var(--danger)" : ""};">${fmtMoney(v)}</td>
+      <td class="num mono" style="color:${Number(v) < 0 ? "var(--red)" : ""};">${fmtMoney(v)}</td>
       <td class="muted">${esc(desc || "")}</td></tr>`;
   const section = (label) => `<tr><td colspan="4" class="muted" style="background:var(--bg);font-weight:600;">${esc(label)}</td></tr>`;
   t.innerHTML = `<thead><tr><th>类别</th><th>项目</th><th class="num">金额</th><th>说明</th></tr></thead><tbody>
@@ -8742,7 +8742,7 @@ function renderCashflow(d, all) {
     ${row("人工打包费", out.pack_fee, "出库带出的打包人工费", "流出")}
     ${row("手工记账支出", out.manual_expense, "财务流水页登记的支出", "流出")}
     <tr><td></td><td><b>流出合计</b></td><td class="num mono"><b>${fmtMoney(out.total)}</b></td><td></td></tr>
-    <tr><td></td><td><b>本期净现金流</b></td><td class="num mono"><b style="color:${net >= 0 ? "var(--green)" : "var(--danger)"};">${fmtMoney(net)}</b></td><td></td></tr>
+    <tr><td></td><td><b>本期净现金流</b></td><td class="num mono"><b style="color:${net >= 0 ? "var(--green)" : "var(--red)"};">${fmtMoney(net)}</b></td><td></td></tr>
     ${row("期末账面现金", d.closing_cash, "期初 + 本期净现金流（不是银行余额）", "时点")}
   </tbody>`;
   const whs = d.warehouses || [];
@@ -8751,7 +8751,7 @@ function renderCashflow(d, all) {
         <th class="num">本期净现金流</th><th class="num">期末账面现金</th></tr></thead><tbody>${whs.map((w) => `<tr>
           <td>${esc(w.name || w.key)}</td>
           <td class="num mono">${fmtMoney(w.opening_cash)}</td>
-          <td class="num mono" style="color:${Number(w.net) >= 0 ? "var(--green)" : "var(--danger)"};">${fmtMoney(w.net)}</td>
+          <td class="num mono" style="color:${Number(w.net) >= 0 ? "var(--green)" : "var(--red)"};">${fmtMoney(w.net)}</td>
           <td class="num mono">${fmtMoney(w.closing_cash)}</td></tr>`).join("")}</tbody>` : "";
   }
 }
