@@ -498,12 +498,52 @@ def _stock_value_at(db: Session, wh_key: str, as_of: str) -> dict:
     return result
 
 
+def _first_ad_recharge(dbs: list[Session]) -> str:
+    """所有分仓里最早的「广告费充值」日期（作为全公司消耗的起算点，保证各仓余额相加=全仓）。"""
+    first = ""
+    for db in dbs:
+        d = db.execute(
+            select(func.min(OtherExpense.date)).where(
+                OtherExpense.amount != 0,
+                OtherExpense.category.like(f"{AD_PREPAID_CATEGORY}%"),
+            )
+        ).scalar()
+        if d and (not first or str(d) < first):
+            first = str(d)
+    return first
+
+
+def _company_ad_first() -> str:
+    """全仓最早的广告充值日期（单仓视图也用它，避免各仓起算日不同导致余额加不起来）。"""
+    cache = _STOCK_ASOF_CACHE.get(("ad_first", ""))
+    now = time.time()
+    if cache and now - cache[0] < _STOCK_ASOF_TTL:
+        return str(cache[1]["value"])
+    sessions = []
+    try:
+        for w in get_warehouses():
+            key = str(w.get("key") or "")
+            if key:
+                try:
+                    sessions.append(get_sessionmaker(key)())
+                except Exception:  # noqa: BLE001
+                    continue
+        value = _first_ad_recharge(sessions)
+    finally:
+        for s in sessions:
+            s.close()
+    _STOCK_ASOF_CACHE[("ad_first", "")] = (now, {"value": value})
+    return value
+
+
 def _ad_prepay_of(dbs: list[Session], date_from: str, as_of: str, wh_key: str,
-                  with_ads: bool, account_wh: dict[str, str]) -> dict:
+                  with_ads: bool, account_wh: dict[str, str],
+                  first_override: str | None = None) -> dict:
     """广告充值预付余额：累计充值 − 该仓（或全仓）实际消耗。
 
     单仓必须依赖「店铺账号 → 分仓」对照表：充值按仓记账，花费按店铺抓取；
     没有映射时不能拿全公司的消耗去减一个仓的充值（会算出 −10 万这种假余额）。
+    消耗的起算日统一用全仓最早充值日（first_override），各仓余额相加才等于全仓余额。
     """
     from datetime import date as _date
 
@@ -538,7 +578,9 @@ def _ad_prepay_of(dbs: list[Session], date_from: str, as_of: str, wh_key: str,
     if not with_ads or recharge_total <= 0:
         return ad
 
-    first = min((d for d, a in recharges if a > 0 and (not as_of or d <= as_of)), default="")
+    first = first_override or min(
+        (d for d, a in recharges if a > 0 and (not as_of or d <= as_of)), default=""
+    )
     if not first:
         return ad
 
@@ -609,7 +651,7 @@ def _ad_prepay_of(dbs: list[Session], date_from: str, as_of: str, wh_key: str,
 
 
 def _balances_one(db: Session, wh_key: str, date_from: str, as_of: str,
-                  with_ads: bool, account_wh: dict[str, str]) -> dict:
+                  with_ads: bool, account_wh: dict[str, str], ad_first: str = "") -> dict:
     """单个分仓的余额表：库存 / 往来 / 广告预付 / 盘点差异。"""
     from datetime import date as _date
 
@@ -661,7 +703,8 @@ def _balances_one(db: Session, wh_key: str, date_from: str, as_of: str,
         bucket[r["source"]] = round(bucket.get(r["source"], 0.0) + float(r["amount"] or 0), 2)
 
     # ---- 广告充值预付 ----
-    ad = _ad_prepay_of([db], date_from, as_of, wh_key, with_ads, account_wh)
+    ad = _ad_prepay_of([db], date_from, as_of, wh_key, with_ads, account_wh,
+                       first_override=ad_first or None)
 
     # ---- 盘点差异（未计入损益）----
     q = select(StockMovement).where(
@@ -731,13 +774,15 @@ def _balances_all(date_from: str, as_of: str, with_ads: bool) -> dict:
                 sessions.append((key, get_sessionmaker(key)()))
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{w.get('name') or key} 打开失败：{exc}")
+        ad_first = _first_ad_recharge([s for _, s in sessions])
         for key, session in sessions:
             try:
-                parts.append(_balances_one(session, key, date_from, as_of, with_ads, account_wh))
+                parts.append(_balances_one(session, key, date_from, as_of, with_ads,
+                                           account_wh, ad_first=ad_first))
             except Exception as exc:  # noqa: BLE001 - 单个仓坏了不拖垮全仓
                 errors.append(f"{current_warehouse_name(key)} 余额计算失败：{exc}")
         ad = _ad_prepay_of([s for _, s in sessions], date_from, as_of,
-                           ALL_WH, with_ads, account_wh)
+                           ALL_WH, with_ads, account_wh, first_override=ad_first or None)
     finally:
         for _key, session in sessions:
             session.close()
@@ -832,7 +877,8 @@ def balances(
             return _balances_all(date_from, as_of, bool(with_ads))
         from .adprofit import load_account_warehouses
         return _balances_one(db, wh_key, date_from, as_of, bool(with_ads),
-                             load_account_warehouses())
+                             load_account_warehouses(),
+                             ad_first=_company_ad_first() if with_ads else "")
 
     return _heavy_cached(key, _compute)
 
