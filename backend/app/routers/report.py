@@ -498,44 +498,6 @@ def _stock_value_at(db: Session, wh_key: str, as_of: str) -> dict:
     return result
 
 
-def _first_ad_recharge(dbs: list[Session]) -> str:
-    """所有分仓里最早的「广告费充值」日期（作为全公司消耗的起算点，保证各仓余额相加=全仓）。"""
-    first = ""
-    for db in dbs:
-        d = db.execute(
-            select(func.min(OtherExpense.date)).where(
-                OtherExpense.amount != 0,
-                OtherExpense.category.like(f"{AD_PREPAID_CATEGORY}%"),
-            )
-        ).scalar()
-        if d and (not first or str(d) < first):
-            first = str(d)
-    return first
-
-
-def _company_ad_first() -> str:
-    """全仓最早的广告充值日期（单仓视图也用它，避免各仓起算日不同导致余额加不起来）。"""
-    cache = _STOCK_ASOF_CACHE.get(("ad_first", ""))
-    now = time.time()
-    if cache and now - cache[0] < _STOCK_ASOF_TTL:
-        return str(cache[1]["value"])
-    sessions = []
-    try:
-        for w in get_warehouses():
-            key = str(w.get("key") or "")
-            if key:
-                try:
-                    sessions.append(get_sessionmaker(key)())
-                except Exception:  # noqa: BLE001
-                    continue
-        value = _first_ad_recharge(sessions)
-    finally:
-        for s in sessions:
-            s.close()
-    _STOCK_ASOF_CACHE[("ad_first", "")] = (now, {"value": value})
-    return value
-
-
 def _cf_balance_as_of(info: dict, days: list[dict], as_of: str, cf_end: str) -> float:
     """某账号在 as_of（含）的可用余额：优先取当日「结算后结余」。"""
     if not as_of or (cf_end and as_of >= cf_end):
@@ -548,8 +510,7 @@ def _cf_balance_as_of(info: dict, days: list[dict], as_of: str, cf_end: str) -> 
 
 
 def _ad_prepay_of(dbs: list[Session], date_from: str, as_of: str, wh_key: str,
-                  with_ads: bool, account_wh: dict[str, str],
-                  first_override: str | None = None) -> dict:
+                  with_ads: bool, account_wh: dict[str, str]) -> dict:
     """广告充值预付余额：直接读 jdfenxi「广告费流水」的账户实际余额。
 
     数据来源是 jdfenxi 抓的京准通「账户中心 → 财务记录」，不再依赖 ERP 手工登记的
@@ -682,7 +643,7 @@ def _ad_prepay_of(dbs: list[Session], date_from: str, as_of: str, wh_key: str,
 
 
 def _balances_one(db: Session, wh_key: str, date_from: str, as_of: str,
-                  with_ads: bool, account_wh: dict[str, str], ad_first: str = "") -> dict:
+                  with_ads: bool, account_wh: dict[str, str]) -> dict:
     """单个分仓的余额表：库存 / 往来 / 广告预付 / 盘点差异。"""
     from datetime import date as _date
 
@@ -734,8 +695,7 @@ def _balances_one(db: Session, wh_key: str, date_from: str, as_of: str,
         bucket[r["source"]] = round(bucket.get(r["source"], 0.0) + float(r["amount"] or 0), 2)
 
     # ---- 广告充值预付 ----
-    ad = _ad_prepay_of([db], date_from, as_of, wh_key, with_ads, account_wh,
-                       first_override=ad_first or None)
+    ad = _ad_prepay_of([db], date_from, as_of, wh_key, with_ads, account_wh)
 
     # ---- 盘点差异（未计入损益）----
     q = select(StockMovement).where(
@@ -805,15 +765,13 @@ def _balances_all(date_from: str, as_of: str, with_ads: bool) -> dict:
                 sessions.append((key, get_sessionmaker(key)()))
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{w.get('name') or key} 打开失败：{exc}")
-        ad_first = _first_ad_recharge([s for _, s in sessions])
         for key, session in sessions:
             try:
-                parts.append(_balances_one(session, key, date_from, as_of, with_ads,
-                                           account_wh, ad_first=ad_first))
+                parts.append(_balances_one(session, key, date_from, as_of, with_ads, account_wh))
             except Exception as exc:  # noqa: BLE001 - 单个仓坏了不拖垮全仓
                 errors.append(f"{current_warehouse_name(key)} 余额计算失败：{exc}")
         ad = _ad_prepay_of([s for _, s in sessions], date_from, as_of,
-                           ALL_WH, with_ads, account_wh, first_override=ad_first or None)
+                           ALL_WH, with_ads, account_wh)
     finally:
         for _key, session in sessions:
             session.close()
@@ -908,8 +866,7 @@ def balances(
             return _balances_all(date_from, as_of, bool(with_ads))
         from .adprofit import load_account_warehouses
         return _balances_one(db, wh_key, date_from, as_of, bool(with_ads),
-                             load_account_warehouses(),
-                             ad_first=_company_ad_first() if with_ads else "")
+                             load_account_warehouses())
 
     return _heavy_cached(key, _compute)
 
