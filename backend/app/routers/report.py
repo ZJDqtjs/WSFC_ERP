@@ -536,117 +536,148 @@ def _company_ad_first() -> str:
     return value
 
 
+def _cf_balance_as_of(info: dict, days: list[dict], as_of: str, cf_end: str) -> float:
+    """某账号在 as_of（含）的可用余额：优先取当日「结算后结余」。"""
+    if not as_of or (cf_end and as_of >= cf_end):
+        return round(float(info.get("balance_current") or 0.0), 2)
+    rows = [d for d in days if str(d.get("date") or "") <= as_of]
+    for d in sorted(rows, key=lambda x: str(x.get("date") or ""), reverse=True):
+        if d.get("balance") is not None:
+            return round(float(d["balance"]), 2)
+    return round(float(info.get("balance_start") or 0.0), 2)
+
+
 def _ad_prepay_of(dbs: list[Session], date_from: str, as_of: str, wh_key: str,
                   with_ads: bool, account_wh: dict[str, str],
                   first_override: str | None = None) -> dict:
-    """广告充值预付余额：累计充值 − 该仓（或全仓）实际消耗。
+    """广告充值预付余额：直接读 jdfenxi「广告费流水」的账户实际余额。
 
-    单仓必须依赖「店铺账号 → 分仓」对照表：充值按仓记账，花费按店铺抓取；
-    没有映射时不能拿全公司的消耗去减一个仓的充值（会算出 −10 万这种假余额）。
-    消耗的起算日统一用全仓最早充值日（first_override），各仓余额相加才等于全仓余额。
+    数据来源是 jdfenxi 抓的京准通「账户中心 → 财务记录」，不再依赖 ERP 手工登记的
+    「广告费充值」。单仓按「店铺账号 → 分仓」对照表分摊；全仓直接合计。
     """
-    from datetime import date as _date
-
-    recharges: list[tuple[str, float]] = []
-    for db in dbs:
-        recharges.extend(
-            (e.date or "", float(e.amount or 0.0))
-            for e in db.execute(
-                select(OtherExpense).where(
-                    OtherExpense.amount != 0,
-                    OtherExpense.category.like(f"{AD_PREPAID_CATEGORY}%"),
-                )
-            ).scalars()
-            if is_ad_prepay(e.category)
-        )
-    recharge_total = round(sum(a for d, a in recharges if (not as_of or d <= as_of)), 2)
-    recharge_period = round(sum(
-        a for d, a in recharges
-        if (not date_from or d >= date_from) and (not as_of or d <= as_of)
-    ), 2)
     ad = {
-        "recharged_total": recharge_total,
-        "recharged_period": recharge_period,
+        "recharged_total": None,
+        "recharged_period": None,
         "spent_total": None,
         "balance": None,
+        "balance_current": None,
         "ok": False,
         "warnings": [],
         "by_account": [],
         "unmapped_accounts": [],
+        "missing_accounts": [],
         "scope": "all" if wh_key == ALL_WH else "warehouse",
+        "source": "jdfenxi_cashflow",
+        "cashflow_range": None,
+        "as_of": as_of,
     }
-    if not with_ads or recharge_total <= 0:
+    if not with_ads:
         return ad
-
-    first = first_override or min(
-        (d for d, a in recharges if a > 0 and (not as_of or d <= as_of)), default=""
-    )
-    if not first:
+    if wh_key != ALL_WH and not account_wh:
+        ad["warnings"].append(
+            "未配置「店铺账号 → 分仓」对照表（backend/data/ad_account_wh.json），"
+            "本仓广告预付余额不计算"
+        )
         return ad
 
     try:
-        from .adprofit import _load_accounts, _spend_part
-        start, end = _date.fromisoformat(first), _date.fromisoformat(as_of)
-        cps = _spend_part("cps", start, end, False)
-        jzt = _spend_part("spend", start, end, False)
-        if not (cps.get("ok") and jzt.get("ok")):
-            ad["warnings"].append(
-                (cps.get("error") or "") if not cps.get("ok") else (jzt.get("error") or "")
-            )
-            return ad
+        from .adprofit import _load_accounts, ad_cashflow_snapshot
+        snap = ad_cashflow_snapshot()
+    except Exception as exc:  # noqa: BLE001
+        ad["warnings"].append(f"读取 jdfenxi 广告费流水失败：{exc}")
+        return ad
+    if not snap.get("ok"):
+        ad["warnings"].append(str(snap.get("error") or "jdfenxi 广告费流水读取失败"))
+        return ad
 
-        if wh_key != ALL_WH and not account_wh:
-            ad["warnings"].append(
-                "未配置「店铺账号 → 分仓」对照表（backend/data/ad_account_wh.json），"
-                "本仓广告预付余额不计算（否则会拿全公司花费减单仓充值）"
-            )
-            return ad
+    cf_start, cf_end = str(snap.get("range_start") or ""), str(snap.get("range_end") or "")
+    ad["cashflow_range"] = {"start": cf_start, "end": cf_end}
+    if date_from and cf_start and date_from < cf_start:
+        ad["warnings"].append(
+            f"jdfenxi 广告费流水只覆盖 {cf_start} 起；{date_from}~{cf_start} 的充值/消费未计入区间合计"
+        )
+    if as_of and cf_end and as_of > cf_end:
+        ad["warnings"].append(
+            f"jdfenxi 广告费流水截至 {cf_end}；余额取最新可用余额，区间合计只统计到 {cf_end}"
+        )
+    if as_of and cf_start and as_of < cf_start:
+        ad["warnings"].append(
+            f"所选截止日 {as_of} 早于广告费流水起始日 {cf_start}，余额按流水起始日余额估算"
+        )
 
-        spent = 0.0
-        seen: set[str] = set()
-        by_acc: dict[str, dict] = {}
-        for part_name, part in (("CPS", cps), ("京准通", jzt)):
-            for acc in part.get("accounts") or []:
-                key = str(acc.get("key") or "")
-                seen.add(key)
-                target = account_wh.get(key) or ""
-                if wh_key != ALL_WH and target != wh_key:
-                    if not target:
-                        ad["unmapped_accounts"].append(str(acc.get("label") or key))
-                    continue
-                amount = round(float(acc.get("total") or 0), 2)
-                spent += amount
-                row = by_acc.setdefault(key, {
-                    "key": key,
-                    "label": str(acc.get("label") or key),
-                    "warehouse": target,
-                    "spend": 0.0,
-                })
-                row["spend"] = round(float(row["spend"]) + amount, 2)
-                for gap in acc.get("gaps") or []:
-                    ad["warnings"].append(
-                        f"{part_name} · {acc.get('label') or key} 缺 {gap}"
-                    )
-        ad["by_account"] = sorted(by_acc.values(), key=lambda x: -float(x["spend"]))
+    try:
+        accounts = _load_accounts(False)
+    except Exception:  # noqa: BLE001
+        accounts = []
+    if not accounts:
+        ad["warnings"].append("读不到 jdfenxi 店铺账号列表，广告预付余额未计算")
+        return ad
 
-        # 有店铺一次缓存都没有：明确列出来，避免余额偏高被当成真的
-        if wh_key != ALL_WH:
-            try:
-                for acc in _load_accounts(False):
-                    key = str(acc.get("key") or "")
-                    if key in seen or (account_wh.get(key) or "") != wh_key:
-                        continue
-                    ad["warnings"].append(f"{acc.get('label') or key} 该区间没有花费缓存，消耗按 0 计入")
-            except Exception:  # noqa: BLE001
-                pass
+    selected: list[tuple[str, str, str]] = []
+    for a in accounts:
+        key = str(a.get("key") or "")
+        if not key:
+            continue
+        label = str(a.get("label") or key)
+        target = account_wh.get(key) or ""
+        if wh_key != ALL_WH and target != wh_key:
+            if not target:
+                ad["unmapped_accounts"].append(label)
+            continue
+        selected.append((key, label, target))
 
-        ad.update({
-            "spent_total": round(spent, 2),
-            "balance": round(recharge_total - spent, 2),
-            "ok": True,
+    recharge_total = spend_total = balance_asof = balance_current = 0.0
+    by_account: list[dict] = []
+    for key, label, target in selected:
+        info = (snap.get("accounts") or {}).get(label)
+        if not info:
+            ad["missing_accounts"].append(label)
+            continue
+        days = (snap.get("daily") or {}).get(label) or []
+        period_recharge = round(sum(
+            float(d.get("recharge") or 0) for d in days
+            if (not date_from or str(d.get("date")) >= date_from) and str(d.get("date")) <= as_of
+        ), 2)
+        period_spend = round(sum(
+            float(d.get("spend") or 0) for d in days
+            if (not date_from or str(d.get("date")) >= date_from) and str(d.get("date")) <= as_of
+        ), 2)
+        bal_asof = _cf_balance_as_of(info, days, as_of, cf_end)
+        bal_current = round(float(info.get("balance_current") or 0.0), 2)
+        recharge_total += period_recharge
+        spend_total += period_spend
+        balance_asof += bal_asof
+        balance_current += bal_current
+        by_account.append({
+            "key": key,
+            "label": label,
+            "warehouse": target,
+            "recharge": period_recharge,
+            "spend": period_spend,
+            "balance": bal_asof,
+            "balance_current": bal_current,
         })
-    except Exception as exc:  # noqa: BLE001 - 挂载服务不可用时降级
-        ad["warnings"].append(f"广告花费缓存读取失败：{exc}")
+
+    if ad["missing_accounts"]:
+        ad["warnings"].append(
+            "以下账号在 jdfenxi 广告费流水里没有数据（按 0 计）："
+            + "、".join(ad["missing_accounts"])
+        )
+    if ad["unmapped_accounts"]:
+        ad["warnings"].append(
+            "以下账号没有「店铺 → 分仓」映射，未计入本仓："
+            + "、".join(sorted(set(ad["unmapped_accounts"])))
+        )
+
+    ad.update({
+        "recharged_total": round(recharge_total, 2),
+        "recharged_period": round(recharge_total, 2),
+        "spent_total": round(spend_total, 2),
+        "balance": round(balance_asof, 2),
+        "balance_current": round(balance_current, 2),
+        "by_account": sorted(by_account, key=lambda x: -float(x["balance"])),
+        "ok": True,
+    })
     return ad
 
 

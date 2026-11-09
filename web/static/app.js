@@ -8787,14 +8787,19 @@ function renderBalances(bal, all) {
   const stockDesc = inv.basis === "as_of"
     ? `按库存流水 FIFO 重放到 ${bal.as_of}（当前库存 ${fmtMoney(inv.stock_value_current)}）`
     : "按 FIFO 批次结存（当前库存）";
+  const cf = ad.cashflow_range || {};
+  const cfSpan = cf.start ? `${cf.start} ~ ${cf.end}` : "jdfenxi 广告费流水";
   const adDesc = ad.balance == null
-    ? `累计充值 ${fmtMoney(ad.recharged_total)}；${(ad.warnings || [])[0] || "实际消耗读不到，见「广告利润」页"}`
-    : `累计充值 ${fmtMoney(ad.recharged_total)} − ${ad.scope === "all" ? "全部门店" : "本仓门店"}消耗 ${fmtMoney(ad.spent_total)}`
+    ? `jdfenxi 广告费流水读取失败：${(ad.warnings || [])[0] || "请到 jdfenxi「广告费流水」页刷新一次"}`
+    : `来源 jdfenxi 广告费流水（${cfSpan}）；当前账户可用余额 ${fmtMoney(ad.balance_current)}`
+      + (Math.abs(Number(ad.balance) - Number(ad.balance_current)) >= 0.005
+        ? `，截至 ${bal.as_of} 为 ${fmtMoney(ad.balance)}` : "")
+      + `；区间充值 ${fmtMoney(ad.recharged_period)} − 区间消费 ${fmtMoney(ad.spent_total)}`
       + (Number(ad.unmapped_accounts || []).length ? ` · 未映射店铺 ${esc(ad.unmapped_accounts.join("、"))}` : "");
   const rows = [
     { kind: "资产", name: "库存结存总值", value: inv.stock_value,
       desc: (neg ? `其中 ${neg} 个商品为负库存（数量 ${fmtNum(inv.negative_qty)}），说明有超卖/漏入库，需盘点冲正；` : "") + stockDesc },
-    { kind: "资产", name: "广告充值预付余额", value: ad.balance == null ? null : ad.balance, desc: adDesc },
+    { kind: "资产", name: "广告账户可用余额（jdfenxi）", value: ad.balance == null ? null : ad.balance, desc: adDesc },
     { kind: "负债", name: "应付未付（要付出去）", value: pay.total || 0,
       desc: srcText(pay.by_source) || "没有未结清的应付款" },
     { kind: "应收", name: "应收未收（要收进来）", value: rec.total || 0,

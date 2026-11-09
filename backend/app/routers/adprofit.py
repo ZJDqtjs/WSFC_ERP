@@ -190,6 +190,132 @@ def _load_accounts(refresh: bool = False) -> list[dict]:
     return _ad_cached("accounts", _load, refresh)
 
 
+# ---------------------------------------------------------------- 广告费流水（jdfenxi 财务记录）
+# jdfenxi 的「广告费流水」页直接抓京准通账户中心 → 财务记录，包含每个账号的
+# 当前可用余额、区间充值、区间消费、每日消耗与结余。余额表的「广告充值预付余额」
+# 改为直接读这份数据，不再依赖 ERP 里手工登记的「广告费充值」。
+_CASHFLOW_TTL = 300.0
+_CASHFLOW_CACHE: dict[str, tuple[float, dict]] = {}
+_CASHFLOW_LOCK = threading.Lock()
+
+
+def _cash_date_iso(v) -> str:
+    if hasattr(v, "strftime"):
+        return v.strftime("%Y-%m-%d")
+    s = str(v or "").strip()
+    return s[:10]
+
+
+def _cash_num(v) -> float:
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _parse_cashflow_export(data: bytes) -> dict:
+    """解析 jdfenxi /api/cashflow/export：账号汇总 + 每日流水 + 数据区间。"""
+    from openpyxl import load_workbook
+
+    accounts: dict[str, dict] = {}
+    daily: dict[str, list] = {}
+    range_start = range_end = ""
+    wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    try:
+        for ws in wb.worksheets:
+            title = str(ws.title or "")
+            rows = ws.iter_rows(min_row=1, values_only=True)
+            try:
+                header = [str(c or "").strip() for c in next(rows)]
+            except StopIteration:
+                continue
+            if not header:
+                continue
+            idx = {name: i for i, name in enumerate(header)}
+
+            if "账号汇总" in title or title.startswith("01"):
+                for r in rows:
+                    if not r:
+                        continue
+                    label = str(r[idx.get("账号", 0)] or "").strip()
+                    if not label or label == "合计":
+                        continue
+                    accounts[label] = {
+                        "account_id": str(r[idx.get("账户ID", 1)] or "").strip(),
+                        "balance_current": round(_cash_num(r[idx.get("当前可用余额(¥)", 2)]), 2),
+                        "balance_start": round(_cash_num(r[idx.get("区间期初余额(¥)", 3)]), 2),
+                        "recharge": round(_cash_num(r[idx.get("区间充值(¥)", 4)]), 2),
+                        "spend": round(_cash_num(r[idx.get("区间消费(¥)", 5)]), 2),
+                        "cash": round(_cash_num(r[idx.get("其中现金(¥)", 6)]), 2),
+                        "red": round(_cash_num(r[idx.get("其中红包(¥)", 7)]), 2),
+                        "assign": round(_cash_num(r[idx.get("分配净额(¥)", 8)]), 2),
+                    }
+            elif "每日流水" in title or title.startswith("02"):
+                for r in rows:
+                    if not r:
+                        continue
+                    label = str(r[idx.get("账号", 1)] or "").strip()
+                    d = _cash_date_iso(r[idx.get("日期", 0)])
+                    if not label or not d:
+                        continue
+                    bal = r[idx.get("结算后结余(¥)", 9)]
+                    daily.setdefault(label, []).append({
+                        "date": d,
+                        "recharge": round(_cash_num(r[idx.get("当日充值(¥)", 7)]), 2),
+                        "spend": round(_cash_num(r[idx.get("当日消费合计(¥)", 6)]), 2),
+                        "balance": None if bal is None else round(_cash_num(bal), 2),
+                    })
+            elif "口径" in title or title.startswith("04"):
+                for r in rows:
+                    if not r:
+                        continue
+                    k = str(r[0] or "").strip()
+                    if k == "数据区间":
+                        m = re.search(r"(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})",
+                                      str(r[1] or ""))
+                        if m:
+                            range_start, range_end = m.group(1), m.group(2)
+    finally:
+        wb.close()
+
+    if not range_start:
+        dates = [d["date"] for rows in daily.values() for d in rows if d.get("date")]
+        if dates:
+            range_start, range_end = min(dates), max(dates)
+    for rows in daily.values():
+        rows.sort(key=lambda x: x["date"])
+    return {
+        "ok": True,
+        "range_start": range_start,
+        "range_end": range_end,
+        "accounts": accounts,
+        "daily": daily,
+        "warnings": [],
+    }
+
+
+def ad_cashflow_snapshot(refresh: bool = False) -> dict:
+    """jdfenxi 广告费流水快照（10 分钟内复用；失败降级不拖垮余额表）。"""
+    now = time.time()
+    with _CASHFLOW_LOCK:
+        hit = _CASHFLOW_CACHE.get("snap")
+    if hit and not refresh and now - hit[0] < _CASHFLOW_TTL:
+        return hit[1]
+    try:
+        raw = _ad_get_bytes("/api/cashflow/export")
+        snap = _parse_cashflow_export(raw)
+    except Exception as exc:  # noqa: BLE001
+        snap = {
+            "ok": False,
+            "error": f"读取 jdfenxi 广告费流水失败：{type(exc).__name__}: {exc}",
+            "range_start": "", "range_end": "",
+            "accounts": {}, "daily": {}, "warnings": [],
+        }
+    with _CASHFLOW_LOCK:
+        _CASHFLOW_CACHE["snap"] = (now, snap)
+    return snap
+
+
 def _day(value) -> date | None:
     try:
         return date.fromisoformat(str(value or "").strip()[:10])
