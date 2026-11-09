@@ -1047,6 +1047,27 @@ def ad_profit_summary(
     net = round(float(base.get("net_profit") or 0), 2)
     days = (end - start).days + 1
 
+    # ---- 入仓台账（备货结算）单独成表 ----
+    # 它已包含在财务口径的收入/毛利里，但不是京东实际成交；SKU 明细按成交口径不会重复计入，
+    # 所以必须单独列出来，避免用户拿「财务口径毛利」和「SKU 成交毛利」直接对比。
+    wi_rows: list[dict] = []
+    for p in base.get("by_product") or []:
+        if not p.get("is_warehouse_in"):
+            continue
+        wi_rev = round(float(p.get("amount") or 0) + float(p.get("settle_income") or 0), 2)
+        wi_cost = round(float(p.get("total_cogs") or 0), 2)
+        wi_rows.append({
+            "name": str(p.get("name") or ""),
+            "qty": round(float(p.get("qty") or 0), 4),
+            "unit": str(p.get("unit") or ""),
+            "revenue": wi_rev,
+            "cogs": wi_cost,
+            "gross": round(float(p.get("gross_profit") or 0), 2),
+        })
+    wi_rows.sort(key=lambda r: -r["gross"])
+    wi_revenue = round(float(base.get("warehouse_in_revenue") or 0), 2)
+    wi_cogs = round(float(base.get("warehouse_in_cogs") or 0), 2)
+
     # ---- 覆盖提示：拼不满的日期必须在页面上说清楚，否则广告费会被低估 ----
     warnings: list[str] = []
     covered_accounts: dict[str, set[str]] = {}
@@ -1121,6 +1142,14 @@ def ad_profit_summary(
             "warehouse_in_revenue": round(float(base.get("warehouse_in_revenue") or 0), 2),
             "warehouse_in_cogs": round(float(base.get("warehouse_in_cogs") or 0), 2),
             "warehouse_in_count": int(base.get("warehouse_in_count") or 0),
+        },
+        "warehouse_in": {
+            "revenue": wi_revenue,
+            "cogs": wi_cogs,
+            "gross": round(wi_revenue - wi_cogs, 2),
+            "qty": round(float(base.get("warehouse_in_qty") or 0), 4),
+            "count": int(base.get("warehouse_in_count") or 0),
+            "rows": wi_rows,
         },
         "ads": {
             "service_ok": service_ok,

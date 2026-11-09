@@ -20,6 +20,13 @@
           <div class="seg-item" :class="{ active: scope === 'one' }" @click="setScope('one')">当前分仓</div>
         </div>
 
+        <!-- 口径切换：财务口径 / 入仓台账 / 成交口径，与桌面端一致，三块互不混算 -->
+        <div class="seg" style="margin:10px 0 0;">
+          <div class="seg-item" :class="{ active: view === 'overview' }" @click="view = 'overview'">财务口径</div>
+          <div class="seg-item" :class="{ active: view === 'whin' }" @click="view = 'whin'">入仓台账</div>
+          <div class="seg-item" :class="{ active: view === 'sku' }" @click="view = 'sku'">成交口径</div>
+        </div>
+
         <div class="row" style="margin-top:10px;gap:8px;align-items:center;">
           <span class="grow" style="font-size:13px;">排除其他收支</span>
           <span class="muted" style="font-size:12px;">与财务报表口径一致</span>
@@ -32,10 +39,10 @@
         <div class="muted" style="font-size:12px;margin-top:8px;line-height:1.5;">{{ rangeHint }}</div>
       </div>
 
-      <!-- 概览 -->
-      <div class="card">
+      <!-- 财务口径：与财务报表同一套账，含入仓台账备货结算 -->
+      <div v-if="view === 'overview'" class="card">
         <div class="card-title">
-          <span class="grow">利润概览</span>
+          <span class="grow">利润表 · 财务口径</span>
           <span class="muted" style="font-size:11px;font-weight:400;">{{ generatedAt }}</span>
         </div>
         <div v-if="loading" class="empty">加载中…</div>
@@ -68,9 +75,9 @@
       </div>
 
       <!-- 利润桥 -->
-      <div class="card">
-        <div class="card-title">广告前后利润桥</div>
-        <div class="muted" style="font-size:12px;margin-bottom:6px;">口径 = 财务报表（本页只额外扣减广告费，不改动原报表）</div>
+      <div v-if="view === 'overview'" class="card">
+        <div class="card-title">利润表明细 · 财务口径（含入仓台账）</div>
+        <div class="muted" style="font-size:12px;margin-bottom:6px;">与「财务报表」同一套口径，本页只额外扣减广告费</div>
         <div v-for="b in bridge" :key="b.name" class="bridge-row">
           <span class="grow" :class="{ bold: b.bold }">{{ b.name }}</span>
           <span class="mono" :class="[b.bold ? 'bold' : '', num(b.value) >= 0 ? 'down' : 'up']">{{ fmtMoney(b.value) }}</span>
@@ -79,7 +86,7 @@
       </div>
 
       <!-- 按店铺账号 -->
-      <div class="card">
+      <div v-if="view === 'overview'" class="card">
         <div class="card-title">按店铺账号的广告费</div>
         <div class="muted" style="font-size:12px;margin-bottom:6px;">来自挂载服务「花费一览」的本地缓存（一次抓取 = 一个账号 + 一个区间）</div>
         <div v-if="!accounts.length" class="empty">所选区间没有可用的花费缓存</div>
@@ -96,9 +103,57 @@
         </div>
       </div>
 
-      <!-- 按 SKU 明细 -->
-      <div class="card">
-        <div class="card-title">按 SKU 明细</div>
+      <!-- 入仓台账：备货结算口径，单独成表，不与 SKU 成交合计混用 -->
+      <div v-if="view === 'whin'" class="card">
+        <div class="card-title">入仓台账（备货结算）</div>
+        <div class="muted" style="font-size:12px;margin-bottom:6px;line-height:1.5;">
+          已计入「财务口径」的收入与毛利；这是备货入仓/结算口径，不是京东实际成交
+        </div>
+        <div v-if="loading" class="empty">加载中…</div>
+        <template v-else>
+          <div class="stat-grid cols2">
+            <div class="stat accent"><div class="label">入仓收入</div><div class="value">{{ fmtMoney(whIn.revenue) }}</div></div>
+            <div class="stat warn"><div class="label">入仓成本</div><div class="value">{{ fmtMoney(whIn.cogs) }}</div></div>
+            <div class="stat success"><div class="label">入仓毛利</div><div class="value">{{ fmtMoney(whIn.gross) }}</div></div>
+            <div class="stat"><div class="label">入仓单数</div><div class="value">{{ whIn.count || 0 }}</div><div class="sub">{{ fmtNum(whIn.qty) }} 袋</div></div>
+          </div>
+          <div v-if="!whRows.length" class="empty">所选区间没有入仓台账</div>
+          <div v-for="(r, i) in whRows" :key="i" class="list-item">
+            <div class="row">
+              <span class="grow bold">{{ r.name || '—' }}</span>
+              <span class="muted mono">{{ fmtNum(r.qty) }}{{ r.unit || '' }}</span>
+            </div>
+            <div class="item-meta mono">收入 {{ fmtMoney(r.revenue) }} · 成本 {{ fmtMoney(r.cogs) }} · 毛利 {{ fmtMoney(r.gross) }}</div>
+          </div>
+        </template>
+        <div class="muted" style="font-size:12px;margin-top:8px;line-height:1.5;">
+          京东是否卖出要看「成交口径」；同一批货不会在成交口径重复计入。
+        </div>
+      </div>
+
+      <!-- 成交口径：利润表小计 + 与财务口径对账 -->
+      <div v-if="view === 'sku'" class="card">
+        <div class="card-title">利润表 · 成交口径</div>
+        <div class="muted" style="font-size:12px;margin-bottom:6px;line-height:1.5;">
+          ERP 出库销售 + 入仓品京东实际成交；不含入仓台账，合计对应下方 SKU 明细
+        </div>
+        <div v-if="skuLoading" class="empty">按 SKU 加载中…</div>
+        <template v-else>
+          <div v-for="b in dealRows" :key="b.name" class="bridge-row">
+            <span class="grow" :class="{ bold: b.bold }">{{ b.name }}</span>
+            <span class="mono" :class="{ bold: b.bold }">{{ fmtMoney(b.value) }}</span>
+          </div>
+          <div class="card-title" style="margin-top:12px;">与财务口径对账（差额来源）</div>
+          <div v-for="b in reconRows" :key="b.name" class="bridge-row">
+            <span class="grow">{{ b.name }}</span>
+            <span class="mono">{{ fmtMoney(b.value) }}</span>
+          </div>
+        </template>
+      </div>
+
+      <!-- 按 SKU 明细（成交口径） -->
+      <div v-if="view === 'sku'" class="card">
+        <div class="card-title">SKU 明细 · 成交口径</div>
         <div class="muted" style="font-size:12px;line-height:1.5;">{{ skuStat }}</div>
 
         <div class="row wrap" style="gap:8px;align-items:center;margin:10px 0 6px;">
@@ -167,7 +222,7 @@
         </template>
 
         <div class="muted" style="font-size:12px;margin-top:8px;line-height:1.5;">
-          广告花费按缓存段整段读取后按 SKU 汇总；ERP 商品编码需填京东 skuId 才能匹配。入仓品的成交件数与毛利取 jdfenxi「月度利润」本地缓存，利润 = 入仓品毛利 − 广告费。本表按成交口径统计，与上方财务卡片的收入口径不同。
+          广告花费按缓存段整段读取后按 SKU 汇总；ERP 商品编码需填京东 skuId 才能匹配。入仓品的成交件数与毛利取 jdfenxi「月度利润」本地缓存，利润 = 入仓品毛利 − 广告费。本页为成交口径；财务口径与入仓台账在页签单独查看，差额见上方对账。
         </div>
       </div>
     </div>
@@ -192,6 +247,7 @@ const df = ref(monthStartStr())
 const dt = ref(todayStr())
 const quickKey = ref('month')
 const scope = ref('all')          // all 全仓总览 / one 当前分仓
+const view = ref('overview')      // overview 财务口径 / whin 入仓台账 / sku 成交口径
 const excludeOther = ref(true)
 const loading = ref(false)
 const summary = ref({})
@@ -293,6 +349,37 @@ const skuStat = computed(() => {
   return `${t.sku_count || 0} 个 SKU · 匹配广告 ${t.matched_skus || 0} 个 · 未匹配广告 ${t.ad_only_skus || 0} 个`
     + (num(t.warehouse_sku_count) ? ` · 入仓品 ${t.warehouse_sku_count} 个（利润缓存 ${pr || '无'}）` : '')
     + (num(t.unmatched_ads) > 0.005 ? ` · 未匹配广告费 ${fmtMoney(t.unmatched_ads)}` : '')
+})
+
+/* 入仓台账（备货结算）：财务口径里含它，成交口径不含它 */
+const whIn = computed(() => summary.value.warehouse_in || {})
+const whRows = computed(() => whIn.value.rows || [])
+
+/* 成交口径利润表 + 与财务口径的对账：与桌面端同一套接口合计 */
+const dealRows = computed(() => {
+  const t = skuTotals.value
+  const rev = num(t.revenue_total != null ? t.revenue_total : t.erp_revenue)
+  const gross = num(t.gross_before)
+  return [
+    { name: '销售收入', value: rev },
+    { name: '结转成本', value: -(rev - gross) },
+    { name: '毛利（广告前）', value: gross, bold: true },
+    { name: '广告费合计', value: -num(t.ads_total) },
+    { name: '广告后毛利', value: num(t.gross_after), bold: true },
+  ]
+})
+const reconRows = computed(() => {
+  const p = profit.value
+  const w = whIn.value
+  const t = skuTotals.value
+  return [
+    { name: '财务口径毛利（广告前）', value: num(p.gross_before_ads) },
+    { name: '减：入仓台账毛利', value: -num(w.gross) },
+    { name: '加：入仓品京东成交毛利', value: num(t.warehouse_gross) },
+    { name: '广告费差异', value: num(t.ads_total) - num(p.ads_total) },
+    { name: '广告后毛利差额（财务 − 成交）', value: num(p.gross_after_ads) - num(t.gross_after) },
+    { name: '财务口径净利润另扣期间费用', value: num(erp.value.expense) },
+  ]
 })
 
 function lastMonthRange() {

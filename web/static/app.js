@@ -8339,7 +8339,7 @@ async function repEnsureWhOptions() {
 }
 
 /** 顶层切换：全仓总览 / 单仓总览
- *  四个分区 tab（汇总/支出/商品/流水）两种视角都用：数据源由请求的 wh 决定
+ *  六个分区 tab（利润表/现金流量表/余额表/支出/商品/流水）两种视角都用：数据源由请求的 wh 决定
  *  （全仓 = wh=all，后端把各分仓独立账套的结果合并）。 */
 function repScope(btn) {
   btn.closest(".seg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
@@ -9166,8 +9166,8 @@ async function renderSalesBySpec(from, to, whQs) {
   }
 }
 
-/* 报表分区 tab：汇总 / 支出 / 商品 / 流水（日期条件常驻，作用于所有分区） */
-const REP_PANELS = ["rep-panel-summary", "rep-panel-cash", "rep-panel-expense", "rep-panel-goods", "rep-panel-flow"];
+/* 报表分区 tab：利润表 / 现金流量表 / 余额表 / 支出 / 商品 / 流水（日期条件常驻，作用于所有分区） */
+const REP_PANELS = ["rep-panel-summary", "rep-panel-cash", "rep-panel-bal", "rep-panel-expense", "rep-panel-goods", "rep-panel-flow"];
 function repTab(btn) {
   btn.closest(".seg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
   const p = btn.dataset.panel;
@@ -12498,6 +12498,8 @@ let ADP_SCOPE = "all";   // all 全仓总览（默认） / one 单仓总览
 let ADP_WH = "";         // 单仓总览查看的分仓 key；"" = 当前分仓
 let ADP_SKU = null;      // 按 SKU 明细接口的返回（搜索/排序只在前端重排，不重复请求）
 let ADP_SKU_FULL = false; // 是否展开「显示全部」
+let ADP_SUMMARY = null;   // 利润概览接口的返回：财务口径 + 入仓台账明细
+let ADP_SKU_ERROR = "";   // 成交口径（SKU）加载失败原因，避免页面一直显示「加载中」
 let adpInited = false;
 let ADP_BF_TIMER = null;  // 补抓进度轮询定时器
 let adpWhLoaded = false;
@@ -12559,16 +12561,23 @@ function adpOpenAdService() {
   window.open("/jdfenxi/", "_blank");
 }
 
-/* 页内视图切换：利润概览 / SKU 明细（默认利润概览），两个视图互斥，
-   SKU 表不再留在概览页底，切过去才显示 */
+/* 页内视图切换：财务口径 / 入仓台账 / 成交口径（SKU 明细）。
+   三块按口径完全分开：财务口径含入仓台账；入仓台账单独列；成交口径才是 SKU 合计。 */
 function adpView(btn) {
-  const sku = btn.dataset.view === "sku";
+  const view = btn.dataset.view || "overview";
   btn.closest(".seg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
-  $("adpOverviewCard").classList.toggle("adp-collapsed", sku);
+  $("adpOverviewCard").classList.toggle("adp-collapsed", view !== "overview");
   ["adpOverviewBody", "adpBridgeCard", "adpAccountsCard"].forEach((id) => {
-    $(id).style.display = sku ? "none" : "";
+    $(id).style.display = view === "overview" ? "" : "none";
   });
-  $("adpSkuCard").style.display = sku ? "" : "none";
+  $("adpWhInCard").style.display = view === "whin" ? "" : "none";
+  $("adpDealCard").style.display = view === "sku" ? "" : "none";
+  $("adpSkuCard").style.display = view === "sku" ? "" : "none";
+  if (view === "whin") renderAdpWhIn();
+  if (view === "sku") {
+    renderAdpDealTable();
+    renderAdProfitSku();
+  }
 }
 
 async function loadAdProfit(refresh) {
@@ -12583,6 +12592,9 @@ async function loadAdProfit(refresh) {
   const whQs = ADP_SCOPE === "all" ? "&wh=all" : (ADP_WH ? `&wh=${encodeURIComponent(ADP_WH)}` : "");
   const hint = $("adpStatHint");
   if (hint) hint.textContent = "加载中…";
+  // 区间/分仓变了，上一轮的 SKU 合计不能继续显示，等新数据回来再填
+  ADP_SKU = null;
+  ADP_SKU_ERROR = "";
   let d;
   try {
     d = await api(`/api/adprofit/summary?date_from=${from}&date_to=${to}${whQs}${excludeOtherQs()}${refresh ? "&refresh=1" : ""}`);
@@ -12674,9 +12686,11 @@ async function loadAdProfitSku(from, to, whQs, refresh) {
     renderAdProfitSku();
   } catch (e) {
     ADP_SKU = null;
+    ADP_SKU_ERROR = e.message || "接口请求失败";
     const t = $("adpSkuTable");
     if (t) t.innerHTML = `<tbody><tr><td class="empty">按 SKU 明细加载失败：${esc(e.message)}</td></tr></tbody>`;
     if (stat) stat.textContent = "";
+    renderAdpDealTable();
   }
 }
 
@@ -12787,9 +12801,11 @@ function renderAdProfitSku() {
       <td class="num mono"><strong>${fmtMoney(filtered ? sumF("gross_after") : totals.gross_after)}</strong></td>
       <td class="num"></td><td class="num"></td><td class="num"></td>
     </tr>${Number(totals.warehouse_sku_count) ? `<tr><td colspan="12" class="muted">其中入仓品 ${totals.warehouse_sku_count} 个 · 成交 ${fmtNum(totals.warehouse_qty)} 件 · 销售额 ${fmtMoney(totals.warehouse_revenue)} · 毛利 ${fmtMoney(totals.warehouse_gross)} · 广告费 ${fmtMoney(totals.warehouse_ads)} · 广告后毛利 ${fmtMoney(totals.warehouse_net)}</td></tr>` : ""}${(!ADP_SKU_FULL && rows.length > LIMIT) ? `<tr><td colspan="12" class="muted">已显示前 ${LIMIT} 条，共 ${rows.length} 条 · <a href="javascript:;" onclick="ADP_SKU_FULL=true;renderAdProfitSku();">显示全部</a></td></tr>` : ""}</tfoot>`;
+  renderAdpDealTable();
 }
 
 function renderAdProfit(d) {
+  ADP_SUMMARY = d;
   const erp = d.erp || {}, p = d.profit || {}, ads = d.ads || {};
   const rng = d.range || {};
   const rev = Number(erp.revenue) || 0;
@@ -12852,6 +12868,90 @@ function renderAdProfit(d) {
 
   // ---- 按店铺账号的广告费 ----
   renderAdAccounts(ads, rng.days);
+  // ---- 入仓台账 / 成交口径：只在切换对应视图时展示，但数据随概览一起更新 ----
+  renderAdpWhIn();
+  renderAdpDealTable();
+}
+
+/* 入仓台账（备货结算）单独一张表：财务口径里含它，但成交口径不含它 */
+function renderAdpWhIn() {
+  const t = $("adpWhInTable");
+  if (!t) return;
+  const d = ADP_SUMMARY;
+  if (!d) {
+    t.innerHTML = `<tbody><tr><td class="empty">暂无数据</td></tr></tbody>`;
+    return;
+  }
+  const wi = d.warehouse_in || {};
+  const rows = wi.rows || [];
+  const body = rows.map((r) => `<tr>
+      <td>${esc(r.name || "")}</td>
+      <td class="num mono">${fmtNum(r.qty)}${r.unit ? " " + esc(r.unit) : ""}</td>
+      <td class="num mono">${fmtMoney(r.revenue)}</td>
+      <td class="num mono">${fmtMoney(r.cogs)}</td>
+      <td class="num mono">${fmtMoney(r.gross)}</td>
+    </tr>`).join("");
+  t.innerHTML = `<thead><tr>
+      <th>入仓品</th><th class="num">数量</th><th class="num">入仓收入</th>
+      <th class="num">入仓成本</th><th class="num">入仓毛利</th>
+    </tr></thead><tbody>${body || `<tr><td colspan="5" class="empty">所选区间没有入仓台账</td></tr>`}</tbody>
+    <tfoot><tr>
+      <td><strong>合计</strong> <span class="muted">共 ${Number(wi.count) || 0} 单</span></td>
+      <td class="num mono"><strong>${fmtNum(wi.qty)}</strong></td>
+      <td class="num mono"><strong>${fmtMoney(wi.revenue)}</strong></td>
+      <td class="num mono"><strong>${fmtMoney(wi.cogs)}</strong></td>
+      <td class="num mono"><strong>${fmtMoney(wi.gross)}</strong></td>
+    </tr></tfoot>`;
+}
+
+/* 成交口径利润表 + 与财务口径的对账：所有数字都来自接口合计，不在前端另算口径 */
+function renderAdpDealTable() {
+  const t = $("adpDealTable");
+  if (!t) return;
+  if (!ADP_SKU) {
+    const msg = ADP_SKU_ERROR
+      ? `成交口径加载失败：${esc(ADP_SKU_ERROR)}`
+      : (ADP_SUMMARY ? "按 SKU 明细加载中…" : "暂无数据");
+    t.innerHTML = `<tbody><tr><td class="empty">${msg}</td></tr></tbody>`;
+    return;
+  }
+  const tot = ADP_SKU.totals || {};
+  const rev = Number(tot.revenue_total) || 0;
+  const gross = Number(tot.gross_before) || 0;
+  const cogs = rev - gross;
+  const ads = Number(tot.ads_total) || 0;
+  const after = Number(tot.gross_after) || 0;
+
+  const f = ADP_SUMMARY || {};
+  const fp = f.profit || {};
+  const fwi = f.warehouse_in || {};
+  const fe = f.erp || {};
+  const fGross = Number(fp.gross_before_ads) || 0;
+  const fAfter = Number(fp.gross_after_ads) || 0;
+  const whGross = Number(fwi.gross) || 0;
+  const dealWhGross = Number(tot.warehouse_gross) || 0;
+  const expense = Number(fe.expense) || 0;
+
+  const line = (name, value, desc, cls = "") =>
+    `<tr class="${cls}"><td>${esc(name)}</td><td class="num mono">${fmtMoney(value)}</td><td class="muted">${esc(desc)}</td></tr>`;
+  const section = (title) => `<tr><td colspan="3" class="muted" style="background:var(--bg-soft,#f7f8fa);font-weight:600;">${esc(title)}</td></tr>`;
+
+  t.innerHTML = `<thead><tr><th>项目</th><th class="num">金额</th><th>说明</th></tr></thead><tbody>` +
+    section("一、利润表（成交口径）") +
+    line("销售收入", rev, "ERP 出库销售 + 入仓品京东实际成交") +
+    line("结转成本", -cogs, "商品成本 + 打包/快递 + 刷单结算") +
+    line("毛利（广告前）", gross, "销售收入 − 结转成本") +
+    line("广告费合计", -ads, "CPS + 京准通（与财务口径同一份缓存）") +
+    `<tr><td><strong>广告后毛利</strong></td><td class="num mono"><strong>${fmtMoney(after)}</strong></td><td class="muted">毛利 − 广告费</td></tr>` +
+    section("二、与财务口径对账（差额来源）") +
+    line("财务口径毛利（广告前）", fGross, "含入仓台账备货结算") +
+    line("减：入仓台账毛利", -whGross, "备货入仓/结算，不在成交口径") +
+    line("加：入仓品京东成交毛利", dealWhGross, "入仓品实际卖出部分（jdfenxi 月度利润）") +
+    `<tr><td><strong>成交口径毛利（广告前）</strong></td><td class="num mono"><strong>${fmtMoney(gross)}</strong></td><td class="muted">与第一节一致（0.01 尾差为逐行四舍五入）</td></tr>` +
+    line("广告费差异", ads - (Number(fp.ads_total) || 0), "两边读同一份花费缓存，应为 0") +
+    line("广告后毛利差额（财务 − 成交）", fAfter - after, "= 入仓台账毛利 − 入仓品成交毛利") +
+    line("财务口径净利润（广告后）另扣期间费用", expense, "净利润 = 毛利 − 期间费用；成交口径只到毛利") +
+    `</tbody>`;
 }
 
 function renderAdAccounts(ads, days) {
