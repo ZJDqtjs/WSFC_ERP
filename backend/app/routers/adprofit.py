@@ -60,7 +60,11 @@ AD_ACCOUNT_WH_FILE = DATA_DIR / "ad_account_wh.json"
 
 
 def load_account_warehouses() -> dict[str, str]:
-    """读取店铺账号 → 分仓 key 对照表；文件缺失/格式不对时返回空表。"""
+    """读取店铺账号 → 分仓 key 对照表；文件缺失/格式不对时返回空表。
+
+    以 `_` 开头的键是说明性元数据（如 `_associations` 记录某店铺关联了哪几个仓），
+    不参与金额分摊，读取时跳过。
+    """
     try:
         data = json.loads(AD_ACCOUNT_WH_FILE.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001 - 未配置属正常情况
@@ -70,6 +74,8 @@ def load_account_warehouses() -> dict[str, str]:
     out: dict[str, str] = {}
     for k, v in data.items():
         key, wh = str(k or "").strip(), str(v or "").strip()
+        if not key or key.startswith("_"):
+            continue
         if key and wh:
             out[key] = wh
     return out
