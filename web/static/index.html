@@ -358,7 +358,8 @@
         <div class="card">
           <div class="card-head">
             <h3>新增出库 / 销售单</h3><span class="hint">卖商品自动结转关联包装材料与打包费</span>
-            <button class="btn" style="margin-left:auto;" onclick="openBatchModal('jushuitan')"><svg class="ic"><use href="#i-download"/></svg> 导入聚水潭出库单</button>
+            <button class="btn secondary" style="margin-left:auto;" onclick="openBatchModal('brush')" title="放单仓刷单出库：仓储方推错仓时，先回冲已出库的原单（盘点记录里留明细），再按刷单口径重新入账"><svg class="ic"><use href="#i-out"/></svg> 刷单出库</button>
+            <button class="btn" onclick="openBatchModal('jushuitan')"><svg class="ic"><use href="#i-download"/></svg> 导入聚水潭出库单</button>
             <button class="btn secondary" id="jstPendingBtn" onclick="openJstPending()" title="聚水潭新商品没规则匹配 / 需要验证码时，在这里处理">待办处理</button>
             <button class="btn secondary" onclick="openBatchModal('outbound')"><svg class="ic"><use href="#i-out"/></svg> 批量出库</button>
           </div>

@@ -11628,13 +11628,24 @@ const BATCH_MODAL = {
     confirm: "/api/jushuitan/import/confirm",
     hint: "上传聚水潭导出的「销售出库单_*.xlsx」，自动识别商品并按件数×每件规格结算。先解析预览（自动试算 AI 新增方案），确认后才出库。未关联商品可点「去新增商品」在新标签页新建，或一键确认 AI 自动新增。「仓储方」为芳谊放单仓的订单，确认框里会逐单让你填刷单成本，并核算结算价与最终利润。",
   },
+  brush: {
+    title: "刷单出库",
+    tpl: "",
+    preview: "/api/brush-out/preview",
+    confirm: "/api/brush-out/confirm",
+    hint: "放单仓刷单专用：上传聚水潭导出的「销售出库单_*.xlsx」，全部按刷单口径入账（不扣库存、不耗包材，成本 = 刷单成本 + 快递+包装固定费）。仓储方是芳谊放单仓的直接按刷单流程走；若是别的仓（如自持干货打单仓）且这些单已被自动出库当正常单出了库，会先回冲原单（删单回滚库存，并在「盘点记录」里留回冲明细），再建刷单单 —— 收入只保留刷单这一份。",
+  },
 };
 /* 放单仓名单（后端下发，见 backend/app/brush.py 的 BRUSH_WAREHOUSES）：
    这些「仓储方」的聚水潭订单要在确认框里逐单填刷单成本，核算结算价与最终利润。 */
 let __BRUSH_WH__ = [];
 let __BRUSH_HIT__ = [];   // 本次解析里真正命中的放单仓（有它就不自动跑 AI 归并）
+/* 刷单出库专用（见 backend/app/routers/brush_out.py）：需要先回冲的已入账出库单 */
+let __BRUSH_REVERT__ = [];
 function isBrushOrder(o) { return !!o && !!o.warehouse && __BRUSH_WH__.includes(o.warehouse); }
 function isBrushBatch() { return (__BRUSH_HIT__ || []).length > 0; }
+/* 聚水潭出库单两种入口：正常导入（jushuitan）/ 刷单出库（brush），解析与预览结构一致 */
+function isJstLike(kind) { return kind === "jushuitan" || kind === "brush"; }
 function openBatchModal(kind) {
   const cfg = BATCH_MODAL[kind];
   if (!cfg) return;
@@ -11665,16 +11676,17 @@ async function runBatchModal(kind) {
   const cfg = BATCH_MODAL[kind];
   const file = ($("bmFile") && $("bmFile").files[0]) || window.__BM_FILE__;
   if (!file) { toast("请先选择 Excel 文件"); return; }
-  if (kind === "jushuitan") window.__BM_FILE__ = file; // 供 AI 关联后一键重新解析
+  if (isJstLike(kind)) window.__BM_FILE__ = file; // 供 AI 关联后一键重新解析
   // 结果预览会把 modalBox 内容整体替换掉，此时 #bmResult 已不存在（旧代码在这里抛错 → 点「重新解析」没反应），
   // 故进度提示回退到弹窗主体。
   const box = $("bmResult") || $("modalBox");
   if (box) box.innerHTML = `<div class="alert ok">⏳ 正在解析…（同一文件）</div>`;
   try {
     const r = await apiUpload(cfg.preview, file);
-    if (kind === "jushuitan") {
+    if (isJstLike(kind)) {
       __BRUSH_WH__ = r.brush_warehouse_names || [];   // 放单仓名单（配置）
       __BRUSH_HIT__ = r.brush_warehouses || [];       // 本次解析命中的放单仓
+      __BRUSH_REVERT__ = r.revert || [];              // 刷单出库：需要先回冲的已入账出库单
     }
     if (kind === "inbound") renderInboundReview(kind, r);
     else renderDraftReview(kind, r);
@@ -11691,8 +11703,8 @@ function renderDraftReview(kind, r) {
   orders.forEach((o) => { if (o.pack_lines && o.pack_lines.length) window.__DRAFT_PACK__[o.doc_no] = o.pack_lines; });
   let warn = "";
   if (r.unmapped_codes && r.unmapped_codes.length) {
-    window.__LAST_UNMAPPED__ = kind === "jushuitan" ? (r.unmapped_codes || []) : [];
-    if (kind === "jushuitan") {
+    window.__LAST_UNMAPPED__ = isJstLike(kind) ? (r.unmapped_codes || []) : [];
+    if (isJstLike(kind)) {
       // 每个未关联商品名都带「去新增商品」按钮：新标签页打开「商品」页并按该名称预填新增弹窗。
       // AI 自动新增在页面渲染后自动试算（不落库），把方案展示出来，用户确认后才真正新增。
       const unmapDetail = {};
@@ -11717,13 +11729,13 @@ function renderDraftReview(kind, r) {
     $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3>
       <div class="alert warn">未解析出可出库的单据。</div>${warn}
       <div class="modal-foot"><button class="btn secondary" onclick="openBatchModal('${kind}')">返回重新选择</button>` +
-      (kind === "jushuitan" ? `<button class="btn" onclick="runBatchModal('jushuitan')">↻ 重新解析（同一文件）</button>` : "") +
+      (isJstLike(kind) ? `<button class="btn" onclick="runBatchModal('${kind}')">↻ 重新解析（同一文件）</button>` : "") +
       `</div>`;
     scheduleAiAutoPreview(kind);
     return;
   }
-  // 聚水潭：不逐单展示，改为汇总相同商品名的总体预览
-  if (kind === "jushuitan") {
+  // 聚水潭 / 刷单出库：不逐单展示，改为汇总相同商品名的总体预览
+  if (isJstLike(kind)) {
     renderAggregateReview(kind, orders, warn);
     scheduleAiAutoPreview(kind);
     return;
@@ -11756,7 +11768,7 @@ function renderDraftReview(kind, r) {
     <div class="draft-list">${body}</div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="openBatchModal('${kind}')">重新选择文件</button>
-      ${kind === "jushuitan" ? `<button class="btn secondary" onclick="runBatchModal('jushuitan')">↻ 重新解析（同一文件）</button>` : ""}
+      ${isJstLike(kind) ? `<button class="btn secondary" onclick="runBatchModal('${kind}')">↻ 重新解析（同一文件）</button>` : ""}
       <button class="btn green" onclick="confirmDraft('${kind}')">✓ 确认出库（<span id="draftCount">${orders.length}</span> 单）</button>
     </div>`;
   scheduleAiAutoPreview(kind);
@@ -11953,10 +11965,34 @@ function renderAggregateReview(kind, orders, warn) {
         </table>
       </div>
     </div>` : "";
+  // 刷单出库：仓储方推错仓时，这些单已被自动出库当正常单出了库 → 确认时先回冲（删原单回滚库存 +
+  // 盘点记录留回冲明细），再按刷单口径重建，收入只保留刷单单这一份（见 routers/brush_out.py）
+  const revertRows = (__BRUSH_REVERT__ || []);
+  const revertSection = revertRows.length ? `
+    <div class="alert warn">
+      <div>⚠ 有 <b>${revertRows.length}</b> 张单已在系统里按「正常出库」入过账（仓储方推错仓，自动出库误识别）。
+        确认后将先<b>回冲</b>：删除这些原出库单（库存与成本随之精确回滚），并在「库存 → 盘点记录」里为每个商品留一条
+        <b>回冲明细</b>；随后再按刷单口径重建出库单，<b>收入只保留刷单这一份</b>。</div>
+      <div class="table-wrap" style="margin-top:8px;">
+        <table class="subtable" style="width:100%;">
+          <thead><tr><th>聚水潭单号</th><th>原出库单</th><th style="width:96px;">日期</th><th>回冲商品</th>
+            <th class="num" style="width:96px;">原收入</th><th class="num" style="width:96px;">原成本</th></tr></thead>
+          <tbody>${revertRows.map((r) => `<tr>
+            <td class="mono">${esc(r.doc_no || "")}</td>
+            <td class="mono">${esc(r.code || "")}${r.has_return ? `<div class="muted" style="font-size:11px;color:var(--red);">有退货单，需先删除</div>` : ""}</td>
+            <td class="muted">${esc(r.date || "")}</td>
+            <td class="muted">${(r.lines || []).map((l) => `${esc(l.product_name)} ×${fmtNum(l.quantity)}${esc(l.unit || "")}`).join("　") || "—"}</td>
+            <td class="num mono">${fmtMoney(r.total_amount || 0)}</td>
+            <td class="num mono">${fmtMoney(r.total_cogs || 0)}</td>
+          </tr>`).join("")}</tbody>
+        </table>
+      </div>
+    </div>` : "";
   $("modalBox").classList.add("wide");
   $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} — 商品汇总预览 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="alert ok">共 <b>${orders.length}</b> 单${range ? `（${esc(range)}）` : ""}，商品 <b>${rows.length}</b> 种，合计金额 <b>${fmtMoney(sumAmt)}</b>${packFee ? `（另有打包费 ${fmtMoney(packFee)}）` : ""}。确认后按原单据整批出库。</div>
     ${warn}
+    ${revertSection}
     ${brushSection}
     <div class="draft-list">
       <table class="subtable agg-table" style="width:100%;">
@@ -11980,7 +12016,7 @@ function renderAggregateReview(kind, orders, warn) {
     </div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="openBatchModal('${kind}')">重新选择文件</button>
-      <button class="btn secondary" onclick="runBatchModal('jushuitan')">↻ 重新解析（同一文件）</button>
+      <button class="btn secondary" onclick="runBatchModal('${kind}')">↻ 重新解析（同一文件）</button>
       <button class="btn green" onclick="confirmAggregate('${kind}')">✓ 确认出库（${orders.length} 单）</button>
     </div>`;
   if (brushOrders.length) brushCalc();   // 初始化逐单利润与合计
@@ -12223,11 +12259,13 @@ async function submitDraftOrders(kind, orders) {
     const payload = { orders };
     // 聚水潭（古法/手动导入）：带上来源文件名，后端会往「自动出库设置 → 执行记录」记一条
     // 「古法导入」记录（见 imports._log_manual_jst_import）
-    if (kind === "jushuitan") payload.source = (window.__BM_FILE__ && window.__BM_FILE__.name) || "";
+    if (isJstLike(kind)) payload.source = (window.__BM_FILE__ && window.__BM_FILE__.name) || "";
     const r = await api(BATCH_MODAL[kind].confirm, "POST", payload);
     let html = `<div class="alert ok">✓ 已创建 <b>${r.created}</b> 个出库单`;
     if (r.failed_count) html += `，失败 <b>${r.failed_count}</b>`;
     html += `</div>`;
+    // 刷单出库：推错仓的原单已回冲（删单回滚库存，盘点记录留明细）
+    if (r.revert_note) html += `<div class="alert ok">↩ ${esc(r.revert_note)}：原出库单已删除、库存与成本已回滚，「库存 → 盘点记录」里已留回冲明细。</div>`;
     if (r.warnings && r.warnings.length) html += `<div class="alert warn">⚠ ${r.warnings.map(esc).join("；")}</div>`;
     if (r.failed && r.failed.length) html += `<div class="alert err">失败：${r.failed.map((f) => esc(f.reason)).join("；")}</div>`;
     $("modalBox").innerHTML = `<h3>${BATCH_MODAL[kind].title} <button class="close" onclick="closeModal()">✕</button></h3>${html}
@@ -12240,6 +12278,7 @@ async function submitDraftOrders(kind, orders) {
       $("outDateTo").value = ds[ds.length - 1];
     }
     loadOutbounds(); loadStock();
+    if (r.revert_note) loadAdjustments();   // 刷单出库回冲后，盘点记录里刚写入的回冲明细马上可见
     renderJstPending();   // 导入完立刻刷新「待办处理」（有新商品没关联 / 要验证码时马上就能看到）
   } catch (e) { toast("确认出库失败：" + e.message); }
   finally { window.__CONFIRMING__ = false; }
