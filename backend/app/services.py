@@ -306,12 +306,19 @@ def _movement_rows(db: Session, product_id: int):
 
     大商品流水上千条，而 recompute_product / fifo_state 在一次批量导入里会被调用上千次，
     ORM 实例化开销会占到大头（实测 300 单导入里约 95 万次对象构造、占近 30% 时间）。
+
+    **排序按「业务日期 + 流水 id」**（不是单纯 id）：补录/倒填日期的入库单虽然流水 id 最新，
+    但必须按它自己的业务日期回到 FIFO 队列里，否则它会越过所有已发生的出库、先去补最古老的
+    超卖欠账（2026-11 草莓番茄就是这种情形：11-01~11-09 补录 4.8 元/公斤的入库，全被 10-30
+    的出库吃掉，11 月成本一直停在 7 元/公斤）。同一天内仍按 id（录入先后）排，保证当天
+    「先入库后出库」的正常录入顺序不变。date 是 YYYY-MM-DD 定长字符串，字典序即时间序。
     """
     return db.execute(
         select(
             StockMovement.id, StockMovement.move_type, StockMovement.quantity_base,
             StockMovement.amount, StockMovement.ref_type, StockMovement.ref_id,
-        ).where(StockMovement.product_id == product_id).order_by(StockMovement.id)
+        ).where(StockMovement.product_id == product_id)
+        .order_by(StockMovement.date, StockMovement.id)
     ).all()
 
 
@@ -939,11 +946,15 @@ def sync_doc_edit(db: Session, kind: str, ref_id: int, date: str, operator: str,
 
     - 操作员统一记为本次修改人（后端强制取登录账号，忽略前端传值）；
     - 改日期时三类关联记录的日期一起改，保证报表按日期统计口径一致；
-      FIFO 重放按流水 id 排序，因此改日期不会改变结转成本。
+      FIFO 重放按「业务日期 + 流水 id」排序（见 _movement_rows），**改日期会改变结转成本**，
+      所以日期真的变了要重算受影响商品的库存/成本并把结果回写出库单。
     """
+    affected: set[int] = set()
     for m in db.execute(
         select(StockMovement).where(StockMovement.ref_type == kind, StockMovement.ref_id == ref_id)
     ).scalars():
+        if (m.date or "") != date:
+            affected.add(m.product_id)
         m.date, m.operator = date, operator
     for f in db.execute(
         select(FinanceRecord).where(FinanceRecord.ref_type == kind, FinanceRecord.ref_id == ref_id)
@@ -963,6 +974,11 @@ def sync_doc_edit(db: Session, kind: str, ref_id: int, date: str, operator: str,
             select(DropshipBill).where(DropshipBill.outbound_id == ref_id)
         ).scalars():
             b.date, b.operator = date, operator
+    # 日期变了 → 该单在 FIFO 队列里的位置变了 → 受影响商品重放一遍，出库单成本随之回写
+    if affected:
+        db.flush()
+        for pid in affected:
+            recompute_product(db, pid)
 
 
 def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
