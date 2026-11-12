@@ -4,6 +4,7 @@ import math
 import os
 import re
 from collections import deque
+from types import SimpleNamespace
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -317,6 +318,7 @@ def _movement_rows(db: Session, product_id: int):
         select(
             StockMovement.id, StockMovement.move_type, StockMovement.quantity_base,
             StockMovement.amount, StockMovement.ref_type, StockMovement.ref_id,
+            StockMovement.date,   # 评估入库改单影响（改日期会改变 FIFO 顺序）时需要
         ).where(StockMovement.product_id == product_id)
         .order_by(StockMovement.date, StockMovement.id)
     ).all()
@@ -508,6 +510,154 @@ def recompute_product(db: Session, product_id: int) -> Product:
         product.stock_value = 0.0
     db.flush()
     return product
+
+
+def inbound_unit_factor(product: Product, rec: "Inbound") -> float:
+    """入库单所在单位相对基础单位的换算系数。
+
+    优先用商品当前的换算表；老单据的单位后来被改掉/删掉时，退回按单据自己的
+    quantity_base / quantity 折算，避免历史入库单没法再改数量。
+    """
+    conv = (product.conversions or {}).get(rec.unit)
+    if conv and float(conv) > 0:
+        return float(conv)
+    qty = float(rec.quantity or 0.0)
+    if qty > 0:
+        f = float(rec.quantity_base or 0.0) / qty
+        if f > 0:
+            return f
+    raise ValueError(f"商品「{product.name}」未配置单位「{rec.unit}」的换算系数")
+
+
+def inbound_edit_impact(db: Session, rec: "Inbound", quantity: float | None = None,
+                        unit_price: float | None = None, date: str | None = None) -> dict:
+    """评估「修改入库单数量 / 单价（/日期）」的影响范围，**不落库**。
+
+    做法：把这张入库单对应的库存流水按新数量、新到岸金额替换掉，对同一商品再做一次
+    完整 FIFO 重放，与当前结果逐条比对出库流水的结转成本：
+      - 没有出库成本变化 → 可快速修改（该批次还没被出库/包装消耗用到，或价格没变）；
+      - 有变化 → 返回受影响的出库单（单号 / 日期 / 客户 / 成本前后与差额），
+        保存时 recompute_product 会按 FIFO 重算并把新成本回写到这些订单。
+
+    返回结构供前端弹窗展示；异常（数量非法、缺流水）抛 ValueError。
+    """
+    product = db.get(Product, rec.product_id)
+    if not product:
+        raise ValueError("商品不存在")
+    new_qty = round(float(rec.quantity if quantity is None else quantity), 6)
+    new_price = round(float(rec.unit_price if unit_price is None else unit_price), 6)
+    if new_qty <= 0:
+        raise ValueError("数量必须大于 0")
+    if new_price < 0:
+        raise ValueError("单价不能为负数")
+    new_base = new_qty * inbound_unit_factor(product, rec)
+    new_total = round(new_qty * new_price, 2)
+    fee_sum = round(float(rec.freight or 0.0) + float(rec.handling or 0.0) + float(rec.fee or 0.0), 2)
+    old_total = round(float(rec.total_amount or 0.0), 2)
+    old_landed = round(old_total + fee_sum, 2)
+    new_landed = round(new_total + fee_sum, 2)
+
+    mv = db.scalar(
+        select(StockMovement).where(
+            StockMovement.ref_type == "inbound", StockMovement.ref_id == rec.id,
+            StockMovement.move_type == "in",
+        ).order_by(StockMovement.id)
+    )
+    if not mv:
+        raise ValueError("该入库单缺少库存流水，无法评估影响")
+
+    moves = _movement_rows(db, rec.product_id)
+    before = _fifo_replay(moves, fallback=product.unit_cost or 0.0)
+    new_date = (date or "").strip() or rec.date
+    sim = [
+        SimpleNamespace(
+            id=m.id, move_type=m.move_type,
+            quantity_base=(new_base if m.id == mv.id else m.quantity_base),
+            amount=(new_landed if m.id == mv.id else m.amount),
+            ref_type=m.ref_type, ref_id=m.ref_id,
+            date=(new_date if m.id == mv.id else m.date),
+        )
+        for m in moves
+    ]
+    if new_date != (mv.date or ""):
+        sim.sort(key=lambda m: (m.date or "", m.id))   # 改日期会改变 FIFO 顺序
+    after = _fifo_replay(sim, fallback=product.unit_cost or 0.0)
+
+    stock0, value0 = before[0], before[1]
+    stock1, value1 = after[0], after[1]
+    avg0 = (value0 / stock0) if stock0 > 1e-9 else before[3]
+    avg1 = (value1 / stock1) if stock1 > 1e-9 else after[3]
+    costs0, costs1 = before[4], after[4]
+
+    # 这批货是否已经被出库/包装消耗用到：把它从 FIFO 队列里拿掉，若出库成本有变化 → 用过
+    without = _fifo_replay([m for m in moves if m.id != mv.id], fallback=product.unit_cost or 0.0)
+    used = any(
+        abs(without[4].get(mid, 0.0) - costs0.get(mid, 0.0)) > 1e-9
+        for mid in set(without[4]) | set(costs0)
+    )
+
+    info = {m.id: m for m in moves}
+    by_outbound: dict[int, float] = {}
+    other_changed = 0
+    for mid in set(costs0) | set(costs1):
+        amt0, amt1 = costs0.get(mid, 0.0), costs1.get(mid, 0.0)
+        if abs(amt0 - amt1) <= 1e-9:
+            continue
+        m = info.get(mid)
+        if m and m.ref_type == "outbound" and m.ref_id:
+            by_outbound[m.ref_id] = by_outbound.get(m.ref_id, 0.0) + (amt1 - amt0)
+        else:
+            other_changed += 1
+
+    affected = []
+    if by_outbound:
+        outs = db.execute(
+            select(Outbound).where(Outbound.id.in_(list(by_outbound)))
+        ).scalars()
+        for o in outs:
+            delta = round(by_outbound.get(o.id, 0.0), 2)
+            cogs_before = round(float(o.total_cogs or 0.0), 2)
+            affected.append({
+                "id": o.id, "code": o.code, "date": o.date,
+                "customer": o.customer or "",
+                "cogs_before": cogs_before,
+                "cogs_after": round(cogs_before + delta, 2),
+                "delta": delta,
+            })
+        affected.sort(key=lambda x: (x["date"], x["code"]))
+
+    warnings = []
+    if stock1 < -1e-6:
+        warnings.append(
+            f"修改后库存将为 {fmt_qty(stock1)}（超卖），超出已入库数量；"
+            "缺口服用的出库成本会按暂估成本重算"
+        )
+    if new_date != (mv.date or ""):
+        warnings.append("入库日期改动会改变 FIFO 先后顺序，可能影响更多出库单的结转成本")
+
+    affected_count = len(affected)
+    return {
+        "id": rec.id, "code": rec.code,
+        "product_id": product.id, "product_name": product.name,
+        "unit": rec.unit, "base_unit": product.base_unit or "",
+        # 单据单位相对基础单位的换算系数（前端按单据单位展示库存/均价，避免「克 / 公斤」来回折算）
+        "unit_factor": inbound_unit_factor(product, rec),
+        "old_quantity": round(float(rec.quantity or 0.0), 6),
+        "new_quantity": new_qty,
+        "old_unit_price": round(float(rec.unit_price or 0.0), 6),
+        "new_unit_price": new_price,
+        "old_total_amount": old_total, "new_total_amount": new_total,
+        "amount_delta": round(new_total - old_total, 2),
+        "old_landed": old_landed, "new_landed": new_landed,
+        "stock_before": round(stock0, 6), "stock_after": round(stock1, 6),
+        "avg_cost_before": round(avg0, 6), "avg_cost_after": round(avg1, 6),
+        "consumed": bool(by_outbound) or other_changed > 0,
+        "used": used,   # 这批货是否已被出库/包装消耗用到（与「本次改动是否改变成本」分开看）
+        "affected_count": affected_count,
+        "affected_outbounds": affected[:100],   # 明细最多回前 100 单，够弹窗展示；总数看 affected_count
+        "changed_movements": other_changed + sum(1 for _ in by_outbound),
+        "warnings": warnings,
+    }
 
 
 # ---------------- 单据批量删除 ----------------

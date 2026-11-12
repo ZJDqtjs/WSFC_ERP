@@ -6956,33 +6956,59 @@ async function deleteInbound(id) {
   try { await api("/api/inbounds/" + id, "DELETE"); toast("已删除"); loadInbounds(); loadStock(); }
   catch (e) { toast("删除失败：" + e.message); }
 }
-/* 手动修改入库单：可改 供应商 / 入库日期 / 付款状态 / 运费 / 装卸费 / 手续费；保存后操作员记为修改人 */
+/* 手动修改入库单：可改 数量 / 单价 / 供应商 / 入库日期 / 付款状态 / 运费 / 装卸费 / 手续费；
+   数量、单价改动会先核算影响范围（这批货是否已被出库/包装消耗用到）：
+   - 未被用到 → 提示「可快速更改」，直接改；
+   - 已被用到 → 列出受影响的出库单（成本前后），确认后按 FIFO 重算这些订单的成本与毛利 */
 let ED_IN_ADJUST = 0;   // 改单弹窗里的金额调整（应付合计 = 货款 + 调整 + 运费 + 装卸 + 手续费）
+let ED_IN = null;           // 正在修改的入库单原值（数量 / 单价 / 日期）
+let ED_IN_IMPACT = null;    // 最近一次影响评估结果
+let ED_IN_IMPACT_KEY = "";  // 评估对应的输入指纹（数量|单价|日期）
+let ED_IN_TIMER = null;
+
 function editInbound(id) {
   const r = ($("inTable")._rows || []).find((x) => x.id === id);
   if (!r) { toast("未找到该入库单，请刷新列表"); return; }
   ED_IN_ADJUST = Number(r.adjust_amount) || 0;
+  ED_IN = {
+    id, quantity: Number(r.quantity) || 0, unit_price: Number(r.unit_price) || 0,
+    date: r.date || "", total_amount: Number(r.total_amount) || 0,
+  };
+  ED_IN_IMPACT = null;
+  ED_IN_IMPACT_KEY = "";
+  const unit = esc(r.unit || "");
   openModal(`
     <h3>修改入库单 <button class="close" onclick="closeModal()">✕</button></h3>
     <div class="muted" style="margin-bottom:12px;">
-      ${esc(r.code)} · ${esc(r.product_name)} ${fmtNum(r.quantity)}${esc(r.unit || "")} · 金额 ${fmtMoney(r.total_amount)}${r.adjust_amount ? `（调整 ${r.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(r.adjust_amount))}）` : ""}
+      ${esc(r.code)} · ${esc(r.product_name)} ${fmtNum(r.quantity)}${unit} · 金额 ${fmtMoney(r.total_amount)}${r.adjust_amount ? `（调整 ${r.adjust_amount > 0 ? "+" : "-"}${fmtMoney(Math.abs(r.adjust_amount))}）` : ""}
     </div>
     <div class="form-grid">
+      <div class="field">
+        <label>数量（${unit}）*</label>
+        <input id="edInQty" type="number" min="0" step="any" value="${r.quantity}" oninput="edInChanged()" />
+        <div class="field-hint">按单据单位；改完库存、批次成本与本单金额一起重算</div>
+      </div>
+      <div class="field">
+        <label>单价（元/${unit}）*</label>
+        <input id="edInPrice" type="number" min="0" step="any" value="${r.unit_price}" oninput="edInChanged()" />
+        <div class="field-hint">改数量/单价会先核算影响范围，已有出库用到这批货时会列出受影响的订单</div>
+      </div>
+      <div class="field" style="grid-column:1/-1;"><div id="edInImpact"></div></div>
       <div class="field"><label>供应商</label><input id="edInSupplier" value="${esc(r.supplier || "")}" placeholder="供应商名称" /></div>
-      <div class="field"><label>入库日期 *</label><input id="edInDate" type="date" value="${esc(r.date || "")}" /></div>
+      <div class="field"><label>入库日期 *</label><input id="edInDate" type="date" value="${esc(r.date || "")}" onchange="edInChanged()" /></div>
       <div class="field">
         <label>运费</label>
-        <input id="edInFreight" type="number" min="0" step="any" value="${r.freight || ""}" placeholder="0.00" oninput="edInCalc(${r.total_amount || 0})" />
+        <input id="edInFreight" type="number" min="0" step="any" value="${r.freight || ""}" placeholder="0.00" oninput="edInCalc()" />
         <div class="field-hint">选填；计入该批次成本（体现在这个品的毛利），并同步记入「其他收支」</div>
       </div>
       <div class="field">
         <label>装卸费</label>
-        <input id="edInHandling" type="number" min="0" step="any" value="${r.handling || ""}" placeholder="0.00" oninput="edInCalc(${r.total_amount || 0})" />
+        <input id="edInHandling" type="number" min="0" step="any" value="${r.handling || ""}" placeholder="0.00" oninput="edInCalc()" />
         <div class="field-hint">选填；日期随入库单日期，清零即删掉对应的「其他收支」</div>
       </div>
       <div class="field">
         <label>手续费</label>
-        <input id="edInFee" type="number" min="0" step="any" value="${r.fee || ""}" placeholder="0.00" oninput="edInCalc(${r.total_amount || 0})" />
+        <input id="edInFee" type="number" min="0" step="any" value="${r.fee || ""}" placeholder="0.00" oninput="edInCalc()" />
         <div class="field-hint">选填；付款给供应商产生的转账手续费，同运费计入成本</div>
       </div>
       <div class="field">
@@ -6998,13 +7024,106 @@ function editInbound(id) {
       </div>
     </div>
     <p class="hint" id="edInHint"></p>
-    <p class="hint">保存后操作员记为当前登录账号（${esc(operatorName())}）。数量 / 单价 / 商品如需更正，请删除后重新入库；运费、装卸费与手续费之后随时可改（会重算该批次成本与该品毛利）。</p>
+    <p class="hint">保存后操作员记为当前登录账号（${esc(operatorName())}）。商品如需更换请删除后重新入库；数量 / 单价可直接修改（保存前会先核算影响范围，已有出库用到这批货时列出受影响订单并重算成本）。</p>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
       <button class="btn green" onclick="saveInboundEdit(${id})">✓ 保存</button>
     </div>`);
-  edInCalc(Number(r.total_amount) || 0);
+  edInCalc();
   edInCompHint();
+  previewInboundEdit(true);   // 打开就先算一遍：是「可快速更改」还是「会影响哪些单」
+}
+
+/** 弹窗里的数量 / 单价（按单据单位） */
+function edInQtyPrice() {
+  const qty = parseFloat($("edInQty")?.value);
+  const price = parseFloat($("edInPrice")?.value);
+  return { qty: Number.isFinite(qty) ? qty : 0, price: Number.isFinite(price) ? price : 0 };
+}
+/** 本单货款 = 数量 × 单价（改数量/单价时随时更新） */
+function edInTotal() {
+  const q = edInQtyPrice();
+  return round2(q.qty * q.price);
+}
+/** 数量/单价/日期改动：刷新成本提示，并防抖核算影响范围 */
+function edInChanged() {
+  edInCalc();
+  clearTimeout(ED_IN_TIMER);
+  ED_IN_TIMER = setTimeout(() => previewInboundEdit(true), 400);
+}
+
+/** 调后端核算影响范围（不落库）；返回影响评估结果，失败返回 null */
+async function previewInboundEdit(silent) {
+  const box = $("edInImpact");
+  if (!box || !ED_IN) return null;
+  const { qty, price } = edInQtyPrice();
+  if (!(qty > 0) || price < 0) {
+    ED_IN_IMPACT = null;
+    ED_IN_IMPACT_KEY = "";
+    box.innerHTML = `<div class="alert err">${qty > 0 ? "单价不能为负数" : "数量必须大于 0"}</div>`;
+    return null;
+  }
+  const date = $("edInDate")?.value || "";
+  const key = `${qty}|${price}|${date}`;
+  if (key === ED_IN_IMPACT_KEY && ED_IN_IMPACT) return ED_IN_IMPACT;
+  box.innerHTML = `<div class="muted" style="font-size:12px;padding:6px 0;">正在核算影响范围…</div>`;
+  try {
+    const r = await api(`/api/inbounds/${ED_IN.id}/impact?quantity=${qty}&unit_price=${price}&date=${encodeURIComponent(date)}`);
+    ED_IN_IMPACT = r;
+    ED_IN_IMPACT_KEY = key;
+    renderInboundImpact(r);
+    return r;
+  } catch (e) {
+    ED_IN_IMPACT = null;
+    ED_IN_IMPACT_KEY = "";
+    box.innerHTML = `<div class="alert err">影响核算失败：${esc(e.message)}</div>`;
+    if (!silent) toast("影响核算失败：" + e.message);
+    return null;
+  }
+}
+
+/** 影响范围面板：可快速更改（绿）/ 会影响 N 张出库单（黄，列出成本变化） */
+function renderInboundImpact(r) {
+  const box = $("edInImpact");
+  if (!box) return;
+  const bu = esc(r.base_unit || "");
+  const du = esc(r.unit || bu);
+  const f = Number(r.unit_factor) || 1;   // 基础单位 → 单据单位的换算系数（库存/均价按单据单位展示更好读）
+  const money = (v) => fmtMoney(v || 0);
+  const deltaTxt = (v) => `${v >= 0 ? "+" : "-"}${fmtMoney(Math.abs(v || 0))}`;
+  const summary =
+    `<div class="muted" style="font-size:12px;line-height:1.8;">
+      本单金额 ${money(r.old_total_amount)} → <b>${money(r.new_total_amount)}</b>（${deltaTxt(r.amount_delta)}）<br />
+      库存 ${fmtNum(r.stock_before / f)} ${du} → <b>${fmtNum(r.stock_after / f)} ${du}</b>；
+      均价 ${money(r.avg_cost_before * f)}/${du} → ${money(r.avg_cost_after * f)}/${du}
+    </div>`;
+  const warns = (r.warnings || []).length
+    ? `<div style="margin-top:6px;color:var(--danger,#dc2626);font-size:12px;">⚠ ${(r.warnings || []).map(esc).join("；")}</div>`
+    : "";
+  if (!r.used) {
+    box.innerHTML = `<div class="alert ok"><b>可快速更改</b>：这批货还没有被出库/包装消耗用到，修改不会影响任何订单成本。${summary}${warns}</div>`;
+    return;
+  }
+  if (!r.affected_count) {
+    box.innerHTML = `<div class="alert ok"><b>这批货已有出库用到</b>，但按当前的改动，订单结转成本没有变化（改动未改变实际耗用成本）。${summary}${warns}</div>`;
+    return;
+  }
+  const rows = (r.affected_outbounds || []).map((o) => `<tr>
+      <td class="mono">${esc(o.code)}</td><td>${esc(o.date)}</td><td>${esc(o.customer) || "—"}</td>
+      <td class="num mono">${money(o.cogs_before)} → ${money(o.cogs_after)}</td>
+      <td class="num mono" style="color:${o.delta > 0 ? "var(--danger,#dc2626)" : o.delta < 0 ? "var(--green,#16a34a)" : ""}">${deltaTxt(o.delta)}</td>
+    </tr>`).join("");
+  box.innerHTML = `<div class="alert warn">
+      <b>已有 ${r.affected_count} 张出库单用到这批货</b>，保存后会按 FIFO 重新结转成本并重算这些订单的毛利：
+      <div style="max-height:180px;overflow:auto;margin-top:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead><tr class="muted"><th align="left">单号</th><th align="left">日期</th><th align="left">客户</th><th align="right">成本</th><th align="right">变化</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      ${r.affected_count > (r.affected_outbounds || []).length ? `<div class="muted" style="font-size:12px;margin-top:4px;">以上为前 ${(r.affected_outbounds || []).length} 单，共 ${r.affected_count} 单会重算</div>` : ""}
+      ${summary}${warns}
+    </div>`;
 }
 
 /** 供应商补偿的实时说明：记一笔负数的其他收支，冲减期间费用、计入报表净利 */
@@ -7018,9 +7137,10 @@ function edInCompHint() {
 }
 
 /** 改单时实时显示「货款 + 运费 + 装卸 + 手续费 = 批次到岸成本」，避免改完不知道成本变成多少 */
-function edInCalc(total) {
+function edInCalc() {
   const el = $("edInHint");
   if (!el) return;
+  const total = edInTotal();
   const fee = (parseFloat($("edInFreight")?.value) || 0) + (parseFloat($("edInHandling")?.value) || 0)
     + (parseFloat($("edInFee")?.value) || 0);
   el.innerHTML = fee > 0
@@ -7036,6 +7156,28 @@ function edInCalc(total) {
 async function saveInboundEdit(id) {
   const date = $("edInDate").value;
   if (!date) { toast("请选择入库日期"); return; }
+  const { qty, price } = edInQtyPrice();
+  if (!(qty > 0)) { toast("数量必须大于 0"); return; }
+  if (!(price >= 0)) { toast("单价不能为负数"); return; }
+  const qtyChanged = !!ED_IN
+    && (Math.abs(qty - ED_IN.quantity) > 1e-9 || Math.abs(price - ED_IN.unit_price) > 1e-9);
+  const dateChanged = !!ED_IN && date !== ED_IN.date;
+  // 改数量/单价/日期：保存前再核算一次影响范围，有受影响的订单就先让用户确认
+  let impact = null;
+  if (qtyChanged || dateChanged) {
+    impact = await previewInboundEdit(false);
+    if (!impact) { toast("影响核算失败，请重试"); return; }
+    const warnTxt = (impact.warnings || []).join("；");
+    if (impact.affected_count > 0) {
+      const list = (impact.affected_outbounds || []).slice(0, 8)
+        .map((o) => `${o.code}（${o.date}${o.customer ? " · " + o.customer : ""}，成本 ${o.delta >= 0 ? "+" : "-"}${fmtMoney(Math.abs(o.delta))}）`)
+        .join("\n");
+      const more = impact.affected_count > 8 ? `\n…等共 ${impact.affected_count} 张` : "";
+      if (!confirm(`该批次已被出库使用，保存后会重算 ${impact.affected_count} 张出库单的成本与毛利：\n${list}${more}\n\n确认修改？`)) return;
+    } else if (warnTxt && !confirm(`注意：${warnTxt}\n\n确认继续？`)) {
+      return;
+    }
+  }
   const freight = parseFloat($("edInFreight").value) || 0;
   const handling = parseFloat($("edInHandling").value) || 0;
   const fee = parseFloat($("edInFee")?.value) || 0;
@@ -7053,16 +7195,21 @@ async function saveInboundEdit(id) {
     if (paidAmount >= due - 0.005) { toast(`已付金额已够 ¥${due.toFixed(2)}，付款状态请选「已付款」`); return; }
   }
   try {
-    await api(`/api/inbounds/${id}`, "PUT", {
+    const payload = {
       supplier: $("edInSupplier").value, date, pay_status: payStatus, paid_amount: paidAmount,
       freight, handling, fee, compensation,
-    });
+    };
+    if (qtyChanged) { payload.quantity = qty; payload.unit_price = price; }
+    await api(`/api/inbounds/${id}`, "PUT", payload);
     closeModal();
     toast(`已保存，操作员记为 ${operatorName()}`
+      + (qtyChanged ? "；数量/单价已更新" : "")
+      + (impact && impact.affected_count ? `；已重算 ${impact.affected_count} 张出库单成本` : "")
       + (freight + handling + fee > 0 ? `；运费/装卸/手续费 ${fmtMoney(freight + handling + fee)} 已计入成本` : "")
       + (compensation > 0 ? `；供应商补偿 ¥${fmtMoney(compensation)} 已计入财务报表` : ""));
     loadInbounds();
     loadStock();   // 成本变了，库存列表的均价/货值跟着刷新
+    api("/api/products").then((ps) => { PRODUCTS = ps; }).catch(() => {});   // 参考成本/均价缓存同步
   } catch (e) { toast("保存失败：" + e.message); }
 }
 
