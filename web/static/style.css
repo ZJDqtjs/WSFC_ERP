@@ -901,8 +901,11 @@ th.cb-col input, td.cb-col input {
 }
 
 /* ============ 表格 ============ */
+/* 表头吸顶：长表在 .table-wrap 内部纵向滚动，thead 始终留在顶部（列名不再随页面滚走）。
+   上限高度 = 视口高度 − 顶部卡片/工具栏，避免整页被长表撑到几千像素。 */
 .table-wrap { 
-  overflow-x: auto; 
+  overflow: auto; 
+  max-height: calc(100vh - 200px);
   border-radius: var(--radius);
 }
 
@@ -930,6 +933,20 @@ th {
 
 @media (prefers-color-scheme: dark) {
   th { background: rgba(255, 255, 255, 0.03); }
+}
+
+/* 表头吸顶：滚动 .table-wrap 时列名固定在顶部；底色必须不透明，否则会透出下面的数据行 */
+.table-wrap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background-color: var(--card);
+  background-image: linear-gradient(rgba(0, 0, 0, 0.02), rgba(0, 0, 0, 0.02));
+}
+@media (prefers-color-scheme: dark) {
+  .table-wrap thead th {
+    background-image: linear-gradient(rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.03));
+  }
 }
 
 th:first-child, td:first-child { 
