@@ -9200,7 +9200,7 @@ function renderReportGoods() {
   // 重量（kg）：后端给的是净重 kg（口径与出库结算快递费一致），保留 2 位；0 用「—」占位
   const fmtKg = (v) => { const n = Number(v) || 0; return n ? n.toFixed(2) : "—"; };
   if (!prodRows.length) {
-    pt.innerHTML = `<tr><td class="empty" colspan="8">${all.length ? `没有匹配「${esc(kw)}」的商品，换个关键词试试` : "本期无销售"}</td></tr>`;
+    pt.innerHTML = `<tr><td class="empty" colspan="10">${all.length ? `没有匹配「${esc(kw)}」的商品，换个关键词试试` : "本期无销售"}</td></tr>`;
     pt._rows = [];
     pt._render = renderReportGoods;
     return;
@@ -9211,10 +9211,13 @@ function renderReportGoods() {
     a.amount += Number(p.amount) || 0;
     a.settle += settleOf(p);
     a.cogs += Number(p.total_cogs != null ? p.total_cogs : p.cogs) || 0;
+    a.goods += Number(p.goods_cogs) || 0;
     return a;
-  }, { qty: 0, weight: 0, amount: 0, settle: 0, cogs: 0 });
+  }, { qty: 0, weight: 0, amount: 0, settle: 0, cogs: 0, goods: 0 });
   const sumGp = sum.amount + sum.settle - sum.cogs;
   const sumColor = sumGp >= 0 ? "var(--green)" : "var(--red)";
+  const sumRevenue = sum.amount + sum.settle;
+  const sumGoodsRate = sumRevenue ? (sum.goods / sumRevenue) * 100 : null;
   pt.innerHTML = `<thead><tr>
     <th data-key="name">商品${sortArrow("repProductTable", "name")}</th>
     <th data-key="is_dropship">出库方式${sortArrow("repProductTable", "is_dropship")}</th>
@@ -9222,6 +9225,8 @@ function renderReportGoods() {
     <th data-key="weight_kg" class="num">重量(kg)${sortArrow("repProductTable", "weight_kg")}</th>
     <th data-key="amount" class="num">收入${sortArrow("repProductTable", "amount")}</th>
     <th data-key="cogs" class="num">总成本${sortArrow("repProductTable", "cogs")}</th>
+    <th data-key="goods_cogs" class="num" title="商品本身的货款成本，不含快递、人工、包材">商品成本${sortArrow("repProductTable", "goods_cogs")}</th>
+    <th class="num" title="货款占比 = 商品成本 ÷ 收入">货款占比</th>
     <th data-key="gross" class="num">毛利${sortArrow("repProductTable", "gross")}</th>
     <th class="num">毛利率</th></tr></thead><tbody>` +
     prodRows.map((p) => {
@@ -9229,6 +9234,10 @@ function renderReportGoods() {
       const settle = settleOf(p);   // 客户代收的关联结算（包材/人工/快递费）：成本里含它，收入也要含
       const gp = (Number(p.amount) || 0) + settle - total;
       const color = gp >= 0 ? "var(--green)" : "var(--red)";
+      // 商品成本（纯货款）与货款占比：占比分母用本行展示的收入（含客户代收的关联结算）
+      const goods = Number(p.goods_cogs) || 0;
+      const rowRevenue = (Number(p.amount) || 0) + settle;
+      const goodsRate = rowRevenue ? (goods / rowRevenue) * 100 : null;
       // 成本构成：代发行也要列出来（代发成本/商品成本 ＋ 打包人工 ＋ 耗材 ＋ 其他关联结算 ＋ 快递费）
       const splitText = costSplitText(p);
       const split = splitText ? `<div class="muted" style="font-size:11px;">${splitText}</div>` : "";
@@ -9248,6 +9257,8 @@ function renderReportGoods() {
       <td class="num mono">${fmtKg(p.weight_kg)}</td>
       <td class="num mono">${fmtMoney((Number(p.amount) || 0) + settle)}${settle ? `<div class="muted" style="font-size:11px;" title="客户随货款一起付的包材/人工/快递费（成本里已含，收入侧也计一笔）">含代收 ${fmtMoney(settle)}</div>` : ""}</td>
       <td class="num mono">${fmtMoney(total)}</td>
+      <td class="num mono">${fmtMoney(goods)}</td>
+      <td class="num muted">${goodsRate == null ? "—" : goodsRate.toFixed(1) + "%"}</td>
       <td class="num mono" style="color:${color}">${fmtMoney(gp)}</td>
       <td class="num mono" style="color:${color}">${gpRateOf(p)}</td></tr>`;
     }).join("") + `</tbody>
@@ -9258,6 +9269,8 @@ function renderReportGoods() {
       <td class="num mono"><b>${fmtKg(sum.weight)}</b></td>
       <td class="num mono"><b>${fmtMoney(sum.amount + sum.settle)}</b>${sum.settle ? `<div class="muted" style="font-size:11px;">含代收 ${fmtMoney(sum.settle)}</div>` : ""}</td>
       <td class="num mono"><b>${fmtMoney(sum.cogs)}</b></td>
+      <td class="num mono"><b>${fmtMoney(sum.goods)}</b></td>
+      <td class="num mono"><b>${sumGoodsRate == null ? "—" : sumGoodsRate.toFixed(1) + "%"}</b></td>
       <td class="num mono" style="color:${sumColor}"><b>${fmtMoney(sumGp)}</b></td>
       <td class="num mono" style="color:${sumColor}"><b>${sum.amount + sum.settle ? ((sumGp / (sum.amount + sum.settle)) * 100).toFixed(1) + "%" : "—"}</b></td>
     </tr></tfoot>`;
@@ -12906,6 +12919,9 @@ function renderAdProfitSku() {
   for (const r of all) {
     const ads = Number(r.ads_total) || 0;
     r.gp_ads = ads ? (Number(r.gross_before) || 0) / ads : null;
+    // 毛利率 = 广告后毛利 ÷ 销售额（纯广告行没有销售额，显示 —）
+    const rev = Number(r.revenue) || 0;
+    r.gp_rate = rev ? (Number(r.gross_after) || 0) / rev : null;
   }
   // 名称后展示的标签也参与搜索（如「入仓品」「未匹配ERP」「未填编码」），空格写法与无空格写法都算命中
   const tagTextOf = (r) => {
@@ -12960,15 +12976,18 @@ function renderAdProfitSku() {
       <td class="num mono">${fmtMoney(r.jzt)}</td>
       <td class="num mono"><strong>${fmtMoney(r.ads_total)}</strong></td>
       <td class="num mono" style="color:${r.gross_after >= 0 ? "var(--green)" : "var(--red)"};">${fmtMoney(r.gross_after)}</td>
+      <td class="num mono" style="color:${r.gp_rate == null ? "" : (r.gp_rate >= 0 ? "var(--green)" : "var(--red)")};">${adpPct(r.gp_rate)}</td>
       <td class="num muted">${adpPct(r.ad_rate)}</td>
       <td class="num muted">${r.roi == null ? "—" : Number(r.roi).toFixed(2)}</td>
       <td class="num" style="color:${r.gp_ads != null && r.gp_ads < 0 ? "var(--red)" : ""}">${r.gp_ads == null ? "—" : Number(r.gp_ads).toFixed(2)}</td>
-    </tr>`).join("") : `<tr><td colspan="12" class="empty">${kws.length || onlyAds || onlyLoss ? "没有符合条件的 SKU" : "所选区间没有可用的 SKU 数据"}</td></tr>`;
+    </tr>`).join("") : `<tr><td colspan="13" class="empty">${kws.length || onlyAds || onlyLoss ? "没有符合条件的 SKU" : "所选区间没有可用的 SKU 数据"}</td></tr>`;
 
   const filtered = kws.length > 0 || onlyAds || onlyLoss;
   // 筛选生效时合计必须跟着筛，否则「只看亏损 28 个」下面却挂着全量广告费，会误导
   const sumF = (k) => Math.round(rows.reduce((a, r) => a + (Number(r[k]) || 0), 0) * 100) / 100;
   const revenueTotal = filtered ? sumF("revenue") : (totals.revenue_total != null ? totals.revenue_total : totals.erp_revenue);
+  const grossAfterTotal = filtered ? sumF("gross_after") : totals.gross_after;
+  const marginTotal = revenueTotal ? grossAfterTotal / revenueTotal : null;
 
   t.innerHTML = `<thead><tr>
       <th data-key="sku">SKU${sortArrow("adpSkuTable", "sku")}</th>
@@ -12980,6 +12999,7 @@ function renderAdProfitSku() {
       <th class="num" data-key="jzt">京准通花费${sortArrow("adpSkuTable", "jzt")}</th>
       <th class="num" data-key="ads_total">广告费合计${sortArrow("adpSkuTable", "ads_total")}</th>
       <th class="num" data-key="gross_after">广告后毛利${sortArrow("adpSkuTable", "gross_after")}</th>
+      <th class="num" data-key="gp_rate" title="毛利率 = 广告后毛利 ÷ 销售额">毛利率${sortArrow("adpSkuTable", "gp_rate")}</th>
       <th class="num" data-key="ad_rate">广告费率${sortArrow("adpSkuTable", "ad_rate")}</th>
       <th class="num" data-key="roi" title="销售额 ÷ 广告费（ROAS，不是利润率）">ROAS${sortArrow("adpSkuTable", "roi")}</th>
       <th class="num" data-key="gp_ads" title="广告前毛利 ÷ 广告费：小于 1 说明这批广告带来的毛利还不够付广告费">毛利/广告费${sortArrow("adpSkuTable", "gp_ads")}</th>
@@ -12992,9 +13012,10 @@ function renderAdProfitSku() {
       <td class="num mono"><strong>${fmtMoney(filtered ? sumF("cps") : totals.cps_total)}</strong></td>
       <td class="num mono"><strong>${fmtMoney(filtered ? sumF("jzt") : totals.jzt_total)}</strong></td>
       <td class="num mono"><strong>${fmtMoney(filtered ? sumF("ads_total") : totals.ads_total)}</strong></td>
-      <td class="num mono"><strong>${fmtMoney(filtered ? sumF("gross_after") : totals.gross_after)}</strong></td>
+      <td class="num mono"><strong>${fmtMoney(grossAfterTotal)}</strong></td>
+      <td class="num mono"><strong>${adpPct(marginTotal)}</strong></td>
       <td class="num"></td><td class="num"></td><td class="num"></td>
-    </tr>${Number(totals.warehouse_sku_count) ? `<tr><td colspan="12" class="muted">其中入仓品 ${totals.warehouse_sku_count} 个 · 成交 ${fmtNum(totals.warehouse_qty)} 件 · 销售额 ${fmtMoney(totals.warehouse_revenue)} · 毛利 ${fmtMoney(totals.warehouse_gross)} · 广告费 ${fmtMoney(totals.warehouse_ads)} · 广告后毛利 ${fmtMoney(totals.warehouse_net)}</td></tr>` : ""}${(!ADP_SKU_FULL && rows.length > LIMIT) ? `<tr><td colspan="12" class="muted">已显示前 ${LIMIT} 条，共 ${rows.length} 条 · <a href="javascript:;" onclick="ADP_SKU_FULL=true;renderAdProfitSku();">显示全部</a></td></tr>` : ""}</tfoot>`;
+    </tr>${Number(totals.warehouse_sku_count) ? `<tr><td colspan="13" class="muted">其中入仓品 ${totals.warehouse_sku_count} 个 · 成交 ${fmtNum(totals.warehouse_qty)} 件 · 销售额 ${fmtMoney(totals.warehouse_revenue)} · 毛利 ${fmtMoney(totals.warehouse_gross)} · 广告费 ${fmtMoney(totals.warehouse_ads)} · 广告后毛利 ${fmtMoney(totals.warehouse_net)}</td></tr>` : ""}${(!ADP_SKU_FULL && rows.length > LIMIT) ? `<tr><td colspan="13" class="muted">已显示前 ${LIMIT} 条，共 ${rows.length} 条 · <a href="javascript:;" onclick="ADP_SKU_FULL=true;renderAdProfitSku();">显示全部</a></td></tr>` : ""}</tfoot>`;
   renderAdpDealTable();
 }
 
