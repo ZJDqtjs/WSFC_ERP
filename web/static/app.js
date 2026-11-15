@@ -12907,10 +12907,18 @@ function renderAdProfitSku() {
     const ads = Number(r.ads_total) || 0;
     r.gp_ads = ads ? (Number(r.gross_before) || 0) / ads : null;
   }
+  // 名称后展示的标签也参与搜索（如「入仓品」「未匹配ERP」「未填编码」），空格写法与无空格写法都算命中
+  const tagTextOf = (r) => {
+    if (r.source === "profit") return "入仓品";
+    if (r.ad_only) {
+      return "未匹配ERP 未匹配 ERP" + (r.is_warehouse_in ? " 入仓品 入仓品无利润缓存" : "");
+    }
+    return r.no_code ? "未填编码" : "";
+  };
   let rows = all.filter((r) =>
     (!onlyAds || r.ads_total > 0) &&
     (!onlyLoss || (Number(r.gross_after) < -0.005 && !r.ad_only)) &&
-    searchHit(`${r.sku || ""} ${r.name || ""}`, kws)
+    searchHit(`${r.sku || ""} ${r.name || ""} ${tagTextOf(r)}`, kws)
   );
   if (!t._sort) t._sort = { key: "ads_total", dir: -1 };
   const sel = $("adpSkuSort");
