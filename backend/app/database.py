@@ -15,6 +15,7 @@
 """
 import json
 import os
+import shutil
 from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
@@ -110,8 +111,24 @@ def load_warehouses() -> dict:
 
 
 def save_warehouses(d: dict) -> None:
+    """保存分仓注册表；覆盖前先留一份历史快照。
+
+    注册表不在任何业务数据库里，一旦被误覆盖（如切到旧分支、git checkout 回滚），
+    分仓就整体"消失"。这里每次写入前把旧版本复制到 data/backups/warehouses_*.json，
+    并只保留最近 20 份，便于事后找回。
+    """
     tmp = WAREHOUSES_FILE.with_suffix(".json.tmp")  # 原子写，防断电损坏
     tmp.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        if WAREHOUSES_FILE.exists():
+            bak_dir = DATA_DIR / "backups"
+            bak_dir.mkdir(exist_ok=True)
+            bak = bak_dir / f"warehouses_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            shutil.copy2(WAREHOUSES_FILE, bak)
+            for old in sorted(bak_dir.glob("warehouses_*.json"))[:-20]:
+                old.unlink(missing_ok=True)
+    except OSError:
+        pass  # 快照失败不影响正常保存
     os.replace(tmp, WAREHOUSES_FILE)
 
 

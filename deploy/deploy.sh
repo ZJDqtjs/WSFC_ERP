@@ -8,6 +8,18 @@ APP_DIR="/home/azureuser/WSFC_ERP"
 SERVICE="erp"
 APP_USER="${1:-azureuser}"
 
+echo "==> [0/7] 检查运行时数据是否被 git 跟踪（防止 checkout/回滚覆盖线上数据库）"
+# 历史上有旧分支把 backend/data 纳入了版本库，切分支时把线上 wh01.db / warehouses.json
+# 覆盖成早期小文件，导致整个分仓数据「消失」。当前分支不应再跟踪这些文件；
+# 若这里报错，请先确认在 main 分支、只用 git pull --ff-only 更新。
+TRACKED_DATA="$(cd "$APP_DIR" && git ls-files backend/data | grep -v '^backend/data/backups/' || true)"
+if [ -n "$TRACKED_DATA" ]; then
+  echo "错误：当前检出仍有被 git 跟踪的运行时数据，checkout/reset 可能覆盖线上数据：" >&2
+  printf '%s\n' "$TRACKED_DATA" | head -20 >&2
+  echo "请切回 main 并用 git pull --ff-only 更新后重试部署。" >&2
+  exit 1
+fi
+
 echo "==> [1/7] 停止旧服务（若有）"
 sudo systemctl stop "$SERVICE" 2>/dev/null || true
 

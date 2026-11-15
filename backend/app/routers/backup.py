@@ -29,7 +29,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from ..auth import get_current_user
-from ..database import DATA_DIR, get_current_key, warehouse_db_path
+from ..database import DATA_DIR, WAREHOUSES_FILE, get_current_key, warehouse_db_path
 from ..models import User
 
 router = APIRouter(prefix="/api", tags=["backup"])
@@ -249,11 +249,26 @@ def _iter_json_files():
         yield p, rel
 
 
+def _iter_extra_config_files():
+    """不在 backend/json 里、但同样只有服务器本地一份的配置：分仓注册表。
+
+    注册表丢了「全仓」就只剩默认仓，因此一并打进 json 备份，随远程备份保留历史版本。
+    """
+    if WAREHOUSES_FILE.exists():
+        yield WAREHOUSES_FILE, WAREHOUSES_FILE.name
+
+
+def _iter_backup_config_files():
+    """json 备份的完整文件清单：backend/json + 分仓注册表。"""
+    yield from _iter_json_files()
+    yield from _iter_extra_config_files()
+
+
 def _json_fingerprint() -> str:
     """目录内容指纹：相对路径 + 大小 + mtime 逐文件求和，目录无变化则指纹不变。"""
     h = hashlib.sha256()
     any_file = False
-    for p, rel in _iter_json_files():
+    for p, rel in _iter_backup_config_files():
         any_file = True
         try:
             st = p.stat()
@@ -303,7 +318,7 @@ def create_json_backup_file(force: bool = False) -> str | None:
     tmp = target.with_suffix(".gz.part")
     try:
         with tarfile.open(tmp, "w:gz") as tf:
-            for p, rel in _iter_json_files():
+            for p, rel in _iter_backup_config_files():
                 try:
                     tf.add(p, arcname=rel, recursive=False)
                 except OSError:
