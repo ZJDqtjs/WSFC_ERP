@@ -69,10 +69,12 @@
 
       <!-- 分区 tab：全仓总览 / 单仓总览 两种视角都用（数据源由请求的 wh 决定） -->
       <div class="seg">
-        <div class="seg-item" :class="{ active: tab === 'summary' }" @click="tab = 'summary'">汇总</div>
-        <div class="seg-item" :class="{ active: tab === 'expense' }" @click="tab = 'expense'">支出</div>
-        <div class="seg-item" :class="{ active: tab === 'goods' }" @click="tab = 'goods'">商品</div>
-        <div class="seg-item" :class="{ active: tab === 'flow' }" @click="tab = 'flow'">流水</div>
+        <div class="seg-item" :class="{ active: tab === 'summary' }" @click="selectTab('summary')">利润表</div>
+        <div class="seg-item" :class="{ active: tab === 'cash' }" @click="selectTab('cash')">现金流</div>
+        <div class="seg-item" :class="{ active: tab === 'balance' }" @click="selectTab('balance')">余额</div>
+        <div class="seg-item" :class="{ active: tab === 'expense' }" @click="selectTab('expense')">支出</div>
+        <div class="seg-item" :class="{ active: tab === 'goods' }" @click="selectTab('goods')">商品</div>
+        <div class="seg-item" :class="{ active: tab === 'flow' }" @click="selectTab('flow')">流水</div>
       </div>
 
       <!-- 汇总 -->
@@ -163,6 +165,110 @@
       </div>
       </template>   <!-- /单仓总览·汇总 -->
 
+      </template>
+
+      <!-- 现金流量表（直接法·实收实付）：与利润表分开，只认已经收/付的钱 -->
+      <template v-else-if="tab === 'cash'">
+        <div class="card">
+          <div class="card-title">
+            <span class="grow">现金流量表（经营收付）</span>
+            <van-button size="mini" plain icon="replay" :loading="cashLoading" @click="loadCashflow(true)">刷新</van-button>
+          </div>
+          <div class="muted" style="margin-bottom:8px;">{{ cashHint }}</div>
+          <div v-if="cashLoading && !cash" class="empty">加载中…</div>
+          <div v-else-if="cashError" class="alert warn">{{ cashError }}</div>
+          <template v-else-if="cash">
+            <div class="stat-grid" style="margin-bottom:12px;">
+              <div class="stat accent"><div class="label">期初账面现金</div><div class="value">{{ fmtMoney(cash.opening_cash) }}</div><div class="sub">累计净现金流</div></div>
+              <div class="stat success"><div class="label">经营流入</div><div class="value">{{ fmtMoney(cash.inflow && cash.inflow.total) }}</div><div class="sub">销售 / 入仓 / 其他</div></div>
+              <div class="stat danger"><div class="label">经营流出</div><div class="value">{{ fmtMoney(cash.outflow && cash.outflow.total) }}</div><div class="sub">采购 / 代发 / 广告</div></div>
+              <div class="stat" :class="num(cash.net) >= 0 ? 'success' : 'danger'"><div class="label">本期净现金流</div><div class="value">{{ fmtMoney(cash.net) }}</div><div class="sub">流入 − 流出</div></div>
+              <div class="stat accent"><div class="label">期末账面现金</div><div class="value">{{ fmtMoney(cash.closing_cash) }}</div><div class="sub">期初 + 本期净额</div></div>
+            </div>
+            <div class="card-title" style="margin-top:4px;">经营活动现金流入</div>
+            <div v-for="r in cashInRows" :key="r.name" class="list-item">
+              <div class="row">
+                <span class="grow item-title">{{ r.name }}</span>
+                <span class="bold" :class="r.value < 0 ? 'down' : 'up'">{{ fmtMoney(r.value) }}</span>
+              </div>
+              <div v-if="r.desc" class="item-meta">{{ r.desc }}</div>
+            </div>
+            <div class="row" style="margin-top:6px;">
+              <span class="grow bold">流入合计</span>
+              <span class="bold">{{ fmtMoney(cash.inflow && cash.inflow.total) }}</span>
+            </div>
+            <div class="card-title" style="margin-top:12px;">经营活动现金流出</div>
+            <div v-for="r in cashOutRows" :key="r.name" class="list-item">
+              <div class="row">
+                <span class="grow item-title">{{ r.name }}</span>
+                <span class="bold" :class="r.value < 0 ? 'up' : 'down'">{{ fmtMoney(r.value) }}</span>
+              </div>
+              <div v-if="r.desc" class="item-meta">{{ r.desc }}</div>
+            </div>
+            <div class="row" style="margin-top:6px;">
+              <span class="grow bold">流出合计</span>
+              <span class="bold">{{ fmtMoney(cash.outflow && cash.outflow.total) }}</span>
+            </div>
+            <div class="divider"></div>
+            <div class="row">
+              <span class="grow bold">本期净现金流</span>
+              <span class="bold" :class="num(cash.net) >= 0 ? 'up' : 'down'">{{ fmtMoney(cash.net) }}</span>
+            </div>
+            <template v-if="cash.warehouses && cash.warehouses.length">
+              <div class="card-title" style="margin-top:12px;">各分仓现金流</div>
+              <div v-for="w in cash.warehouses" :key="w.key" class="list-item">
+                <div class="row">
+                  <span class="grow item-title">{{ w.name || w.key }}</span>
+                  <span class="bold" :class="num(w.net) >= 0 ? 'up' : 'down'">{{ fmtMoney(w.net) }}</span>
+                </div>
+                <div class="item-meta">期初 {{ fmtMoney(w.opening_cash) }} · 期末 {{ fmtMoney(w.closing_cash) }}</div>
+              </div>
+            </template>
+          </template>
+        </div>
+      </template>
+
+      <!-- 余额表：资产 / 往来 / 预付 / 盘点差异，与损益分开看 -->
+      <template v-else-if="tab === 'balance'">
+        <div class="card">
+          <div class="card-title">
+            <span class="grow">余额表（资产 / 往来 / 预付）</span>
+            <van-button size="mini" plain icon="replay" :loading="balLoading" @click="loadBalance(true)">刷新</van-button>
+          </div>
+          <div class="muted" style="margin-bottom:8px;">{{ balHint }}</div>
+          <div v-if="balLoading && !bal" class="empty">加载中…</div>
+          <div v-else-if="balError" class="alert warn">{{ balError }}</div>
+          <template v-else-if="bal">
+            <div class="stat-grid" style="margin-bottom:12px;">
+              <div class="stat accent"><div class="label">库存结存总值</div><div class="value">{{ fmtMoney(bal.inventory && bal.inventory.stock_value) }}</div><div class="sub">{{ (bal.inventory && bal.inventory.product_count) || 0 }} 种商品</div></div>
+              <div class="stat danger"><div class="label">应付未付</div><div class="value">{{ fmtMoney(bal.payables && bal.payables.total) }}</div><div class="sub">要付出去</div></div>
+              <div class="stat success"><div class="label">应收未收</div><div class="value">{{ fmtMoney(bal.receivables && bal.receivables.total) }}</div><div class="sub">要收进来</div></div>
+              <div class="stat"><div class="label">广告账户余额</div><div class="value">{{ adBalanceText }}</div><div class="sub">jdfenxi 流水</div></div>
+            </div>
+            <div v-for="r in balRows" :key="r.name" class="list-item">
+              <div class="row">
+                <van-tag plain>{{ r.kind }}</van-tag>
+                <span class="grow item-title" style="margin-left:6px;">{{ r.name }}</span>
+                <span class="bold">{{ r.value == null ? '—' : fmtMoney(r.value) }}</span>
+              </div>
+              <div class="item-meta">{{ r.desc }}</div>
+            </div>
+            <template v-if="bal.warehouses && bal.warehouses.length">
+              <div class="card-title" style="margin-top:12px;">各分仓余额</div>
+              <div v-for="w in bal.warehouses" :key="w.key" class="list-item">
+                <div class="row">
+                  <span class="grow item-title">{{ w.name || w.key }}</span>
+                  <span class="bold">库存 {{ fmtMoney(w.inventory && w.inventory.stock_value) }}</span>
+                </div>
+                <div class="item-meta">
+                  应付 {{ fmtMoney(w.payables_total) }} · 应收 {{ fmtMoney(w.receivables_total) }} ·
+                  盘点差异 {{ fmtMoney(w.count_diff && w.count_diff.net_value) }}
+                </div>
+              </div>
+            </template>
+            <div v-if="balWarnings" class="alert warn" style="margin-top:8px;">提示：{{ balWarnings }}</div>
+          </template>
+        </div>
       </template>
 
       <!-- 支出（期间费用 = 其他收支 + 手工记账） -->
@@ -587,9 +693,144 @@ function pickWh(a) { whKey.value = a.key; whShow.value = false; load() }
 /** 全仓总览点某个分仓 → 回到单仓总览看它的明细 */
 function viewWarehouse(key) { whKey.value = key; scope.value = 'one'; load() }
 
-/* ---------- 报表分区 tab（汇总 / 支出 / 商品 / 流水）与支出子页签 ---------- */
+/* ---------- 报表分区 tab（利润表 / 现金流 / 余额 / 支出 / 商品 / 流水）与支出子页签 ---------- */
 const tab = ref('summary')
 const expTab = ref('cat')   // cat 按类型 / day 按日 / month 按月 / item 逐笔
+
+/* 现金流 / 余额按需加载：不拖慢默认的利润表（月度汇总本来就重） */
+const cash = ref(null)
+const cashLoading = ref(false)
+const cashError = ref('')
+let cashKey = ''
+const bal = ref(null)
+const balLoading = ref(false)
+const balError = ref('')
+let balKey = ''
+
+function whQs() {
+  return scope.value === 'all' ? '&wh=all' : (whKey.value ? `&wh=${encodeURIComponent(whKey.value)}` : '')
+}
+
+function selectTab(t) {
+  tab.value = t
+  if (t === 'cash') loadCashflow()
+  else if (t === 'balance') loadBalance()
+}
+
+const cashHint = computed(() => {
+  const d = cash.value
+  if (!d) return '只认已经收/付的钱，与利润表口径分开'
+  const r = d.range || {}
+  return `统计区间 ${r.date_from || '最早'} ~ ${r.date_to || '最新'}`
+    + (d.is_all ? ` · 全仓合计（${d.warehouse_count || 0} 个分仓）` : (d.warehouse && d.warehouse.name ? ` · ${d.warehouse.name}` : ''))
+    + ' · 只认已收付的钱'
+})
+const cashInRows = computed(() => {
+  const inf = (cash.value && cash.value.inflow) || {}
+  return [
+    { name: '销售回款（退货已净掉）', value: num(inf.sales), desc: '已回款出库单的实收金额' },
+    { name: '入仓结算回款', value: num(inf.warehouse_in), desc: '京东支付入仓货款' },
+    { name: '手工记账收入', value: num(inf.manual_income), desc: '财务流水页登记的收入' },
+    { name: '其他收入（补偿/退款）', value: num(inf.other_income), desc: '供应商补偿、负数其他收支' },
+  ]
+})
+const cashOutRows = computed(() => {
+  const out = (cash.value && cash.value.outflow) || {}
+  return [
+    { name: '采购付款', value: num(out.purchase), desc: '已付入库单（含运费/装卸/手续费/金额调整）' },
+    { name: '代发付款', value: num(out.dropship), desc: '已付代发账单' },
+    { name: '广告充值', value: num(out.ad_prepay), desc: '充进京准通账户的预付款' },
+    { name: '其他收支支出', value: num(out.other_expense), desc: '手工登记的其他支出与赔付' },
+    { name: '人工打包费', value: num(out.pack_fee), desc: '出库带出的打包人工费' },
+    { name: '手工记账支出', value: num(out.manual_expense), desc: '财务流水页登记的支出' },
+  ]
+})
+
+async function loadCashflow(force) {
+  const key = `${df.value}|${dt.value}|${whQs()}`
+  if (!force && cash.value && cashKey === key) return
+  cashLoading.value = true
+  cashError.value = ''
+  try {
+    const d = await api(`/api/report/cashflow?date_from=${df.value || ''}&date_to=${dt.value || ''}${whQs()}`)
+    cash.value = d
+    cashKey = key
+  } catch (e) {
+    cash.value = null
+    cashKey = ''
+    cashError.value = '现金流量表加载失败：' + (e.message || '请稍后重试')
+  }
+  cashLoading.value = false
+}
+
+const balHint = computed(() => {
+  const b = bal.value
+  if (!b) return '截至所选截止日；只回答「钱和货还在哪」，不改变利润表口径'
+  const inv = b.inventory || {}
+  return `截至 ${b.as_of || '今天'}`
+    + (b.warehouse && b.warehouse.name ? ` · ${b.warehouse.name}` : '')
+    + (b.is_all ? `（${b.warehouse_count || 0} 个分仓）` : '')
+    + (inv.basis === 'as_of' ? ` · 库存已按 FIFO 回算到 ${b.as_of}` : ' · 库存为当前结存')
+})
+const adBalanceText = computed(() => {
+  const ad = (bal.value && bal.value.ad_prepay) || {}
+  return ad.balance == null ? '—' : fmtMoney(ad.balance)
+})
+const balRows = computed(() => {
+  const b = bal.value || {}
+  const inv = b.inventory || {}
+  const pay = b.payables || {}
+  const rec = b.receivables || {}
+  const ad = b.ad_prepay || {}
+  const cd = b.count_diff || {}
+  const neg = num(inv.negative_count)
+  const srcText = (m) => Object.entries(m || {})
+    .filter(([, v]) => Math.abs(num(v)) >= 0.005)
+    .map(([k, v]) => `${k} ${fmtMoney(v)}`).join(' · ')
+  const stockDesc = inv.basis === 'as_of'
+    ? `按库存流水 FIFO 回算到 ${b.as_of}（当前库存 ${fmtMoney(inv.stock_value_current)}）`
+    : '按 FIFO 批次结存（当前库存）'
+  return [
+    {
+      kind: '资产', name: '库存结存总值', value: num(inv.stock_value),
+      desc: (neg ? `其中 ${neg} 个商品为负库存（数量 ${fmtNum(inv.negative_qty)}），需盘点冲正；` : '') + stockDesc,
+    },
+    {
+      kind: '资产', name: '广告账户可用余额', value: ad.balance == null ? null : num(ad.balance),
+      desc: ad.balance == null
+        ? 'jdfenxi 广告费流水读取失败，可稍后刷新重试'
+        : `来源 jdfenxi 广告费流水；当前可用余额 ${fmtMoney(ad.balance_current)}；区间充值 ${fmtMoney(ad.recharged_period)} − 消费 ${fmtMoney(ad.spent_total)}`,
+    },
+    { kind: '负债', name: '应付未付（要付出去）', value: num(pay.total), desc: srcText(pay.by_source) || '没有未结清的应付款' },
+    { kind: '应收', name: '应收未收（要收进来）', value: num(rec.total), desc: srcText(rec.by_source) || '没有未回款的应收款' },
+    {
+      kind: '盘点', name: '区间内盘点差异（未计入损益）', value: num(cd.net_value),
+      desc: `盘盈入账 ${fmtMoney(cd.gain_value)}（${cd.gain_lines || 0} 笔） / 盘亏成本 ${fmtMoney(cd.loss_value)}（${cd.loss_lines || 0} 笔）`
+        + (num(cd.booked_expense) ? `；已记「库存损耗」费用 ${fmtMoney(cd.booked_expense)}` : '；盘亏只冲库存，未记「库存损耗」费用'),
+    },
+  ]
+})
+const balWarnings = computed(() => {
+  const b = bal.value || {}
+  return [...(b.warnings || []), ...((b.ad_prepay || {}).warnings || [])].filter(Boolean).join('；')
+})
+
+async function loadBalance(force) {
+  const key = `${df.value}|${dt.value}|${whQs()}`
+  if (!force && bal.value && balKey === key) return
+  balLoading.value = true
+  balError.value = ''
+  try {
+    const d = await api(`/api/report/balances?date_from=${df.value || ''}&date_to=${dt.value || ''}${whQs()}`)
+    bal.value = d
+    balKey = key
+  } catch (e) {
+    bal.value = null
+    balKey = ''
+    balError.value = '余额表加载失败：' + (e.message || '不影响利润表数据，可稍后重试')
+  }
+  balLoading.value = false
+}
 const MAX_EXP_DAYS = 90
 const expDays = computed(() => (rep.value.expense_by_day || []).slice(0, MAX_EXP_DAYS))
 const expDayTruncated = computed(() => (rep.value.expense_by_day || []).length > MAX_EXP_DAYS)
@@ -708,6 +949,9 @@ async function load() {
     finLimit.value = FIN_PAGE   // 换了区间/口径：窗口收回第一批
     inited = true
   } catch (e) { showToast(e.message || '加载失败') }
+  // 正停在现金流 / 余额分区：重查后按新区间顺带刷新
+  if (tab.value === 'cash') loadCashflow(true)
+  else if (tab.value === 'balance') loadBalance(true)
 }
 
 function quick(kind) {
@@ -772,7 +1016,7 @@ function applyQuery() {
     else { df.value = ''; dt.value = '' }
   }
   const t = String(q.tab || '')
-  if (['summary', 'expense', 'goods', 'flow'].includes(t)) tab.value = t
+  if (['summary', 'cash', 'balance', 'expense', 'goods', 'flow'].includes(t)) tab.value = t
 }
 
 onMounted(() => { applyQuery(); if (!inited) load() })

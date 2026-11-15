@@ -30,6 +30,7 @@
         <div v-if="selected.length" class="batch-bar">
           <span class="muted">已选 {{ selected.length }} 项</span>
           <van-button size="mini" plain type="primary" @click="batchEditShow = true">批量修改属性</van-button>
+          <van-button size="mini" plain type="success" @click="openCopy">复制到其他仓</van-button>
           <van-button size="mini" type="danger" @click="batchDelete">批量删除</van-button>
           <van-button size="mini" plain @click="selected = []">取消</van-button>
         </div>
@@ -52,6 +53,9 @@
           <div class="item-meta">
             {{ p.category || '—' }}{{ p.code ? ' · 编码 ' + p.code : '' }} · 单位 {{ p.default_unit || p.base_unit }}
             <template v-if="p.product_type === 'stock'"> · 库存 {{ fmtStock(p) }}</template>
+          </div>
+          <div v-if="p.warehouse_party" class="item-meta">
+            <van-tag type="warning" plain>仓储方 {{ p.warehouse_party }}</van-tag>
           </div>
           <div class="item-meta">
             售价 {{ fmtMoney(unitPrice(p, 'sale_price')) }} · 参考成本 {{ fmtMoney(unitPrice(p, 'unit_cost')) }}
@@ -104,7 +108,11 @@
             <template #button><span class="muted">kg</span></template>
           </van-field>
           <van-field v-model="form.spec" label="规格说明" placeholder="如：每个约150克；或每袋5斤" />
+          <van-field v-model="form.warehouse_party" label="仓储方" placeholder="如 云南芳谊昆明（干货）仓；多个用、分隔，留空=不限" />
         </van-cell-group>
+        <div class="muted" style="padding:0 4px 8px;">
+          聚水潭出库单的「仓储方」列。出库单没有 SKU 时只能靠商品名称匹配；<b>同名商品</b>请建两条并填不同仓储方，导入时按每行仓储方精确匹配。留空 = 不限。
+        </div>
         <div class="muted" style="padding:0 4px 8px;">
           重量类按克记账（1斤=500克），计数类按个记账；订单商品固定为「单」。单位换算表由所选单位自动生成。<br />
           售价与参考成本都按「{{ formDispUnit }}」填<span v-if="formFactor !== 1">（1{{ formDispUnit }} = {{ fmtNum(formFactor) }}{{ formBaseUnit }}）</span>，存库自动折回基础单位；售价出库时带出，参考成本在无入库时按此结算。
@@ -194,6 +202,39 @@
       </div>
     </van-popup>
 
+    <!-- ============ 复制商品到其他仓 ============ -->
+    <van-popup v-model:show="copyShow" position="bottom" round>
+      <div class="sheet-body">
+        <div class="sheet-title">复制商品到其他仓（{{ selected.length }} 个）</div>
+        <div class="muted" style="margin-bottom:8px;">
+          把选中商品的资料复制到目标仓；目标仓已有同名商品会直接复用，不会覆盖。库存数量、均价与出入库历史不复制。
+        </div>
+        <van-cell-group inset>
+          <van-field
+            :model-value="copyTargetName"
+            readonly
+            label="目标分仓"
+            placeholder="请选择"
+            @click="copyWhShow = true"
+          />
+          <van-cell title="同时复制关联商品（包材 / 人工 / 库存大类）" title-class="copy-cell-title">
+            <template #right-icon><van-switch v-model="copyDeps" size="20" /></template>
+          </van-cell>
+          <van-cell title="复制后在当前仓停用选中的商品" title-class="copy-cell-title">
+            <template #right-icon><van-switch v-model="copyDisable" size="20" /></template>
+          </van-cell>
+        </van-cell-group>
+        <div class="muted" style="padding:8px 4px;">
+          不勾选「同时复制关联商品」时，目标仓缺少的关联商品会被丢弃，订单商品的关联结算 / 扣减库存可能不完整。
+        </div>
+        <div class="sheet-foot">
+          <van-button block plain @click="copyShow = false">取消</van-button>
+          <van-button block type="primary" :loading="copySaving" @click="submitCopy">开始复制</van-button>
+        </div>
+      </div>
+    </van-popup>
+    <van-action-sheet v-model:show="copyWhShow" :actions="copyWhActions" title="目标分仓" cancel-text="取消" @select="pickCopyWh" />
+
     <!-- ============ 计量单位管理 ============ -->
     <van-popup v-model:show="unitsShow" position="bottom" round :style="{ height: '76%' }">
       <div class="sheet-body">
@@ -257,7 +298,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { showToast, showConfirmDialog } from 'vant'
+import { showToast, showConfirmDialog, showDialog } from 'vant'
 import api, { downloadFile } from '../api'
 import ProductPicker from '../components/ProductPicker.vue'
 import { fmtMoney, fmtNum, num, defaultUnit, unitFactor, fmtStock, shrink } from '../utils/format'
@@ -358,6 +399,7 @@ const form = reactive({
   id: 0, code: '', name: '', category: '', product_type: 'stock', unit: '斤',
   sale_price: 0, unit_cost: 0, weight_kg: 0, spec: '', pack_items: [], pack_fee: 0,
   stock_links: [], is_active: true, base_unit: '克', conversions: {},
+  warehouse_party: '',
 })
 
 const stockUnitOptions = ['克', '斤', '公斤', '千克', '个', '袋', '包', '盒', '箱', '件', '份', '单']
@@ -389,7 +431,7 @@ function openProduct(p, prefillName = '') {
     Object.assign(form, {
       id: 0, code: '', name: prefillName || '', category: pcat.value || '', product_type: 'stock', unit: '斤',
       sale_price: 0, unit_cost: 0, weight_kg: 0, spec: '', pack_items: [], pack_fee: 0,
-      stock_links: [], is_active: true, conversions: {},
+      stock_links: [], is_active: true, conversions: {}, warehouse_party: '',
     })
     refreshFormUnit()
   } else {
@@ -404,6 +446,7 @@ function openProduct(p, prefillName = '') {
       is_active: p.is_active !== false,
       pack_items: (p.pack_items || []).map((it) => ({ product_id: it.product_id, quantity: it.quantity, unit: it.unit })),
       conversions: p.conversions || {},
+      warehouse_party: p.warehouse_party || '',
     })
     refreshFormUnit()
     // 存库的是基础单位价，界面按当前默认单位显示
@@ -452,6 +495,7 @@ async function save() {
     base_unit: payload.base_unit,
     default_unit: payload.default_unit,
     spec: form.spec,
+    warehouse_party: (form.warehouse_party || '').trim(),
     // 界面按默认单位填，存库折回基础单位（与桌面端一致）
     sale_price: +(num(form.sale_price) / (formFactor.value || 1)).toFixed(8),
     unit_cost: +(num(form.unit_cost) / (formFactor.value || 1)).toFixed(8),
@@ -625,6 +669,72 @@ async function batchDelete() {
     selected.value = []
     await load()
   } catch (e) { showToast('删除失败：' + e.message) }
+}
+
+/* ---------- 复制商品到其他仓 ---------- */
+const copyShow = ref(false)
+const copySaving = ref(false)
+const copyDeps = ref(true)
+const copyDisable = ref(false)
+const copyWhs = ref([])
+const copyTarget = ref('')
+const copyWhShow = ref(false)
+const copyWhActions = computed(() =>
+  copyWhs.value.map((w) => ({ name: `${w.name}（${w.key}）`, value: w.key }))
+)
+const copyTargetName = computed(() => {
+  const w = copyWhs.value.find((x) => x.key === copyTarget.value)
+  return w ? `${w.name}（${w.key}）` : ''
+})
+
+async function openCopy() {
+  if (!selected.value.length) { showToast('请先勾选要复制的商品'); return }
+  try {
+    const r = await api('/api/warehouses')
+    copyWhs.value = (r.warehouses || []).filter((w) => !w.is_current)
+  } catch (e) { showToast('读取分仓列表失败：' + e.message); return }
+  if (!copyWhs.value.length) { showToast('没有其他分仓可复制'); return }
+  copyTarget.value = copyWhs.value[0].key
+  copyShow.value = true
+}
+function pickCopyWh(a) { copyTarget.value = a.value; copyWhShow.value = false }
+
+async function submitCopy() {
+  if (!copyTarget.value) { showToast('请选择目标分仓'); return }
+  copySaving.value = true
+  try {
+    const r = await api('/api/products/copy-to-warehouse', 'POST', {
+      target_wh: copyTarget.value,
+      ids: selected.value,
+      include_dependencies: copyDeps.value,
+      disable_source: copyDisable.value,
+    })
+    copyShow.value = false
+    selected.value = []
+    await load()
+    const created = r.created || []
+    const mapped = r.mapped || []
+    const mainCreated = created.filter((x) => x.is_main).length
+    const depCreated = created.length - mainCreated
+    const mainMapped = mapped.filter((x) => x.is_main).length
+    const depMapped = mapped.length - mainMapped
+    const lines = []
+    if (mainCreated) lines.push(`新建 ${mainCreated} 个商品`)
+    if (depCreated) lines.push(`新建 ${depCreated} 个关联商品（包材 / 人工 / 库存大类）`)
+    if (mainMapped) lines.push(`复用目标仓已有同名商品 ${mainMapped} 个`)
+    if (depMapped) lines.push(`复用目标仓已有同名关联商品 ${depMapped} 个`)
+    if ((r.disabled || []).length) lines.push(`已在当前仓停用 ${r.disabled.length} 个商品`)
+    const skipped = r.skipped || []
+    if (skipped.length) lines.push(`${skipped.length} 个关联商品未复制：${skipped.slice(0, 6).map((x) => x.name).join('、')}`)
+    const warnings = r.warnings || []
+    showDialog({
+      title: '复制完成',
+      message: `从「${(r.source && r.source.name) || '当前仓'}」复制到「${(r.target && r.target.name) || copyTargetName.value}」\n`
+        + (lines.join('\n') || '没有需要新建的商品')
+        + (warnings.length ? `\n⚠ ${warnings.slice(0, 4).join('\n')}` : ''),
+    })
+  } catch (e) { showToast('复制失败：' + e.message) }
+  copySaving.value = false
 }
 
 /* ---------- 计量单位 ---------- */

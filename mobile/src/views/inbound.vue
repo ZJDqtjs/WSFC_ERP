@@ -87,6 +87,26 @@
         </div>
         <van-field v-model="kw" placeholder="筛选单号 / 商品 / 供应商" style="background:#f7f8fa;border-radius:6px;margin-top:8px;" />
 
+        <!-- 筛选实时汇总：笔数 / 数量（按单位分组）/ 应付 / 已付 / 未付 / 货款与附加费用 -->
+        <div v-if="filteredList.length" class="io-sum">
+          <div class="row">
+            <span class="grow">
+              {{ kw.trim() || filter.from || filter.to ? '筛选结果' : '当前列表' }}
+              <b>{{ listSum.n }}</b> 笔{{ listSum.n === list.length ? '' : ` / 共 ${list.length} 笔` }}
+            </span>
+            <span>应付 <b>{{ fmtMoney(listSum.due) }}</b></span>
+          </div>
+          <div class="muted" style="margin-top:2px;">数量合计 {{ listSum.qtyText }}</div>
+          <div class="muted">
+            已付 <b style="color:#107c10;">{{ fmtMoney(listSum.paid) }}</b>
+            ／ 未付 <b style="color:#d13438;">{{ fmtMoney(listSum.unpaid) }}</b>
+            <template v-if="listSum.pend">（待结算 {{ listSum.pend }} 笔）</template>
+          </div>
+          <div class="muted">
+            货款 {{ fmtMoney(listSum.goods) }}<template v-if="listSum.extras"> · {{ listSum.extras }}</template>
+          </div>
+        </div>
+
         <div v-if="selected.length" class="batch-bar">
           <span class="muted">已选 {{ selected.length }} 条 · 合计 {{ fmtMoney(selectedAmount) }}</span>
           <van-button size="mini" type="danger" @click="batchDelete">批量删除</van-button>
@@ -158,8 +178,56 @@
           </template>
         </div>
         <van-cell-group inset>
+          <van-field
+            v-model="editForm.quantity"
+            type="number"
+            :label="`数量（${editForm.unit || '单位'}）`"
+            @update:model-value="onEditChanged"
+          />
+          <van-field
+            v-model="editForm.unit_price"
+            type="number"
+            :label="`单价（元/${editForm.unit || '单位'}）`"
+            @update:model-value="onEditChanged"
+          />
+        </van-cell-group>
+
+        <!-- 影响范围：未被出库用到 → 可快速更改；已用到 → 列出受影响订单 -->
+        <div v-if="editImpactLoading" class="io-note" style="padding:6px 16px;">正在核算影响范围…</div>
+        <div v-else-if="editImpactError" class="alert err" style="margin:6px 16px;">{{ editImpactError }}</div>
+        <div
+          v-else-if="editImpact"
+          class="impact"
+          :class="editImpact.affected_count ? 'warn' : 'ok'"
+        >
+          <div class="bold">
+            <template v-if="editImpact.affected_count">会影响 {{ editImpact.affected_count }} 张出库单，保存后按 FIFO 重算成本与毛利</template>
+            <template v-else-if="editImpact.used">这批货已有出库用到，但按当前改动订单成本没有变化</template>
+            <template v-else>可快速更改：这批货还没有被出库/包装消耗用到</template>
+          </div>
+          <div class="muted" style="margin-top:3px;">
+            本单金额 {{ fmtMoney(editImpact.old_total_amount) }} → <b>{{ fmtMoney(editImpact.new_total_amount) }}</b>；
+            库存 {{ fmtNum(num(editImpact.stock_before) / editImpactFactor) }}{{ editImpactUnit }} →
+            <b>{{ fmtNum(num(editImpact.stock_after) / editImpactFactor) }}{{ editImpactUnit }}</b>；
+            均价 {{ fmtMoney(num(editImpact.avg_cost_before) * editImpactFactor) }} →
+            {{ fmtMoney(num(editImpact.avg_cost_after) * editImpactFactor) }}/{{ editImpactUnit }}
+          </div>
+          <div v-if="editImpact.affected_outbounds && editImpact.affected_outbounds.length" class="muted" style="margin-top:3px;">
+            <div v-for="o in editImpact.affected_outbounds.slice(0, 5)" :key="o.id">
+              {{ o.code }} · {{ o.date }}{{ o.customer ? ' · ' + o.customer : '' }}：
+              成本 {{ fmtMoney(o.cogs_before) }} → {{ fmtMoney(o.cogs_after) }}
+              （{{ num(o.delta) >= 0 ? '+' : '−' }}{{ fmtMoney(Math.abs(num(o.delta))) }}）
+            </div>
+            <div v-if="editImpact.affected_count > 5">…等共 {{ editImpact.affected_count }} 张</div>
+          </div>
+          <div v-if="editImpact.warnings && editImpact.warnings.length" style="margin-top:3px;color:#d13438;">
+            ⚠ {{ editImpact.warnings.join('；') }}
+          </div>
+        </div>
+
+        <van-cell-group inset>
           <van-field v-model="editForm.supplier" label="供应商" placeholder="可留空" />
-          <van-field v-model="editForm.date" label="日期" type="date" />
+          <van-field v-model="editForm.date" label="日期" type="date" @update:model-value="onEditChanged" />
           <PayStatusField
             v-model="editForm.pay_status"
             allow-partial
@@ -185,7 +253,7 @@
           </div>
         </van-cell-group>
         <div class="muted io-note" style="margin:8px 4px;">
-          只能修改以上几项；保存后操作员记为当前登录账号。数量 / 单价 / 金额如需更正，请删除后重新入库。
+          保存后操作员记为当前登录账号。数量 / 单价可直接修改（保存前会先核算影响范围，已有出库用到这批货时列出受影响订单并重算成本）；商品如需更换请删除后重新入库。
         </div>
         <div class="row" style="gap:8px;">
           <van-button block plain @click="editShow = false">取消</van-button>
@@ -320,6 +388,9 @@ async function submit() {
       if (paid >= due - 0.005) { showToast(`第 ${i + 1} 行已付已够 ${fmtMoney(due)}，付款状态请选「已付款」`); return }
     }
   }
+  // 单价与最近一次入库价不同：先让用户确认（价格录错会连带批次成本与毛利）
+  await ensureProducts()
+  if (!(await confirmPriceWarnings(lines))) return
   saving.value = true
   try {
     const adjustTotal = lines.reduce((s, r) => s + num(r.adjust), 0)
@@ -363,6 +434,47 @@ const pickableProducts = computed(() =>
 async function ensureProducts() {
   if (PRODUCTS.value.length) return
   try { PRODUCTS.value = await api('/api/products') } catch (e) {}
+}
+
+/**
+ * 入库单价变动确认：本次录入价与「该商品最近一次入库价」不同就列出来让用户确认。
+ * products.last_in_price 是「每基础单位」价格，比较前先按本次单位换算。
+ */
+function priceWarnings(lines) {
+  const out = []
+  for (const r of lines) {
+    const pid = +(r.product_id || 0)
+    if (!pid) continue
+    const cur = num(r.price != null ? r.price : r.unit_price)
+    if (!(cur > 0)) continue          // 未填价不提示
+    const p = PRODUCTS.value.find((x) => x.id === pid)
+    if (!p) continue
+    const lastBase = num(p.last_in_price)
+    if (!(lastBase > 0)) continue     // 还没入过库
+    const unit = r.unit || defaultUnit(p)
+    const f = num(r._factor) || unitFactor(p, unit) || 1
+    const last = lastBase * f
+    if (Math.abs(cur - last) <= 1e-4) continue
+    const pct = last ? ((cur - last) / last) * 100 : 0
+    out.push(`${p.name}：最近入库 ${fmtMoney(last)}/${unit}（${p.last_in_date || '日期未知'}）`
+      + ` → 本次 ${fmtMoney(cur)}/${unit}（${pct >= 0 ? '涨' : '降'} ${Math.abs(pct).toFixed(1)}%）`)
+  }
+  return out
+}
+
+/** 有价格差异时弹二次确认；返回 true = 继续提交 */
+async function confirmPriceWarnings(lines) {
+  const warns = priceWarnings(lines)
+  if (!warns.length) return true
+  const list = warns.slice(0, 10)
+  const more = warns.length > list.length ? `；…另有 ${warns.length - list.length} 个商品存在差异` : ''
+  try {
+    await showConfirmDialog({
+      title: '入库单价与最近一次不同',
+      message: `${list.join('；')}${more}。\n\n确认价格无误、仍按本次单价入库吗？`,
+    })
+    return true
+  } catch (e) { return false }
 }
 async function openPicker(i) {
   pickIndex = i
@@ -412,6 +524,35 @@ const filteredList = computed(() => {
     (r.supplier || '').toLowerCase().includes(s)
   )
 })
+/** 筛选结果实时汇总：数量按单位分组（公斤/箱/袋不能直接相加），金额按应付口径 */
+const listSum = computed(() => {
+  const rows = filteredList.value
+  const qtyMap = new Map()
+  let goods = 0, adjust = 0, freight = 0, handling = 0, fee = 0
+  let due = 0, paid = 0, unpaid = 0, pend = 0
+  for (const r of rows) {
+    const u = (r.unit || '').trim()
+    qtyMap.set(u, (qtyMap.get(u) || 0) + num(r.quantity))
+    goods += num(r.total_amount)
+    adjust += num(r.adjust_amount)
+    freight += num(r.freight)
+    handling += num(r.handling)
+    fee += num(r.fee)
+    due += num(r.due_amount)
+    paid += num(r.paid_amount)
+    unpaid += num(r.unpaid_amount)
+    if ((r.pay_status || 'paid') !== 'paid') pend += 1
+  }
+  const extras = [
+    adjust ? `调整 ${adjust > 0 ? '+' : '−'}${fmtMoney(Math.abs(adjust))}` : '',
+    freight ? `运费 ${fmtMoney(freight)}` : '',
+    handling ? `装卸 ${fmtMoney(handling)}` : '',
+    fee ? `手续费 ${fmtMoney(fee)}` : '',
+  ].filter(Boolean).join(' · ')
+  const qtyText = [...qtyMap.entries()].map(([u, q]) => `${fmtNum(q)}${u ? ' ' + u : ''}`).join(' / ') || '0'
+  return { n: rows.length, qtyText, goods, due, paid, unpaid, pend, extras }
+})
+
 const selectedAmount = computed(() =>
   list.value.filter((r) => selected.value.includes(r.id)).reduce((s, r) => s + finalOf(r), 0)
 )
@@ -472,14 +613,70 @@ function switchList() {
   loadList()
 }
 
-/* ---------- 修改单据（只允许改 供应商 / 日期 / 付款状态） ---------- */
+/* ---------- 修改单据（数量 / 单价 / 日期 / 供应商 / 付款状态） ---------- */
 const editShow = ref(false)
 const editSaving = ref(false)
 const editForm = reactive({
   id: null, code: '', product_name: '', total_amount: 0, adjust_amount: 0,
+  quantity: '', unit_price: '', unit: '',
   supplier: '', date: todayStr(), pay_status: 'paid', paid_amount: '', compensation: '',
 })
-const editDue = computed(() => round2(num(editForm.total_amount) + num(editForm.adjust_amount)))
+// 修改前的影响范围评估（后端 /api/inbounds/{id}/impact，不落库）
+const editImpact = ref(null)
+const editImpactLoading = ref(false)
+const editImpactError = ref('')
+const editImpactKey = ref('')
+const editOrigin = { quantity: 0, unit_price: 0, date: '' }
+let editTimer = null
+
+const editImpactUnit = computed(() => editImpact.value?.unit || editImpact.value?.base_unit || '')
+const editImpactFactor = computed(() => num(editImpact.value?.unit_factor) || 1)
+
+/** 数量/单价/日期改动：防抖后重新核算影响范围（否则每次输入都打一次 FIFO 重放） */
+function onEditChanged() {
+  editImpact.value = null
+  editImpactKey.value = ''
+  clearTimeout(editTimer)
+  editTimer = setTimeout(() => previewImpact(true), 400)
+}
+
+/** 调后端核算影响范围；force=false 时相同输入复用上次结果 */
+async function previewImpact(silent) {
+  const qty = num(editForm.quantity)
+  const price = num(editForm.unit_price)
+  if (!(qty > 0)) {
+    editImpact.value = null
+    editImpactError.value = '数量必须大于 0'
+    return null
+  }
+  if (price < 0) {
+    editImpact.value = null
+    editImpactError.value = '单价不能为负数'
+    return null
+  }
+  const key = `${qty}|${price}|${editForm.date}`
+  if (editImpact.value && editImpactKey.value === key) return editImpact.value
+  editImpactLoading.value = true
+  editImpactError.value = ''
+  try {
+    const r = await api(
+      `/api/inbounds/${editForm.id}/impact?quantity=${qty}&unit_price=${price}&date=${encodeURIComponent(editForm.date || '')}`
+    )
+    editImpact.value = r
+    editImpactKey.value = key
+    return r
+  } catch (e) {
+    editImpact.value = null
+    editImpactKey.value = ''
+    editImpactError.value = '影响核算失败：' + (e.message || '请重试')
+    if (!silent) showToast(editImpactError.value)
+    return null
+  } finally {
+    editImpactLoading.value = false
+  }
+}
+const editGoods = computed(() => round2(num(editForm.quantity) * num(editForm.unit_price)))
+const editDue = computed(() => round2(editGoods.value + num(editForm.adjust_amount)))
 const editPaid = computed(() => {
   if (editForm.pay_status === 'paid') return editDue.value
   if (editForm.pay_status !== 'partial') return 0
@@ -494,17 +691,31 @@ function openEdit(r) {
     product_name: r.product_name,
     total_amount: num(r.total_amount),
     adjust_amount: num(r.adjust_amount),
+    quantity: String(num(r.quantity)),
+    unit_price: String(num(r.unit_price)),
+    unit: r.unit || '',
     supplier: r.supplier || '',
     date: r.date || todayStr(),
     pay_status: ['paid', 'partial', 'unpaid'].includes(r.pay_status) ? r.pay_status : 'paid',
     paid_amount: r.pay_status === 'partial' && num(r.paid_amount) > 0 ? String(num(r.paid_amount)) : '',
     compensation: num(r.compensation) > 0 ? String(num(r.compensation)) : '',
   })
+  editOrigin.quantity = num(r.quantity)
+  editOrigin.unit_price = num(r.unit_price)
+  editOrigin.date = r.date || ''
+  editImpact.value = null
+  editImpactError.value = ''
+  editImpactKey.value = ''
   editShow.value = true
+  previewImpact(true)   // 打开就先算一遍：可快速更改，还是会影响哪些单
 }
 
 async function saveEdit() {
   if (!editForm.date) { showToast('请选择入库日期'); return }
+  const qty = num(editForm.quantity)
+  const price = num(editForm.unit_price)
+  if (!(qty > 0)) { showToast('数量必须大于 0'); return }
+  if (price < 0) { showToast('单价不能为负数'); return }
   const compensation = round2(num(editForm.compensation))
   if (compensation < 0) { showToast('供应商补偿不能为负数'); return }
   let paidAmount = 0
@@ -513,17 +724,47 @@ async function saveEdit() {
     if (!(paidAmount > 0)) { showToast(`部分付款请填已付金额（应付 ${fmtMoney(editDue.value)}）`); return }
     if (paidAmount >= editDue.value - 0.005) { showToast(`已付已够 ${fmtMoney(editDue.value)}，付款状态请选「已付款」`); return }
   }
+  const qtyChanged = Math.abs(qty - editOrigin.quantity) > 1e-9 || Math.abs(price - editOrigin.unit_price) > 1e-9
+  const dateChanged = editForm.date !== editOrigin.date
+  // 数量/单价/日期改动：保存前再核算一次影响范围，有受影响的出库单就先让用户确认
+  let impact = null
+  if (qtyChanged || dateChanged) {
+    impact = await previewImpact(false)
+    if (!impact) { showToast('影响核算失败，请重试'); return }
+    const warns = (impact.warnings || []).join('；')
+    if (impact.affected_count > 0) {
+      const list = (impact.affected_outbounds || []).slice(0, 8)
+        .map((o) => `${o.code}（${o.date}${o.customer ? ' · ' + o.customer : ''}，成本 ${num(o.delta) >= 0 ? '+' : '−'}${fmtMoney(Math.abs(num(o.delta)))}）`)
+        .join('\n')
+      const more = impact.affected_count > 8 ? `\n…等共 ${impact.affected_count} 张` : ''
+      try {
+        await showConfirmDialog({
+          title: '该批次已被出库使用',
+          message: `保存后会重算 ${impact.affected_count} 张出库单的成本与毛利：\n${list}${more}\n\n确认修改？`,
+        })
+      } catch (e) { return }
+    } else if (warns) {
+      try { await showConfirmDialog({ title: '注意', message: `${warns}\n\n确认继续？` }) } catch (e) { return }
+    }
+  }
   editSaving.value = true
   try {
-    await api(`/api/inbounds/${editForm.id}`, 'PUT', {
+    const payload = {
       supplier: (editForm.supplier || '').trim(),
       date: editForm.date,
       pay_status: editForm.pay_status,
       paid_amount: paidAmount,
       compensation,
-    })
+    }
+    if (qtyChanged) {
+      payload.quantity = qty
+      payload.unit_price = price
+    }
+    await api(`/api/inbounds/${editForm.id}`, 'PUT', payload)
     editShow.value = false
     showToast('已保存，操作员记为当前登录账号'
+      + (qtyChanged ? '；数量/单价已更新' : '')
+      + (impact && impact.affected_count ? `；已重算 ${impact.affected_count} 张出库单成本` : '')
       + (compensation > 0 ? `；供应商补偿 ${fmtMoney(compensation)} 已计入其他收支` : ''))
     loadList()
   } catch (e) { showToast('保存失败：' + e.message) }
@@ -579,6 +820,8 @@ async function confirmBatch() {
       remark: i.remark,
     }))
   if (!items.length) { showToast('没有勾选可入库的数据'); return }
+  await ensureProducts()
+  if (!(await confirmPriceWarnings(items))) return
   batchSaving.value = true
   try {
     const r = await api('/api/import/inbounds/confirm', 'POST', { items })
@@ -608,6 +851,29 @@ onActivated(() => { if (tab.value === 'list') loadList() })
 .io-hint { color: #1989fa; font-size: 12px; cursor: pointer; }
 .io-amount { min-width: 76px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; font-size: 13px; }
 .io-note { font-size: 12px; line-height: 1.5; }
+/* 筛选结果实时汇总条 */
+.io-sum {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid #e8f0fb;
+  border-radius: 8px;
+  background: #f0f8ff;
+  font-size: 12.5px;
+  color: #323233;
+  line-height: 1.6;
+}
+.io-sum b { color: #0067c0; }
+/* 改单影响范围面板 */
+.impact {
+  margin: 6px 16px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.impact.ok { background: #e8f7ee; color: #07a05a; }
+.impact.warn { background: #fffbe8; color: #b45309; }
+.impact .muted { color: inherit; opacity: 0.85; }
 .batch-bar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   background: #fff7e6; border-radius: 8px; padding: 8px 10px; margin-top: 8px;

@@ -28,6 +28,7 @@ const batchState = {
         <div class="card-title">
           <span class="grow">新增出库 / 销售单</span>
           <van-button size="mini" plain type="primary" icon="down" @click="openBatch('jushuitan')">聚水潭</van-button>
+          <van-button size="mini" plain icon="exchange" @click="openBatch('brush')">刷单出库</van-button>
           <van-button size="mini" plain icon="down" @click="openBatch('outbound')">批量</van-button>
         </div>
         <van-cell-group inset>
@@ -409,7 +410,7 @@ const batchState = {
           <van-button v-if="batchCfg.tpl" size="small" plain type="primary" icon="down" @click="downloadTpl">下载模板</van-button>
           <van-button size="small" plain icon="upgrade" @click="batchFile && batchFile.click()">选择 Excel</van-button>
           <van-button
-            v-if="batchKind === 'jushuitan' && batchFileObj"
+            v-if="jstLike && batchFileObj"
             size="small"
             plain
             icon="replay"
@@ -421,8 +422,20 @@ const batchState = {
 
         <div v-if="batchParsing" class="empty">正在解析…</div>
 
-        <!-- 聚水潭：不逐单展示，汇总相同商品名的总体预览 -->
-        <template v-if="batchKind === 'jushuitan' && batchOrders.length">
+        <!-- 刷单出库：仓储方推错仓时，确认会先回冲已入账的原出库单 -->
+        <div v-if="batchKind === 'brush' && batchRevert.length" class="alert warn">
+          ⚠ 有 <b>{{ batchRevert.length }}</b> 张单已在系统里按「正常出库」入过账（仓储方推错仓）。
+          确认刷单出库时会先删除原单、回滚库存，并在「盘点记录」里留回冲明细，再按刷单口径入账。
+          <div v-for="(o, i) in batchRevert.slice(0, 5)" :key="i" class="muted" style="font-size:12px;">
+            {{ o.code }} · {{ o.date }} · {{ fmtMoney(o.total_amount) }}
+            <template v-if="o.lines && o.lines.length">
+              （{{ o.lines.map((l) => `${l.product_name} ${fmtNum(l.quantity)}${l.unit}`).join('、') }}）
+            </template>
+          </div>
+        </div>
+
+        <!-- 聚水潭 / 刷单出库：不逐单展示，汇总相同商品名的总体预览 -->
+        <template v-if="jstLike && batchOrders.length">
           <div class="row" style="justify-content:space-between;margin-bottom:6px;">
             <span class="bold">共 {{ batchOrders.length }} 单 · {{ aggProducts.length }} 种商品</span>
             <span class="bold">合计 {{ fmtMoney(aggTotalAmount) }}</span>
@@ -521,7 +534,7 @@ const batchState = {
               <van-button size="mini" plain type="primary" icon="plus" @click="goNewProduct(c)">去新增商品</van-button>
             </div>
           </div>
-          <div v-if="batchKind === 'jushuitan'" style="margin-top:8px;">
+          <div v-if="jstLike" style="margin-top:8px;">
             <div v-if="brushHit.length" class="muted" style="font-size:12px;margin-bottom:6px;">
               本文件含放单仓单据（{{ brushHit.join('、') }}），已<b>不自动</b>跑 AI 归并（放单仓商品名多是占位名，自动新增会建出垃圾商品）——这些商品请点「去新增商品」新建，或到「聚水潭关联」页手动关联。
             </div>
@@ -1133,6 +1146,13 @@ const BATCH_CFG = {
     confirm: '/api/jushuitan/import/confirm',
     hint: '上传聚水潭导出的「销售出库单_*.xlsx」，自动识别商品并按件数×每件规格结算。先解析预览（自动试算 AI 新增方案），确认后才出库。未关联商品可点「去新增商品」新建，或一键确认 AI 自动新增。「仓储方」为芳谊放单仓的订单，确认框里会逐单让你填刷单成本并核算利润。',
   },
+  brush: {
+    title: '刷单出库',
+    tpl: '',
+    preview: '/api/brush-out/preview',
+    confirm: '/api/brush-out/confirm',
+    hint: '放单仓刷单专用：上传聚水潭导出的「销售出库单_*.xlsx」，全部按刷单口径入账（不扣库存、不耗包材，成本 = 刷单成本 + 快递+包装固定费）。仓储方是芳谊放单仓的直接按刷单流程走；若是别的仓且这些单已被自动出库当正常单出了库，确认时会先回冲原单（删单回滚库存，并在「盘点记录」里留回冲明细），再建刷单单——收入只保留刷单这一份。',
+  },
 }
 const batchKind = ref(batchState.kind)
 const batchShow = ref(false)
@@ -1154,8 +1174,12 @@ const brushHit = ref([])      // 本次解析命中的放单仓（有它就不�
 const batchBrushCost = ref('') // 一键批量①：每单同一个刷单成本
 const batchBrushTotal = ref('') // 一键批量②：本次刷单总成本
 const brushSplitMode = ref('revenue') // 总成本分摊方式：revenue 按结算收入占比 / avg 平均
+// 刷单出库：需要先回冲的已入账出库单（仓储方推错仓时才会有）
+const batchRevert = ref([])
 
 const batchCfg = computed(() => BATCH_CFG[batchKind.value])
+// 聚水潭 / 刷单出库共用同一套解析预览（订单结构一致，只是入账口径不同）
+const jstLike = computed(() => batchKind.value === 'jushuitan' || batchKind.value === 'brush')
 const batchAllOn = computed(() => batchOrders.value.length > 0 && batchOrders.value.every((o) => o._on))
 const batchSkipText = computed(() =>
   Object.entries(batchSkip.value).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}单`).join('、')
@@ -1262,6 +1286,7 @@ function resetBatch(kind) {
   aiPlan.value = null
   brushWh.value = []
   brushHit.value = []
+  batchRevert.value = []
   batchBrushCost.value = ''
   batchBrushTotal.value = ''
   batchState.aiSig = ''
@@ -1292,6 +1317,7 @@ async function runParse(f) {
     const r = await upload(batchCfg.value.preview, f)
     brushWh.value = r.brush_warehouse_names || []
     brushHit.value = r.brush_warehouses || []
+    batchRevert.value = r.revert || []
     // 放单仓订单：带出「快递+包装固定费」的自动值（可改）与「刷单成本」输入位
     batchOrders.value = (r.orders || []).map((o) => ({
       ...o, _on: true,
@@ -1381,6 +1407,7 @@ async function confirmBatch() {
     const r = await api(batchCfg.value.confirm, 'POST', { orders })
     let msg = `已创建 ${r.created} 个出库单`
     if (r.failed_count) msg += `，失败 ${r.failed_count}`
+    if (r.revert_note) msg += `；${r.revert_note}（盘点记录已留回冲明细）`
     showToast(msg)
     batchShow.value = false
     resetBatch(batchKind.value) // 清空并同步模块级状态，避免下次进入还看到旧结果

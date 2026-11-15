@@ -1,6 +1,7 @@
 import '../mobile/widgets/mobile_page.dart';
 import '../mobile/widgets/parts.dart';
 import '../mobile/mobile_style.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -31,6 +32,7 @@ class _OutboundScreenState extends State<OutboundScreen> {
   List<String> _settleCats = [];
   Map<String, dynamic>? _preview;
   bool _previewing = false;
+  bool _brushBusy = false;
 
   final _currencyFormat = NumberFormat.currency(locale: 'zh_CN', symbol: '¥', decimalDigits: 2);
 
@@ -47,6 +49,45 @@ class _OutboundScreenState extends State<OutboundScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // 刷单出库：放单仓聚水潭单据整批按刷单口径入账（不扣库存、不耗包材）
+              GlassPanel(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('刷单出库',
+                        style: TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w600, color: Mc.ink)),
+                    const SizedBox(height: 2),
+                    const Text(
+                      '放单仓专用：上传聚水潭「销售出库单_*.xlsx」，全部按刷单口径入账；仓储方推错仓时会先回冲原单。',
+                      style: TextStyle(fontSize: 11.5, color: Mc.inkThird),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 38,
+                      child: OutlinedButton.icon(
+                        onPressed: _brushBusy ? null : _openBrushOut,
+                        icon: _brushBusy
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.upload_file, size: 18),
+                        label: Text(_brushBusy ? '解析中…' : '选择文件并预览'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Mc.brand,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
               GCard(
                 child: Padding(
                   padding: const EdgeInsets.all(14),
@@ -522,6 +563,296 @@ class _OutboundScreenState extends State<OutboundScreen> {
       _settleCats = [];
       _preview = null;
     });
+  }
+
+  /// 刷单出库：选聚水潭出库单 → 预览（逐单填刷单成本）→ 确认
+  Future<void> _openBrushOut() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['xlsx'],
+    );
+    final f = result?.files.isNotEmpty == true ? result!.files.first : null;
+    if (f == null || f.path == null) return;
+    setState(() => _brushBusy = true);
+    try {
+      final Map<String, dynamic> preview = await ApiService.previewBrushOut(f.path!);
+      if (!mounted) return;
+      final Map<String, dynamic>? res = await showDialog<Map<String, dynamic>>(
+        context: context,
+        barrierDismissible: false,
+        builder: (c) => Dialog(
+          insetPadding: const EdgeInsets.all(10),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          child: _BrushReviewDialog(preview: preview, fileName: f.name),
+        ),
+      );
+      if (res != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已创建 ${_i(res['created'])} 个刷单出库单'
+                '${_i(res['failed_count']) > 0 ? '，失败 ${_i(res['failed_count'])}' : ''}'
+                '${(res['revert_note'] ?? '').toString().isNotEmpty ? '；${res['revert_note']}（盘点记录已留回冲明细）' : ''}'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('刷单出库失败：${e.message}'), backgroundColor: Colors.red),
+      );
+    } finally {
+      if (mounted) setState(() => _brushBusy = false);
+    }
+  }
+}
+
+int _i(dynamic v) {
+  if (v is num) return v.toInt();
+  return int.tryParse(v?.toString() ?? '') ?? 0;
+}
+
+/// 刷单出库预览：逐单填「刷单成本」与「快递+包装固定费」，确认后按刷单口径建单
+class _BrushReviewDialog extends StatefulWidget {
+  const _BrushReviewDialog({required this.preview, required this.fileName});
+
+  final Map<String, dynamic> preview;
+  final String fileName;
+
+  @override
+  State<_BrushReviewDialog> createState() => _BrushReviewDialogState();
+}
+
+class _BrushReviewDialogState extends State<_BrushReviewDialog> {
+  final NumberFormat _money =
+      NumberFormat.currency(locale: 'zh_CN', symbol: '¥', decimalDigits: 2);
+  final List<Map<String, dynamic>> _orders = [];
+  final List<bool> _on = [];
+  final List<TextEditingController> _cost = [];
+  final List<TextEditingController> _fee = [];
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final double defaultFee = _d(widget.preview['brush_default_fee']);
+    for (final o in (widget.preview['orders'] as List?) ?? const []) {
+      if (o is! Map) continue;
+      final Map<String, dynamic> order = Map<String, dynamic>.from(o);
+      _orders.add(order);
+      _on.add(true);
+      _cost.add(TextEditingController());
+      final double auto = _d(order['brush_fee_auto']);
+      final double fee = auto > 0 ? auto : defaultFee;
+      _fee.add(TextEditingController(text: fee == 0 ? '' : fee.toStringAsFixed(2)));
+    }
+  }
+
+  static double _d(dynamic v) {
+    if (v is num) return v.toDouble();
+    return double.tryParse(v?.toString() ?? '') ?? 0;
+  }
+
+  @override
+  void dispose() {
+    for (final c in _cost) {
+      c.dispose();
+    }
+    for (final c in _fee) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final List<Map<String, dynamic>> selected = [];
+    for (var i = 0; i < _orders.length; i++) {
+      if (!_on[i]) continue;
+      final Map<String, dynamic> o = Map<String, dynamic>.from(_orders[i]);
+      o['brush_cost'] = double.tryParse(_cost[i].text.trim()) ?? 0;
+      o['brush_fee'] = double.tryParse(_fee[i].text.trim()) ?? 0;
+      selected.add(o);
+    }
+    if (selected.isEmpty) {
+      setState(() => _error = '没有勾选可出库的单据');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final r = await ApiService.confirmBrushOut(selected, source: widget.fileName);
+      if (!mounted) return;
+      Navigator.of(context).pop(r);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = '确认出库失败：${e.message}';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<dynamic> revert = (widget.preview['revert'] as List?) ?? const [];
+    return SizedBox(
+      height: MediaQuery.of(context).size.height * 0.84,
+      width: double.infinity,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text('刷单出库 — 确认',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                ),
+                IconButton(
+                  onPressed: _saving ? null : () => Navigator.pop(context),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              children: [
+                if (revert.isNotEmpty)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Mc.warn.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '⚠ 有 ${revert.length} 张单已按「正常出库」入过账（仓储方推错仓）：'
+                      '${revert.take(5).map((o) => _s((o as Map)['code'])).join('、')}。'
+                      '确认后会先删除原单、回滚库存，并在「盘点记录」里留回冲明细，再按刷单口径入账。',
+                      style: const TextStyle(fontSize: 12, color: Mc.warn, height: 1.5),
+                    ),
+                  ),
+                if (_orders.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 30),
+                    child: Center(
+                      child: Text('未解析出可出库的单据',
+                          style: TextStyle(fontSize: 13, color: Mc.inkThird)),
+                    ),
+                  ),
+                for (var i = 0; i < _orders.length; i++) _orderCard(i),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(_error!,
+                        style: const TextStyle(fontSize: 12, color: Mc.danger)),
+                  ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+                16, 8, 16, 12 + MediaQuery.of(context).viewInsets.bottom),
+            child: Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _saving ? null : () => Navigator.pop(context),
+                    child: const Text('取消'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _saving ? null : _submit,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Mc.brand,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: Text(_saving ? '提交中…' : '确认刷单出库'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _s(dynamic v) => v?.toString() ?? '';
+
+  Widget _orderCard(int i) {
+    final Map<String, dynamic> o = _orders[i];
+    final List<dynamic> lines = (o['lines'] as List?) ?? const [];
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Checkbox(
+                value: _on[i],
+                onChanged: _saving ? null : (v) => setState(() => _on[i] = v ?? false),
+                visualDensity: VisualDensity.compact,
+              ),
+              Expanded(
+                child: Text('${_s(o['doc_no'])} · ${_s(o['date'])}',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+              Text(_money.format(_d(o['income'])),
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            ],
+          ),
+          Text(
+            '${_s(o['customer']).isEmpty ? '—' : _s(o['customer'])} · '
+            '${lines.map((l) => '${(l as Map)['product_name']} '
+                '${(l as Map)['quantity']}${(l as Map)['unit']}').join('、')}',
+            style: const TextStyle(fontSize: 11.5, color: Mc.inkThird),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: FormCell(
+                  label: '刷单成本',
+                  child: CellInput(
+                    controller: _cost[i],
+                    hint: '我刷这单的成本',
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FormCell(
+                  label: '快递+包装固定费',
+                  child: CellInput(
+                    controller: _fee[i],
+                    hint: '可改',
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 }
 class _OutboundRow {

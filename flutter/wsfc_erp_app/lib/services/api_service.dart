@@ -412,6 +412,22 @@ class ApiService {
     return Map<String, dynamic>.from(data as Map);
   }
 
+  /// 复制商品资料到其他分仓（不复制库存/均价/出入库历史）
+  static Future<Map<String, dynamic>> copyProductsToWarehouse({
+    required String targetWh,
+    required List<int> ids,
+    bool includeDependencies = true,
+    bool disableSource = false,
+  }) async {
+    final data = await post('/api/products/copy-to-warehouse', data: {
+      'target_wh': targetWh,
+      'ids': ids,
+      'include_dependencies': includeDependencies,
+      'disable_source': disableSource,
+    });
+    return Map<String, dynamic>.from(data as Map);
+  }
+
   static Future<List<dynamic>> units() async {
     return await get('/api/units') as List<dynamic>;
   }
@@ -441,9 +457,24 @@ class ApiService {
     return Map<String, dynamic>.from(data as Map);
   }
 
-  /// 只能改 供应商 / 日期 / 付款状态 / 运费 / 装卸费；freight、handling 传 null 表示按 0
+  /// 可改 数量 / 单价 / 供应商 / 日期 / 付款状态 / 运费 / 装卸费 / 手续费
   static Future<Map<String, dynamic>> updateInbound(int id, Map<String, dynamic> body) async {
     return Map<String, dynamic>.from(await put('/api/inbounds/$id', data: body) as Map);
+  }
+
+  /// 改数量/单价/日期前核算影响范围（不落库）：是否已被出库用到、会影响哪些出库单的成本
+  static Future<Map<String, dynamic>> inboundImpact(
+    int id, {
+    required double quantity,
+    required double unitPrice,
+    String date = '',
+  }) async {
+    final data = await get('/api/inbounds/$id/impact', queryParameters: _clean({
+      'quantity': quantity,
+      'unit_price': unitPrice,
+      'date': date,
+    }));
+    return Map<String, dynamic>.from(data as Map);
   }
 
   static Future<void> deleteInbound(int id) async {
@@ -818,6 +849,20 @@ class ApiService {
     return Map<String, dynamic>.from(data as Map);
   }
 
+  /// 现金流量表（直接法·实收实付）：经营流入 / 流出 / 净现金流 / 期初期末账面现金
+  static Future<Map<String, dynamic>> reportCashflow({String dateFrom = '', String dateTo = '', String wh = ''}) async {
+    final data = await get('/api/report/cashflow',
+        queryParameters: _clean({'date_from': dateFrom, 'date_to': dateTo, 'wh': wh}));
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// 余额表（截至 date_to）：库存 / 往来 / 广告预付 / 盘点差异
+  static Future<Map<String, dynamic>> reportBalances({String dateFrom = '', String dateTo = '', String wh = ''}) async {
+    final data = await get('/api/report/balances',
+        queryParameters: _clean({'date_from': dateFrom, 'date_to': dateTo, 'wh': wh}));
+    return Map<String, dynamic>.from(data as Map);
+  }
+
   // ---------------- 入仓 ----------------
 
   /// {items, by_product, total, count}
@@ -924,6 +969,18 @@ class ApiService {
 
   static Future<Map<String, dynamic>> confirmImportJushuitan(List<Map<String, dynamic>> orders, {String source = ''}) async {
     final data = await post('/api/jushuitan/import/confirm', data: {'orders': orders, 'source': source});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// 刷单出库：解析聚水潭销售出库单（全部按刷单口径入账）
+  static Future<Map<String, dynamic>> previewBrushOut(String filePath) async {
+    final data = await upload('/api/brush-out/preview', filePath);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// 刷单出库确认：先回冲推错仓已入账的原单，再按刷单口径建单
+  static Future<Map<String, dynamic>> confirmBrushOut(List<Map<String, dynamic>> orders, {String source = ''}) async {
+    final data = await post('/api/brush-out/confirm', data: {'orders': orders, 'source': source});
     return Map<String, dynamic>.from(data as Map);
   }
 

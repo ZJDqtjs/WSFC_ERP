@@ -228,6 +228,7 @@ class _MobileHomePageState extends State<MobileHomePage> {
       ('库存', Icons.inventory_2_outlined, '/stock', Mc.brand),
       ('待付款', Icons.account_balance_wallet_outlined, '/payables', Mc.warn),
       ('其他开支', Icons.receipt_long_outlined, '/expenses', Mc.danger),
+      ('财务报表', Icons.bar_chart_rounded, '/report', Mc.brand),
       ('财务流水', Icons.show_chart, '/finance', Mc.fresh),
       ('规则设置', Icons.tune, '/rules', Mc.inkSecond),
     ];

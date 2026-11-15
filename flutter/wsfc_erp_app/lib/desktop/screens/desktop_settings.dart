@@ -1012,10 +1012,12 @@ class _ImportPanelState extends State<_ImportPanel> {
   _PickedFile? _inFile;
   _PickedFile? _outFile;
   _PickedFile? _jstFile;
+  _PickedFile? _brushFile;
   bool _busy = false;
   final GlobalKey<_DraftResultBoxState> _prodResult = GlobalKey<_DraftResultBoxState>();
   final GlobalKey<_DraftResultBoxState> _outResult = GlobalKey<_DraftResultBoxState>();
   final GlobalKey<_DraftResultBoxState> _jstResult = GlobalKey<_DraftResultBoxState>();
+  final GlobalKey<_DraftResultBoxState> _brushResult = GlobalKey<_DraftResultBoxState>();
   Map<String, dynamic>? _inResult;
 
   Future<void> _downloadTemplate(String kind, String fileName) async {
@@ -1040,6 +1042,8 @@ class _ImportPanelState extends State<_ImportPanel> {
           _inFile = f;
         case 'out':
           _outFile = f;
+        case 'brush':
+          _brushFile = f;
         default:
           _jstFile = f;
       }
@@ -1147,6 +1151,39 @@ class _ImportPanelState extends State<_ImportPanel> {
             preview: r, fileName: f.name, filePath: f.path, onNavigate: widget.onNavigate),
       );
       if (res != null) _jstResult.currentState?.show(res);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      wsToast(context, '解析失败：${e.message}', error: true);
+    }
+  }
+
+  /// 刷单出库：上传聚水潭出库单，全部按刷单口径入账（仓储方推错仓时先回冲原单）
+  Future<void> _previewBrushOut() async {
+    final f = _brushFile;
+    if (f == null) {
+      wsToast(context, '请先选择 Excel 文件');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final r = await ApiService.previewBrushOut(f.path);
+      if (!mounted) return;
+      setState(() => _busy = false);
+      final res = await _wsDialog<Map<String, dynamic>>(
+        context,
+        title: '刷单出库 — 商品汇总预览',
+        width: 1180,
+        maxHeight: 780,
+        body: _JstReviewBody(
+          preview: r,
+          fileName: f.name,
+          filePath: f.path,
+          onNavigate: widget.onNavigate,
+          brush: true,
+        ),
+      );
+      if (res != null) _brushResult.currentState?.show(res);
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
@@ -1290,6 +1327,35 @@ class _ImportPanelState extends State<_ImportPanel> {
                 ],
               ),
               _DraftResultBox(key: _jstResult),
+            ],
+          ),
+        ),
+        WsCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const WsCardHead(title: '刷单出库（放单仓专用）', icon: SolarIconsOutline.refreshCircle),
+              const Text(
+                '上传聚水潭导出的「销售出库单_*.xlsx」，全部按刷单口径入账（不扣库存、不耗包材，'
+                '成本 = 刷单成本 + 快递+包装固定费）。仓储方是芳谊放单仓的直接按刷单流程走；'
+                '若是别的仓且这些单已被自动出库当正常单出了库，确认时会先回冲原单'
+                '（删单回滚库存，并在「盘点记录」里留回冲明细），再建刷单单——收入只保留刷单这一份。',
+                style: TextStyle(fontSize: 12, height: 1.6, color: WsTokens.mutedLight),
+              ),
+              const SizedBox(height: 6),
+              _fileLine(_brushFile),
+              Wrap(
+                spacing: 10,
+                children: [
+                  DesktopButton(label: '选择 Excel 文件', onPressed: _busy ? null : () => _pick('brush')),
+                  DesktopButton(
+                    label: '刷单出库（预览确认）',
+                    kind: DesktopButtonKind.primary,
+                    onPressed: _busy ? null : _previewBrushOut,
+                  ),
+                ],
+              ),
+              _DraftResultBox(key: _brushResult),
             ],
           ),
         ),
@@ -1816,12 +1882,16 @@ class _JstReviewBody extends StatefulWidget {
     required this.fileName,
     required this.filePath,
     required this.onNavigate,
+    this.brush = false,
   });
 
   final Map<String, dynamic> preview;
   final String fileName;
   final String filePath;
   final void Function(String route) onNavigate;
+
+  /// true = 刷单出库（/api/brush-out/*）：全部按刷单口径入账，确认时先回冲推错仓的原单
+  final bool brush;
 
   @override
   State<_JstReviewBody> createState() => _JstReviewBodyState();
@@ -1991,7 +2061,9 @@ class _JstReviewBodyState extends State<_JstReviewBody> {
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final r = await ApiService.previewImportJushuitan(widget.filePath);
+      final r = widget.brush
+          ? await ApiService.previewBrushOut(widget.filePath)
+          : await ApiService.previewImportJushuitan(widget.filePath);
       if (!mounted) return;
       setState(() {
         _busy = false;
@@ -2025,7 +2097,9 @@ class _JstReviewBodyState extends State<_JstReviewBody> {
     }
     setState(() => _submitting = true);
     try {
-      final r = await ApiService.confirmImportJushuitan(orders, source: widget.fileName);
+      final r = widget.brush
+          ? await ApiService.confirmBrushOut(orders, source: widget.fileName)
+          : await ApiService.confirmImportJushuitan(orders, source: widget.fileName);
       if (!mounted) return;
       Navigator.of(context).pop(r);
     } on ApiException catch (e) {
@@ -2317,6 +2391,13 @@ class _JstReviewBodyState extends State<_JstReviewBody> {
                 else
                   DesktopNotice(head, kind: DesktopNoticeKind.success),
                 ..._warnWidgets(),
+                if (((_preview['revert'] as List?) ?? const []).isNotEmpty)
+                  DesktopNotice(
+                    '⚠ 有 ${(_preview['revert'] as List).length} 张单已在系统里按「正常出库」入过账（仓储方推错仓）：'
+                    '${(_preview['revert'] as List).take(5).map((o) => wsS((o as Map)['code'])).join('、')}。'
+                    '确认刷单出库时会先删除原单、回滚库存，并在「盘点记录」里留回冲明细，再按刷单口径入账。',
+                    kind: DesktopNoticeKind.warn,
+                  ),
                 if (_submitError != null)
                   DesktopNotice(_submitError!, kind: DesktopNoticeKind.error),
                 if (brushIdx.isNotEmpty && _orders.isNotEmpty) _brushSection(brushIdx),

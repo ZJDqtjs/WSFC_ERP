@@ -33,7 +33,7 @@ class DesktopReportScreen extends StatefulWidget {
   final AuthProvider auth;
   final void Function(String route) onNavigate;
 
-  /// 'summary' | 'expense' | 'goods' | 'flow'，null=汇总
+  /// 'summary' | 'cash' | 'balance' | 'expense' | 'goods' | 'flow'，null=汇总
   final String? initialPanel;
 
   @override
@@ -52,7 +52,7 @@ const int _kMaxItemRows = 200;
 /// 支出柱图最多画几根（仅影响图形，表格仍是全量）
 const int _kMaxChartBars = 30;
 
-const List<String> _kPanelNames = ['汇总', '支出', '商品', '流水'];
+const List<String> _kPanelNames = ['利润表', '现金流', '余额', '支出', '商品', '流水'];
 
 /// 商品明细的一组合计值（销量 / 重量 / 收入 / 客户代收 / 总成本）
 typedef _GoodsSum = ({double qty, double weight, double amount, double settle, double cogs});
@@ -115,6 +115,14 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
   List<Map<String, dynamic>> _expItems = const [];
   List<dynamic> _whOptions = const [];
 
+  // 现金流 / 余额：按需加载，不拖慢默认的利润表
+  Map<String, dynamic> _cash = const {};
+  Map<String, dynamic> _balance = const {};
+  bool _auxLoading = false;
+  String? _auxError;
+  String _cashKey = '';
+  String _balanceKey = '';
+
   bool _loading = false;
   String? _error;
 
@@ -130,9 +138,11 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
   void initState() {
     super.initState();
     _panel = switch (widget.initialPanel) {
-      'expense' => 1,
-      'goods' => 2,
-      'flow' => 3,
+      'cash' => 1,
+      'balance' => 2,
+      'expense' => 3,
+      'goods' => 4,
+      'flow' => 5,
       _ => 0,
     };
     _boot();
@@ -216,6 +226,82 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
         if (_summary.isEmpty) _error = '加载报表失败：${e.message}';
       });
       wsToast(context, '加载报表失败：${e.message}', error: true);
+    }
+    // 正停在现金流 / 余额分区：重查后按新区间顺带刷新
+    if (_panel == 1) {
+      await _loadCash(force: true);
+    } else if (_panel == 2) {
+      await _loadBalance(force: true);
+    }
+  }
+
+  String get _whParam => _allWh ? 'all' : _wh;
+
+  /// 现金流量表（只在切到该分区时请求，结果按区间/视角复用）
+  Future<void> _loadCash({bool force = false}) async {
+    final String key = '$_dateFrom|$_dateTo|$_whParam';
+    if (!force && _cash.isNotEmpty && _cashKey == key) return;
+    setState(() {
+      _auxLoading = true;
+      _auxError = null;
+    });
+    try {
+      final Map<String, dynamic> d =
+          await ApiService.reportCashflow(dateFrom: _dateFrom, dateTo: _dateTo, wh: _whParam);
+      if (!mounted) return;
+      setState(() {
+        _cash = d;
+        _cashKey = key;
+        _auxLoading = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _cash = const {};
+        _cashKey = '';
+        _auxLoading = false;
+        _auxError = '现金流量表加载失败：${e.message}';
+      });
+    }
+  }
+
+  /// 余额表（截至 date_to）：与损益彻底分开，只回答「钱和货现在在哪」
+  Future<void> _loadBalance({bool force = false}) async {
+    final String key = '$_dateFrom|$_dateTo|$_whParam';
+    if (!force && _balance.isNotEmpty && _balanceKey == key) return;
+    setState(() {
+      _auxLoading = true;
+      _auxError = null;
+    });
+    try {
+      final Map<String, dynamic> d =
+          await ApiService.reportBalances(dateFrom: _dateFrom, dateTo: _dateTo, wh: _whParam);
+      if (!mounted) return;
+      setState(() {
+        _balance = d;
+        _balanceKey = key;
+        _auxLoading = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _balance = const {};
+        _balanceKey = '';
+        _auxLoading = false;
+        _auxError = '余额表加载失败：${e.message}';
+      });
+    }
+  }
+
+  void _selectPanel(int i) {
+    setState(() {
+      _panel = i;
+      _auxError = null;
+    });
+    if (i == 1) {
+      _loadCash();
+    } else if (i == 2) {
+      _loadBalance();
     }
   }
 
@@ -338,7 +424,7 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
         onOpenItems: (source, periodKey) {
           Navigator.of(dialogContext).pop();
           setState(() {
-            _panel = 1;
+            _panel = 3;
             _expSrc = source;
             _expKwCtrl.text = periodKey;
           });
@@ -404,7 +490,7 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
               DesktopTabs(
                 items: _kPanelNames,
                 index: _panel,
-                onChanged: (i) => setState(() => _panel = i),
+                onChanged: _selectPanel,
               ),
               const SizedBox(width: 14),
               if (_summary.isNotEmpty)
@@ -427,9 +513,11 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
               child: ListView(
                 padding: const EdgeInsets.only(bottom: 24),
                 children: switch (_panel) {
-                  1 => _expensePanel(),
-                  2 => _goodsPanel(),
-                  3 => _flowPanel(),
+                  1 => _cashPanel(),
+                  2 => _balancePanel(),
+                  3 => _expensePanel(),
+                  4 => _goodsPanel(),
+                  5 => _flowPanel(),
                   _ => _summaryPanel(),
                 },
               ),
@@ -444,8 +532,10 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
         0 => _allWh
             ? '全仓总览：各分仓独立账套合并合计，点「看单仓明细」可切回单仓视角'
             : '单仓总览：默认你当前所在分仓，换一个只是换看谁的数据',
-        1 => '支出 ＝ 采购（进货）＋ 其他开支 ＋ 手工记账 ＋ 刷单成本；期间费用才是从毛利里扣的部分',
-        2 => '商品销售明细的成本是「总成本」（商品成本 ＋ 打包人工/耗材 ＋ 快递费 ＋ 刷单结算）',
+        1 => '现金流量表（直接法）：只认已经收/付的钱，与利润表口径分开',
+        2 => '余额表：截至截止日还剩什么资产 / 欠多少往来 / 预付还剩多少，不改变损益口径',
+        3 => '支出 ＝ 采购（进货）＋ 其他开支 ＋ 手工记账 ＋ 刷单成本；期间费用才是从毛利里扣的部分',
+        4 => '商品销售明细的成本是「总成本」（商品成本 ＋ 打包人工/耗材 ＋ 快递费 ＋ 刷单结算）',
         _ => '流水只列财务记录（收入 / 支出），采购与其他开支在「支出」分区逐笔核对',
       };
 
@@ -558,6 +648,379 @@ class _DesktopReportScreenState extends State<DesktopReportScreen> {
   }
 
   // ==================== 分区 1：汇总 ====================
+
+  /// 现金流 / 余额两个分区的公共占位：加载中 / 失败
+  Widget _auxPlaceholder(String loadingText) {
+    if (_auxLoading) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 32),
+        child: Center(
+          child: Text(loadingText, style: const TextStyle(fontSize: 13, color: WsTokens.mutedLight)),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: DesktopNotice(_auxError ?? '暂无数据', kind: DesktopNoticeKind.warn),
+    );
+  }
+
+  // ---------------- 现金流量表（实收实付） ----------------
+  List<Widget> _cashPanel() {
+    final Map<String, dynamic> d = _cash;
+    if (d.isEmpty) return [_auxPlaceholder('正在计算现金流…')];
+    final Map<String, dynamic> inf = (d['inflow'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final Map<String, dynamic> out = (d['outflow'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final Map<String, dynamic> rng = (d['range'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final double net = wsD(d['net']);
+    final List<Map<String, dynamic>> whs = _toMaps(d['warehouses']);
+    final String rangeText = wsS(rng['date_from']).isEmpty ? '最早' : wsS(rng['date_from']);
+    final String hint = '统计区间 $rangeText ~ ${wsS(rng['date_to']).isEmpty ? '最新' : wsS(rng['date_to'])}'
+        '${d['is_all'] == true ? ' · 全仓合计（${wsI(d['warehouse_count'])} 个分仓）' : ''}'
+        ' · 只认已收付的钱';
+
+    final List<({String name, double value, String desc})> inRows = [
+      (name: '销售回款（退货已净掉）', value: wsD(inf['sales']), desc: '已回款出库单的实收金额'),
+      (name: '入仓结算回款', value: wsD(inf['warehouse_in']), desc: '京东支付入仓货款'),
+      (name: '手工记账收入', value: wsD(inf['manual_income']), desc: '财务流水页登记的收入'),
+      (name: '其他收入（补偿/退款）', value: wsD(inf['other_income']), desc: '供应商补偿、负数其他收支'),
+    ];
+    final List<({String name, double value, String desc})> outRows = [
+      (name: '采购付款', value: wsD(out['purchase']), desc: '已付入库单（含运费/装卸/手续费/金额调整）'),
+      (name: '代发付款', value: wsD(out['dropship']), desc: '已付代发账单'),
+      (name: '广告充值', value: wsD(out['ad_prepay']), desc: '充进京准通账户的预付款'),
+      (name: '其他收支支出', value: wsD(out['other_expense']), desc: '手工登记的其他支出与赔付'),
+      (name: '人工打包费', value: wsD(out['pack_fee']), desc: '出库带出的打包人工费'),
+      (name: '手工记账支出', value: wsD(out['manual_expense']), desc: '财务流水页登记的支出'),
+    ];
+
+    DesktopRow rowOf(String kind, ({String name, double value, String desc}) r) => DesktopRow(
+          cells: [
+            wsCell(kind),
+            wsCell(r.name, tip: r.desc),
+            ReportMoneyCell(text: wsMoney(r.value), color: r.value < 0 ? kReportExpense : null),
+            wsCell(r.desc, tip: r.desc),
+          ],
+        );
+    DesktopRow sectionRow(String title) => DesktopRow(
+          highlight: true,
+          cells: [
+            wsCell(title, bold: true),
+            wsCell(''),
+            wsCell(''),
+            wsCell(''),
+          ],
+        );
+
+    return [
+      DesktopRise(
+        index: 0,
+        child: DesktopStatGrid(children: [
+          DesktopStatCard(
+            label: '期初账面现金',
+            value: wsMoney(d['opening_cash']),
+            color: WsTokens.primary,
+            sub: '已录入流水的累计净现金流',
+          ),
+          DesktopStatCard(
+            label: '经营流入',
+            value: wsMoney(inf['total']),
+            color: WsTokens.green,
+            sub: '销售回款 / 入仓结算 / 其他收入',
+          ),
+          DesktopStatCard(
+            label: '经营流出',
+            value: wsMoney(out['total']),
+            color: WsTokens.red,
+            sub: '采购 / 代发 / 广告 / 费用',
+          ),
+          DesktopStatCard(
+            label: '本期净现金流',
+            value: wsMoney(net),
+            color: net >= 0 ? WsTokens.green : WsTokens.red,
+            sub: '流入 − 流出',
+          ),
+          DesktopStatCard(
+            label: '期末账面现金',
+            value: wsMoney(d['closing_cash']),
+            color: WsTokens.primary,
+            sub: '期初 + 本期净现金流',
+          ),
+        ]),
+      ),
+      DesktopRise(
+        index: 1,
+        child: WsCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              WsCardHead(
+                title: '现金流量表（经营收付）',
+                icon: SolarIconsOutline.card,
+                trailing: Text(hint, style: const TextStyle(fontSize: 12, color: WsTokens.mutedLight)),
+              ),
+              DesktopGrid(
+                cols: const [
+                  DesktopCol('类别', width: 80),
+                  DesktopCol('项目', width: 240),
+                  DesktopCol('金额', width: 140, right: true),
+                  DesktopCol('说明', width: 480),
+                ],
+                rows: [
+                  sectionRow('流入'),
+                  for (final r in inRows) rowOf('流入', r),
+                  DesktopRow(
+                    highlight: true,
+                    cells: [
+                      wsCell(''),
+                      wsCell('流入合计', bold: true),
+                      ReportMoneyCell(text: wsMoney(inf['total']), bold: true),
+                      wsCell(''),
+                    ],
+                  ),
+                  sectionRow('流出'),
+                  for (final r in outRows) rowOf('流出', r),
+                  DesktopRow(
+                    highlight: true,
+                    cells: [
+                      wsCell(''),
+                      wsCell('流出合计', bold: true),
+                      ReportMoneyCell(text: wsMoney(out['total']), bold: true),
+                      wsCell(''),
+                    ],
+                  ),
+                  DesktopRow(
+                    highlight: true,
+                    cells: [
+                      wsCell('净额'),
+                      wsCell('本期净现金流', bold: true),
+                      ReportMoneyCell(
+                        text: wsMoney(net),
+                        bold: true,
+                        color: net >= 0 ? kReportIncome : kReportExpense,
+                      ),
+                      wsCell('流入合计 − 流出合计'),
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+      if (d['is_all'] == true && whs.isNotEmpty)
+        DesktopRise(
+          index: 2,
+          child: WsCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const WsCardHead(title: '各分仓现金流', icon: SolarIconsOutline.server),
+                DesktopGrid(
+                  cols: const [
+                    DesktopCol('分仓', width: 240),
+                    DesktopCol('期初账面现金', width: 150, right: true),
+                    DesktopCol('本期净现金流', width: 150, right: true),
+                    DesktopCol('期末账面现金', width: 150, right: true),
+                  ],
+                  rows: [
+                    for (final w in whs)
+                      DesktopRow(cells: [
+                        wsCell(wsS(w['name']).isEmpty ? wsS(w['key']) : wsS(w['name'])),
+                        ReportMoneyCell(text: wsMoney(w['opening_cash'])),
+                        ReportMoneyCell(
+                          text: wsMoney(w['net']),
+                          color: wsD(w['net']) >= 0 ? kReportIncome : kReportExpense,
+                        ),
+                        ReportMoneyCell(text: wsMoney(w['closing_cash'])),
+                      ]),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+    ];
+  }
+
+  // ---------------- 余额表（资产 / 往来 / 预付 / 盘点差异） ----------------
+  List<Widget> _balancePanel() {
+    final Map<String, dynamic> d = _balance;
+    if (d.isEmpty) return [_auxPlaceholder('正在计算余额…')];
+    final Map<String, dynamic> inv = (d['inventory'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final Map<String, dynamic> pay = (d['payables'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final Map<String, dynamic> rec = (d['receivables'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final Map<String, dynamic> ad = (d['ad_prepay'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final Map<String, dynamic> cd = (d['count_diff'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final List<Map<String, dynamic>> whs = _toMaps(d['warehouses']);
+    final int neg = wsI(inv['negative_count']);
+    final bool asOf = wsS(inv['basis']) == 'as_of';
+
+    String srcText(dynamic m) {
+      final Map<String, dynamic> map = (m as Map?)?.cast<String, dynamic>() ?? const {};
+      return map.entries
+          .where((e) => wsD(e.value).abs() >= 0.005)
+          .map((e) => '${e.key} ${wsMoney(e.value)}')
+          .join(' · ');
+    }
+
+    final List<String> warnings = [
+      for (final w in (d['warnings'] as List?) ?? const []) wsS(w),
+      for (final w in (ad['warnings'] as List?) ?? const []) wsS(w),
+    ].where((s) => s.isNotEmpty).toList();
+
+    final String hint = '截至 ${wsS(d['as_of']).isEmpty ? '今天' : wsS(d['as_of'])}'
+        '${d['is_all'] == true ? '（${wsI(d['warehouse_count'])} 个分仓）' : ''}'
+        '${asOf ? ' · 库存已按 FIFO 回算到 ${wsS(d['as_of'])}' : ' · 库存为当前结存'}'
+        '；只回答「钱和货还在哪」，不改变利润表口径';
+
+    final String adDesc = ad['balance'] == null
+        ? 'jdfenxi 广告费流水读取失败，可稍后刷新重试'
+        : '来源 jdfenxi 广告费流水；当前可用余额 ${wsMoney(ad['balance_current'])}；'
+            '区间充值 ${wsMoney(ad['recharged_period'])} − 消费 ${wsMoney(ad['spent_total'])}';
+
+    final List<({String kind, String name, double? value, String desc})> rows = [
+      (
+        kind: '资产',
+        name: '库存结存总值',
+        value: wsD(inv['stock_value']),
+        desc: '${neg > 0 ? '其中 $neg 个商品为负库存（数量 ${wsTrim(wsD(inv['negative_qty']), digits: 4)}），需盘点冲正；' : ''}'
+            '${asOf ? '按库存流水 FIFO 回算到 ${wsS(d['as_of'])}（当前库存 ${wsMoney(inv['stock_value_current'])}）' : '按 FIFO 批次结存（当前库存）'}',
+      ),
+      (
+        kind: '资产',
+        name: '广告账户可用余额',
+        value: ad['balance'] == null ? null : wsD(ad['balance']),
+        desc: adDesc,
+      ),
+      (
+        kind: '负债',
+        name: '应付未付（要付出去）',
+        value: wsD(pay['total']),
+        desc: srcText(pay['by_source']).isEmpty ? '没有未结清的应付款' : srcText(pay['by_source']),
+      ),
+      (
+        kind: '应收',
+        name: '应收未收（要收进来）',
+        value: wsD(rec['total']),
+        desc: srcText(rec['by_source']).isEmpty ? '没有未回款的应收款' : srcText(rec['by_source']),
+      ),
+      (
+        kind: '盘点',
+        name: '区间内盘点差异（未计入损益）',
+        value: wsD(cd['net_value']),
+        desc: '盘盈入账 ${wsMoney(cd['gain_value'])}（${wsI(cd['gain_lines'])} 笔） / '
+            '盘亏成本 ${wsMoney(cd['loss_value'])}（${wsI(cd['loss_lines'])} 笔）'
+            '${wsD(cd['booked_expense']) != 0 ? '；已记「库存损耗」费用 ${wsMoney(cd['booked_expense'])}' : '；盘亏只冲库存，未记「库存损耗」费用'}',
+      ),
+    ];
+
+    return [
+      DesktopRise(
+        index: 0,
+        child: DesktopStatGrid(children: [
+          DesktopStatCard(
+            label: '库存结存总值',
+            value: wsMoney(inv['stock_value']),
+            color: WsTokens.primary,
+            sub: '${wsI(inv['product_count'])} 种商品',
+          ),
+          DesktopStatCard(
+            label: '应付未付',
+            value: wsMoney(pay['total']),
+            color: WsTokens.red,
+            sub: '要付出去',
+          ),
+          DesktopStatCard(
+            label: '应收未收',
+            value: wsMoney(rec['total']),
+            color: WsTokens.green,
+            sub: '要收进来',
+          ),
+          DesktopStatCard(
+            label: '广告账户余额',
+            value: ad['balance'] == null ? '—' : wsMoney(ad['balance']),
+            sub: 'jdfenxi 流水',
+          ),
+        ]),
+      ),
+      DesktopRise(
+        index: 1,
+        child: WsCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              WsCardHead(
+                title: '余额表（资产 / 往来 / 预付）',
+                icon: SolarIconsOutline.wallet,
+                trailing: Text(hint, style: const TextStyle(fontSize: 12, color: WsTokens.mutedLight)),
+              ),
+              DesktopGrid(
+                cols: const [
+                  DesktopCol('类别', width: 80),
+                  DesktopCol('项目', width: 240),
+                  DesktopCol('金额', width: 140, right: true),
+                  DesktopCol('说明', width: 520),
+                ],
+                rows: [
+                  for (final r in rows)
+                    DesktopRow(cells: [
+                      wsCell(r.kind),
+                      wsCell(r.name, bold: true),
+                      ReportMoneyCell(text: r.value == null ? '—' : wsMoney(r.value)),
+                      wsCell(r.desc, tip: r.desc),
+                    ]),
+                ],
+              ),
+              if (warnings.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: DesktopNotice('提示：${warnings.join('；')}', kind: DesktopNoticeKind.warn),
+                ),
+            ],
+          ),
+        ),
+      ),
+      if (d['is_all'] == true && whs.isNotEmpty)
+        DesktopRise(
+          index: 2,
+          child: WsCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const WsCardHead(title: '各分仓余额', icon: SolarIconsOutline.server),
+                DesktopGrid(
+                  cols: const [
+                    DesktopCol('分仓', width: 220),
+                    DesktopCol('库存结存', width: 140, right: true),
+                    DesktopCol('应付未付', width: 140, right: true),
+                    DesktopCol('应收未收', width: 140, right: true),
+                    DesktopCol('盘点差异', width: 140, right: true),
+                    DesktopCol('广告预付余额', width: 140, right: true),
+                  ],
+                  rows: [
+                    for (final w in whs)
+                      DesktopRow(cells: [
+                        wsCell(wsS(w['name']).isEmpty ? wsS(w['key']) : wsS(w['name'])),
+                        ReportMoneyCell(
+                            text: wsMoney((w['inventory'] as Map?)?['stock_value'])),
+                        ReportMoneyCell(text: wsMoney(w['payables_total'])),
+                        ReportMoneyCell(text: wsMoney(w['receivables_total'])),
+                        ReportMoneyCell(text: wsMoney((w['count_diff'] as Map?)?['net_value'])),
+                        ReportMoneyCell(
+                          text: (w['ad_prepay'] as Map?)?['balance'] == null
+                              ? '—'
+                              : wsMoney((w['ad_prepay'] as Map?)?['balance']),
+                        ),
+                      ]),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+    ];
+  }
 
   List<Widget> _summaryPanel() {
     final Map<String, dynamic> s = _s;

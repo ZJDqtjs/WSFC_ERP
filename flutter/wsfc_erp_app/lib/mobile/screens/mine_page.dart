@@ -143,6 +143,7 @@ class _MobileMinePageState extends State<MobileMinePage> {
                 _EntryTile(title: '商品', subtitle: '建品 / 改价 / 停用 / 批量', route: '/products', icon: Icons.category_outlined),
                 _EntryTile(title: '待付款', subtitle: '入库·出库·开支的挂账与代发账单', route: '/payables', icon: Icons.account_balance_wallet_outlined),
                 _EntryTile(title: '其他开支', subtitle: '房租水电装卸等零星支出', route: '/expenses', icon: Icons.receipt_long_outlined),
+                _EntryTile(title: '财务报表', subtitle: '利润表 / 现金流量表 / 余额表', route: '/report', icon: Icons.bar_chart_rounded),
                 _EntryTile(title: '财务流水', subtitle: '收入支出台账与手动记账', route: '/finance', icon: Icons.show_chart),
                 _EntryTile(title: '规则设置', subtitle: '扣点 / 店铺扣点 / 快递 / 打包', route: '/rules', icon: Icons.tune),
                 _EntryTile(title: '鲜货现采', subtitle: '鲜货清单与今日需求预演算', route: '/fresh', icon: Icons.storefront_outlined, push: false),

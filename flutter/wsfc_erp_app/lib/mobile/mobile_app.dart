@@ -19,6 +19,7 @@ import 'screens/ai_entry_screen.dart';
 import 'screens/home_page.dart';
 import 'screens/login_page.dart';
 import 'screens/mine_page.dart';
+import 'screens/report_page.dart';
 
 /// 移动端外壳：玻璃主题 + 五段底部导航（StatefulShellRoute 保留各 Tab 状态）。
 /// 桌面端不走这里，见 desktop/DesktopApp。
@@ -126,6 +127,7 @@ GoRouter buildMobileRouter(AuthProvider auth) => GoRouter(
         GoRoute(path: '/payables', name: 'payables', builder: (c, s) => const PayablesScreen()),
         GoRoute(path: '/expenses', name: 'expenses', builder: (c, s) => const ExpensesScreen()),
         GoRoute(path: '/finance', name: 'finance', builder: (c, s) => const FinanceScreen()),
+        GoRoute(path: '/report', name: 'report', builder: (c, s) => const MobileReportPage()),
         GoRoute(path: '/rules', name: 'rules', builder: (c, s) => const RulesScreen()),
         GoRoute(
           path: '/ai-entry',

@@ -1,4 +1,6 @@
 import 'package:file_picker/file_picker.dart';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../providers/auth_provider.dart';
@@ -505,6 +507,28 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
     return (items: items, bad: bad);
   }
 
+  /// 本次录入价 vs 该商品最近一次入库价：不同就列出来让用户二次确认（价格录错会连带批次成本与毛利）
+  List<String> _priceWarnings(List<Map<String, dynamic>> items) {
+    final out = <String>[];
+    for (final it in items) {
+      final Map<String, dynamic>? p = _productById[wsI(it['product_id'])];
+      if (p == null) continue;
+      final double cur = wsD(it['unit_price']);
+      if (!(cur > 0)) continue;
+      final double lastBase = wsD(p['last_in_price']);
+      if (!(lastBase > 0)) continue;
+      final String unit = wsS(it['unit']);
+      final double f = _factorOf(p, unit);
+      final double last = lastBase * f;
+      if ((cur - last).abs() <= 1e-4) continue;
+      final double pct = last == 0 ? 0 : (cur - last) / last * 100;
+      out.add('${wsS(p['name'])}：最近入库 ${wsMoney(last)}/$unit'
+          '（${wsS(p['last_in_date'], fallback: '日期未知')}）'
+          ' → 本次 ${wsMoney(cur)}/$unit（${pct >= 0 ? '涨' : '降'} ${pct.abs().toStringAsFixed(1)}%）');
+    }
+    return out;
+  }
+
   Future<void> _submitBatch() async {
     if (_submitting) return;
     final res = _collect();
@@ -517,6 +541,20 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
     if (res.items.isEmpty) {
       wsToast(context, '请先选商品并填数量（一行 = 一张入库单）', error: true);
       return;
+    }
+    final List<String> priceWarns = _priceWarnings(res.items);
+    if (priceWarns.isNotEmpty) {
+      final List<String> list = priceWarns.take(10).toList();
+      final String more =
+          priceWarns.length > list.length ? '；…另有 ${priceWarns.length - list.length} 个商品存在差异' : '';
+      if (!mounted) return;
+      final bool ok = await wsConfirm(
+        context,
+        title: '入库单价与最近一次不同',
+        message: '${list.join('；')}$more。\n\n确认价格无误、仍按本次单价入库吗？',
+        okLabel: '确认入库',
+      );
+      if (!ok) return;
     }
     final t = _totals();
     setState(() {
@@ -914,6 +952,53 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
     return rows;
   }
 
+  /// 筛选实时汇总：数量按单位分组（公斤/箱/袋不能直接相加），金额按应付口径
+  ({
+    String qtyText,
+    double goods,
+    double adjust,
+    double freight,
+    double handling,
+    double fee,
+    double due,
+    double paid,
+    double unpaid,
+    int pend,
+  }) _sumOfRecords(List<Map<String, dynamic>> rows) {
+    final Map<String, double> qtyMap = <String, double>{};
+    double goods = 0, adjust = 0, freight = 0, handling = 0, fee = 0;
+    double due = 0, paid = 0, unpaid = 0;
+    int pend = 0;
+    for (final r in rows) {
+      final String u = wsS(r['unit']).trim();
+      qtyMap[u] = (qtyMap[u] ?? 0) + wsD(r['quantity']);
+      goods += wsD(r['total_amount']);
+      adjust += wsD(r['adjust_amount']);
+      freight += wsD(r['freight']);
+      handling += wsD(r['handling']);
+      fee += wsD(r['fee']);
+      due += wsD(r['due_amount']);
+      paid += wsD(r['paid_amount']);
+      unpaid += wsD(r['unpaid_amount']);
+      if (wsS(r['pay_status'], fallback: 'paid') != 'paid') pend += 1;
+    }
+    final String qtyText = qtyMap.entries
+        .map((e) => '${wsTrim(e.value, digits: 4)}${e.key.isEmpty ? '' : ' ${e.key}'}')
+        .join(' / ');
+    return (
+      qtyText: qtyText.isEmpty ? '0' : qtyText,
+      goods: goods,
+      adjust: adjust,
+      freight: freight,
+      handling: handling,
+      fee: fee,
+      due: due,
+      paid: paid,
+      unpaid: unpaid,
+      pend: pend,
+    );
+  }
+
   static int _compareValues(dynamic a, dynamic b) {
     final sa = '$a';
     final sb = '$b';
@@ -942,14 +1027,140 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
     final id = wsI(r['id']);
     final total = wsD(r['total_amount']);
     final adjust = wsD(r['adjust_amount']);
+    final qtyCtl = TextEditingController(text: wsTrim(wsD(r['quantity']), digits: 6));
+    final priceCtl = TextEditingController(text: wsTrim(wsD(r['unit_price']), digits: 6));
     final supplierCtl = TextEditingController(text: wsS(r['supplier']));
     final freightCtl = TextEditingController(text: _plain(wsD(r['freight'])));
     final handlingCtl = TextEditingController(text: _plain(wsD(r['handling'])));
+    final double originQty = wsD(r['quantity']);
+    final double originPrice = wsD(r['unit_price']);
     String date = wsS(r['date'], fallback: wsToday());
+    final String originDate = date;
+    final String unit = wsS(r['unit']);
     String pay = wsS(r['pay_status'], fallback: 'paid');
     String err = '';
+    Map<String, dynamic>? impact;
+    String impactErr = '';
+    bool impactLoading = false;
+    Timer? impactTimer;
+    bool dlgClosed = false;
     BuildContext? dlg;
     void Function(void Function())? setDlgState;
+    bool impactBooted = false;
+
+    Future<void> fetchImpact() async {
+      if (dlgClosed) return;
+      final qty = _textNum(qtyCtl);
+      final price = _textNum(priceCtl);
+      if (!(qty > 0) || price < 0) {
+        setDlgState?.call(() {
+          impact = null;
+          impactErr = qty > 0 ? '单价不能为负数' : '数量必须大于 0';
+          impactLoading = false;
+        });
+        return;
+      }
+      setDlgState?.call(() {
+        impactLoading = true;
+        impactErr = '';
+      });
+      try {
+        final res =
+            await ApiService.inboundImpact(id, quantity: qty, unitPrice: price, date: date);
+        if (dlgClosed) return;
+        setDlgState?.call(() {
+          impact = res;
+          impactLoading = false;
+        });
+      } on ApiException catch (e) {
+        if (dlgClosed) return;
+        setDlgState?.call(() {
+          impact = null;
+          impactErr = '影响核算失败：${e.message}';
+          impactLoading = false;
+        });
+      }
+    }
+
+    void scheduleImpact() {
+      impact = null;
+      impactErr = '';
+      impactTimer?.cancel();
+      impactTimer = Timer(const Duration(milliseconds: 400), fetchImpact);
+    }
+
+    /// 影响范围面板：可快速更改（绿）/ 会影响 N 张出库单（黄，列出成本变化）
+    Widget impactBox() {
+      if (impactLoading) {
+        return wsCell('正在核算影响范围…', color: WsTokens.mutedLight);
+      }
+      if (impactErr.isNotEmpty) {
+        return DesktopNotice(impactErr, kind: DesktopNoticeKind.error);
+      }
+      final Map<String, dynamic>? d = impact;
+      if (d == null) return const SizedBox.shrink();
+      final double f = wsD(d['unit_factor']) == 0 ? 1 : wsD(d['unit_factor']);
+      final String du = wsS(d['unit']).isNotEmpty ? wsS(d['unit']) : wsS(d['base_unit']);
+      final int affected = wsI(d['affected_count']);
+      final List<Map<String, dynamic>> outs = [
+        for (final o in ((d['affected_outbounds'] as List?) ?? const []))
+          if (o is Map) Map<String, dynamic>.from(o),
+      ];
+      final List<String> warnings = [
+        for (final w in ((d['warnings'] as List?) ?? const [])) wsS(w),
+      ].where((e) => e.isNotEmpty).toList();
+      final Color tone = affected > 0 ? WsTokens.amber : WsTokens.green;
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: tone.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              affected > 0
+                  ? '会影响 $affected 张出库单，保存后按 FIFO 重算成本与毛利'
+                  : (d['used'] == true
+                      ? '这批货已有出库用到，但按当前改动订单成本没有变化'
+                      : '可快速更改：这批货还没有被出库/包装消耗用到'),
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: tone),
+            ),
+            const SizedBox(height: 4),
+            wsCell(
+              '本单金额 ${wsMoney(d['old_total_amount'])} → ${wsMoney(d['new_total_amount'])}；'
+              '库存 ${wsTrim(wsD(d['stock_before']) / f, digits: 4)}$du → '
+              '${wsTrim(wsD(d['stock_after']) / f, digits: 4)}$du；'
+              '均价 ${wsMoney(wsD(d['avg_cost_before']) * f)} → ${wsMoney(wsD(d['avg_cost_after']) * f)}/$du',
+              color: WsTokens.mutedLight,
+            ),
+            for (final o in outs.take(5))
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: wsCell(
+                  '${wsS(o['code'])} · ${wsS(o['date'])}'
+                  '${wsS(o['customer']).isNotEmpty ? ' · ${wsS(o['customer'])}' : ''}：'
+                  '成本 ${wsMoney(o['cogs_before'])} → ${wsMoney(o['cogs_after'])}'
+                  '（${wsD(o['delta']) >= 0 ? '+' : '-'}${wsMoney(wsD(o['delta']).abs())}）',
+                  color: WsTokens.mutedLight,
+                ),
+              ),
+            if (affected > outs.length)
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: wsCell('…等共 $affected 张', color: WsTokens.mutedLight),
+              ),
+            if (warnings.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: wsCell('⚠ ${warnings.join('；')}', color: WsTokens.red),
+              ),
+          ],
+        ),
+      );
+    }
 
     final patch = await desktopDialog<Map<String, dynamic>>(
       context,
@@ -960,6 +1171,10 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
         return StatefulBuilder(
           builder: (c2, setDlg) {
             setDlgState = setDlg;
+            if (!impactBooted) {
+              impactBooted = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) => fetchImpact());
+            }
             final fee = _textNum(freightCtl) + _textNum(handlingCtl);
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -972,10 +1187,37 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
                 ),
                 const SizedBox(height: 12),
                 if (err.isNotEmpty) DesktopNotice(err, kind: DesktopNoticeKind.error),
-                const DesktopNotice(
-                  '数量 / 单价不可修改，请删除后重新入库（商品与金额一并保留）。'
-                  '这里只改 供应商 / 入库日期 / 付款状态 / 运费 / 装卸费。',
-                  kind: DesktopNoticeKind.warn,
+                DesktopFormRow(
+                  label: '数量（$unit）',
+                  required: true,
+                  tip: '按单据单位；库存、批次成本与本单金额一起重算',
+                  child: DesktopTextField(
+                    controller: qtyCtl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: DesktopTextField.decimalOnly,
+                    onChanged: (_) {
+                      setDlg(() {});
+                      scheduleImpact();
+                    },
+                  ),
+                ),
+                DesktopFormRow(
+                  label: '单价（元/$unit）',
+                  required: true,
+                  tip: '已出库用到这批货时，保存会按 FIFO 重算受影响订单的成本与毛利',
+                  child: DesktopTextField(
+                    controller: priceCtl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: DesktopTextField.decimalOnly,
+                    onChanged: (_) {
+                      setDlg(() {});
+                      scheduleImpact();
+                    },
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: impactBox(),
                 ),
                 DesktopFormRow(
                   label: '供应商',
@@ -987,7 +1229,10 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
                   child: DesktopDateField(
                     value: date,
                     allowClear: false,
-                    onChanged: (v) => setDlg(() => date = v.isEmpty ? date : v),
+                    onChanged: (v) {
+                      setDlg(() => date = v.isEmpty ? date : v);
+                      scheduleImpact();
+                    },
                   ),
                 ),
                 DesktopFormRow(
@@ -1025,7 +1270,8 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
                   color: WsTokens.mutedLight,
                 ),
                 const SizedBox(height: 8),
-                wsCell('保存后操作员记为当前登录账号（$_operator）。数量 / 单价 / 商品如需更正，请删除后重新入库。',
+                wsCell(
+                    '保存后操作员记为当前登录账号（$_operator）。数量 / 单价可直接修改，已被出库用到这批货时会列出受影响的订单并重算成本；商品如需更换请删除后重新入库。',
                     color: WsTokens.mutedLight),
               ],
             );
@@ -1034,8 +1280,18 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
       },
       submitLabel: '✓ 保存',
       onSubmit: () {
+        final qty = _textNum(qtyCtl);
+        final price = _textNum(priceCtl);
         final freight = _textNum(freightCtl);
         final handling = _textNum(handlingCtl);
+        if (!(qty > 0)) {
+          setDlgState?.call(() => err = '数量必须大于 0');
+          return;
+        }
+        if (price < 0) {
+          setDlgState?.call(() => err = '单价不能为负数');
+          return;
+        }
         if (date.isEmpty) {
           setDlgState?.call(() => err = '请选择入库日期');
           return;
@@ -1044,25 +1300,88 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
           setDlgState?.call(() => err = '运费 / 装卸费不能为负数');
           return;
         }
+        final bool qtyChanged =
+            (qty - originQty).abs() > 1e-9 || (price - originPrice).abs() > 1e-9;
         Navigator.of(dlg ?? context).pop({
           'supplier': supplierCtl.text.trim(),
           'date': date,
           'pay_status': pay,
           'freight': _nonNeg(freight),
           'handling': _nonNeg(handling),
+          if (qtyChanged) 'quantity': qty,
+          if (qtyChanged) 'unit_price': price,
         });
       },
     );
 
+    dlgClosed = true;
+    impactTimer?.cancel();
+    qtyCtl.dispose();
+    priceCtl.dispose();
     supplierCtl.dispose();
     freightCtl.dispose();
     handlingCtl.dispose();
     if (patch == null) return;
+
+    final bool qtyChanged = patch.containsKey('quantity');
+    final bool dateChanged = wsS(patch['date']) != originDate;
+    int affected = 0;
+    // 改数量/单价/日期：保存前再核算一次影响范围，有受影响的订单就先让用户确认
+    if (qtyChanged || dateChanged) {
+      try {
+        final Map<String, dynamic> imp = await ApiService.inboundImpact(
+          id,
+          quantity: qtyChanged ? wsD(patch['quantity']) : originQty,
+          unitPrice: qtyChanged ? wsD(patch['unit_price']) : originPrice,
+          date: wsS(patch['date']),
+        );
+        affected = wsI(imp['affected_count']);
+        final List<String> warns = [
+          for (final w in ((imp['warnings'] as List?) ?? const [])) wsS(w),
+        ].where((e) => e.isNotEmpty).toList();
+        if (affected > 0) {
+          final List<Map<String, dynamic>> outs = [
+            for (final o in ((imp['affected_outbounds'] as List?) ?? const []))
+              if (o is Map) Map<String, dynamic>.from(o),
+          ];
+          final String list = outs
+              .take(8)
+              .map((o) => '${wsS(o['code'])}（${wsS(o['date'])}'
+                  '${wsS(o['customer']).isNotEmpty ? ' · ${wsS(o['customer'])}' : ''}，'
+                  '成本 ${wsD(o['delta']) >= 0 ? '+' : '-'}${wsMoney(wsD(o['delta']).abs())}）')
+              .join('\n');
+          final String more = affected > 8 ? '\n…等共 $affected 张' : '';
+          if (!mounted) return;
+          final bool ok = await wsConfirm(
+            context,
+            title: '该批次已被出库使用',
+            message: '保存后会重算 $affected 张出库单的成本与毛利：\n$list$more\n\n确认修改？',
+            okLabel: '确认修改',
+          );
+          if (!ok) return;
+        } else if (warns.isNotEmpty) {
+          if (!mounted) return;
+          final bool ok = await wsConfirm(
+            context,
+            title: '注意',
+            message: '${warns.join('；')}\n\n确认继续？',
+          );
+          if (!ok) return;
+        }
+      } on ApiException catch (e) {
+        if (!mounted) return;
+        wsToast(context, '影响核算失败：${e.message}', error: true);
+        return;
+      }
+    }
+
     try {
       await ApiService.updateInbound(id, patch);
       if (!mounted) return;
       final fee = _textNumOf(patch['freight']) + _textNumOf(patch['handling']);
       wsToast(context, '已保存，操作员记为 $_operator'
+          '${qtyChanged ? '；数量/单价已更新' : ''}'
+          '${affected > 0 ? '；已重算 $affected 张出库单成本' : ''}'
           '${fee > 0 ? '；运费/装卸 ${wsMoney(fee)} 已计入成本' : ''}');
       await _loadRecords();
     } on ApiException catch (e) {
@@ -1423,6 +1742,13 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
       handling += wsD(r['handling']);
     }
     final total = amount + freight + handling;
+    final s = _sumOfRecords(rows);
+    final List<String> extras = [
+      if (s.adjust != 0) '调整 ${s.adjust > 0 ? '+' : '-'}${wsMoney(s.adjust.abs())}',
+      if (s.freight != 0) '运费 ${wsMoney(s.freight)}',
+      if (s.handling != 0) '装卸 ${wsMoney(s.handling)}',
+      if (s.fee != 0) '手续费 ${wsMoney(s.fee)}',
+    ];
     return SingleChildScrollView(
       child: DesktopRise(
         index: 0,
@@ -1489,6 +1815,45 @@ class _DesktopInboundState extends State<DesktopInboundScreen> {
                   DesktopButton(label: '查询', icon: SolarIconsOutline.magnifier, small: true, onPressed: _loadRecords),
                 ],
               ),
+              if (rows.isEmpty)
+                const SizedBox.shrink()
+              else
+                Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: WsTokens.primary.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: wsCell(
+                              '筛选结果 ${rows.length} 笔'
+                              '${rows.length == _records.length ? '' : ' / 共 ${_records.length} 笔'}',
+                              bold: true,
+                            ),
+                          ),
+                          wsCell('应付 ${wsMoney(s.due)}', bold: true, color: WsTokens.primary),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      wsCell('数量合计 ${s.qtyText}', color: WsTokens.mutedLight),
+                      wsCell(
+                        '已付 ${wsMoney(s.paid)} ／ 未付 ${wsMoney(s.unpaid)}'
+                        '${s.pend > 0 ? '（待结算 ${s.pend} 笔）' : ''}',
+                        color: WsTokens.mutedLight,
+                      ),
+                      wsCell(
+                        '货款 ${wsMoney(s.goods)}${extras.isEmpty ? '' : ' · ${extras.join(' · ')}'}',
+                        color: WsTokens.mutedLight,
+                      ),
+                    ],
+                  ),
+                ),
               DesktopStateView(
                 loading: _recLoading,
                 error: _recError,

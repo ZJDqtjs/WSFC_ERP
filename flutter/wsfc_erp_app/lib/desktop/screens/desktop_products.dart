@@ -620,6 +620,124 @@ class _DesktopProductsScreenState extends State<DesktopProductsScreen> {
     });
   }
 
+  /// 复制商品资料到其他分仓（同名复用、不复制库存与出入库历史）
+  Future<void> _copyToWarehouse() async {
+    final List<int> ids = _selected.toList();
+    if (ids.isEmpty) return;
+    List<Map<String, dynamic>> whs = const [];
+    try {
+      final Map<String, dynamic> r = await ApiService.warehouses();
+      whs = [
+        for (final w in ((r['warehouses'] as List?) ?? const []))
+          if (w is Map && w['is_current'] != true) Map<String, dynamic>.from(w),
+      ];
+    } on ApiException catch (e) {
+      if (mounted) wsToast(context, '读取分仓列表失败：${e.message}', error: true);
+      return;
+    }
+    if (whs.isEmpty) {
+      if (mounted) wsToast(context, '没有其他分仓可复制');
+      return;
+    }
+    String target = wsS(whs.first['key']);
+    bool deps = true;
+    bool disable = false;
+    BuildContext? dlg;
+    final bool? go = await desktopDialog<bool>(
+      context,
+      title: '复制商品到其他仓（${ids.length} 个）',
+      width: 620,
+      builder: (c) {
+        dlg = c;
+        return StatefulBuilder(
+          builder: (c2, sd) => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const DesktopNotice(
+                '把选中商品的资料复制到目标仓；目标仓已有同名商品会直接复用，不会覆盖。'
+                '库存数量、均价与出入库历史不复制。',
+                kind: DesktopNoticeKind.info,
+              ),
+              DesktopFormRow(
+                label: '目标分仓',
+                required: true,
+                child: DesktopSelect<String>(
+                  width: 300,
+                  value: target,
+                  options: [
+                    for (final w in whs)
+                      DesktopOption<String>(wsS(w['key']), '${wsS(w['name'])}（${wsS(w['key'])}）'),
+                  ],
+                  onChanged: (v) => sd(() => target = v ?? target),
+                ),
+              ),
+              Row(
+                children: [
+                  Checkbox(
+                    value: deps,
+                    visualDensity: VisualDensity.compact,
+                    onChanged: (_) => sd(() => deps = !deps),
+                  ),
+                  const Expanded(
+                    child: Text('同时复制关联商品（包材 / 人工 / 库存大类）',
+                        style: TextStyle(fontSize: 12.5)),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  Checkbox(
+                    value: disable,
+                    visualDensity: VisualDensity.compact,
+                    onChanged: (_) => sd(() => disable = !disable),
+                  ),
+                  const Expanded(
+                    child: Text('复制后在当前仓停用选中的商品', style: TextStyle(fontSize: 12.5)),
+                  ),
+                ],
+              ),
+              const Padding(
+                padding: EdgeInsets.only(left: 30, top: 2),
+                child: Text(
+                  '不勾选「同时复制关联商品」时，目标仓缺少的关联商品会被丢弃。',
+                  style: TextStyle(fontSize: 11.5, color: WsTokens.mutedLight),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+      submitLabel: '开始复制',
+      onSubmit: () => Navigator.of(dlg ?? context).pop(true),
+    );
+    if (go != true || !mounted) return;
+    try {
+      final Map<String, dynamic> r = await ApiService.copyProductsToWarehouse(
+        targetWh: target,
+        ids: ids,
+        includeDependencies: deps,
+        disableSource: disable,
+      );
+      final List<dynamic> created = (r['created'] as List?) ?? const [];
+      final List<dynamic> mapped = (r['mapped'] as List?) ?? const [];
+      final List<dynamic> disabled = (r['disabled'] as List?) ?? const [];
+      final int mainCreated = created.where((x) => x is Map && x['is_main'] == true).length;
+      final int mainMapped = mapped.where((x) => x is Map && x['is_main'] == true).length;
+      _selected.clear();
+      await _load();
+      if (!mounted) return;
+      wsToast(
+        context,
+        '复制完成：新建 ${created.length} 个（主商品 $mainCreated）、'
+        '复用 ${mapped.length} 个（主商品 $mainMapped）'
+        '${disabled.isNotEmpty ? '，当前仓停用 ${disabled.length} 个' : ''}',
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      wsToast(context, '复制失败：${e.message}', error: true);
+    }
+  }
+
   Future<void> _batchDelete() async {
     final List<int> ids = _selected.toList();
     if (ids.isEmpty) return;
@@ -1163,6 +1281,7 @@ class _DesktopProductsScreenState extends State<DesktopProductsScreen> {
             DesktopButton(label: '批量改分类', small: true, onPressed: _busy ? null : _batchCategory),
             DesktopButton(label: '批量改默认单位', small: true, onPressed: _busy ? null : _batchUnit),
             DesktopButton(label: '批量改售价', small: true, onPressed: _busy ? null : _batchPrice),
+            DesktopButton(label: '复制到其他仓', small: true, onPressed: _busy ? null : _copyToWarehouse),
             DesktopButton(
               label: '批量删除',
               small: true,
@@ -1194,6 +1313,7 @@ class _DesktopProductsScreenState extends State<DesktopProductsScreen> {
     final bool isOrder = _typeOf(p) == 'order';
     final bool isLabor = wsS(p['category']) == '人工';
     final double stockV = _stockSortValue(p, _byId);
+    final String party = wsS(p['warehouse_party']);
 
     return DesktopRow(
       dim: !active,
@@ -1210,7 +1330,15 @@ class _DesktopProductsScreenState extends State<DesktopProductsScreen> {
             shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(3))),
           ),
         ),
-        wsCell(wsS(p['name']), bold: true, tip: wsS(p['name'])),
+        Row(
+          children: [
+            Flexible(child: wsCell(wsS(p['name']), bold: true, tip: wsS(p['name']))),
+            if (party.isNotEmpty) ...[
+              const SizedBox(width: 6),
+              DesktopTag(party, color: WsTokens.amber),
+            ],
+          ],
+        ),
         wsCell(wsS(p['code'], fallback: '—'), tip: wsS(p['code'])),
         wsS(p['category']).isEmpty
             ? wsCell('—')
@@ -1623,6 +1751,7 @@ class _ProductFormState extends State<_ProductForm> {
   final TextEditingController _codeCtl = TextEditingController();
   final TextEditingController _categoryCtl = TextEditingController();
   final TextEditingController _specCtl = TextEditingController();
+  final TextEditingController _partyCtl = TextEditingController();
   final TextEditingController _saleCtl = TextEditingController();
   final TextEditingController _costCtl = TextEditingController();
   final TextEditingController _weightCtl = TextEditingController();
@@ -1662,6 +1791,7 @@ class _ProductFormState extends State<_ProductForm> {
       _category = wsS(p['category']);
       _categoryCtl.text = _category;
       _specCtl.text = wsS(p['spec']);
+      _partyCtl.text = wsS(p['warehouse_party']);
       final String base = wsS(p['base_unit']);
       _baseUnit = base.isEmpty ? '克' : base;
       _defaultUnit = wsS(p['default_unit']);
@@ -1731,6 +1861,7 @@ class _ProductFormState extends State<_ProductForm> {
     _codeCtl.dispose();
     _categoryCtl.dispose();
     _specCtl.dispose();
+    _partyCtl.dispose();
     _saleCtl.dispose();
     _costCtl.dispose();
     _weightCtl.dispose();
@@ -1891,6 +2022,7 @@ class _ProductFormState extends State<_ProductForm> {
       'base_unit': _baseUnit,
       'default_unit': def,
       'spec': _specCtl.text.trim(),
+      'warehouse_party': _partyCtl.text.trim(),
       // 界面上售价/成本按默认单位填，存库要折回基础单位
       'sale_price': _textNum(_saleCtl) / f,
       'unit_cost': unitCostBase,
@@ -2054,6 +2186,15 @@ class _ProductFormState extends State<_ProductForm> {
             width: 360,
             child: DesktopTextField(
                 controller: _specCtl, hintText: '如：每个约150克；或每袋5斤', width: 360),
+          ),
+          DesktopFormRow(
+            label: '仓储方',
+            width: 360,
+            tip: '聚水潭出库单的「仓储方」列：同名商品请建两条并填不同仓储方，导入时按每行仓储方精确匹配；留空 = 不限',
+            child: DesktopTextField(
+                controller: _partyCtl,
+                hintText: '如 云南芳谊昆明（干货）仓；多个用、分隔；留空=不限',
+                width: 360),
           ),
           const SizedBox(height: 6),
           _section('单位与换算'),

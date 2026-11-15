@@ -200,6 +200,119 @@ class _ProductsScreenState extends State<ProductsScreen> with SingleTickerProvid
     }
   }
 
+  /// 复制商品资料到其他分仓：同名复用、不复制库存/均价/出入库历史
+  Future<void> _copyToWarehouse() async {
+    final ids = _selected.toList();
+    if (ids.isEmpty) return;
+    List<Map<String, dynamic>> whs = const [];
+    try {
+      final data = await ApiService.warehouses();
+      whs = [
+        for (final w in ((data['warehouses'] as List?) ?? const []))
+          if (w is Map && w['is_current'] != true) Map<String, dynamic>.from(w),
+      ];
+    } on ApiException catch (e) {
+      _toast('读取分仓列表失败：${e.message}', error: true);
+      return;
+    }
+    if (whs.isEmpty) {
+      _toast('没有其他分仓可复制');
+      return;
+    }
+    String target = _str(whs.first['key']);
+    bool deps = true;
+    bool disable = false;
+    final bool? go = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDlg) => AlertDialog(
+          title: Text('复制 ${ids.length} 个商品到其他仓'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '把商品资料复制到目标仓；目标仓已有同名商品会直接复用，不会覆盖。库存、均价与出入库历史不复制。',
+                  style: TextStyle(fontSize: 12.5, color: Color(0xFF52575E)),
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  value: target,
+                  decoration: const InputDecoration(
+                    labelText: '目标分仓',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  items: [
+                    for (final w in whs)
+                      DropdownMenuItem(
+                        value: _str(w['key']),
+                        child: Text('${_str(w['name'])}（${_str(w['key'])}）',
+                            style: const TextStyle(fontSize: 13)),
+                      ),
+                  ],
+                  onChanged: (v) => setDlg(() => target = v ?? target),
+                ),
+                CheckboxListTile(
+                  value: deps,
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text('同时复制关联商品（包材 / 人工 / 库存大类）',
+                      style: TextStyle(fontSize: 13)),
+                  onChanged: (v) => setDlg(() => deps = v ?? true),
+                ),
+                CheckboxListTile(
+                  value: disable,
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text('复制后在当前仓停用选中的商品',
+                      style: TextStyle(fontSize: 13)),
+                  onChanged: (v) => setDlg(() => disable = v ?? false),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('取消')),
+            FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('开始复制')),
+          ],
+        ),
+      ),
+    );
+    if (go != true || !mounted) return;
+    setState(() => _batchRunning = true);
+    try {
+      final data = await ApiService.copyProductsToWarehouse(
+        targetWh: target,
+        ids: ids,
+        includeDependencies: deps,
+        disableSource: disable,
+      );
+      final created = (data['created'] as List?) ?? const [];
+      final mapped = (data['mapped'] as List?) ?? const [];
+      final disabled = (data['disabled'] as List?) ?? const [];
+      final mainCreated = created.where((x) => x is Map && x['is_main'] == true).length;
+      final mainMapped = mapped.where((x) => x is Map && x['is_main'] == true).length;
+      _exitSelect();
+      await _loadProducts();
+      if (!mounted) return;
+      _toast('复制完成：新建 ${created.length} 个（主商品 $mainCreated）、'
+          '复用 ${mapped.length} 个（主商品 $mainMapped）'
+          '${disabled.isNotEmpty ? '，当前仓停用 ${disabled.length} 个' : ''}');
+    } on ApiException catch (e) {
+      _toast('复制失败：${e.message}', error: true);
+    } finally {
+      if (mounted) setState(() => _batchRunning = false);
+    }
+  }
+
   Future<void> _batchDelete() async {
     final ids = _selected.toList();
     if (ids.isEmpty) return;
@@ -445,6 +558,7 @@ class _ProductsScreenState extends State<ProductsScreen> with SingleTickerProvid
                   Icons.play_circle_outline, () => _batchActive(true), tooltip: '批量启用'),
               pageAction(
                   Icons.pause_circle_outline, () => _batchActive(false), tooltip: '批量停用'),
+              pageAction(Icons.copy_all_outlined, _copyToWarehouse, tooltip: '复制到其他仓'),
               pageAction(Icons.delete_outline, _batchDelete, tooltip: '批量删除'),
               pageAction(Icons.close_rounded, _exitSelect, tooltip: '退出多选'),
             ]
@@ -611,6 +725,9 @@ class _ProductsScreenState extends State<ProductsScreen> with SingleTickerProvid
                         if (packs.isNotEmpty)
                           _tag('打包 ${packs.length} 项', const Color(0xFFFFF7E6),
                               const Color(0xFFD48806)),
+                        if (_str(p['warehouse_party']).isNotEmpty)
+                          _tag('仓储方 ${_str(p['warehouse_party'])}',
+                              const Color(0xFFFFF7E6), const Color(0xFFD48806)),
                       ],
                     ),
                     const SizedBox(height: 8),
@@ -764,6 +881,7 @@ class _ProductFormSheetState extends State<_ProductFormSheet> {
   final _code = TextEditingController();
   final _category = TextEditingController();
   final _spec = TextEditingController();
+  final _party = TextEditingController();
   final _baseUnit = TextEditingController(text: '克');
   final _sale = TextEditingController();
   final _cost = TextEditingController();
@@ -794,6 +912,7 @@ class _ProductFormSheetState extends State<_ProductFormSheet> {
       _code.text = _str(p['code']);
       _category.text = _str(p['category']);
       _spec.text = _str(p['spec']);
+      _party.text = _str(p['warehouse_party']);
       final base = _str(p['base_unit']);
       _baseUnit.text = base.isEmpty ? '克' : base;
       _defaultUnit = _str(p['default_unit']);
@@ -828,7 +947,7 @@ class _ProductFormSheetState extends State<_ProductFormSheet> {
 
   @override
   void dispose() {
-    for (final c in [_name, _code, _category, _spec, _baseUnit, _sale, _cost, _weight, _packFee]) {
+    for (final c in [_name, _code, _category, _spec, _party, _baseUnit, _sale, _cost, _weight, _packFee]) {
       c.dispose();
     }
     for (final r in _convs) {
@@ -1054,6 +1173,16 @@ class _ProductFormSheetState extends State<_ProductFormSheet> {
                           ),
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 10),
+                    TextFormField(
+                      controller: _party,
+                      decoration: const InputDecoration(
+                        labelText: '仓储方',
+                        helperText: '聚水潭出库单的「仓储方」列；同名商品请建两条并填不同仓储方，留空=不限',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
                     ),
                     const SizedBox(height: 10),
                     TextFormField(
@@ -1331,6 +1460,7 @@ class _ProductFormSheetState extends State<_ProductFormSheet> {
       'base_unit': base,
       'default_unit': def,
       'spec': _spec.text.trim(),
+      'warehouse_party': _party.text.trim(),
       'sale_price': _numOr(_sale.text),
       'unit_cost': _numOr(_cost.text),
       'weight_kg': _numOr(_weight.text),
