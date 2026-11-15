@@ -74,6 +74,11 @@ class Product(Base):
     # 配了多套时，出库自动选一套：比较每套方案里库存商品「最近一次采购入库」的日期，谁最新用谁；
     # 都没入过库或日期并列 → 用第一套。为空 = 只有 stock_links 那一套（老数据口径不变）。
     stock_schemes: Mapped[list] = mapped_column(JSON, default=list)
+    # 仓储方（聚水潭出库单的「仓储方」列，如 云南芳谊昆明（干货）仓）：
+    # 出库单没有 SKU 列时，平台商品名是唯一线索；同一个名字可能既是代发（芳谊仓）又在本仓扣库存，
+    # 只能靠这个字段把两条商品记录分开（见 imports._resolve_jst_product）。
+    # 空 = 不限（任何仓储方都能匹配）；多个用 、,; 分隔，命中任一即匹配。
+    warehouse_party: Mapped[str] = mapped_column(String(128), default="")
 
     # 缓存聚合（由库存流水重算）
     stock: Mapped[float] = mapped_column(Float, default=0.0)

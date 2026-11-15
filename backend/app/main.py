@@ -19,7 +19,7 @@ from .database import (
 )
 from .initdb import ensure_schema, init_warehouse
 from .maintenance import on_service_start, record_request, should_record, start_activity_store
-from .routers import adprofit, ai, auth, backup, deductions, express, fresh, imports, inbound, inventory, jst_auto, maintenance, open_api, others, outbound, pack_rules, payables, product_data, products, reconcile, report, uploads, warehouse_in, warehouses
+from .routers import adprofit, ai, auth, backup, brush_out, deductions, express, fresh, imports, inbound, inventory, jst_auto, maintenance, open_api, others, outbound, pack_rules, payables, product_data, products, reconcile, report, uploads, warehouse_in, warehouses
 from .routers.backup import create_backup_file, create_json_backup_file, load_config
 
 # 桌面 Web 前端目录（WSFC_ERP/web/static，前后端分离；SERVE_STATIC=1 时后端顺带托管）
@@ -245,6 +245,7 @@ app.include_router(express.router)
 app.include_router(report.router)
 app.include_router(adprofit.router)      # 广告利润（报表口径 + 挂载服务 CPS/京准通花费）
 app.include_router(imports.router)
+app.include_router(brush_out.router)   # 刷单出库（放单仓刷单；推错仓时先回冲原出库单）
 app.include_router(backup.router)
 app.include_router(ai.router)
 app.include_router(reconcile.router)   # 代发账单核对：上传供应商单据（图片/Excel）与代发成本比对

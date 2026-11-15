@@ -39,7 +39,9 @@ class LoginIn(BaseModel):
 
 def _reject(username: str, ip: str) -> NoReturn:
     """记一次失败并抛出对应错误：到档位返回 429（带等待时长），否则 401。"""
-    wait = guard.record_fail(guard.SCOPE_ERP, username, ip)
+    wait = guard.record_ip_fail(guard.SCOPE_ERP, ip)
+    if username:
+        wait = max(wait, guard.record_fail(guard.SCOPE_ERP, username, ip))
     if wait:
         raise HTTPException(
             429,
@@ -71,8 +73,11 @@ def login(
     username = data.username.strip()
     ip = client_ip(request)
     if not username:
-        raise HTTPException(401, "用户名或私钥不匹配")
+        _reject(username, ip)
 
+    ip_left = guard.ip_locked_left(guard.SCOPE_ERP, ip)
+    if ip_left:
+        raise HTTPException(429, f"该 IP 连续失败次数过多，请 {guard.humanize(ip_left)} 后再试")
     left = guard.locked_left(guard.SCOPE_ERP, username, ip)
     if left:
         raise HTTPException(429, f"账号已锁定，请 {guard.humanize(left)} 后再试")
@@ -90,6 +95,7 @@ def login(
         _reject(username, ip)
 
     guard.reset(guard.SCOPE_ERP, username)
+    guard.reset_ip(guard.SCOPE_ERP, ip)
 
     wh = get_default_key()
     token = make_token(user.id, wh)

@@ -25,6 +25,7 @@ import io
 import json
 import os
 import re
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -35,7 +36,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
-from ..database import get_db_wh, get_sessionmaker, load_warehouses, resolve_key
+from ..database import DATA_DIR, get_db_wh, get_sessionmaker, load_warehouses, resolve_key
 from ..models import Product, User, WarehouseProduct
 from .report import ALL_WH, _heavy_cached, _summary_all, _summary_of
 
@@ -51,6 +52,33 @@ _AD_CACHE: dict[str, tuple[float, object]] = {}
 
 # 各缓存只在读取时判断 TTL、过期项从不删除，长跑下来条目只增不减；写入时顺带清扫并封顶。
 _CACHE_MAX = 200
+
+# 店铺账号 → 分仓 key 的对照表（余额表按仓算「广告充值预付余额」用）。
+# 路径：backend/data/ad_account_wh.json，内容 {"main":"aosidi","b":"wh01",...}；
+# 文件缺失 = 未配置，此时单仓余额表不计算广告预付（避免拿全公司花费去减单仓充值）。
+AD_ACCOUNT_WH_FILE = DATA_DIR / "ad_account_wh.json"
+
+
+def load_account_warehouses() -> dict[str, str]:
+    """读取店铺账号 → 分仓 key 对照表；文件缺失/格式不对时返回空表。
+
+    以 `_` 开头的键是说明性元数据（如 `_associations` 记录某店铺关联了哪几个仓），
+    不参与金额分摊，读取时跳过。
+    """
+    try:
+        data = json.loads(AD_ACCOUNT_WH_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - 未配置属正常情况
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in data.items():
+        key, wh = str(k or "").strip(), str(v or "").strip()
+        if not key or key.startswith("_"):
+            continue
+        if key and wh:
+            out[key] = wh
+    return out
 
 
 def _cache_put(cache: dict, key, value, ttl: float) -> None:
@@ -83,8 +111,61 @@ def _ad_cached(key: str, loader, refresh: bool = False):
     return got
 
 
+# 零花费缓存：jdfenxi 的「花费一览」清单只列有行的缓存，京准通 0 元时写的 noSpend 空表
+# 不会出现在 /api/paycomm/spend/cache 里。ERP 之前因此一直把这类账号当成「缺缓存」反复补抓。
+# 补抓时一旦确认某账号某区间是 0 元，就记到 data/ad_zero_spend.json，后续按「已覆盖、0 元」处理。
+AD_ZERO_SPEND_FILE = DATA_DIR / "ad_zero_spend.json"
+_ZERO_LOCK = threading.Lock()
+
+
+def _load_zero_spans(kind: str) -> list[dict]:
+    try:
+        data = json.loads(AD_ZERO_SPEND_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return []
+    items = data.get(kind) if isinstance(data, dict) else None
+    return items if isinstance(items, list) else []
+
+
+def _save_zero_span(kind: str, account: str, start: str, end: str,
+                    label: str = "", saved_at: str = "") -> None:
+    """记录一个「确认 0 元」的账号区间（幂等）。"""
+    with _ZERO_LOCK:
+        try:
+            data = json.loads(AD_ZERO_SPEND_FILE.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except Exception:  # noqa: BLE001
+            data = {}
+        items = data.get(kind) if isinstance(data.get(kind), list) else []
+        items = [x for x in items if not (
+            str(x.get("account")) == account and x.get("start") == start and x.get("end") == end
+        )]
+        items.append({
+            "mode": kind, "account": account, "accountLabel": label or account,
+            "start": start, "end": end, "rows": 0, "total": 0.0,
+            "savedAt": saved_at or datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "zeroSpend": True,
+        })
+        data[kind] = items
+        tmp = AD_ZERO_SPEND_FILE.with_suffix(".json.tmp")
+        try:
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, AD_ZERO_SPEND_FILE)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _zero_entries(kind: str) -> list[dict]:
+    """把已确认的 0 元区间补成缓存清单条目，让拼区间时把它们当成已覆盖。"""
+    return [dict(x, zeroSpend=True) for x in _load_zero_spans(kind)]
+
+
 def _load_entries(kind: str, refresh: bool = False) -> list[dict]:
-    """花费缓存清单（按账号+区间去重）。kind: cps / spend。"""
+    """花费缓存清单（按账号+区间去重）。kind: cps / spend。
+
+    真实缓存优先；noSpend 空表（0 元）用本地 ad_zero_spend.json 补进来。
+    """
     path = "/api/paycomm/cache" if kind == "cps" else "/api/paycomm/spend/cache"
 
     def _load():
@@ -92,7 +173,17 @@ def _load_entries(kind: str, refresh: bool = False) -> list[dict]:
         entries = data.get("entries") if isinstance(data, dict) else None
         return entries if isinstance(entries, list) else []
 
-    return _ad_cached("entries:" + kind, _load, refresh)
+    entries = _ad_cached("entries:" + kind, _load, refresh)
+    zeros = _zero_entries(kind)
+    if not zeros:
+        return entries
+    # 同一账号+区间已经有真实缓存（非 0 元）时，以真实缓存为准
+    real = {(str(e.get("account") or ""), e.get("start"), e.get("end")) for e in entries}
+    merged = list(entries) + [
+        z for z in zeros
+        if (str(z.get("account") or ""), z.get("start"), z.get("end")) not in real
+    ]
+    return merged
 
 
 def _load_accounts(refresh: bool = False) -> list[dict]:
@@ -103,6 +194,132 @@ def _load_accounts(refresh: bool = False) -> list[dict]:
         return accounts if isinstance(accounts, list) else []
 
     return _ad_cached("accounts", _load, refresh)
+
+
+# ---------------------------------------------------------------- 广告费流水（jdfenxi 财务记录）
+# jdfenxi 的「广告费流水」页直接抓京准通账户中心 → 财务记录，包含每个账号的
+# 当前可用余额、区间充值、区间消费、每日消耗与结余。余额表的「广告充值预付余额」
+# 改为直接读这份数据，不再依赖 ERP 里手工登记的「广告费充值」。
+_CASHFLOW_TTL = 300.0
+_CASHFLOW_CACHE: dict[str, tuple[float, dict]] = {}
+_CASHFLOW_LOCK = threading.Lock()
+
+
+def _cash_date_iso(v) -> str:
+    if hasattr(v, "strftime"):
+        return v.strftime("%Y-%m-%d")
+    s = str(v or "").strip()
+    return s[:10]
+
+
+def _cash_num(v) -> float:
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _parse_cashflow_export(data: bytes) -> dict:
+    """解析 jdfenxi /api/cashflow/export：账号汇总 + 每日流水 + 数据区间。"""
+    from openpyxl import load_workbook
+
+    accounts: dict[str, dict] = {}
+    daily: dict[str, list] = {}
+    range_start = range_end = ""
+    wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    try:
+        for ws in wb.worksheets:
+            title = str(ws.title or "")
+            rows = ws.iter_rows(min_row=1, values_only=True)
+            try:
+                header = [str(c or "").strip() for c in next(rows)]
+            except StopIteration:
+                continue
+            if not header:
+                continue
+            idx = {name: i for i, name in enumerate(header)}
+
+            if "账号汇总" in title or title.startswith("01"):
+                for r in rows:
+                    if not r:
+                        continue
+                    label = str(r[idx.get("账号", 0)] or "").strip()
+                    if not label or label == "合计":
+                        continue
+                    accounts[label] = {
+                        "account_id": str(r[idx.get("账户ID", 1)] or "").strip(),
+                        "balance_current": round(_cash_num(r[idx.get("当前可用余额(¥)", 2)]), 2),
+                        "balance_start": round(_cash_num(r[idx.get("区间期初余额(¥)", 3)]), 2),
+                        "recharge": round(_cash_num(r[idx.get("区间充值(¥)", 4)]), 2),
+                        "spend": round(_cash_num(r[idx.get("区间消费(¥)", 5)]), 2),
+                        "cash": round(_cash_num(r[idx.get("其中现金(¥)", 6)]), 2),
+                        "red": round(_cash_num(r[idx.get("其中红包(¥)", 7)]), 2),
+                        "assign": round(_cash_num(r[idx.get("分配净额(¥)", 8)]), 2),
+                    }
+            elif "每日流水" in title or title.startswith("02"):
+                for r in rows:
+                    if not r:
+                        continue
+                    label = str(r[idx.get("账号", 1)] or "").strip()
+                    d = _cash_date_iso(r[idx.get("日期", 0)])
+                    if not label or not d:
+                        continue
+                    bal = r[idx.get("结算后结余(¥)", 9)]
+                    daily.setdefault(label, []).append({
+                        "date": d,
+                        "recharge": round(_cash_num(r[idx.get("当日充值(¥)", 7)]), 2),
+                        "spend": round(_cash_num(r[idx.get("当日消费合计(¥)", 6)]), 2),
+                        "balance": None if bal is None else round(_cash_num(bal), 2),
+                    })
+            elif "口径" in title or title.startswith("04"):
+                for r in rows:
+                    if not r:
+                        continue
+                    k = str(r[0] or "").strip()
+                    if k == "数据区间":
+                        m = re.search(r"(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})",
+                                      str(r[1] or ""))
+                        if m:
+                            range_start, range_end = m.group(1), m.group(2)
+    finally:
+        wb.close()
+
+    if not range_start:
+        dates = [d["date"] for rows in daily.values() for d in rows if d.get("date")]
+        if dates:
+            range_start, range_end = min(dates), max(dates)
+    for rows in daily.values():
+        rows.sort(key=lambda x: x["date"])
+    return {
+        "ok": True,
+        "range_start": range_start,
+        "range_end": range_end,
+        "accounts": accounts,
+        "daily": daily,
+        "warnings": [],
+    }
+
+
+def ad_cashflow_snapshot(refresh: bool = False) -> dict:
+    """jdfenxi 广告费流水快照（10 分钟内复用；失败降级不拖垮余额表）。"""
+    now = time.time()
+    with _CASHFLOW_LOCK:
+        hit = _CASHFLOW_CACHE.get("snap")
+    if hit and not refresh and now - hit[0] < _CASHFLOW_TTL:
+        return hit[1]
+    try:
+        raw = _ad_get_bytes("/api/cashflow/export")
+        snap = _parse_cashflow_export(raw)
+    except Exception as exc:  # noqa: BLE001
+        snap = {
+            "ok": False,
+            "error": f"读取 jdfenxi 广告费流水失败：{type(exc).__name__}: {exc}",
+            "range_start": "", "range_end": "",
+            "accounts": {}, "daily": {}, "warnings": [],
+        }
+    with _CASHFLOW_LOCK:
+        _CASHFLOW_CACHE["snap"] = (now, snap)
+    return snap
 
 
 def _day(value) -> date | None:
@@ -187,6 +404,244 @@ def _spend_part(kind: str, start: date, end: date, refresh: bool):
         })
     accounts.sort(key=lambda a: -a["total"])
     return {"ok": True, "error": None, "total": round(total, 2), "accounts": accounts}
+
+
+# ---------------------------------------------------------------- 缺失花费自动补抓
+# 「刷新广告缓存」只是让 ERP 重新读一遍挂载服务的缓存清单，**不会**触发抓取。
+# 真正的补抓要调用 jdfenxi 现有的 /api/paycomm/run（CPS）与 /api/paycomm/spend/run（京准通）：
+# 这两个接口发现该账号+区间没有缓存时会启动浏览器抓取并写回缓存；两者共用浏览器登录态，
+# 因此这里用后台线程串行排队，一次只跑一个任务，结束后再刷 ERP 的缓存清单。
+_BF_LOCK = threading.Lock()
+_BF_STATE: dict = {
+    "running": False, "jobId": None, "message": "", "error": None,
+    "startedAt": None, "finishedAt": None, "done": 0, "total": 0,
+    "current": None, "tasks": [], "results": [],
+}
+_BF_STATUS_PATH = {"cps": "/api/paycomm/status", "spend": "/api/paycomm/spend/status"}
+_BF_RUN_PATH = {"cps": "/api/paycomm/run", "spend": "/api/paycomm/spend/run"}
+_BF_LABEL = {"cps": "CPS 花费", "spend": "京准通花费"}
+
+
+def _ad_post(path: str, params: dict):
+    """POST 到挂载服务（启动抓取任务用）；异常由调用方降级处理。"""
+    qs = urllib.parse.urlencode(params)
+    req = urllib.request.Request(
+        AD_SERVICE_URL + path + "?" + qs, method="POST",
+        headers={"Accept": "application/json", "User-Agent": "WSFC-ERP"},
+    )
+    with urllib.request.urlopen(req, timeout=max(AD_TIMEOUT, 15)) as resp:  # noqa: S310
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _ad_busy() -> bool:
+    """jdfenxi 的 CPS/京准通两个抓取器是否已有任务在跑（两者共用浏览器登录态）。"""
+    for kind in ("cps", "spend"):
+        try:
+            s = _ad_get(_BF_STATUS_PATH[kind])
+        except Exception:  # noqa: BLE001
+            continue
+        if s.get("active") or s.get("running"):
+            return True
+    return False
+
+
+def _ad_scrape_busy() -> bool:
+    """定时/夜间抓取是否占着浏览器（jdfenxi 的 scrape.lock）。"""
+    try:
+        st = _ad_get("/api/status")
+    except Exception:  # noqa: BLE001
+        return False
+    sc = st.get("scrape") or {}
+    return bool(sc.get("active") or (sc.get("lock") or {}).get("locked"))
+
+
+def _bf_tasks(start: date, end: date) -> list[dict]:
+    """按账号 + 花费类型算出所选区间缺失的缓存段（交给 jdfenxi 逐个补抓）。"""
+    try:
+        accounts = [str(a.get("key")) for a in _load_accounts(True) if a.get("key")]
+    except Exception:  # noqa: BLE001
+        accounts = []
+    labels: dict[str, str] = {}
+    try:
+        for a in _load_accounts(False):
+            labels[str(a.get("key"))] = str(a.get("label") or a.get("key"))
+    except Exception:  # noqa: BLE001
+        pass
+
+    tasks: list[dict] = []
+    for kind, label in (("cps", "CPS 花费"), ("spend", "京准通花费")):
+        try:
+            entries = _load_entries(kind, True)
+        except Exception:  # noqa: BLE001
+            continue
+        slots_by_acc: dict[str, dict[tuple[date, date], dict]] = {}
+        for e in entries:
+            s, t = _day(e.get("start")), _day(e.get("end"))
+            if not s or not t or s > t:
+                continue
+            acc = str(e.get("account") or "")
+            slot = slots_by_acc.setdefault(acc, {})
+            old = slot.get((s, t))
+            if old is None or str(e.get("savedAt") or "") >= str(old.get("savedAt") or ""):
+                slot[(s, t)] = e
+        accs = accounts or sorted(slots_by_acc)
+        for acc in accs:
+            _chosen, gaps = _tile_spans(sorted(slots_by_acc.get(acc, {})), start, end)
+            for gs, ge in gaps:
+                tasks.append({
+                    "kind": kind,
+                    "label": label,
+                    "account": acc,
+                    "account_label": labels.get(acc) or acc,
+                    "start": gs.isoformat(),
+                    "end": ge.isoformat(),
+                })
+    return tasks
+
+
+def _bf_run_one(task: dict) -> tuple[bool, str]:
+    """跑一个（账号 + 类型 + 区间）任务：等空闲 → 启动 → 轮询到结束。"""
+    kind = task["kind"]
+
+    def _record_zero() -> None:
+        # 0 元缓存不会出现在 jdfenxi 的缓存清单里，记进本地零花费清单，避免下次又判定为缺口
+        _save_zero_span(kind, task["account"], task["start"], task["end"],
+                        label=task.get("account_label") or "")
+
+    # 等两个花费任务和定时抓取都空闲（夜间 catchup 会占浏览器登录态，可能十几分钟）
+    deadline = time.time() + 1200
+    while time.time() < deadline:
+        if not _ad_busy() and not _ad_scrape_busy():
+            break
+        time.sleep(30)
+    else:
+        return False, "jdfenxi 有其它抓取任务/定时任务在跑，等待空闲超时"
+
+    last_err = ""
+    started = False
+    for _ in range(8):
+        try:
+            r = _ad_post(_BF_RUN_PATH[kind], {
+                "account": task["account"], "start": task["start"],
+                "end": task["end"], "force": 0,
+            })
+        except Exception as exc:  # noqa: BLE001
+            r = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        if r.get("ok") and r.get("jobId"):
+            started = True
+            break
+        # 已经命中缓存 / 无需再抓：直接算完成
+        if r.get("cached") or (r.get("jobId") and not r.get("error") and r.get("rows") is not None):
+            if int(r.get("rows") or 0) == 0:
+                _record_zero()   # exact 0 元缓存（CPS 与京准通都可能有）
+            return True, "命中本地缓存，无需补抓"
+        last_err = str(r.get("error") or "启动抓取失败")
+        time.sleep(30)
+    if not started:
+        return False, last_err or "启动抓取失败"
+
+    deadline = time.time() + 1800  # 单个任务最多 30 分钟
+    while time.time() < deadline:
+        time.sleep(5)
+        try:
+            s = _ad_get(_BF_STATUS_PATH[kind])
+        except Exception:  # noqa: BLE001
+            continue
+        if not (s.get("active") or s.get("running")):
+            if s.get("error"):
+                return False, str(s.get("error"))
+            msg = str(s.get("message") or "完成")
+            # CPS 抓不到行时不会落盘，只有京准通会写 noSpend 空表，所以这里只给 spend 记零
+            if kind == "spend" and ("没有任何花费数据" in msg
+                                   or (int(s.get("done") or 0) == 0 and int(s.get("total") or 0) == 0)):
+                _record_zero()
+            return True, msg
+    return False, "补抓超时（30 分钟）"
+
+
+def _bf_worker(tasks: list[dict]) -> None:
+    results: list[dict] = []
+    try:
+        for i, task in enumerate(tasks, 1):
+            with _BF_LOCK:
+                _BF_STATE.update({
+                    "done": i - 1,
+                    "current": task,
+                    "message": (f"正在补抓 {i}/{len(tasks)}：{task['label']} · "
+                                f"{task['account_label']} {task['start']} ~ {task['end']}"),
+                })
+            ok, msg = _bf_run_one(task)
+            results.append({**task, "ok": ok, "message": msg})
+            # 每完成一个就把该类型的缓存清单重新读一遍，后续任务能看到最新覆盖
+            try:
+                _load_entries(task["kind"], True)
+            except Exception:  # noqa: BLE001
+                pass
+            with _BF_LOCK:
+                _BF_STATE["results"] = list(results)
+    except Exception as exc:  # noqa: BLE001
+        with _BF_LOCK:
+            _BF_STATE["error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        ok_n = sum(1 for r in results if r.get("ok"))
+        try:
+            _load_entries("cps", True)
+            _load_entries("spend", True)
+        except Exception:  # noqa: BLE001
+            pass
+        _SKU_ROWS_CACHE.clear()
+        with _BF_LOCK:
+            _BF_STATE.update({
+                "running": False,
+                "done": len(tasks),
+                "total": len(tasks),
+                "finishedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "current": None,
+                "results": list(results),
+                "message": (f"补抓完成：成功 {ok_n}/{len(tasks)}；"
+                            + ("失败项见下方明细" if ok_n < len(tasks) else "缓存已更新")),
+            })
+
+
+@router.post("/adprofit/backfill")
+def ad_profit_backfill(
+    date_from: str = "",
+    date_to: str = "",
+    db: Session = Depends(get_db_wh),
+    user: User = Depends(get_current_user),
+):
+    """补齐所选区间缺失的 CPS / 京准通花费缓存（调用 jdfenxi 已有的抓取接口）。"""
+    start, end = _parse_range(date_from, date_to)
+    with _BF_LOCK:
+        if _BF_STATE["running"]:
+            return {"ok": False, "error": "已有补抓任务在运行，请等它结束"}
+    tasks = _bf_tasks(start, end)
+    if not tasks:
+        return {"ok": True, "count": 0, "tasks": [], "message": "所选区间没有缺失的花费缓存"}
+    if len(tasks) > 50:
+        return {"ok": False,
+                "error": f"缺失区间太多（{len(tasks)} 个），请把日期范围缩小后再补抓"}
+    with _BF_LOCK:
+        if _BF_STATE["running"]:
+            return {"ok": False, "error": "已有补抓任务在运行，请等它结束"}
+        job_id = datetime.now().strftime("%Y%m%d%H%M%S") + "-adbackfill"
+        _BF_STATE.update({
+            "running": True, "jobId": job_id, "message": "准备补抓…", "error": None,
+            "startedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "finishedAt": None, "done": 0, "total": len(tasks),
+            "current": None, "tasks": tasks, "results": [],
+        })
+    threading.Thread(target=_bf_worker, args=(tasks,), name="adprofit-backfill", daemon=True).start()
+    return {"ok": True, "count": len(tasks), "jobId": job_id, "tasks": tasks}
+
+
+@router.get("/adprofit/backfill/status")
+def ad_profit_backfill_status(user: User = Depends(get_current_user)):
+    with _BF_LOCK:
+        state = dict(_BF_STATE)
+        state["tasks"] = list(_BF_STATE.get("tasks") or [])
+        state["results"] = list(_BF_STATE.get("results") or [])
+    return {"ok": True, **state}
 
 
 # SKU 明细要用挂载服务「花费一览」的导出接口（现成的按 SKU 报表），
@@ -592,6 +1047,27 @@ def ad_profit_summary(
     net = round(float(base.get("net_profit") or 0), 2)
     days = (end - start).days + 1
 
+    # ---- 入仓台账（备货结算）单独成表 ----
+    # 它已包含在财务口径的收入/毛利里，但不是京东实际成交；SKU 明细按成交口径不会重复计入，
+    # 所以必须单独列出来，避免用户拿「财务口径毛利」和「SKU 成交毛利」直接对比。
+    wi_rows: list[dict] = []
+    for p in base.get("by_product") or []:
+        if not p.get("is_warehouse_in"):
+            continue
+        wi_rev = round(float(p.get("amount") or 0) + float(p.get("settle_income") or 0), 2)
+        wi_cost = round(float(p.get("total_cogs") or 0), 2)
+        wi_rows.append({
+            "name": str(p.get("name") or ""),
+            "qty": round(float(p.get("qty") or 0), 4),
+            "unit": str(p.get("unit") or ""),
+            "revenue": wi_rev,
+            "cogs": wi_cost,
+            "gross": round(float(p.get("gross_profit") or 0), 2),
+        })
+    wi_rows.sort(key=lambda r: -r["gross"])
+    wi_revenue = round(float(base.get("warehouse_in_revenue") or 0), 2)
+    wi_cogs = round(float(base.get("warehouse_in_cogs") or 0), 2)
+
     # ---- 覆盖提示：拼不满的日期必须在页面上说清楚，否则广告费会被低估 ----
     warnings: list[str] = []
     covered_accounts: dict[str, set[str]] = {}
@@ -666,6 +1142,14 @@ def ad_profit_summary(
             "warehouse_in_revenue": round(float(base.get("warehouse_in_revenue") or 0), 2),
             "warehouse_in_cogs": round(float(base.get("warehouse_in_cogs") or 0), 2),
             "warehouse_in_count": int(base.get("warehouse_in_count") or 0),
+        },
+        "warehouse_in": {
+            "revenue": wi_revenue,
+            "cogs": wi_cogs,
+            "gross": round(wi_revenue - wi_cogs, 2),
+            "qty": round(float(base.get("warehouse_in_qty") or 0), 4),
+            "count": int(base.get("warehouse_in_count") or 0),
+            "rows": wi_rows,
         },
         "ads": {
             "service_ok": service_ok,

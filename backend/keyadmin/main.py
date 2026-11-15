@@ -9,10 +9,12 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import sqlite3
 import time
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -45,6 +47,34 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 COOKIE = "keyadmin_token"
 SESSION_MAX_AGE = 60 * 60 * 12  # 12 小时
 SECRET_FILE = DATA_DIR / ".keyadmin_secret"
+AUDIT_LOG = DATA_DIR / "logs" / "keyadmin_audit.log"
+
+
+def _audit(action: str, request: Request | None = None, **detail) -> None:
+    """管理后台操作审计：谁、从哪个 IP、做了什么（JSON 一行，追加写）。
+
+    keyadmin 自身的请求不进 ERP 的 data/activity.db（那套中间件只挂在主服务上），
+    而清库 / 恢复备份 / 重置管理员私钥这类破坏性操作必须留痕，因此单独记到
+    data/logs/keyadmin_audit.log。写日志失败绝不影响业务。
+    """
+    try:
+        logger = logging.getLogger("keyadmin.audit")
+        if not logger.handlers:
+            AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+            handler = RotatingFileHandler(
+                AUDIT_LOG, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8"
+            )
+            handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+            logger.addHandler(handler)
+            logger.setLevel(logging.INFO)
+            logger.propagate = False
+        rec = {"action": action, **detail}
+        if request is not None:
+            rec["ip"] = mt.client_ip(request)
+            rec["ua"] = request.headers.get("user-agent", "")
+        logger.info(json.dumps(rec, ensure_ascii=False))
+    except Exception:
+        pass
 
 
 def _secret() -> bytes:
@@ -193,16 +223,31 @@ def login(
     response: Response,
     db: Session = Depends(get_db),
 ):
-    """门禁登录；连续失败按 app/login_guard.py 的分级规则锁定「账号 + 客户端 IP」。"""
+    """门禁登录；连续失败按 app/login_guard.py 的分级规则锁定「账号 + 客户端 IP」。
+
+    另按客户端 IP 做跨账号累计（record_ip_fail）：攻击者每请求换一个用户名时
+    「账号 + IP」永远到不了档位，只有 IP 维度才能拦住用户名喷洒。
+    """
     username = (data.username or "").strip()
     ip = mt.client_ip(request)
+    ip_left = guard.ip_locked_left(guard.SCOPE_KEYADMIN, ip)
+    if ip_left:
+        _audit("login_blocked_ip", request, username=username, left=ip_left)
+        raise HTTPException(429, f"该 IP 连续失败次数过多，请 {guard.humanize(ip_left)} 后再试")
     if username:
         left = guard.locked_left(guard.SCOPE_KEYADMIN, username, ip)
         if left:
+            _audit("login_blocked_account", request, username=username, left=left)
             raise HTTPException(429, f"账号已锁定，请 {guard.humanize(left)} 后再试")
 
     if not _admin_password_ok(db, username, data.password):
+        ip_wait = guard.record_ip_fail(guard.SCOPE_KEYADMIN, ip)
         wait = guard.record_fail(guard.SCOPE_KEYADMIN, username, ip) if username else 0
+        wait = max(wait, ip_wait)
+        _audit(
+            "login_fail", request, username=username,
+            ip_lock_seconds=ip_wait, account_lock_seconds=wait,
+        )
         if wait:
             raise HTTPException(
                 429,
@@ -211,6 +256,8 @@ def login(
         raise HTTPException(401, "账号或密码错误")
 
     guard.reset(guard.SCOPE_KEYADMIN, username)
+    guard.reset_ip(guard.SCOPE_KEYADMIN, ip)
+    _audit("login_ok", request, username=username)
     response.set_cookie(
         COOKIE, _make_token(), max_age=SESSION_MAX_AGE, httponly=True, path="/", samesite="lax"
     )
@@ -238,10 +285,11 @@ def locks(_: bool = Depends(_require)):
 
 
 @app.post("/api/unlock")
-def unlock(data: UnlockIn, _: bool = Depends(_require)):
+def unlock(data: UnlockIn, request: Request, _: bool = Depends(_require)):
     """手动解除登录锁定：用户名留空 = 清空该系统全部锁定。"""
     scope = guard.SCOPE_ERP if data.scope == guard.SCOPE_ERP else guard.SCOPE_KEYADMIN
     cleared = guard.clear(scope, data.username.strip())
+    _audit("unlock", request, scope=scope, username=data.username.strip(), cleared=cleared)
     return {"ok": True, "scope": scope, "cleared": cleared}
 
 
@@ -258,7 +306,7 @@ def list_users(db: Session = Depends(get_db), _: bool = Depends(_require)):
 
 @app.post("/api/keys")
 def create_user_with_key(
-    data: UserCreate, db: Session = Depends(get_db), _: bool = Depends(_require)
+    data: UserCreate, request: Request, db: Session = Depends(get_db), _: bool = Depends(_require)
 ):
     """输入用户名生成 Ed25519 私钥：创建用户并保存公钥指纹，私钥仅此一次返回。"""
     username = data.username.strip()
@@ -296,6 +344,7 @@ def create_user_with_key(
             s.commit()
         finally:
             s.close()
+    _audit("user_create", request, username=username, role=user.role)
     return {
         "user": _serialize(user),
         "private_key": private_pem,
@@ -308,6 +357,7 @@ def create_user_with_key(
 def update_user(
     user_id: int,
     data: UserUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     _: bool = Depends(_require),
 ):
@@ -332,12 +382,14 @@ def update_user(
                 s.commit()
         finally:
             s.close()
+    _audit("user_update", request, username=user.username, name=data.name, role=data.role)
     return {"user": _serialize(user)}
 
 
 @app.post("/api/users/{user_id}/regenerate")
 def regenerate_key(
     user_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     _: bool = Depends(_require),
 ):
@@ -363,6 +415,7 @@ def regenerate_key(
                 s.commit()
         finally:
             s.close()
+    _audit("key_regenerate", request, username=user.username, fingerprint=fp)
     return {
         "user": _serialize(user),
         "private_key": private_pem,
@@ -372,33 +425,37 @@ def regenerate_key(
 
 
 @app.post("/api/users/sync")
-def sync_users(_: bool = Depends(_require)):
+def sync_users(request: Request, _: bool = Depends(_require)):
     """把默认仓（奥斯迪）的全部账号/私钥同步到其他分仓。"""
     n = sync_users_to_all()
+    _audit("users_sync", request, warehouses=n)
     return {"ok": True, "synced": n, "note": f"已将默认仓账号同步到 {n} 个分仓"}
 
 
 @app.delete("/api/users/{user_id}")
 def delete_user(
     user_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     _: bool = Depends(_require),
 ):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(404, "用户不存在")
+    username = user.username
     db.delete(user)
     db.commit()
     # 同步删除其他分仓的同名账号
     for key in _other_keys():
         s = get_sessionmaker(key)()
         try:
-            u = s.scalar(select(User).where(User.username == user.username))
+            u = s.scalar(select(User).where(User.username == username))
             if u:
                 s.delete(u)
                 s.commit()
         finally:
             s.close()
+    _audit("user_delete", request, username=username)
     return {"ok": True}
 
 
@@ -447,15 +504,18 @@ def rescue_list_backups(key: str | None = None, _: bool = Depends(_require)):
 
 
 @app.post("/api/backup")
-def rescue_create_backup(data: BackupIn | None = None, _: bool = Depends(_require)):
+def rescue_create_backup(
+    request: Request, data: BackupIn | None = None, _: bool = Depends(_require)
+):
     """为指定分仓（缺省默认仓）创建备份文件。"""
     k = _rescue_key(data.key if data else None)
     name = create_backup_file(k)
+    _audit("backup_create", request, key=k, name=name)
     return {"ok": True, "name": name, **_rescue_payload(k)}
 
 
 @app.post("/api/backup/restore")
-def rescue_restore_backup(data: RestoreBackupIn, _: bool = Depends(_require)):
+def rescue_restore_backup(data: RestoreBackupIn, request: Request, _: bool = Depends(_require)):
     """用备份文件覆盖**指定分仓**的数据库（含 WAL 一致性），其他分仓不受影响。
 
     备份文件名必须属于该分仓，否则拒绝，避免跨仓灌数据。恢复后该仓需重新登录。
@@ -475,11 +535,14 @@ def rescue_restore_backup(data: RestoreBackupIn, _: bool = Depends(_require)):
     finally:
         dst.close()
         src.close()
+    _audit("backup_restore", request, key=k, name=data.name)
     return {"ok": True, "restored": data.name, **_rescue_payload(k)}
 
 
 @app.delete("/api/backup/{name}")
-def rescue_delete_backup(name: str, key: str | None = None, _: bool = Depends(_require)):
+def rescue_delete_backup(
+    name: str, request: Request, key: str | None = None, _: bool = Depends(_require)
+):
     """删除**指定分仓**的备份文件。"""
     k = _rescue_key(key)
     if not _belongs(name, k):
@@ -488,11 +551,14 @@ def rescue_delete_backup(name: str, key: str | None = None, _: bool = Depends(_r
     if not src_path.exists():
         raise HTTPException(404, "备份文件不存在")
     src_path.unlink()
+    _audit("backup_delete", request, key=k, name=name)
     return {"ok": True, **_rescue_payload(k)}
 
 
 @app.post("/api/rescue/reset-admin")
-def rescue_reset_admin(db: Session = Depends(get_db), _: bool = Depends(_require)):
+def rescue_reset_admin(
+    request: Request, db: Session = Depends(get_db), _: bool = Depends(_require)
+):
     """应急重置：确保初始管理员（product_rules.json accounts）恢复默认密码，并为其重新生成 ERP 登录私钥。
 
     同一把私钥写入所有分仓，保证初始管理员可登录任意分仓。
@@ -528,6 +594,11 @@ def rescue_reset_admin(db: Session = Depends(get_db), _: bool = Depends(_require
         items.append(
             {"username": seed["username"], "name": seed["name"], "private_key": private_pem, "fingerprint": fp}
         )
+    _audit(
+        "reset_admin", request,
+        usernames=[it["username"] for it in items],
+        warehouses=len(all_keys),
+    )
     return {
         "ok": True,
         "note": "已重置初始管理员密码并重新生成 ERP 登录私钥（旧私钥已失效，同一私钥可用于所有分仓），请立即下载保存",
@@ -572,14 +643,17 @@ def clear_categories(_: bool = Depends(_require)):
 
 
 @app.post("/api/clear")
-def clear_execute_endpoint(data: ClearIn, _: bool = Depends(_require)):
+def clear_execute_endpoint(data: ClearIn, request: Request, _: bool = Depends(_require)):
     """执行细化清除：指定分仓 + 指定类别。清除前自动备份（可关）。"""
+    _audit("clear_start", request, key=data.key, items=list(data.items), backup=bool(data.backup))
     try:
-        return clear_execute(data.key, data.items, backup=bool(data.backup))
+        result = clear_execute(data.key, data.items, backup=bool(data.backup))
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, f"清除失败：{e}")
+    _audit("clear_done", request, key=data.key, items=list(data.items))
+    return result
 
 
 # ============================================================
@@ -602,22 +676,25 @@ def maintenance_state(_: bool = Depends(_require)):
 
 
 @app.post("/api/maintenance/announce")
-def maintenance_announce(data: MaintenanceIn, _: bool = Depends(_require)):
+def maintenance_announce(data: MaintenanceIn, request: Request, _: bool = Depends(_require)):
     """发布停服公告并开始倒计时（提前 lead_minutes 分钟通知用户）。"""
+    _audit("maintenance_announce", request, lead_minutes=data.lead_minutes, eta_minutes=data.eta_minutes)
     return mt.start_announce(
         data.lead_minutes, data.eta_minutes, data.message, data.auto_resume_on_start
     )
 
 
 @app.post("/api/maintenance/start")
-def maintenance_start(data: MaintenanceIn, _: bool = Depends(_require)):
+def maintenance_start(data: MaintenanceIn, request: Request, _: bool = Depends(_require)):
     """立即进入维护模式（不给倒计时，前端马上显示维护页）。"""
+    _audit("maintenance_start", request, eta_minutes=data.eta_minutes)
     return mt.start_maintenance(data.eta_minutes, data.message, data.auto_resume_on_start)
 
 
 @app.post("/api/maintenance/cancel")
-def maintenance_cancel(_: bool = Depends(_require)):
+def maintenance_cancel(request: Request, _: bool = Depends(_require)):
     """结束维护 / 取消公告，恢复正常访问。"""
+    _audit("maintenance_cancel", request)
     return mt.cancel_maintenance()
 
 

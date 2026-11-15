@@ -10,7 +10,9 @@ from ..database import get_db
 from ..models import FinanceRecord, Inbound, OtherExpense, Product, StockMovement, User
 from ..services import (
     create_inbound,
+    inbound_edit_impact,
     inbound_pay_fields,
+    inbound_unit_factor,
     pay_due,
     purge_inbounds,
     recompute_product,
@@ -52,7 +54,10 @@ class InboundIn(BaseModel):
 
 
 class InboundUpdate(BaseModel):
-    """手动修改入库单：可改 供应商 / 日期 / 付款状态 / 运费 / 装卸费 / 供应商补偿（数量、单价须删除重建）。"""
+    """手动修改入库单：可改 供应商 / 日期 / 付款状态 / 运费 / 装卸费 / 供应商补偿 / 数量 / 单价。
+
+    数量、单价改动会先核算影响范围（见 /impact），保存后按 FIFO 重算库存与受影响的出库成本。
+    """
 
     supplier: str = ""
     date: str
@@ -66,6 +71,9 @@ class InboundUpdate(BaseModel):
     fee: float | None = None
     # 供应商补偿（选填，≥0）：None = 不修改；填了/清零会同步「其他收支 → 供应商补偿」镜像行
     compensation: float | None = None
+    # 数量（按单据单位）/ 单价（元/单位）：None = 不修改；填了会改库存流水与采购支出，并按 FIFO 重算
+    quantity: float | None = None
+    unit_price: float | None = None
 
 
 class InboundBatchIn(BaseModel):
@@ -175,10 +183,27 @@ def create_inbound_api(data: InboundIn, db: Session = Depends(get_db), user: Use
     return _to_dict(rec)
 
 
+@router.get("/{rid}/impact")
+def inbound_edit_impact_api(rid: int, quantity: float | None = None, unit_price: float | None = None,
+                            date: str = "", db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """修改前核算影响范围：这批货有没有被出库用掉、会连带重算哪些出库单（不落库）。"""
+    rec = db.get(Inbound, rid)
+    if not rec:
+        raise HTTPException(404, "入库单不存在")
+    if date and not DATE_RE.match(date):
+        raise HTTPException(400, "日期格式应为 YYYY-MM-DD")
+    try:
+        return inbound_edit_impact(db, rec, quantity, unit_price, date or None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.put("/{rid}")
 def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """手动修改入库单：可改 供应商 / 日期 / 付款状态 / 运费 / 装卸费；操作员记为本次修改人。
+    """手动修改入库单：可改 供应商 / 日期 / 付款状态 / 运费 / 装卸费 / 数量 / 单价；操作员记为本次修改人。
 
+    数量/单价改动：先按 FIFO 模拟核算影响范围（随响应返回 impact 供前端提示），
+    保存时同步库存流水（数量与到岸金额）、采购支出金额，并重算该品库存/均价与受影响的出库成本。
     运费/装卸费改动要连带三件事（口径见 services.create_inbound）：
     ① 批次到岸成本 = 货款 + 运费 + 装卸 → 同步库存流水金额，并重算该品均价/库存货值/毛利；
     ② 「其他收支」镜像行金额跟着改（日期、付款状态随入库单）；
@@ -190,9 +215,35 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
     date = (data.date or "").strip()
     if not DATE_RE.match(date):
         raise HTTPException(400, "日期格式应为 YYYY-MM-DD")
+    qty_changed = data.quantity is not None or data.unit_price is not None
+    impact = None
+    if qty_changed:
+        try:
+            impact = inbound_edit_impact(db, rec, data.quantity, data.unit_price, date)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
     rec.supplier = (data.supplier or "").strip()
     rec.date = date
     rec.operator = user.name   # 记录为后来的修改人（忽略前端传值）
+
+    # 数量 / 单价（可选）：都按单据单位；数量 ≤ 0、单价 < 0 直接拒绝
+    if qty_changed:
+        qty = round(float(rec.quantity if data.quantity is None else data.quantity), 6)
+        price = round(float(rec.unit_price if data.unit_price is None else data.unit_price), 6)
+        if qty <= 0:
+            raise HTTPException(400, "数量必须大于 0")
+        if price < 0:
+            raise HTTPException(400, "单价不能为负数")
+        factor = inbound_unit_factor(rec.product, rec)   # 必须在改 quantity 之前取（老单据靠原值折算）
+        rec.quantity = qty
+        rec.quantity_base = qty * factor
+        rec.unit_price = price
+        rec.total_amount = round(qty * price, 2)
+        # 采购支出流水按新的货款金额（金额调整、运费等镜像行各自独立，不在这里动）
+        for f in db.execute(
+            select(FinanceRecord).where(FinanceRecord.ref_type == "inbound", FinanceRecord.ref_id == rid)
+        ).scalars():
+            f.amount = rec.total_amount
 
     # 运费/装卸费/手续费：不传 = 保持原值；传了就按新值算（选填，≥0）
     old_fee = round(float(rec.freight or 0.0) + float(rec.handling or 0.0) + float(getattr(rec, "fee", 0.0) or 0.0), 2)
@@ -230,21 +281,26 @@ def update_inbound(rid: int, data: InboundUpdate, db: Session = Depends(get_db),
     pay_link = {k: pay[k] for k in ("pay_status", "paid_at")}
 
     sync_doc_edit(db, "inbound", rid, date, user.name, pay_link)   # 日期/操作员/收付款状态（含运费镜像行）
-    if new_fee != old_fee:
+    if new_fee != old_fee or qty_changed:
         landed = round((rec.total_amount or 0.0) + new_fee, 2)
         for m in db.execute(
             select(StockMovement).where(StockMovement.ref_type == "inbound", StockMovement.ref_id == rid)
         ).scalars():
             m.amount = landed
+            if qty_changed:
+                m.quantity_base = rec.quantity_base
             m.remark = f"入库 {rec.code}" + (f"（含运费/装卸/手续费 ¥{new_fee}）" if new_fee else "")
-        # 金额变了 → 重算该品 FIFO 批次/均价（后续出库的结转成本按新成本重放）
+        # 金额/数量变了 → 重算该品 FIFO 批次/均价（后续出库的结转成本按新成本重放）
         recompute_product(db, rec.product_id)
     # 每项 >0 生成一行镜像、清零则删除（日期=入库单日期），幂等
     sync_inbound_fee_expenses(db, rec, rec.product.name if rec.product else "", pay_link)
     sync_compensation_expense(db, rec)   # 供应商补偿：负数其他收支（冲减期间费用），清零则删
     db.commit()
     db.refresh(rec)
-    return _to_dict(rec)
+    result = _to_dict(rec)
+    if impact is not None:
+        result["impact"] = impact   # 保存前的影响评估结果，前端用来提示「重算了哪些单」
+    return result
 
 
 @router.delete("/{rid}")

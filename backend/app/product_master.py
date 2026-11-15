@@ -18,7 +18,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 
 from .models import CodeMapping, PackRule, Product, Unit
-from .services import default_conversions
+from .services import default_conversions, warehouse_party_key
 
 ROOT = Path(__file__).resolve().parent.parent
 JSON_DIR = ROOT / "json"
@@ -84,6 +84,8 @@ def _product_dict(p: Product, db) -> dict:
         # 多端商品：同一规格在多个店铺各有一个编码（如京东多店铺 skuId）
         "multi_code": bool(getattr(p, "multi_code", False)),
         "codes": [dict(it) for it in (getattr(p, "codes", None) or []) if isinstance(it, dict)],
+        # 仓储方：同名商品按它区分渠道（空 = 不限），备份/恢复必须带上，否则同名商品会互相覆盖
+        "warehouse_party": getattr(p, "warehouse_party", "") or "",
         "name": p.name,
         "category": p.category,
         "product_type": p.product_type,
@@ -181,11 +183,21 @@ def export_all(db) -> dict:
     return {"ok": True, "exported_at": _now(), "files": [_write_file(db, k) for k in IMPORT_ORDER]}
 
 
-def _get_product_by_name(db, name: str) -> Product | None:
+def _get_product_by_name(db, name: str, warehouse_party: str | None = None) -> Product | None:
+    """按名称取商品；订单商品允许同名，此时用仓储方区分（None = 不校验，兼容引用类查找）。"""
     name = (name or "").strip()
     if not name:
         return None
-    return db.scalar(select(Product).where(Product.name == name))
+    rows = db.execute(select(Product).where(Product.name == name).order_by(Product.id)).scalars().all()
+    if not rows:
+        return None
+    if warehouse_party is None:
+        return rows[0]   # 引用类查找（库存大类/包材等）：按名称取第一条即可
+    want = warehouse_party_key(warehouse_party)
+    for p in rows:
+        if warehouse_party_key(getattr(p, "warehouse_party", "")) == want:
+            return p
+    return None   # 同名但仓储方都对不上 = 另一条商品，让调用方新建
 
 
 def _import_units(db, items) -> dict:
@@ -219,7 +231,9 @@ def _import_products(db, items, default_type: str) -> dict:
         name = str(it.get("name", "")).strip()
         if not name:
             continue
-        p = _get_product_by_name(db, name)
+        # 订单商品允许同名（靠仓储方区分），恢复时按 (名称 + 仓储方) 找，避免两条互相覆盖
+        wp = str(it.get("warehouse_party", "") or "").strip()
+        p = _get_product_by_name(db, name, wp if "warehouse_party" in it else None)
         is_new = p is None
         if is_new:
             p = Product(name=name, product_type=default_type)
@@ -227,6 +241,8 @@ def _import_products(db, items, default_type: str) -> dict:
             created += 1
         else:
             updated += 1
+        if "warehouse_party" in it:
+            p.warehouse_party = wp
         p.code = str(it.get("code", "")).strip()
         # 多端商品多编码：JSON 里没这两项（老备份文件）时保留原值，不把开关/编码冲掉
         if "multi_code" in it:
