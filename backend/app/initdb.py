@@ -48,7 +48,10 @@ def migrate(engine: Engine, maker: sessionmaker, key: str = "") -> None:
         smcols = [r[1] for r in conn.execute(text("PRAGMA table_info(stock_movements)")).fetchall()]
         if smcols and "line_id" not in smcols:
             conn.execute(text("ALTER TABLE stock_movements ADD COLUMN line_id INTEGER"))
-            conn.commit()
+        # 货款回收：出库按「本次入库批次」结转（指定批次），FIFO 重放时优先消耗最新批次
+        if smcols and "cost_locked" not in smcols:
+            conn.execute(text("ALTER TABLE stock_movements ADD COLUMN cost_locked BOOLEAN DEFAULT 0"))
+        conn.commit()
 
     # 用户表：SSH 指纹认证所需字段
     with engine.connect() as conn:
@@ -535,8 +538,9 @@ _EXTRA_COLUMNS = {
                  ("multi_code", "BOOLEAN DEFAULT 0"), ("codes", "JSON"),
                  # 仓储方：聚水潭出库单的「仓储方」列，用于区分同名但不同渠道的商品（空=不限）
                  ("warehouse_party", "VARCHAR(128) DEFAULT ''")),
-    # 库存流水：出库行 id（一单多货时一行出库明细对应多条流水）
-    "stock_movements": (("line_id", "INTEGER"),),
+    # 库存流水：出库行 id（一单多货时一行出库明细对应多条流水）；
+    # cost_locked：指定批次成本（货款回收按本次入库批次结转，FIFO 重放时优先消耗最新批次）
+    "stock_movements": (("line_id", "INTEGER"), ("cost_locked", "BOOLEAN DEFAULT 0")),
 }
 
 

@@ -394,19 +394,24 @@ def _fifo_replay(moves, fallback: float = 0.0) -> tuple[float, float, list, floa
                     layers_value += rest * unit
             stock += qty
             continue
-        # 出库 / 包装消耗 / 盘点减少：先进先出扣减
+        # 出库 / 包装消耗 / 盘点减少：默认先进先出扣减；
+        # cost_locked=True（货款回收）时改为优先扣「最新入库批次」，保证这一单用本次入库的成本。
         out = -qty
+        latest = bool(getattr(m, "cost_locked", False))
         cost = 0.0
         remain = out
         while remain > 1e-9 and layers:
-            l = layers[0]
+            l = layers[-1] if latest else layers[0]
             take = l[0] if l[0] < remain else remain
             cost += take * l[1]
             layers_value -= take * l[1]
             l[0] -= take
             remain -= take
             if l[0] <= 1e-9:
-                layers.popleft()
+                if latest:
+                    layers.pop()
+                else:
+                    layers.popleft()
         if remain > 1e-9:  # 超卖：先按兜底成本暂估，登记待后续入库回补
             assumed = base if base > 0 else fallback
             if base <= 0:
@@ -779,6 +784,26 @@ def fifo_take(layers: deque, base: float, qty: float, fallback: float) -> float:
             layers.popleft()
     if remain > 1e-9:
         cost += remain * (base if base > 0 else fallback)
+    return cost
+
+
+def fifo_take_latest(layers: deque, base: float, qty: float, fallback: float) -> float:
+    """从最新批次（队列尾部）倒着消耗 qty，返回成本（货款回收的「买这批卖这批」用）。
+
+    最新批次不够时，剩余缺口仍按先进先出兜底（正常不会发生：出库数量不超过本次入库数量）。
+    """
+    cost = 0.0
+    remain = qty
+    while remain > 1e-9 and layers:
+        l = layers[-1]
+        take = l[0] if l[0] < remain else remain
+        cost += take * l[1]
+        l[0] -= take
+        remain -= take
+        if l[0] <= 1e-9:
+            layers.pop()
+    if remain > 1e-9:
+        cost += fifo_take(layers, base, remain, fallback)
     return cost
 
 
@@ -1309,11 +1334,12 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
     # FIFO 批次缓存：{库存商品id: (剩余批次deque, 兜底成本)}；同单内对同一商品的多行按顺序依次扣减
     fifo_cache: dict[int, tuple] = {}
 
-    def _fifo_cogs(target: Product, qty: float) -> float:
+    def _fifo_cogs(target: Product, qty: float, latest: bool = False) -> float:
         if target.id not in fifo_cache:
             fifo_cache[target.id] = fifo_state(db, target.id)
         layers, base = fifo_cache[target.id]
-        return fifo_take(layers, base, qty, target.unit_cost or 0.0)
+        take = fifo_take_latest if latest else fifo_take
+        return take(layers, base, qty, target.unit_cost or 0.0)
 
     for ln in lines:
         if hasattr(ln, "product_id"):  # Pydantic 对象
@@ -1324,6 +1350,7 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
             ov_sp = getattr(ln, "stock_product_id", None)
             ov_mult = getattr(ln, "multiplier", 1.0)
             gross = getattr(ln, "gross_sales", None)
+            latest = bool(getattr(ln, "latest_batch", False))
         else:  # dict（批量导入）
             pid, unit, quantity = ln["product_id"], ln["unit"], ln["quantity"]
             price = float(ln.get("price", 0) or 0)
@@ -1332,6 +1359,7 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
             ov_sp = ln.get("stock_product_id")
             ov_mult = ln.get("multiplier", 1.0)
             gross = ln.get("gross_sales")
+            latest = bool(ln.get("latest_batch", False))
         p = db.get(Product, pid)
         if not p:
             raise ValueError("商品不存在")
@@ -1402,7 +1430,7 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
                 if kg <= 0:
                     kg = line_weight_kg(sp, ded_qty)
                 line_net_kg += kg
-                c = _fifo_cogs(sp, ded_qty)
+                c = _fifo_cogs(sp, ded_qty, latest)
                 cogs += c
                 ded_info.append({
                     "product_id": sp.id, "product_name": sp.name, "base_unit": sp.base_unit,
@@ -1428,6 +1456,8 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
                 "scheme_name": scheme_name if not is_dropship else "",
                 "unit_price": price, "amount": amount, "cogs": cogs, "pack_fee": fee, "gross_sales": gross_sales,
                 "line_type": "sale", "spec": spec,
+                # 指定批次：这一行的出库成本优先扣本次最新入库批次（货款回收用）
+                "cost_locked": latest,
             }
         )
         total_amount += amount
@@ -1703,6 +1733,8 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
                             ref_type="outbound",
                             ref_id=rec.id,
                             line_id=line.id,
+                            # 指定批次（货款回收）：优先消耗本次最新入库批次，成本与录入一致
+                            cost_locked=bool(r.get("cost_locked")),
                             date=date,
                             operator=op,
                             remark=f"销售 {rec.code}",

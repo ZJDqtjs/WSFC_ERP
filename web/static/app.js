@@ -7646,15 +7646,16 @@ async function openQuickRecovery() {
     <div class="form-grid">
       <div class="field"><label>日期 *</label><input id="qrDate" type="date" value="${today()}" /></div>
       <div class="field"><label>商品 *</label><select id="qrProduct" class="searchable" onchange="qrProductChanged()">${opts}</select></div>
-      <div class="field"><label>单位</label><select id="qrUnit" onchange="qrCalc()"></select></div>
+      <div class="field"><label>单位</label><select id="qrUnit" onchange="qrUnitChanged()"></select></div>
       <div class="field"><label>客户（出库单）</label><input id="qrCustomer" placeholder="可不填" /></div>
     </div>
     <h4 class="block-title">入库（采购）</h4>
     <div class="form-grid">
       <div class="field"><label>数量 *</label><input id="qrInQty" type="number" step="any" min="0" value="1" oninput="qrInQtyChanged(this)" /></div>
-      <div class="field"><label>单价（元/单位）*</label><input id="qrInPrice" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /></div>
+      <div class="field"><label>单价（元/单位）*</label><input id="qrInPrice" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /><div class="field-hint" id="qrInPriceHint"></div></div>
       <div class="field"><label>运费</label><input id="qrInFreight" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /></div>
       <div class="field"><label>装卸费</label><input id="qrInHandling" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /></div>
+      <div class="field"><label>调整（抹零/补整）</label><input id="qrInAdjust" type="number" step="any" placeholder="0.00" oninput="qrCalc()" /><div class="field-hint">正=多付给供应商，负=少付</div></div>
     </div>
     <h4 class="block-title">出库（销售）</h4>
     <div class="form-grid">
@@ -7663,12 +7664,24 @@ async function openQuickRecovery() {
       <div class="field"><label>运费</label><input id="qrOutFreight" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /></div>
       <div class="field"><label>装卸费</label><input id="qrOutHandling" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /></div>
       <div class="field"><label>手续费</label><input id="qrOutFee" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /></div>
+      <div class="field"><label>调整（抹零/补整）</label><input id="qrOutAdjust" type="number" step="any" placeholder="0.00" oninput="qrCalc()" /><div class="field-hint">正=加收，负=抹零</div></div>
+    </div>
+    <div class="field">
+      <label>备注</label>
+      <textarea id="qrRemark" rows="2" placeholder="可选；可直接 Ctrl+V 粘贴图片 / 附件" onpaste="pasteRemarkFiles('qrRemark', event)"></textarea>
+      <div class="attach-bar">
+        <button type="button" class="btn sm secondary" onclick="$('qrRemarkFile').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 图片 / 附件</button>
+        <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），可直接 Ctrl+V 粘贴</span>
+        <input type="file" id="qrRemarkFile" multiple style="display:none;" onchange="uploadRemarkFiles('qrRemark', this)" />
+      </div>
+      <div class="attach-list" id="qrRemarkFiles"></div>
     </div>
     <div class="alert ok" id="qrProfit" style="margin-top:12px;">净利 ¥0.00</div>
     <div class="toolbar" style="justify-content:flex-end;margin-top:12px;">
       <button class="btn secondary" onclick="closeModal()">取消</button>
       <button class="btn" onclick="submitQuickRecovery()">确认回收</button>
     </div>`);
+  clearRemarkField("qrRemark");   // 每次打开清空上一次的备注附件
   const sel = $("qrProduct");
   if (sel) sel.dispatchEvent(new Event("change", { bubbles: true }));   // 初值同步到搜索框 + 带出单位
   else qrProductChanged();
@@ -7679,7 +7692,31 @@ function qrProductChanged() {
   const unit = p ? (p.default_unit || p.base_unit || "kg") : "kg";
   const html = p ? unitOptions(p, unit) : "";
   $("qrUnit").innerHTML = html || `<option value="${esc(unit)}">${esc(unit)}</option>`;
+  qrFillInPrice();
   qrCalc();
+}
+/** 换单位：和入库页一样按新单位重新带出价格（最近入库价 → 参考成本） */
+function qrUnitChanged() {
+  qrFillInPrice();
+  qrCalc();
+}
+/** 入库单价自动带出：优先最近一次入库价（按所选单位换算），没有则用参考成本；可手改 */
+function qrFillInPrice() {
+  const p = PRODUCTS.find((x) => x.id === +(($("qrProduct") || {}).value || 0));
+  const inp = $("qrInPrice");
+  if (!p || !inp) return;
+  const unit = $("qrUnit").value || p.default_unit || p.base_unit;
+  const f = (p.conversions || {})[unit] || 1;
+  const lastBase = Number(p.last_in_price) || 0;
+  const refBase = Number(p.unit_cost) || 0;
+  const per = (base) => +(base * f).toFixed(6);
+  inp.value = lastBase > 0 ? per(lastBase) : (refBase > 0 ? per(refBase) : "");
+  const hint = $("qrInPriceHint");
+  if (hint) {
+    hint.textContent = lastBase > 0
+      ? `最近入库价 ¥${fmtNum(per(lastBase))}/${unit}（${p.last_in_date || "—"}），可改`
+      : (refBase > 0 ? `按参考成本 ¥${fmtNum(per(refBase))}/${unit} 填入，可改` : "还没入库过、也没设参考成本，请手动填");
+  }
 }
 /** 入库数量改动时，出库数量跟着同步（用户手动改过出库数量后就不再联动） */
 function qrInQtyChanged(inp) {
@@ -7690,16 +7727,18 @@ function qrInQtyChanged(inp) {
 function qrCalc() {
   const inQty = qrNum("qrInQty"), inPrice = qrNum("qrInPrice");
   const inFreight = qrNum("qrInFreight"), inHandling = qrNum("qrInHandling");
+  const inAdjust = qrNum("qrInAdjust");   // 入库抹零/补整：正=多付，负=少付
   const outQty = qrNum("qrOutQty"), outPrice = qrNum("qrOutPrice");
+  const outAdjust = qrNum("qrOutAdjust"); // 出库抹零/补整：正=加收，负=抹零
   const outFees = qrNum("qrOutFreight") + qrNum("qrOutHandling") + qrNum("qrOutFee");
   const purchase = inQty * inPrice + inFreight + inHandling;   // 入库到岸成本（货款 + 运费 + 装卸）
   const landed = inQty > 0 ? purchase / inQty : 0;              // 每单位到岸成本
   const revenue = outQty * outPrice;
-  const net = revenue - outQty * landed - outFees;
+  const net = revenue + outAdjust - outQty * landed - outFees - inAdjust;
   const box = $("qrProfit");
   if (!box) return;
   box.innerHTML = `净利 <b style="font-size:18px;">${fmtMoney(net)}</b>`
-    + `<span class="muted" style="margin-left:10px;">出库收入 ${fmtMoney(revenue)} − 入库成本 ${fmtMoney(outQty * landed)} − 出库费用 ${fmtMoney(outFees)}</span>`;
+    + `<span class="muted" style="margin-left:10px;">出库收入净额 ${fmtMoney(revenue + outAdjust)} − 入库成本净额 ${fmtMoney(outQty * landed + inAdjust)} − 出库费用 ${fmtMoney(outFees)}</span>`;
 }
 async function submitQuickRecovery() {
   const p = PRODUCTS.find((x) => x.id === +(($("qrProduct") || {}).value || 0));
@@ -7714,12 +7753,15 @@ async function submitQuickRecovery() {
     const r = await api("/api/outbounds/quick-recovery", "POST", {
       date, product_id: p.id, unit,
       in_quantity: inQty, in_price: qrNum("qrInPrice"),
-      in_freight: qrNum("qrInFreight"), in_handling: qrNum("qrInHandling"),
+      in_freight: qrNum("qrInFreight"), in_handling: qrNum("qrInHandling"), in_adjust: qrNum("qrInAdjust"),
       out_quantity: outQty, out_price: qrNum("qrOutPrice"),
       out_freight: qrNum("qrOutFreight"), out_handling: qrNum("qrOutHandling"), out_fee: qrNum("qrOutFee"),
+      out_adjust: qrNum("qrOutAdjust"),
       customer: ($("qrCustomer").value || "").trim(),
+      remark: remarkValue("qrRemark"),
     });
     closeModal();
+    clearRemarkField("qrRemark");
     const warns = (r.warnings || []).length ? `\n⚠ ${r.warnings.join("；")}` : "";
     toast(`货款回收已入账：入库 ${r.inbound_code} / 出库 ${r.outbound_code}，净利 ${fmtMoney(r.net_profit)}${warns}`, 4200);
     loadOutbounds(); loadInbounds(); loadStock();

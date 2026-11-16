@@ -259,6 +259,9 @@ class StockMovement(Base):
     # 出库行 id（仅出库产生的流水）：一行出库明细可能对应多条流水（订单商品关联多个库存商品），
     # 供 FIFO 成本重算精确回写到对应出库行；空 = 旧数据（按顺序一一对应）
     line_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # 指定批次成本：True = 本次出库优先消耗「最新入库批次」，而不是先进先出。
+    # 用于「货款回收」这种买这批、卖这批的场景，保证该单成本/净利与录入时的入库成本一致。
+    cost_locked: Mapped[bool] = mapped_column(Boolean, default=False)
     date: Mapped[str] = mapped_column(String(10), index=True)
     operator: Mapped[str] = mapped_column(String(32), default="")
     remark: Mapped[str] = mapped_column(String(255), default="")

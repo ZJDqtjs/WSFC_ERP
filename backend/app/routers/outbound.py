@@ -102,12 +102,16 @@ class QuickRecoveryIn(BaseModel):
     in_price: float
     in_freight: float = 0.0      # 入库运费（计入批次到岸成本）
     in_handling: float = 0.0     # 入库装卸费（计入批次到岸成本）
+    in_adjust: float = 0.0       # 入库抹零/补整：正=多付，负=少付（不改批次成本，只记差额）
     out_quantity: float
     out_price: float
     out_freight: float = 0.0     # 出库运费（计入出库单固定费用）
     out_handling: float = 0.0    # 出库装卸费
     out_fee: float = 0.0         # 出库手续费
+    out_adjust: float = 0.0      # 出库抹零/补整：正=加收，负=抹零
     customer: str = ""
+    # 备注（纯文本 + 附件 /uploads/xxx，与其它单据备注同一格式）：同时带到入库单和出库单
+    remark: str = ""
 
 
 class ReturnLineIn(BaseModel):
@@ -229,21 +233,27 @@ def quick_recovery(data: QuickRecoveryIn, db: Session = Depends(get_db), user: U
         if v < 0:
             raise HTTPException(400, "金额不能为负数")
     out_fees = round(data.out_freight + data.out_handling + data.out_fee, 2)
+    user_remark = (data.remark or "").strip()
+    in_remark = "货款回收：采购入库" + (f"｜{user_remark}" if user_remark else "")
+    out_remark = "货款回收：销售出库" + (f"｜{user_remark}" if user_remark else "")
     try:
         in_rec = create_inbound(db, {
             "product_id": data.product_id, "unit": data.unit, "quantity": data.in_quantity,
             "unit_price": data.in_price, "freight": data.in_freight, "handling": data.in_handling,
-            "fee": 0.0, "date": data.date, "remark": "货款回收：采购入库", "pay_status": "paid",
+            "fee": 0.0, "date": data.date, "remark": in_remark, "pay_status": "paid",
+            "adjust_amount": data.in_adjust,
         }, operator=user.name)
         out_rec, warnings = create_outbound(db, {
             "customer": data.customer, "operator": user.name, "date": data.date,
-            "remark": "货款回收：销售出库",
+            "remark": out_remark,
             "lines": [{"product_id": data.product_id, "unit": data.unit,
-                       "quantity": data.out_quantity, "price": data.out_price}],
+                       "quantity": data.out_quantity, "price": data.out_price,
+                       # 这批货买多少卖多少：出库成本按本次入库批次结转（不按旧库存 FIFO）
+                       "latest_batch": True}],
             "pack_lines": [], "pack_fee_total": out_fees, "auto_express": False,
             # 出库费用（运费/装卸/手续费）记成一笔「货款回收费用」，别混进人工打包费
             "fee_category": "货款回收费用",
-            "pay_status": "paid", "adjust_amount": 0.0, "settle_cats": [],
+            "pay_status": "paid", "adjust_amount": data.out_adjust, "settle_cats": [],
         }, operator=user.name, allow_self_stock=True)
         db.commit()
     except ValueError as e:
@@ -254,7 +264,8 @@ def quick_recovery(data: QuickRecoveryIn, db: Session = Depends(get_db), user: U
         raise
     landed = (data.in_quantity * data.in_price + data.in_freight + data.in_handling) / data.in_quantity
     revenue = data.out_quantity * data.out_price
-    net = round(revenue - data.out_quantity * landed - out_fees, 2)
+    # 净利 = 出库收入（含抹零/补整） − 本次入库到岸成本（按出库数量折算） − 出库费用 − 入库调整
+    net = round(revenue + data.out_adjust - data.out_quantity * landed - out_fees - data.in_adjust, 2)
     return {
         "ok": True,
         "inbound_code": in_rec.code,
