@@ -162,6 +162,34 @@ def _income_of(o) -> float:
     return (o.total_amount or 0.0) + (getattr(o, "settle_income", 0.0) or 0.0)
 
 
+# ---------------- 规格口径：去掉「，合并N件」 ----------------
+# 聚水潭导入时会把「这一单买了几件」拼到出库行规格末尾（见 imports._pack_rule_settle：
+# spec = 外部商品名 + f"，合并{qty}件"）。它描述的是订单件数，不是商品规格差异，
+# 但报表/规格统计都按 spec 分桶，不做处理会把同一个商品拆成
+# 「黑花生1.5斤」「黑花生1.5斤，合并2件」「…合并3件」… 好几行（看起来就是同规格重复）。
+# 这里只在**统计口径**上归并，历史数据不动。
+_MERGE_QTY_TAG = "，合并"
+
+
+def _norm_spec(spec: str) -> str:
+    """Python 侧：去掉规格末尾的「，合并N件」。"""
+    s = (spec or "").strip()
+    i = s.find(_MERGE_QTY_TAG)
+    if i >= 0 and s.endswith("件"):
+        return s[:i].strip()
+    return s
+
+
+def _spec_norm_expr(col):
+    """SQL 侧：与 _norm_spec 同口径（分组前就去掉后缀，分组结果天然合并）。"""
+    s = func.trim(func.coalesce(col, ""))
+    pos = func.instr(s, _MERGE_QTY_TAG)
+    return case(
+        (and_(pos > 0, s.like("%件")), func.trim(func.substr(s, 1, pos - 1))),
+        else_=s,
+    )
+
+
 # 报表读出库单只用到这几列：整行 ORM 实例化在 wh01 一个月就要造 3.3 万个对象
 # （实测占 _summary_of 一半耗时，光InstanceState.__init__ 就 1.5 秒）。
 # 列查询返回的 Row 同样支持 o.total_amount / getattr(o, "brush_cost", 0) 这种属性访问，
@@ -1264,6 +1292,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         其它商品一律 shop="" 入桶，报表口径与行数完全不变。
         """
         key_shop = shop if (split_shop and pid in split_shop) else ""
+        spec = _norm_spec(spec)   # 「，合并N件」是订单件数，不算规格差异
         key = (pid, spec, dropship, key_shop)
         d = by_product.get(key)
         if d is not None:
@@ -1306,7 +1335,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     if date_to:
         line_conds.append(Outbound.date <= date_to)
     paid_out = func.coalesce(Outbound.pay_status, PAID) != "unpaid"
-    spec_expr = func.trim(func.coalesce(OutboundLine.spec, ""))
+    spec_expr = _spec_norm_expr(OutboundLine.spec)
     dr_expr = func.coalesce(OutboundLine.is_dropship, 0)
     pk = aliased(Product)
     # 关联结算行的费用类别（人工/包材/快递/其他）→ 成本字段；口径同 _pack_cost_category_of
@@ -1357,7 +1386,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     owned_rows = db.execute(
         select(
             owner.product_id.label("pid"),
-            func.trim(func.coalesce(owner.spec, "")).label("spec"),
+            _spec_norm_expr(owner.spec).label("spec"),
             func.coalesce(owner.is_dropship, 0).label("dr"),
             field_expr.label("field"),
             func.coalesce(func.sum(OutboundLine.cogs), 0).label("amt"),
@@ -1371,7 +1400,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         .join(owner, owner.id == first_sale.c.sid)
         .join(pk, pk.id == OutboundLine.product_id, isouter=True)
         .where(OutboundLine.line_type == "pack", *line_conds, paid_out)
-        .group_by(owner.product_id, func.trim(func.coalesce(owner.spec, "")),
+        .group_by(owner.product_id, _spec_norm_expr(owner.spec),
                   func.coalesce(owner.is_dropship, 0), field_expr,
                   func.trim(func.coalesce(Outbound.customer, "")))
     ).all()
@@ -2208,7 +2237,7 @@ def _sales_by_spec_of(db: Session, date_from: str, date_to: str, key: str) -> di
     if date_to:
         conds.append(Outbound.date <= date_to)
     sale_conds = [*conds, OutboundLine.line_type == "sale"]
-    spec_col = func.coalesce(func.nullif(func.trim(OutboundLine.spec), ""), "未标规格")
+    spec_col = func.coalesce(func.nullif(_spec_norm_expr(OutboundLine.spec), ""), "未标规格")
     dropship = OutboundLine.is_dropship == True  # noqa: E712 - 生成 SQL 的 = 1，NULL 不匹配
 
     def _sums():
