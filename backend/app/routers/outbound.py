@@ -12,6 +12,7 @@ from ..database import get_db
 from ..models import DropshipBill, FinanceRecord, OtherExpense, Outbound, OutboundLine, Product, StockMovement, User
 from ..services import (
     build_order,
+    create_inbound,
     create_outbound,
     create_sales_return,
     normalize_settle_cats,
@@ -49,6 +50,8 @@ class PackLine(BaseModel):
 class PreviewIn(BaseModel):
     lines: list[SaleLine]
     auto_express: bool = True   # False = 不自动结算快递费（手动出库时删掉「快递费」行）
+    # 手动改过的快递费：自动算出来的金额不对时，按用户手填的金额预览（不填=按整单毛重自动算）
+    express_fee: float | None = None
     # 手动挑选的关联出库物品（追加在自动带出的结算项后面）：让预览也按 FIFO 算它们的成本
     extra_pack_lines: list[PackLine] = Field(default=[])
     # 客户承担的关联结算类别（material 包材 / labor 人工 / express 快递费）：预览随之返回 settle_income
@@ -66,6 +69,8 @@ class OutboundIn(BaseModel):
     # False = 不自动结算快递费（手动出库时用户在预览里删掉了「快递费」行）；
     # 批量导入/聚水潭等不传，保持按整单毛重自动计快递费的原行为
     auto_express: bool = True
+    # 手动改过的快递费（自动算的不对时手填）：不填=按整单毛重自动算
+    express_fee: float | None = None
     pay_status: str = "paid"  # paid 已付款/已回款（默认）/ unpaid 待付款（先进「待付款账单」）
     # 金额调整（给客户抹零/凑整）：正=加收，负=抹零。商品成本不变，差额自动记「金额调整」其他收支
     adjust_amount: float = 0.0
@@ -85,6 +90,24 @@ class OutboundUpdate(BaseModel):
 
 class BatchIds(BaseModel):
     ids: list[int]
+
+
+class QuickRecoveryIn(BaseModel):
+    """货款回收：同一商品先按采购价入库，再按销售价出库（一笔搞定收购+卖出）。"""
+
+    date: str
+    product_id: int
+    unit: str
+    in_quantity: float
+    in_price: float
+    in_freight: float = 0.0      # 入库运费（计入批次到岸成本）
+    in_handling: float = 0.0     # 入库装卸费（计入批次到岸成本）
+    out_quantity: float
+    out_price: float
+    out_freight: float = 0.0     # 出库运费（计入出库单固定费用）
+    out_handling: float = 0.0    # 出库装卸费
+    out_fee: float = 0.0         # 出库手续费
+    customer: str = ""
 
 
 class ReturnLineIn(BaseModel):
@@ -186,6 +209,61 @@ def _to_dict(o: Outbound) -> dict:
     }
 
 
+@router.post("/quick-recovery")
+def quick_recovery(data: QuickRecoveryIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """货款回收：同一商品先入库（采购）再出库（销售），一次提交、同一个事务落账。
+
+    净利 = 出库收入 − 本次入库到岸成本（货款+运费+装卸，按出库数量折算）− 出库费用。
+    出库的运费/装卸费/手续费合计计入出库单「固定费用」，净利口径会扣掉。
+    """
+    if not DATE_RE.match(data.date or ""):
+        raise HTTPException(400, "日期格式不对（要 YYYY-MM-DD）")
+    if not (data.unit or "").strip():
+        raise HTTPException(400, "单位不能为空")
+    if data.in_quantity <= 0 or data.out_quantity <= 0:
+        raise HTTPException(400, "入库、出库数量都要大于 0")
+    if data.out_quantity > data.in_quantity + 1e-9:
+        raise HTTPException(400, "出库数量不能大于本次入库数量")
+    for v in (data.in_price, data.in_freight, data.in_handling,
+              data.out_price, data.out_freight, data.out_handling, data.out_fee):
+        if v < 0:
+            raise HTTPException(400, "金额不能为负数")
+    out_fees = round(data.out_freight + data.out_handling + data.out_fee, 2)
+    try:
+        in_rec = create_inbound(db, {
+            "product_id": data.product_id, "unit": data.unit, "quantity": data.in_quantity,
+            "unit_price": data.in_price, "freight": data.in_freight, "handling": data.in_handling,
+            "fee": 0.0, "date": data.date, "remark": "货款回收：采购入库", "pay_status": "paid",
+        }, operator=user.name)
+        out_rec, warnings = create_outbound(db, {
+            "customer": data.customer, "operator": user.name, "date": data.date,
+            "remark": "货款回收：销售出库",
+            "lines": [{"product_id": data.product_id, "unit": data.unit,
+                       "quantity": data.out_quantity, "price": data.out_price}],
+            "pack_lines": [], "pack_fee_total": out_fees, "auto_express": False,
+            # 出库费用（运费/装卸/手续费）记成一笔「货款回收费用」，别混进人工打包费
+            "fee_category": "货款回收费用",
+            "pay_status": "paid", "adjust_amount": 0.0, "settle_cats": [],
+        }, operator=user.name, allow_self_stock=True)
+        db.commit()
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
+    except Exception:
+        db.rollback()
+        raise
+    landed = (data.in_quantity * data.in_price + data.in_freight + data.in_handling) / data.in_quantity
+    revenue = data.out_quantity * data.out_price
+    net = round(revenue - data.out_quantity * landed - out_fees, 2)
+    return {
+        "ok": True,
+        "inbound_code": in_rec.code,
+        "outbound_code": out_rec.code,
+        "net_profit": net,
+        "warnings": warnings,
+    }
+
+
 @router.post("/preview")
 def preview(data: PreviewIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     try:
@@ -194,7 +272,7 @@ def preview(data: PreviewIn, db: Session = Depends(get_db), user: User = Depends
         # settle_cats = 客户承担的关联结算类别 → 返回 settle_income，前端实收金额直接用服务端的数
         return build_order(db, data.lines, [], None, data.auto_express,
                            allow_self_stock=True, extra_pack_lines=data.extra_pack_lines,
-                           settle_cats=data.settle_cats)
+                           settle_cats=data.settle_cats, express_fee=data.express_fee)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

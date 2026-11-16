@@ -1274,7 +1274,8 @@ def settle_cats_label(cats) -> str:
 
 def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_express: bool = True,
                 allow_self_stock: bool = False, extra_pack_lines=None,
-                settle_cats=None, brush: bool = False) -> dict:
+                settle_cats=None, brush: bool = False,
+                express_fee: float | None = None) -> dict:
     """构建出库单明细：销售行 + 关联结算行(包装材料) + 费用，并校验库存。不落库。
 
     成本结转按「先进先出(FIFO)」：从商品最早的入库批次依次扣减，成本 = Σ(批次单位成本 × 扣减数量)。
@@ -1501,21 +1502,25 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
     # auto_express=False（手动出库并在预览里删掉了「快递费」行）时不再自动追加
     if auto_express and express_weight > 0:
         total_weight = round(express_weight + EXPRESS_BOX_WEIGHT_KG, 3)
-        express_fee = compute_express_fee(total_weight)
-        if express_fee > 0:
+        auto_fee = compute_express_fee(total_weight)
+        # 手动改过快递费（自动算的不对）：按用户手填的金额记，单位成本=该金额（数量固定 1 单）
+        fee_used = round(float(express_fee), 2) if express_fee is not None else auto_fee
+        if fee_used > 0:
             ep = get_or_create_express_product(db)
             pack_rows.append(
                 {
                     "product_id": ep.id, "product_name": ep.name, "base_unit": ep.base_unit,
                     "unit": "单", "quantity": 1, "quantity_base": 1,
-                    "unit_price": express_fee, "amount": express_fee, "cogs": express_fee,
+                    "unit_price": fee_used, "amount": fee_used, "cogs": fee_used,
                     "pack_fee": 0, "line_type": "pack", "sale_product_id": None,
                     "express_weight": total_weight, "manual": False,
                     "spec": f"{total_weight:.3f}kg",
+                    # 自动算出来的建议值：前端「恢复自动」时展示/核对用
+                    "auto_express_fee": auto_fee,
                     "settle_cat": pack_settle_cat(ep.category, ep.name),
                 }
             )
-            total_cogs += express_fee
+            total_cogs += fee_used
 
     if fee_total is not None:
         total_fee = round(float(fee_total), 2)
@@ -1621,6 +1626,8 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
         # 客户承担的关联结算类别（包材/人工/快递费）：手动单由表单开关传，
         # 导入路径不传 → 默认「客户不承担」（见 normalize_settle_cats）
         settle_cats=payload.get("settle_cats"),
+        # 手动改过的快递费（不填=按整单毛重自动算）
+        express_fee=payload.get("express_fee"),
         brush=brush,
     )
     op = (payload.get("operator") or "").strip() or operator
@@ -1734,11 +1741,13 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
                 )
             )
     if order["total_fee"] > 0:
+        # 固定费用默认记「人工打包费」；货款回收等场景可传 fee_category 改成更贴切的类别
+        fee_cat = (payload.get("fee_category") or "").strip()
         db.add(
             FinanceRecord(
-                type="expense", category="人工打包费", product_id=None,
+                type="expense", category=fee_cat or "人工打包费", product_id=None,
                 amount=order["total_fee"], date=date, operator=op,
-                remark=f"打包费 {rec.code}", ref_type="outbound", ref_id=rec.id,
+                remark=f"{fee_cat or '打包费'} {rec.code}", ref_type="outbound", ref_id=rec.id,
                 **pay,   # 挂账状态随出库单
             )
         )

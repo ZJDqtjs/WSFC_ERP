@@ -7217,6 +7217,7 @@ async function saveInboundEdit(id) {
 let outSaleRowId = 0;
 let OUT_PREVIEW = null;  // 最近一次服务端出库预览（含先进先出结转成本），用于展示真实成本
 let OUT_FEE_MANUAL = false;  // 固定费用合计是否被手动改过（改过就别让「预览结算」覆盖掉）
+let OUT_EXPRESS_MANUAL = null;  // 快递费手动改过的金额（null=按整单毛重自动算）
 
 /* ---------- 实收金额口径：客户承担的关联结算（包材 / 人工 / 快递费） ----------
    手动出库 / AI 出库：客户的付款里含包材/工时/运费 → 默认全勾，勾选后计入「实收金额」
@@ -7387,6 +7388,7 @@ async function previewOutbound() {
     const r = await api("/api/outbounds/preview", "POST", {
       lines, auto_express: autoExpressOn(), extra_pack_lines: collectManualPackLines(),
       settle_cats: settleCats(),   // 实收含哪些关联结算（后端据此回 settle_income）
+      express_fee: OUT_EXPRESS_MANUAL,   // 手动改过快递费：预览也按这个金额算，和提交保持一致
     });
     renderPackPreview(r);
   } catch (e) { toast("预览失败：" + e.message); }
@@ -7413,7 +7415,9 @@ function renderPackPreview(r) {
       <td><select class="searchable pl-unit" onchange="packLineUnitChanged(this)">${m ? unitOptions(m, pl.unit) : `<option>${pl.unit}</option>`}</select></td>
       <td><input class="pl-qty" type="number" step="any" value="${pl.quantity}" oninput="packLineChanged(this)" style="width:90px;" /></td>
       <td><span class="badge pack">${isExpress ? "快递费" : (isManual && m && m.category === "人工" ? "人工" : "包装消耗")}</span></td>
-      <td class="num mono">¥${fmtNum(pl.unit_price)}/${esc(pl.unit)}</td>
+      ${isExpress
+        ? `<td class="num mono"><input class="pl-up" type="number" step="any" min="0" value="${OUT_EXPRESS_MANUAL != null ? OUT_EXPRESS_MANUAL : pl.unit_price}" oninput="expressFeeChanged(this)" style="width:100px;" title="系统按整单毛重自动算：¥${fmtNum(pl.auto_express_fee != null ? pl.auto_express_fee : pl.unit_price)}/单；不对可手填本单实际快递费" /> /单${OUT_EXPRESS_MANUAL != null ? ` · <a href="javascript:;" onclick="outExpressReset()">恢复自动</a>` : ""}</td>`
+        : `<td class="num mono">¥${fmtNum(pl.unit_price)}/${esc(pl.unit)}</td>`}
       <td class="num pl-amount">${fmtMoney(pl.amount)}</td>
       <td><button class="btn sm danger" title="删除该结算项" onclick="removePackRow(this)">✕</button></td></tr>`;
   }).join("");
@@ -7519,10 +7523,28 @@ function removePackRow(btn) {
   if (tr && tr.dataset.express === "1") {
     const cb = $("outAutoExpress");
     if (cb) cb.checked = false;
+    OUT_EXPRESS_MANUAL = null;   // 快递费行已删，手填金额作废
     toast("已取消「自动计快递费」，这笔出库不再计快递费");
   }
   tr.remove();
   calcOutboundTotals();
+}
+/** 快递费手动改：用手填的金额重算小计，预览/提交都按这个金额结算（不再按毛重自动算） */
+function expressFeeChanged(inp) {
+  const tr = inp.closest("tr");
+  const v = parseFloat(inp.value);
+  OUT_EXPRESS_MANUAL = (Number.isFinite(v) && v >= 0) ? v : null;
+  if (OUT_EXPRESS_MANUAL == null) return;   // 清空/非法：等重新预览时回到自动值
+  const qty = parseFloat(tr.querySelector(".pl-qty")?.value) || 0;
+  tr.dataset.up = String(OUT_EXPRESS_MANUAL);
+  const amt = tr.querySelector(".pl-amount");
+  if (amt) amt.textContent = fmtMoney(OUT_EXPRESS_MANUAL * qty);
+  calcOutboundTotals();
+}
+/** 恢复按整单毛重自动计算快递费 */
+function outExpressReset() {
+  OUT_EXPRESS_MANUAL = null;
+  previewOutbound();
 }
 function packLineUnitChanged(sel) {
   packLineChanged(sel);
@@ -7606,8 +7628,102 @@ function clearPreview() {
   $("outPreview").style.display = "none";
   OUT_PREVIEW = null;
   OUT_FEE_MANUAL = false;
+  OUT_EXPRESS_MANUAL = null;
   if ($("outAdjust")) $("outAdjust").value = "";
   if ($("outFeeHint")) $("outFeeHint").textContent = "";
+}
+/* ---------- 货款回收：同一商品快速入库 + 按销售价出库，算这一笔的净利 ---------- */
+async function openQuickRecovery() {
+  try {
+    if (!PRODUCTS.length) PRODUCTS = await api("/api/products");
+  } catch (e) { toast("商品资料加载失败：" + e.message); return; }
+  const opts = PRODUCTS.filter((p) => p.is_active !== false)
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "zh"))
+    .map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+  if (!opts) { toast("还没有可用的商品，请先到「商品资料」新增"); return; }
+  openModal(`
+    <h3>货款回收 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="form-grid">
+      <div class="field"><label>日期 *</label><input id="qrDate" type="date" value="${today()}" /></div>
+      <div class="field"><label>商品 *</label><select id="qrProduct" class="searchable" onchange="qrProductChanged()">${opts}</select></div>
+      <div class="field"><label>单位</label><select id="qrUnit" onchange="qrCalc()"></select></div>
+      <div class="field"><label>客户（出库单）</label><input id="qrCustomer" placeholder="可不填" /></div>
+    </div>
+    <h4 class="block-title">入库（采购）</h4>
+    <div class="form-grid">
+      <div class="field"><label>数量 *</label><input id="qrInQty" type="number" step="any" min="0" value="1" oninput="qrInQtyChanged(this)" /></div>
+      <div class="field"><label>单价（元/单位）*</label><input id="qrInPrice" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /></div>
+      <div class="field"><label>运费</label><input id="qrInFreight" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /></div>
+      <div class="field"><label>装卸费</label><input id="qrInHandling" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /></div>
+    </div>
+    <h4 class="block-title">出库（销售）</h4>
+    <div class="form-grid">
+      <div class="field"><label>数量 *</label><input id="qrOutQty" type="number" step="any" min="0" value="1" oninput="this.dataset.touched='1';qrCalc()" /></div>
+      <div class="field"><label>单价（元/单位）*</label><input id="qrOutPrice" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /></div>
+      <div class="field"><label>运费</label><input id="qrOutFreight" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /></div>
+      <div class="field"><label>装卸费</label><input id="qrOutHandling" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /></div>
+      <div class="field"><label>手续费</label><input id="qrOutFee" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /></div>
+    </div>
+    <div class="alert ok" id="qrProfit" style="margin-top:12px;">净利 ¥0.00</div>
+    <div class="toolbar" style="justify-content:flex-end;margin-top:12px;">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="submitQuickRecovery()">确认回收</button>
+    </div>`);
+  const sel = $("qrProduct");
+  if (sel) sel.dispatchEvent(new Event("change", { bubbles: true }));   // 初值同步到搜索框 + 带出单位
+  else qrProductChanged();
+}
+function qrNum(id) { return parseFloat($(id)?.value) || 0; }
+function qrProductChanged() {
+  const p = PRODUCTS.find((x) => x.id === +(($("qrProduct") || {}).value || 0));
+  const unit = p ? (p.default_unit || p.base_unit || "kg") : "kg";
+  const html = p ? unitOptions(p, unit) : "";
+  $("qrUnit").innerHTML = html || `<option value="${esc(unit)}">${esc(unit)}</option>`;
+  qrCalc();
+}
+/** 入库数量改动时，出库数量跟着同步（用户手动改过出库数量后就不再联动） */
+function qrInQtyChanged(inp) {
+  const out = $("qrOutQty");
+  if (out && out.dataset.touched !== "1") out.value = inp.value;
+  qrCalc();
+}
+function qrCalc() {
+  const inQty = qrNum("qrInQty"), inPrice = qrNum("qrInPrice");
+  const inFreight = qrNum("qrInFreight"), inHandling = qrNum("qrInHandling");
+  const outQty = qrNum("qrOutQty"), outPrice = qrNum("qrOutPrice");
+  const outFees = qrNum("qrOutFreight") + qrNum("qrOutHandling") + qrNum("qrOutFee");
+  const purchase = inQty * inPrice + inFreight + inHandling;   // 入库到岸成本（货款 + 运费 + 装卸）
+  const landed = inQty > 0 ? purchase / inQty : 0;              // 每单位到岸成本
+  const revenue = outQty * outPrice;
+  const net = revenue - outQty * landed - outFees;
+  const box = $("qrProfit");
+  if (!box) return;
+  box.innerHTML = `净利 <b style="font-size:18px;">${fmtMoney(net)}</b>`
+    + `<span class="muted" style="margin-left:10px;">出库收入 ${fmtMoney(revenue)} − 入库成本 ${fmtMoney(outQty * landed)} − 出库费用 ${fmtMoney(outFees)}</span>`;
+}
+async function submitQuickRecovery() {
+  const p = PRODUCTS.find((x) => x.id === +(($("qrProduct") || {}).value || 0));
+  if (!p) { toast("请选择商品"); return; }
+  const date = $("qrDate").value || today();
+  const unit = $("qrUnit").value;
+  const inQty = qrNum("qrInQty"), outQty = qrNum("qrOutQty");
+  if (!unit) { toast("请选择单位"); return; }
+  if (inQty <= 0 || outQty <= 0) { toast("入库、出库数量都要大于 0"); return; }
+  if (outQty > inQty + 1e-9) { toast("出库数量不能大于本次入库数量"); return; }
+  try {
+    const r = await api("/api/outbounds/quick-recovery", "POST", {
+      date, product_id: p.id, unit,
+      in_quantity: inQty, in_price: qrNum("qrInPrice"),
+      in_freight: qrNum("qrInFreight"), in_handling: qrNum("qrInHandling"),
+      out_quantity: outQty, out_price: qrNum("qrOutPrice"),
+      out_freight: qrNum("qrOutFreight"), out_handling: qrNum("qrOutHandling"), out_fee: qrNum("qrOutFee"),
+      customer: ($("qrCustomer").value || "").trim(),
+    });
+    closeModal();
+    const warns = (r.warnings || []).length ? `\n⚠ ${r.warnings.join("；")}` : "";
+    toast(`货款回收已入账：入库 ${r.inbound_code} / 出库 ${r.outbound_code}，净利 ${fmtMoney(r.net_profit)}${warns}`, 4200);
+    loadOutbounds(); loadInbounds(); loadStock();
+  } catch (e) { toast("货款回收失败：" + e.message); }
 }
 async function submitOutbound() {
   const lines = collectSaleLines();
@@ -7623,6 +7739,7 @@ async function submitOutbound() {
       date: $("outDate").value, remark: remarkValue("outRemark"),
       lines, pack_lines: packLines, pack_fee_total: fee,
       auto_express: autoExpressOn(),   // 与预览一致：关掉就不再自动加快递费
+      express_fee: OUT_EXPRESS_MANUAL, // 手动改过快递费：按手填金额落库（不填=后端按毛重自动算）
       pay_status: payStatus, adjust_amount: adjust,
       settle_cats: settleCats(),       // 实收含哪些关联结算（客户随货款付回来的包材/人工/运费）
     });
