@@ -318,6 +318,7 @@ def _movement_rows(db: Session, product_id: int):
         select(
             StockMovement.id, StockMovement.move_type, StockMovement.quantity_base,
             StockMovement.amount, StockMovement.ref_type, StockMovement.ref_id,
+            StockMovement.cost_locked,   # 指定批次（货款回收）：出库优先消耗最新入库批次
             StockMovement.date,   # 评估入库改单影响（改日期会改变 FIFO 顺序）时需要
         ).where(StockMovement.product_id == product_id)
         .order_by(StockMovement.date, StockMovement.id)
@@ -580,6 +581,7 @@ def inbound_edit_impact(db: Session, rec: "Inbound", quantity: float | None = No
             quantity_base=(new_base if m.id == mv.id else m.quantity_base),
             amount=(new_landed if m.id == mv.id else m.amount),
             ref_type=m.ref_type, ref_id=m.ref_id,
+            cost_locked=getattr(m, "cost_locked", False),
             date=(new_date if m.id == mv.id else m.date),
         )
         for m in moves
