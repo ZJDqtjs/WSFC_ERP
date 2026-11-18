@@ -7651,7 +7651,7 @@ async function openQuickRecovery() {
     </div>
     <h4 class="block-title">入库（采购）</h4>
     <div class="form-grid">
-      <div class="field"><label>数量 *</label><input id="qrInQty" type="number" step="any" min="0" value="1" oninput="qrInQtyChanged(this)" /></div>
+      <div class="field"><label>数量 *</label><input id="qrInQty" type="number" step="any" min="0" value="1" oninput="qrInQtyChanged(this)" /><div class="field-hint">填 0 = 本次不采购，只卖现有库存（成本按库存 FIFO 算）</div></div>
       <div class="field"><label>单价（元/单位）*</label><input id="qrInPrice" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /><div class="field-hint" id="qrInPriceHint"></div></div>
       <div class="field"><label>运费</label><input id="qrInFreight" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /></div>
       <div class="field"><label>装卸费</label><input id="qrInHandling" type="number" step="any" min="0" placeholder="0.00" oninput="qrCalc()" /></div>
@@ -7682,11 +7682,53 @@ async function openQuickRecovery() {
       <button class="btn" onclick="submitQuickRecovery()">确认回收</button>
     </div>`);
   clearRemarkField("qrRemark");   // 每次打开清空上一次的备注附件
+  QR_FIFO_COST = null; QR_FIFO_WARN = ""; QR_FIFO_KEY = ""; QR_FIFO_FAILED = "";
   const sel = $("qrProduct");
   if (sel) sel.dispatchEvent(new Event("change", { bubbles: true }));   // 初值同步到搜索框 + 带出单位
   else qrProductChanged();
 }
 function qrNum(id) { return parseFloat($(id)?.value) || 0; }
+/* 入库数量为 0（只卖旧库存）时，成本要按库存 FIFO 实算：用出库预览接口取真实成本 */
+let QR_FIFO_COST = null, QR_FIFO_WARN = "", QR_FIFO_KEY = "", QR_FIFO_FAILED = "", QR_FIFO_SEQ = 0, QR_PREVIEW_TIMER = null;
+function qrFifoKey() {
+  const p = PRODUCTS.find((x) => x.id === +(($("qrProduct") || {}).value || 0));
+  const unit = ($("qrUnit") || {}).value || "";
+  const qty = qrNum("qrOutQty");
+  return (p && unit && qty > 0) ? `${p.id}|${unit}|${qty}` : "";
+}
+function qrScheduleFifoCost() {
+  const key = qrFifoKey();
+  if (key === QR_FIFO_KEY && QR_FIFO_COST != null) return;   // 同输入已算过，别重复请求
+  if (key && key === QR_FIFO_FAILED) return;                // 失败过就不自动重试，改输入再试
+  clearTimeout(QR_PREVIEW_TIMER);
+  QR_FIFO_KEY = key;
+  QR_FIFO_COST = null;
+  QR_FIFO_WARN = "";
+  if (!key) return;
+  QR_PREVIEW_TIMER = setTimeout(async () => {
+    const seq = ++QR_FIFO_SEQ;
+    const p = PRODUCTS.find((x) => x.id === +(($("qrProduct") || {}).value || 0));
+    const unit = $("qrUnit").value;
+    const qty = qrNum("qrOutQty");
+    try {
+      const r = await api("/api/outbounds/preview", "POST", {
+        lines: [{ product_id: p.id, unit, quantity: qty, price: qrNum("qrOutPrice") }],
+        auto_express: false, extra_pack_lines: [], settle_cats: [],
+      });
+      if (seq !== QR_FIFO_SEQ) return;
+      QR_FIFO_COST = Math.round((Number(r.total_cogs) || 0) * 100) / 100;
+      QR_FIFO_WARN = (r.warnings || []).join("；");
+      QR_FIFO_FAILED = "";
+      qrCalc();
+    } catch (e) {
+      if (seq !== QR_FIFO_SEQ) return;
+      QR_FIFO_COST = null;
+      QR_FIFO_WARN = "成本预览失败：" + e.message;
+      QR_FIFO_FAILED = key;
+      qrCalc();
+    }
+  }, 300);
+}
 function qrProductChanged() {
   const p = PRODUCTS.find((x) => x.id === +(($("qrProduct") || {}).value || 0));
   const unit = p ? (p.default_unit || p.base_unit || "kg") : "kg";
@@ -7731,14 +7773,30 @@ function qrCalc() {
   const outQty = qrNum("qrOutQty"), outPrice = qrNum("qrOutPrice");
   const outAdjust = qrNum("qrOutAdjust"); // 出库抹零/补整：正=加收，负=抹零
   const outFees = qrNum("qrOutFreight") + qrNum("qrOutHandling") + qrNum("qrOutFee");
-  const purchase = inQty * inPrice + inFreight + inHandling;   // 入库到岸成本（货款 + 运费 + 装卸）
-  const landed = inQty > 0 ? purchase / inQty : 0;              // 每单位到岸成本
   const revenue = outQty * outPrice;
-  const net = revenue + outAdjust - outQty * landed - outFees - inAdjust;
   const box = $("qrProfit");
   if (!box) return;
+  if (inQty > 0) {
+    // 有本次采购：成本按本批到岸价算，并作废「只卖旧库存」的 FIFO 预览结果
+    QR_FIFO_KEY = ""; QR_FIFO_COST = null; QR_FIFO_WARN = ""; QR_FIFO_FAILED = "";
+    const purchase = inQty * inPrice + inFreight + inHandling;
+    const landed = purchase / inQty;
+    const net = revenue + outAdjust - outQty * landed - outFees - inAdjust;
+    box.innerHTML = `净利 <b style="font-size:18px;">${fmtMoney(net)}</b>`
+      + `<span class="muted" style="margin-left:10px;">出库收入净额 ${fmtMoney(revenue + outAdjust)} − 入库成本净额 ${fmtMoney(outQty * landed + inAdjust)} − 出库费用 ${fmtMoney(outFees)}</span>`;
+    return;
+  }
+  // 入库为 0：只卖现有库存，成本按库存 FIFO 预览
+  qrScheduleFifoCost();
+  if (QR_FIFO_COST == null) {
+    box.innerHTML = `净利 <b style="font-size:18px;">${QR_FIFO_FAILED ? "—" : "计算中…"}</b>`
+      + `<span class="muted" style="margin-left:10px;">入库填 0：按库存 FIFO 成本计算；${esc(QR_FIFO_WARN)}</span>`;
+    return;
+  }
+  const net = revenue + outAdjust - QR_FIFO_COST - outFees;
   box.innerHTML = `净利 <b style="font-size:18px;">${fmtMoney(net)}</b>`
-    + `<span class="muted" style="margin-left:10px;">出库收入净额 ${fmtMoney(revenue + outAdjust)} − 入库成本净额 ${fmtMoney(outQty * landed + inAdjust)} − 出库费用 ${fmtMoney(outFees)}</span>`;
+    + `<span class="muted" style="margin-left:10px;">出库收入净额 ${fmtMoney(revenue + outAdjust)} − 出库成本(FIFO) ${fmtMoney(QR_FIFO_COST)} − 出库费用 ${fmtMoney(outFees)}</span>`
+    + (QR_FIFO_WARN ? `<div class="muted" style="font-size:11px;color:var(--amber);">⚠ ${esc(QR_FIFO_WARN)}</div>` : "");
 }
 async function submitQuickRecovery() {
   const p = PRODUCTS.find((x) => x.id === +(($("qrProduct") || {}).value || 0));
@@ -7747,8 +7805,8 @@ async function submitQuickRecovery() {
   const unit = $("qrUnit").value;
   const inQty = qrNum("qrInQty"), outQty = qrNum("qrOutQty");
   if (!unit) { toast("请选择单位"); return; }
-  if (inQty <= 0 || outQty <= 0) { toast("入库、出库数量都要大于 0"); return; }
-  if (outQty > inQty + 1e-9) { toast("出库数量不能大于本次入库数量"); return; }
+  if (inQty < 0 || outQty <= 0) { toast("出库数量要大于 0；入库数量可填 0（只卖现有库存）"); return; }
+  if (inQty > 0 && outQty > inQty + 1e-9) { toast("出库数量不能大于本次入库数量"); return; }
   try {
     const r = await api("/api/outbounds/quick-recovery", "POST", {
       date, product_id: p.id, unit,
@@ -7763,7 +7821,8 @@ async function submitQuickRecovery() {
     closeModal();
     clearRemarkField("qrRemark");
     const warns = (r.warnings || []).length ? `\n⚠ ${r.warnings.join("；")}` : "";
-    toast(`货款回收已入账：入库 ${r.inbound_code} / 出库 ${r.outbound_code}，净利 ${fmtMoney(r.net_profit)}${warns}`, 4200);
+    const inTip = r.inbound_code ? `入库 ${r.inbound_code} / ` : "（只出库）";
+    toast(`货款回收已入账：${inTip}出库 ${r.outbound_code}，净利 ${fmtMoney(r.net_profit)}${warns}`, 4200);
     loadOutbounds(); loadInbounds(); loadStock();
   } catch (e) { toast("货款回收失败：" + e.message); }
 }

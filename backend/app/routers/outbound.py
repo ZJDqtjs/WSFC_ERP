@@ -224,9 +224,11 @@ def quick_recovery(data: QuickRecoveryIn, db: Session = Depends(get_db), user: U
         raise HTTPException(400, "日期格式不对（要 YYYY-MM-DD）")
     if not (data.unit or "").strip():
         raise HTTPException(400, "单位不能为空")
-    if data.in_quantity <= 0 or data.out_quantity <= 0:
-        raise HTTPException(400, "入库、出库数量都要大于 0")
-    if data.out_quantity > data.in_quantity + 1e-9:
+    if data.in_quantity < 0:
+        raise HTTPException(400, "入库数量不能为负数（填 0 = 只卖现有库存）")
+    if data.out_quantity <= 0:
+        raise HTTPException(400, "出库数量要大于 0")
+    if data.in_quantity > 0 and data.out_quantity > data.in_quantity + 1e-9:
         raise HTTPException(400, "出库数量不能大于本次入库数量")
     for v in (data.in_price, data.in_freight, data.in_handling,
               data.out_price, data.out_freight, data.out_handling, data.out_fee):
@@ -237,19 +239,22 @@ def quick_recovery(data: QuickRecoveryIn, db: Session = Depends(get_db), user: U
     in_remark = "货款回收：采购入库" + (f"｜{user_remark}" if user_remark else "")
     out_remark = "货款回收：销售出库" + (f"｜{user_remark}" if user_remark else "")
     try:
-        in_rec = create_inbound(db, {
-            "product_id": data.product_id, "unit": data.unit, "quantity": data.in_quantity,
-            "unit_price": data.in_price, "freight": data.in_freight, "handling": data.in_handling,
-            "fee": 0.0, "date": data.date, "remark": in_remark, "pay_status": "paid",
-            "adjust_amount": data.in_adjust,
-        }, operator=user.name)
+        # 入库数量填 0：本次不采购，只从现有库存出库（成本按库存 FIFO，不生成入库单）
+        in_rec = None
+        if data.in_quantity > 0:
+            in_rec = create_inbound(db, {
+                "product_id": data.product_id, "unit": data.unit, "quantity": data.in_quantity,
+                "unit_price": data.in_price, "freight": data.in_freight, "handling": data.in_handling,
+                "fee": 0.0, "date": data.date, "remark": in_remark, "pay_status": "paid",
+                "adjust_amount": data.in_adjust,
+            }, operator=user.name)
         out_rec, warnings = create_outbound(db, {
             "customer": data.customer, "operator": user.name, "date": data.date,
             "remark": out_remark,
             "lines": [{"product_id": data.product_id, "unit": data.unit,
                        "quantity": data.out_quantity, "price": data.out_price,
-                       # 这批货买多少卖多少：出库成本按本次入库批次结转（不按旧库存 FIFO）
-                       "latest_batch": True}],
+                       # 有本次入库才按本批结转；只卖旧库存时按正常 FIFO
+                       "latest_batch": data.in_quantity > 0}],
             "pack_lines": [], "pack_fee_total": out_fees, "auto_express": False,
             # 出库费用（运费/装卸/手续费）记成一笔「货款回收费用」，别混进人工打包费
             "fee_category": "货款回收费用",
@@ -262,13 +267,18 @@ def quick_recovery(data: QuickRecoveryIn, db: Session = Depends(get_db), user: U
     except Exception:
         db.rollback()
         raise
-    landed = (data.in_quantity * data.in_price + data.in_freight + data.in_handling) / data.in_quantity
     revenue = data.out_quantity * data.out_price
-    # 净利 = 出库收入（含抹零/补整） − 本次入库到岸成本（按出库数量折算） − 出库费用 − 入库调整
-    net = round(revenue + data.out_adjust - data.out_quantity * landed - out_fees - data.in_adjust, 2)
+    if data.in_quantity > 0:
+        landed = (data.in_quantity * data.in_price + data.in_freight + data.in_handling) / data.in_quantity
+        # 净利 = 出库收入（含抹零/补整） − 本次入库到岸成本（按出库数量折算） − 出库费用 − 入库调整
+        net = round(revenue + data.out_adjust - data.out_quantity * landed - out_fees - data.in_adjust, 2)
+    else:
+        # 只卖旧库存：净利按出库单实际结转成本（FIFO）算，与记录完全一致
+        net = round(revenue + data.out_adjust + (out_rec.settle_income or 0)
+                    - (out_rec.total_cogs or 0) - (out_rec.total_fee or 0), 2)
     return {
         "ok": True,
-        "inbound_code": in_rec.code,
+        "inbound_code": in_rec.code if in_rec else "",
         "outbound_code": out_rec.code,
         "net_profit": net,
         "warnings": warnings,
