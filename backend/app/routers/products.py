@@ -109,6 +109,7 @@ def _last_in_map(db: Session) -> dict[int, dict]:
     """
     latest = (
         select(Inbound.product_id, func.max(Inbound.id).label("mid"))
+        .where(Inbound.quantity_base > 0)   # 零数量 = 只记运费的开支单，没有入库价
         .group_by(Inbound.product_id)
         .subquery()
     )

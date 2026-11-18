@@ -1264,7 +1264,11 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     expense = round(manual_expense + other_total, 2)
     purchase = sum(f.amount for f in finances if f.type == "expense" and f.category == "采购支出")
     # 本期进货 = 货款 + 入库运费/装卸费（与「支出」分区的采购桶、支出合计口径一致）
-    purchase_db = sum(_inbound_landed(i) for i in inbounds)
+    # 数量为 0 的入库单只是「先记运费」的开支，不进库存/不算进货（它的运费走其他收支期间费用，避免重复）
+    purchase_db = sum(
+        _inbound_landed(i) for i in inbounds
+        if float(getattr(i, "quantity_base", 0.0) or 0.0) > 0
+    )
     net = round(gross - expense, 2)
     # 库存总值直接让 SQL 求和：不必把全部商品实例化成 ORM 对象再在 Python 里加
     stock_value = round(float(db.execute(
@@ -1824,6 +1828,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         b["count"] += 1
 
     for i in inbounds:  # 采购/进货（与顶部「本期进货」同源；含运费/装卸）
+        if float(getattr(i, "quantity_base", 0.0) or 0.0) <= 0:
+            continue   # 零数量 = 只记运费的开支单，运费在「其他收支」里作为期间费用计
         _add_expense(exp_day, i.date, "purchase", _inbound_landed(i))
         _add_expense(exp_month, (i.date or "")[:7], "purchase", _inbound_landed(i))
     for e in others_in:
@@ -1875,6 +1881,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
 
     expense_items: list[dict] = []
     for i in inbounds:
+        if float(getattr(i, "quantity_base", 0.0) or 0.0) <= 0:
+            continue   # 零数量 = 只记运费的开支单，从「其他收支」行列出，避免重复
         fee = round((getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0)
                     + (getattr(i, "fee", 0.0) or 0.0), 2)
         note = i.supplier or i.remark or ""
@@ -1981,7 +1989,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         "total_expense": round(purchase_db + expense + brush_total, 2),
         "stock_value": stock_value,
         "order_count": len(outbounds),
-        "inbound_count": len(inbounds),
+        "inbound_count": sum(
+            1 for i in inbounds if float(getattr(i, "quantity_base", 0.0) or 0.0) > 0
+        ),   # 零数量开支单不算进货笔数
         "by_product": product_rows,
         # 出库自动结算的关联成本明细（包材/人工/快递），已包含在 cogs 中
         "pack_costs": pack_costs,
@@ -2510,7 +2520,7 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
                 case((inb_partial & (inbound_paid < inbound_landed), inbound_paid), else_=inbound_landed)
             ), 0),
         )
-        .where(*_date_conds(Inbound), paid(Inbound))
+        .where(*_date_conds(Inbound), paid(Inbound), Inbound.quantity_base > 0)
     ).one()
     purchase = float(purchase)
     stock_value = round(float(db.execute(
