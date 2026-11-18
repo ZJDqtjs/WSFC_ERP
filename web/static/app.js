@@ -5463,6 +5463,9 @@ async function renderProducts() {
   // 独立页默认按名称、商品页默认按库存升序排序（用户手动点击表头后保持其排序）
   if (!t._sort) t._sort = isOrderPage ? { key: "name", dir: 1 } : { key: "stock", dir: 1 };
   rows = applyTableSort(t, rows);
+  // 停用的资料统一排到最后，不与启用的混在一起（商品 / 关联结算 / 包材 / 人工 / 快递共用这张表）；
+  // 用稳定排序，停用组内仍保持上面选的排序。
+  rows.sort((a, b) => (a.is_active === false ? 1 : 0) - (b.is_active === false ? 1 : 0));
   t.innerHTML = `<thead><tr>
     <th class="cb-col"><input type="checkbox" onclick="toggleAll(this,'prod')" /></th>
     <th data-key="code">编码${sortArrow("prodTable", "code")}</th>
@@ -6341,6 +6344,8 @@ function renderPackRules() {
     ].join(" ");
     return searchHit(hay, kws) && (!box || (r.box_type || "") === box);
   });
+  // 停用的规则排到最后，不与启用的混在一起
+  rows.sort((a, b) => (a.is_active === false ? 1 : 0) - (b.is_active === false ? 1 : 0));
   const t = $("prTable");
   t.innerHTML = `<thead><tr>
     <th class="cb-col"><input type="checkbox" onclick="toggleAll(this,'pr')" /></th>
