@@ -1239,6 +1239,7 @@ function adjPreview() {
   else if (!/^[+-]\d+(\.\d+)?$/.test(uraw)) afterUc.textContent = "⚠ 需以 + 或 - 开头，如 +2 / -1";
   else afterUc.textContent = `${fmtMoney(Math.max(uc + parseFloat(uraw), 0))}/${unit}`;
 }
+let ADJ_SUBMITTING = false;   // 防连点：提交中再点不重复发请求（曾出现连点 7 次写 7 条盘盈）
 async function submitAdjust() {
   const get = (id) => ($(id)?.value || "").trim();
   const raw = get("adjQty"), araw = get("adjAvgCost"), uraw = get("adjUnitCost");
@@ -1247,6 +1248,10 @@ async function submitAdjust() {
   if (uraw && !/^[+-]\d+(\.\d+)?$/.test(uraw)) { toast("成本单价必须以 + 或 - 开头（如 +2 调高 / -1 调低），留空则不调整"); return; }
   const p = PRODUCTS.find((x) => x.id === +$("adjProduct").value);
   if (!p) { toast("请选择商品"); return; }
+  if (ADJ_SUBMITTING) return;
+  ADJ_SUBMITTING = true;
+  const btn = document.querySelector('.modal-foot button[onclick="submitAdjust()"]');
+  if (btn) btn.disabled = true;
   try {
     const r = await api("/api/adjust", "POST", {
       product_id: p.id,
@@ -1263,6 +1268,7 @@ async function submitAdjust() {
     loadStock();
     loadAdjustments();
   } catch (e) { toast("操作失败：" + e.message); }
+  finally { ADJ_SUBMITTING = false; if (btn) btn.disabled = false; }
 }
 
 /* ---------- 盘点调整记录（查看谁盘点的，支持删除回退） ---------- */

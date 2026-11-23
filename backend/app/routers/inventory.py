@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -376,6 +376,7 @@ def adjust_stock(data: AdjustIn, db: Session = Depends(get_db), user: User = Dep
 
     movements = []
     delta_disp = 0.0
+    delta_base = 0.0
     parts = []
 
     # 1) 平均成本相对调整：在现有均价基础上增减（按展示单位单价）。
@@ -423,29 +424,34 @@ def adjust_stock(data: AdjustIn, db: Session = Depends(get_db), user: User = Dep
         unit = data.unit or du
         f = conv.get(unit, 1) or 1
         delta_base = round(delta_disp * f, 6)
-        # 盘盈金额：按「单位成本 × 盘盈数量」入账，单价取现均价；负库存/零库存时现均价
-        # 可能已被历史暂估拉到 0 附近，此时改用「最近一次真实入库」的单价。
-        # 之前的写法（amount = 目标均价×调整后库存 − 现库存价值）在负库存时会把盘盈金额算到
-        # 接近于 0，FIFO 再用这个超低单价回补历史超卖，就会把过去几个月的出库成本整批改写
-        # （2026-10-31 奥斯迪仓盘点实测把 10 月成本调低了 1.08 万）。
+        # 盘盈金额：按「采购单价 × 盘盈数量」入账，单价一律优先取「最近一次真实入库」单价。
+        # 为什么不能只按现均价(p.avg_cost)：
+        #   1) 负库存时 avg_cost 是 FIFO 的兜底值，可能已被更早的低价盘盈污染；
+        #   2) 正库存时也一样 —— 一旦历史上有过一次低价盘盈，avg_cost 就被拉低，
+        #      之后每次盘盈都按这个被污染的均价记账，越盘越低（自我强化）。
+        # 2026-09-30 wh01 5号纸箱：单价被拉到 0.1363，之后的盘盈按 0.4647 入账，
+        # FIFO 又拿低价回补历史超卖，导致当月的出库成本被整批改写成 0.46。
+        # 旧写法（amount = 目标均价×调整后库存 − 现库存价值）问题更大：负库存时 stock_value
+        # 被截成 0，盘盈几万个只按「盘完净剩的那点量」计价（2026-10-02 wh01 6号纸箱
+        # 盘盈 3736 个只记了 120 元 = 0.0321/个，而采购价 0.75）。
+        # 只有「从没入过库」的商品（如自建空白箱）才回退到现均价/参考成本。
         amount = 0.0
         if delta_base > 0:
             A_eff = p.avg_cost or 0.0
-            if (p.stock or 0.0) <= 1e-9:
-                # 负库存时 p.avg_cost 是 FIFO 的兜底单价，可能已是上一次低价盘盈留下的值，
-                # 不能直接拿来给本次盘盈定价 → 一律回退到「最近一次真实入库」单价。
-                last = db.execute(
-                    select(StockMovement.amount, StockMovement.quantity_base)
-                    .where(
-                        StockMovement.product_id == p.id,
-                        StockMovement.move_type == "in",
-                        StockMovement.quantity_base > 0,
-                    )
-                    .order_by(StockMovement.id.desc())
-                    .limit(1)
-                ).first()
-                if last and last[0] and last[1]:
-                    A_eff = float(last[0]) / float(last[1])
+            last = db.execute(
+                select(StockMovement.amount, StockMovement.quantity_base)
+                .where(
+                    StockMovement.product_id == p.id,
+                    StockMovement.move_type == "in",
+                    StockMovement.quantity_base > 0,
+                )
+                .order_by(StockMovement.id.desc())
+                .limit(1)
+            ).first()
+            if last and last[0] and last[1] > 0:
+                A_eff = float(last[0]) / float(last[1])
+            elif p.unit_cost:             # 无入库记录：用商品参考成本兜底
+                A_eff = p.unit_cost
             if avg_str:                   # 与均价重估流水同步：先重估再盘盈
                 A_eff += avg_delta_base
             amount = round(max(A_eff, 0.0) * delta_base, 2)
@@ -461,6 +467,36 @@ def adjust_stock(data: AdjustIn, db: Session = Depends(get_db), user: User = Dep
                 remark=f"盘点调整：{reason}".strip() if reason else "",
             )
         )
+
+    # 防连点 / 网络重试导致的重复记账：同一操作员、同一商品、同一天、同一组调整参数，
+    # 3 秒内重复提交视为误触，直接忽略（不再写流水）。
+    # 2026-10-02 wh01 6号纸箱被连点 7 次，写了 7 条 +3736 的盘盈，事后只能手工补负数回滚。
+    if movements and qty_str:
+        since = datetime.now() - timedelta(seconds=3)
+        dup = db.execute(
+            select(StockMovement.id).where(
+                StockMovement.product_id == p.id,
+                StockMovement.ref_type == "manual",
+                StockMovement.move_type == "adjust",
+                StockMovement.date == data.date,
+                StockMovement.quantity_base == delta_base,
+                StockMovement.operator == op,
+                StockMovement.created_at >= since,
+            ).limit(1)
+        ).first()
+        if dup:
+            db.rollback()
+            db.refresh(p)
+            return {
+                "ok": True, "adjusted": False, "duplicate": True,
+                "adjustment_id": dup[0],
+                "quantity": delta_disp, "unit": du,
+                "avg_cost_delta": 0.0, "unit_cost_delta": 0.0,
+                "stock": p.stock, "display": round((p.stock or 0.0) / f_disp, 4),
+                "avg_cost": round((p.avg_cost or 0.0) * f_disp, 4),
+                "unit_cost": round((p.unit_cost or 0.0) * f_disp, 4),
+                "message": "检测到 3 秒内的重复提交，本次已忽略（未重复记账）",
+            }
 
     for m in movements:
         db.add(m)
