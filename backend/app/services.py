@@ -1444,6 +1444,9 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
     sale_rows, pack_rows, warnings = [], [], []
     total_amount = total_cogs = 0.0
     express_weight = 0.0  # 整单毛重(kg)，用于自动计算快递费
+    # 商品资料上绑定的快递公司（订单商品优先，其次它扣减的库存大类）：
+    # 出库单没显式指定 express_carrier 时按它计费；整单取第一个「不包邮且绑了公司」的行。
+    carrier_hint = ""
     # FIFO 批次缓存：{库存商品id: (剩余批次deque, 兜底成本)}；同单内对同一商品的多行按顺序依次扣减
     fifo_cache: dict[int, tuple] = {}
 
@@ -1529,6 +1532,8 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
             # 没填净重就不计（视为代发方包邮）。
             if not line_free:
                 express_weight += line_weight_kg(p, qty_base)
+                if not carrier_hint:
+                    carrier_hint = (getattr(p, "express_carrier", "") or "").strip()
             cogs = round(qty_base * (p.unit_cost or 0.0), 2)
             if not (p.unit_cost or 0.0):
                 warnings.append(f"「{p.name}」是代发商品（未关联库存大类）但没填「参考成本」，代发成本按 0 计")
@@ -1553,6 +1558,12 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
                 line_net_kg = line_weight_kg(p, qty_base)
             if not line_free:
                 express_weight += line_net_kg
+                if not carrier_hint:
+                    # 订单商品本身绑的公司优先，没绑就看它扣减的库存大类
+                    carrier_hint = ((getattr(p, "express_carrier", "") or "").strip()
+                                    or next(((getattr(sp, "express_carrier", "") or "").strip()
+                                             for sp, _ in deds
+                                             if (getattr(sp, "express_carrier", "") or "").strip()), ""))
             cogs = round(cogs, 2)
         if fee is None:
             fee = p.pack_fee
@@ -1645,8 +1656,8 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
     # auto_express=False（手动出库并在预览里删掉了「快递费」行）时不再自动追加
     if auto_express and express_weight > 0:
         total_weight = round(express_weight + EXPRESS_BOX_WEIGHT_KG, 3)
-        # 按所选快递公司（不传=默认快递）的计费规则算
-        carrier = express_carrier_cfg(None, express_carrier)
+        # 快递公司优先级：出库单显式指定（关联结算里选的）> 商品资料绑定的 > 默认快递
+        carrier = express_carrier_cfg(None, (express_carrier or "").strip() or carrier_hint)
         auto_fee = compute_express_fee(total_weight, carrier)
         # 手动改过快递费（自动算的不对）：按用户手填的金额记，单位成本=该金额（数量固定 1 单）
         fee_used = round(float(express_fee), 2) if express_fee is not None else auto_fee

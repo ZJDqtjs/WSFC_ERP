@@ -5770,8 +5770,16 @@ function addProductPackRow() {
   bindSearchable(box);
 }
 
+/** 勾了「包邮」→ 快递公司下拉置灰（包邮的商品出库不计快递费，选公司没意义） */
+function pFreeShipChanged() {
+  const box = $("pFreeShip"), sel = $("pExpressCarrier");
+  if (!box || !sel) return;
+  sel.disabled = !!box.checked;
+  sel.title = box.checked ? "该商品已勾「包邮」，出库不计快递费" : "";
+}
 async function openProductModal(pid = 0, prefillName = "") {
   await ensureUnits();   // 先取最新单位表，否则刚新增的单位不会出现在「单位（默认单位）」下拉里
+  if (!EXPRESS_CARRIER_LIST.length) await loadExpressCarrierList();   // 快递公司下拉要选项
   const p = pid ? PRODUCTS.find((x) => x.id === pid) : null;
   const ptype = p ? p.product_type : "stock";
   const curUnit = p ? (p.default_unit || p.base_unit) : "斤";
@@ -5788,6 +5796,11 @@ async function openProductModal(pid = 0, prefillName = "") {
   PM_COST_BASE = p ? (+p.unit_cost || 0) : 0;
   const saleDisp = +(PM_SALE_BASE * f0).toFixed(6);
   const costDisp = +(PM_COST_BASE * f0).toFixed(6);
+  // 这个商品默认发哪家快递：选项来自「快递费」页配置的快递公司（空=跟随默认快递）
+  const curCarrier = p?.express_carrier || "";
+  const carrierOpts = `<option value="">（默认快递${EXPRESS_CARRIER_LIST.length ? "：" + esc((EXPRESS_CARRIER_LIST.find((c) => c.id === EXPRESS_CARRIER_DEFAULT) || {}).name || "") : ""}）</option>`
+    + EXPRESS_CARRIER_LIST.map((c) =>
+      `<option value="${esc(c.id)}"${c.id === curCarrier ? " selected" : ""}>${esc(c.name)}</option>`).join("");
   // 商品表单字段多，用加宽弹窗（字段自动多列排布）减少上下滚动
   $("modalBox").classList.add("wide");
   openModal(`
@@ -5849,7 +5862,12 @@ async function openProductModal(pid = 0, prefillName = "") {
       <label>固定费用（每单，如人工打包费，元）</label>
       <input id="pPackFee" type="number" step="any" value="${p?.pack_fee || 0}" />
     </div>
-    <label style="display:flex;gap:6px;align-items:center;margin-top:10px;"><input type="checkbox" id="pFreeShip" ${p?.free_shipping ? "checked" : ""}/> 包邮（出库不计快递费：该商品的运费不再自动结算）</label>
+    <div class="field" style="margin-top:10px;">
+      <label>快递公司（这个商品出库默认按哪家计费）</label>
+      <select id="pExpressCarrier">${carrierOpts}</select>
+      <div class="field-hint">出库时按这家快递公司的规则算快递费；选「默认快递」= 跟随「快递费」页的默认设置。出库单预览后仍可在「关联结算」的快递费行里按单改。勾了下面的「包邮」则不计快递费。</div>
+    </div>
+    <label style="display:flex;gap:6px;align-items:center;margin-top:10px;"><input type="checkbox" id="pFreeShip" onchange="pFreeShipChanged()" ${p?.free_shipping ? "checked" : ""}/> 包邮（出库不计快递费：该商品的运费不再自动结算）</label>
     ${p ? `<label style="display:flex;gap:6px;align-items:center;margin-top:10px;"><input type="checkbox" id="pActive" ${p.is_active ? "checked" : ""}/> 启用该商品</label>` : ""}
     <div class="modal-foot">
       ${p ? `<button class="btn danger" onclick="deleteProduct(${p.id})" style="margin-right:auto;">删除</button>` : ""}
@@ -5863,6 +5881,7 @@ async function openProductModal(pid = 0, prefillName = "") {
   if ($("pMultiBox")) $("pMultiBox").style.display = ptype === "order" ? "" : "none";
   updateProductPriceLabels(du0, f0, up0.base_unit);   // 价格字段标签/提示按默认单位显示
   updateUnitChangeBox(up0);                            // 跨类别换单位时显示「换算关系」输入框（初始=没换，隐藏）
+  pFreeShipChanged();                                  // 包邮时快递公司下拉置灰（包邮就不计快递费）
   // 加载库存商品（大类）列表，并渲染「扣减方案」（每套方案多行，支持 + 号新增方案/扣减项）
   if (ptype === "order") {
     api("/api/stocks").then((stocks) => {
@@ -6220,6 +6239,8 @@ async function saveProduct(pid, opts) {
     stock_links: stockLinks,
     stock_schemes: schemes,   // 多套扣减方案（[] = 清空，只剩上面的 stock_links）
     free_shipping: $("pFreeShip") ? $("pFreeShip").checked : false,
+    // 这个商品出库默认按哪家快递公司计费（空 = 默认快递）
+    express_carrier: $("pExpressCarrier") ? $("pExpressCarrier").value : "",
     is_active: $("pActive") ? $("pActive").checked : true,
   };
   if (!payload.name.trim()) { toast("请填写商品名称"); return; }
@@ -7585,7 +7606,6 @@ function expressCarrierPick(sel) {
   const tr = sel.closest("tr");
   OUT_EXPRESS_CARRIER = sel.value || null;
   OUT_EXPRESS_MANUAL = null;   // 换了公司：手填金额作废，改按新公司的规则算
-  try { if (OUT_EXPRESS_CARRIER) localStorage.setItem("outExpressCarrier", OUT_EXPRESS_CARRIER); } catch (e) { /* 隐私模式忽略 */ }
   if (tr) tr.querySelector(".pl-exp-reset")?.remove();
   const cfg = EXPRESS_CARRIER_LIST.find((c) => c.id === OUT_EXPRESS_CARRIER);
   const w = parseFloat(tr?.dataset?.weight || "");
@@ -7605,12 +7625,13 @@ function expressCarrierPick(sel) {
   calcOutboundTotals();
   toast(`本单快递费已改按「${cfg.name}」计：${fmtMoney(fee)}`);
 }
-/** 本单选用的快递公司 id（取「关联结算」快递费行里的绑定；没绑就沿用上次选的，再没有=默认快递） */
+/** 本单选用的快递公司 id：
+ *  用户在关联结算里显式改过 → 用它；否则沿用上一次预览算出来的那家；
+ *  都没有（首次预览）→ 传 null，由后端按「商品资料绑定的快递公司 → 默认快递」决定。 */
 function outExpressCarrierId() {
-  const sel = document.querySelector("#outPackBody tr[data-express='1'] .pl-carrier");
-  if (sel && sel.value) return sel.value;
   if (OUT_EXPRESS_CARRIER) return OUT_EXPRESS_CARRIER;
-  try { return localStorage.getItem("outExpressCarrier") || null; } catch (e) { return null; }
+  const sel = document.querySelector("#outPackBody tr[data-express='1'] .pl-carrier");
+  return (sel && sel.value) || null;
 }
 function renderPackPreview(r) {
   OUT_PREVIEW = r;

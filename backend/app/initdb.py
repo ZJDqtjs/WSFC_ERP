@@ -533,6 +533,8 @@ _EXTRA_COLUMNS = {
     # ⚠️ 新增列必须登记在这里：非默认分仓启动时只跑 ensure_schema（即本表），不跑 migrate()。
     #    这两列当初只加在 migrate() 里，导致 wh01 等分仓缺列，/api/products 等接口 500（表现为"数据全没了"）。
     "products": (("stock_links", "JSON"), ("free_shipping", "BOOLEAN DEFAULT 0"),
+                 # 商品默认快递公司（快递费页配置的 id；空=默认快递）
+                 ("express_carrier", "VARCHAR(64) DEFAULT ''"),
                  ("stock_schemes", "JSON"),
                  # 多端商品：多店铺多编码。multi_code 开关 + codes=[{code, shop}]（主编码仍在 code）
                  ("multi_code", "BOOLEAN DEFAULT 0"), ("codes", "JSON"),

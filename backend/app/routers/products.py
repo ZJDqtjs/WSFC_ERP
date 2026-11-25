@@ -72,6 +72,8 @@ class ProductIn(BaseModel):
     unit_cost: float = 0.0
     weight_kg: float = 0.0  # 单件毛重(kg/默认单位)
     free_shipping: bool = False  # 包邮：出库不计快递费（订单商品勾它，或其关联的库存大类勾它，都算包邮）
+    # 这个商品默认发哪家快递（「快递费」页配置的快递公司 id；空=用默认快递）
+    express_carrier: str | None = None
     conversions: dict[str, float] = {}
     pack_items: list[PackItem] = []
     pack_fee: float = 0.0
@@ -199,6 +201,7 @@ def _to_dict(p: Product, db: Session | None = None, last_in: dict[int, dict] | N
         "last_in_date": li.get("date") or "",
         "weight_kg": p.weight_kg or 0,
         "free_shipping": bool(p.free_shipping),
+        "express_carrier": p.express_carrier or "",
         "conversions": p.conversions or {},
         "pack_items": p.pack_items or [],
         "pack_fee": p.pack_fee,
@@ -513,6 +516,7 @@ def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = 
         unit_cost=data.unit_cost,
         weight_kg=data.weight_kg,
         free_shipping=data.free_shipping,
+        express_carrier=(data.express_carrier or "").strip(),
         conversions=conversions,
         pack_items=[item.model_dump() for item in data.pack_items],
         pack_fee=data.pack_fee,
@@ -639,6 +643,9 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
     p.unit_cost = data.unit_cost
     p.weight_kg = data.weight_kg
     p.free_shipping = data.free_shipping
+    # None = 旧客户端没传这个字段 → 保留原值；"" = 清空（用默认快递）
+    if data.express_carrier is not None:
+        p.express_carrier = data.express_carrier.strip()
     p.conversions = data.conversions or default_conversions(data.base_unit)
     p.pack_items = [item.model_dump() for item in data.pack_items]
     p.pack_fee = data.pack_fee
@@ -1026,6 +1033,7 @@ def copy_products_to_warehouse(
                 unit_cost=src.unit_cost or 0.0,
                 weight_kg=src.weight_kg or 0.0,
                 free_shipping=bool(src.free_shipping),
+                express_carrier=src.express_carrier or "",
                 conversions=dict(src.conversions or default_conversions(src.base_unit)),
                 pack_items=pack_items,
                 pack_fee=src.pack_fee or 0.0,
