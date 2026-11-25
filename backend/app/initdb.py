@@ -494,6 +494,8 @@ _EXTRA_COLUMNS = {
         ("brush_cost", "FLOAT DEFAULT 0"),
         ("brush_fee", "FLOAT DEFAULT 0"),
         ("brush_auto_fee", "FLOAT DEFAULT 0"),
+        # 平台订单号（京东 POP 店 orderId）：定时导入幂等 + 取消红冲反查
+        ("external_no", "VARCHAR(64) DEFAULT ''"),
     ),
     # 其他收支：来源单据（入库/出库金额调整自动生成）——单据删除/改日期时按此同步
     # fee：转账手续费（元），登记时已并入 amount，这里留档以便明细里看出「含手续费多少」
@@ -557,6 +559,8 @@ _EXTRA_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_outbound_lines_src ON outbound_lines(src_line_id)",
     # 退货单按原单反查（列表/详情显示「已退」用）
     "CREATE INDEX IF NOT EXISTS idx_outbounds_return_of ON outbounds(return_of_id)",
+    # 京东 POP 定时导入：按平台订单号判断「已建过单 / 已红冲」（重跑幂等，不能全表扫）
+    "CREATE INDEX IF NOT EXISTS idx_outbounds_external ON outbounds(external_no)",
     "CREATE INDEX IF NOT EXISTS idx_other_expenses_ref ON other_expenses(ref_type, ref_id)",
     # 报表「重量(kg)」按出库行的库存流水反推扣减量：line_id 是 ALTER 补加的列，模型里的
     # index=True 对老库不生效 → 缺这个索引时重量查询会退化成全表扫描（实测 13 天区间 104 秒）。

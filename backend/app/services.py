@@ -1801,6 +1801,8 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
     rec = Outbound(
         code=gen_outbound_code(db, date),
         import_group=import_group,
+        # 平台订单号（京东 POP）：定时导入按它去重、取消时按它找原单红冲
+        external_no=(payload.get("external_no") or "").strip(),
         pack_rule_id=payload.get("pack_rule_id"),
         pack_rule_name=(payload.get("pack_rule_name") or "").strip(),
         customer=(payload.get("customer") or "").strip(),

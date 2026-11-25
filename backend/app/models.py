@@ -143,6 +143,9 @@ class Outbound(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(32), index=True)
     import_group: Mapped[str] = mapped_column(String(32), index=True, default="")  # 批量导入批次号，空=单条
+    # 平台订单号（京东 POP 店 orderId）：定时导入按它去重（重跑不重复建单），
+    # 订单状态回撤（已出库 → 已取消）时也按它找回原单做红冲。空 = 非平台单（手动/聚水潭走备注单号）。
+    external_no: Mapped[str] = mapped_column(String(64), index=True, default="")
     pack_rule_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 命中的一单多货规则ID
     pack_rule_name: Mapped[str] = mapped_column(String(255), default="")  # 规则名快照（规则改动不影响历史）
     customer: Mapped[str] = mapped_column(String(64), default="")

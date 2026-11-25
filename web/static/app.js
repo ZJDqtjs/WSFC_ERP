@@ -457,7 +457,12 @@ function switchSettingsTab(panel) {
   if (panel === "pdata") loadPdataPage();
   else if (panel === "backup") loadBackupPage();
   else if (panel === "jushuitan") loadMappingPage();
-  else if (panel === "jstauto") loadJstAutoPage();
+  else if (panel === "jstauto") {
+    // 自动出库设置：聚水潭 / 京麦 两个模块，按上次停留的模块恢复显示
+    switchAutoModule(AUTO_MODULE);
+    if (AUTO_MODULE === "pop") { if (!POP_AUTO) loadPopAutoPage(); }
+    else loadJstAutoPage();
+  }
   else if (panel === "modules") renderNavModulesPanel();
 }
 async function loadSettingsPage() { switchSettingsTab("pdata"); }
@@ -11467,6 +11472,282 @@ async function loadJstHistory() {
         </tr>`;
       }).join("") : `<tr><td colspan="7" class="empty">还没有执行记录</td></tr>`) + `</tbody>`;
   } catch (e) { /* 忽略：历史读不到不影响设置 */ }
+}
+
+/* =============== 自动出库设置：模块切换（聚水潭 / 京麦 · POP 店） =============== */
+let AUTO_MODULE = "jst";
+let POP_AUTO = null;
+let POP_POLL = null;
+
+/* 顶部模块切换按钮：两套设置各管各的，切换只切显示，互不覆盖 */
+function switchAutoModule(mod) {
+  AUTO_MODULE = mod === "pop" ? "pop" : "jst";
+  document.querySelectorAll("#autoModuleSeg .seg-item").forEach((x) => {
+    x.classList.toggle("active", x.dataset.mod === AUTO_MODULE);
+  });
+  document.querySelectorAll("#page-settings .auto-module").forEach((x) => {
+    x.style.display = x.dataset.mod === AUTO_MODULE ? "" : "none";
+  });
+  const hint = $("autoModuleHint");
+  if (hint) {
+    hint.textContent = AUTO_MODULE === "pop"
+      ? "京麦：定时从 jdfenxi 拉京东 POP 店订单，按供货价（再扣店铺扣点）建出库单；订单取消可自动红冲。"
+      : "聚水潭：定时导出销售出库单（xlsx），下载后直接在本分仓建出库单。";
+  }
+  if (AUTO_MODULE === "pop" && !POP_AUTO) loadPopAutoPage();
+}
+
+/* ---------- 京麦（POP 店） ---------- */
+async function loadPopAutoPage() {
+  try {
+    fillPopAuto(await api("/api/pop-auto/settings"));
+  } catch (e) { toast("加载京麦设置失败：" + e.message); }
+}
+
+function popAccountsText(list) {
+  return (list || []).map((a) => `${a.account}=${a.customer || a.label || ""}`).join("\n");
+}
+
+function popParseAccounts(text) {
+  return String(text || "").split("\n").map((s) => s.trim()).filter(Boolean).map((line) => {
+    const m = line.split(/[=＝]/);
+    const account = (m[0] || "").trim();
+    const customer = (m[1] || "").trim();
+    return { account, customer: customer || account, label: customer || account };
+  }).filter((x) => x.account);
+}
+
+function fillPopAuto(d) {
+  POP_AUTO = d;
+  const wh = d.warehouse || {};
+  if ($("jstWhName")) $("jstWhName").textContent = d.warehouse_name || d.warehouse_key || "—";
+  if ($("popWhName")) $("popWhName").textContent = d.warehouse_name || d.warehouse_key || "—";
+  if ($("popServiceUrl")) $("popServiceUrl").value = d.service_url || "";
+  if ($("popServiceHint")) {
+    $("popServiceHint").textContent = "默认：" + (d.service_url_default || "127.0.0.1:18011")
+      + "（与「广告利润」页读的是同一个挂载服务）";
+  }
+  if ($("popAccounts")) $("popAccounts").value = popAccountsText(wh.accounts);
+  const pm = $("popPriceMode");
+  if (pm) {
+    pm.innerHTML = (d.price_modes || []).map((m) =>
+      `<option value="${esc(m.value)}"${wh.price_mode === m.value ? " selected" : ""}>${esc(m.label)}</option>`).join("");
+  }
+  if ($("popDays")) $("popDays").value = wh.days || 7;
+  if ($("popOperator")) $("popOperator").value = wh.operator || "";
+  if ($("popSchedule")) $("popSchedule").value = (wh.schedule || []).join(",");
+  if ($("popJitter")) $("popJitter").value = wh.jitter_minutes ?? 10;
+  if ($("popEnabled")) $("popEnabled").checked = !!wh.enabled;
+  if ($("popAutoExpress")) $("popAutoExpress").checked = wh.auto_express !== false;
+  if ($("popAutoReverse")) $("popAutoReverse").checked = wh.auto_reverse !== false;
+  if ($("popSkipImported")) $("popSkipImported").checked = wh.skip_imported !== false;
+
+  const box = $("popStatusBox");
+  if (box) {
+    const cur = new Set((wh.statuses || []).map(Number));
+    box.innerHTML = (d.statuses || []).map((s) => {
+      const cancel = Number(s.code) === 29;   // 已取消只用于红冲判断，不能当「可导入」勾
+      return `<label class="check-inline"${cancel ? ' title="已取消不导入，只用于把已建的单自动红冲"' : ""}>
+        <input type="checkbox" class="pop-status" value="${s.code}"${(!cancel && cur.has(Number(s.code))) ? " checked" : ""}${cancel ? " disabled" : ""} />
+        ${esc(s.label)}(${s.code})</label>`;
+    }).join("");
+  }
+
+  const dh = $("popDeductionHint");
+  if (dh) {
+    const rows = (wh.accounts || []).map((a) => {
+      const dd = a.deduction || {};
+      const mark = dd.matched ? "✅" : "⚠";
+      return `<div>${mark} ${esc(a.customer || a.account)}：${esc(dd.note || "")}</div>`;
+    });
+    dh.innerHTML = rows.length
+      ? "扣点规则（deduction_config.json）：" + rows.join("")
+      : "还没有配置 POP 店铺账号 —— 填「账号=店铺名」后保存，店铺名要和扣点设置里的店铺名一致。";
+  }
+  const nr = $("popNextRuns");
+  if (nr) nr.textContent = (d.next_runs || []).length ? "接下来：" + d.next_runs.join("、") : "未设定时";
+  renderPopStatus(d.status || {});
+  loadPopPending(d);
+  loadPopHistory();
+}
+
+async function savePopAuto() {
+  const payload = {
+    service_url: ($("popServiceUrl")?.value || "").trim(),
+    enabled: !!$("popEnabled")?.checked,
+    accounts: popParseAccounts($("popAccounts")?.value),
+    price_mode: $("popPriceMode")?.value || "supply",
+    statuses: [...document.querySelectorAll(".pop-status:checked")].map((x) => Number(x.value)),
+    days: Number($("popDays")?.value || 7),
+    schedule: ($("popSchedule")?.value || "").split(",").map((s) => s.trim()).filter(Boolean),
+    jitter_minutes: Number($("popJitter")?.value || 0),
+    auto_express: !!$("popAutoExpress")?.checked,
+    auto_reverse: !!$("popAutoReverse")?.checked,
+    skip_imported: !!$("popSkipImported")?.checked,
+    operator: ($("popOperator")?.value || "").trim(),
+  };
+  try {
+    fillPopAuto(await api("/api/pop-auto/settings", "POST", payload));
+    toast("已保存京麦设置");
+  } catch (e) { toast("保存失败：" + e.message); }
+}
+
+async function checkPopSource() {
+  const el = $("popCheckResult");
+  if (el) el.textContent = "检测中…（只读缓存，不会触发浏览器抓取）";
+  try {
+    const r = await api("/api/pop-auto/check", "POST", { service_url: ($("popServiceUrl")?.value || "").trim() });
+    if (el) el.textContent = (r.ok ? "✅ " : "❌ ") + (r.message || "");
+  } catch (e) { if (el) el.textContent = "❌ " + e.message; }
+}
+
+function renderPopStatus(st) {
+  const el = $("popRunStatus");
+  if (!el) return;
+  const s = st || {};
+  const stats = s.stats || {};
+  const lines = [];
+  if (s.running) lines.push(`⏳ 正在执行（${s.trigger || ""}）· ${s.step || ""} ${s.message || ""}`);
+  else if (s.finished_at) {
+    lines.push(`${s.ok === false ? "❌" : "✅"} 上次执行 ${s.finished_at}（${s.trigger || ""}）`);
+    if (s.error) lines.push("错误：" + s.error);
+  }
+  if (stats && (stats.created != null)) {
+    lines.push(`建单 ${stats.created || 0} · 跳过重复 ${stats.duplicate_skipped || 0} · 红冲 ${stats.reversed || 0}`
+      + ` · 未匹配 ${stats.unmapped || 0} · 状态跳过 ${stats.status_skipped || 0}`
+      + (stats.dry_run ? ` · 试算 ${stats.dry_run}` : ""));
+  }
+  if (s.message && !s.running) lines.push(s.message);
+  el.textContent = lines.join("\n");
+}
+
+async function runPopAuto(dry) {
+  if (!dry && !confirm("立即导入：按当前设置拉 POP 订单并在本分仓建出库单。继续？")) return;
+  const body = {
+    start: $("popRunFrom")?.value || "",
+    end: $("popRunTo")?.value || "",
+    dry_run: !!dry,
+  };
+  try {
+    const r = await api("/api/pop-auto/run", "POST", body);
+    toast(r.message || "已开始执行");
+    renderPopStatus({ running: true, step: "已启动", trigger: dry ? "试算" : "手动" });
+    startPopPoll();
+  } catch (e) { toast("启动失败：" + e.message); }
+}
+
+function startPopPoll() {
+  stopPopPoll();
+  POP_POLL = setInterval(async () => {
+    try {
+      const st = await api("/api/pop-auto/status");
+      renderPopStatus(st);
+      if (!st.running) { stopPopPoll(); loadPopHistory(); loadPopAutoPage(); }
+    } catch (e) { stopPopPoll(); }
+  }, 3000);
+}
+
+function stopPopPoll() {
+  if (POP_POLL) { clearInterval(POP_POLL); POP_POLL = null; }
+}
+
+async function refreshPopStatus() {
+  try {
+    const st = await api("/api/pop-auto/status");
+    renderPopStatus(st);
+    if (st.running) startPopPoll(); else loadPopHistory();
+  } catch (e) { toast("读取状态失败：" + e.message); }
+}
+
+async function loadPopHistory() {
+  const t = $("popHistoryTable");
+  if (!t) return;
+  try {
+    const d = await api("/api/pop-auto/history?limit=20");
+    const rows = d.runs || [];
+    t.innerHTML = `<thead><tr>
+        <th>时间</th><th>触发</th><th>结果</th><th>订单区间</th>
+        <th class="num">建单</th><th class="num">跳过重复</th><th class="num">红冲</th><th class="num">未匹配</th><th>说明</th>
+      </tr></thead><tbody>` +
+      (rows.length ? rows.map((r) => {
+        const s = r.stats || {};
+        return `<tr>
+          <td class="mono">${esc(r.at || "")}</td>
+          <td>${esc(r.trigger || "")}</td>
+          <td>${r.ok ? '<span class="badge in">成功</span>' : '<span class="badge out">失败</span>'}</td>
+          <td class="mono">${esc(r.window || "")}</td>
+          <td class="num">${s.created != null ? s.created : "—"}</td>
+          <td class="num">${s.duplicate_skipped != null ? s.duplicate_skipped : "—"}</td>
+          <td class="num">${s.reversed != null ? s.reversed : "—"}</td>
+          <td class="num">${s.unmapped != null ? s.unmapped : "—"}</td>
+          <td>${esc(r.message || r.error || "")}${(r.warnings || []).length ? `<div class="muted" style="font-size:11px;">${esc(r.warnings.slice(0, 3).join("；"))}</div>` : ""}</td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="9" class="empty">还没有执行记录</td></tr>`) + `</tbody>`;
+  } catch (e) { /* 历史读不到不影响设置 */ }
+}
+
+async function loadPopPending(d) {
+  if (!d) {
+    try { d = await api("/api/pop-auto/settings"); } catch (e) { return; }
+  }
+  const box = $("popPendingBox");
+  if (!box) return;
+  const list = d.pending || [];
+  if (!list.length) { box.innerHTML = '<div class="hint" style="margin:0;">暂无待办</div>'; return; }
+  if (!PRODUCTS.length) { try { PRODUCTS = await api("/api/products"); } catch (e) { /* 下拉拉不到也能看清单 */ } }
+  const opts = PRODUCTS.filter((p) => p.is_active !== false)
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "zh"))
+    .map((p) => `<option value="${p.id}">${esc(p.name)}${p.code ? "（" + esc(p.code) + "）" : ""}</option>`).join("");
+  box.innerHTML = list.map((t) => {
+    const head = `<div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;">
+        <b>${esc(t.title || "待办")}</b><span class="muted">${esc(t.message || "")}</span>
+      </div>`;
+    if (t.type !== "pop_unmapped") {
+      const names = (t.items || []).map((it) => it.name).filter(Boolean);
+      return `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px;">
+        ${head}
+        <div class="mono" style="font-size:12px;margin-top:6px;">${esc(names.join("、"))}</div>
+        <div class="toolbar" style="margin-top:6px;">
+          <button class="btn sm ghost" onclick="closePopPending('${esc(t.id)}')">知道了</button>
+        </div>
+      </div>`;
+    }
+    const items = (t.items || []).map((it) => `<tr>
+        <td class="mono">${esc(it.sku || "")}</td>
+        <td>${esc(it.name || "")}</td>
+        <td class="num">${it.count || 0}</td>
+        <td><select class="pop-map" data-sku="${esc(it.sku || "")}"><option value="">（选择系统商品…）</option>${opts}</select></td>
+      </tr>`).join("");
+    return `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px;">
+      ${head}
+      <div class="table-wrap"><table><thead><tr>
+        <th>京东 SKU</th><th>商品</th><th class="num">出现次数</th><th>关联到系统商品</th>
+      </tr></thead><tbody>${items}</tbody></table></div>
+      <div class="toolbar" style="margin-top:6px;">
+        <button class="btn green sm" onclick="resolvePopPending('${esc(t.id)}')">保存关联</button>
+        <button class="btn sm ghost" onclick="closePopPending('${esc(t.id)}')">忽略这条</button>
+        <span class="muted" style="font-size:11px;">保存后点「立即导入」重跑，跳过重复不会重复建单</span>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+async function resolvePopPending(id) {
+  const mappings = [...document.querySelectorAll(".pop-map")].map((s) => ({
+    external_code: s.dataset.sku || "",
+    product_id: Number(s.value || 0),
+  })).filter((m) => m.external_code && m.product_id);
+  if (!mappings.length) { toast("请先给至少一个 SKU 选择系统商品"); return; }
+  try {
+    const r = await api("/api/pop-auto/pending/resolve", "POST", { mappings, close_id: id || "" });
+    toast(`已保存 ${r.saved} 条关联，可重新导入`);
+    loadPopAutoPage();
+  } catch (e) { toast("保存失败：" + e.message); }
+}
+
+async function closePopPending(id) {
+  try { await api("/api/pop-auto/pending/close", "POST", { id, status: "ignored" }); toast("已忽略"); loadPopAutoPage(); }
+  catch (e) { toast("操作失败：" + e.message); }
 }
 
 /* =============== 待办处理（挂在「设置 → 自动出库设置」页里，不单开侧边栏） ===============

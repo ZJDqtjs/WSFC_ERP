@@ -19,7 +19,7 @@ from .database import (
 )
 from .initdb import ensure_schema, init_warehouse
 from .maintenance import on_service_start, record_request, should_record, start_activity_store
-from .routers import adprofit, ai, auth, backup, brush_out, deductions, express, fresh, imports, inbound, inventory, jst_auto, maintenance, open_api, others, outbound, pack_rules, payables, product_data, products, reconcile, report, uploads, warehouse_in, warehouses
+from .routers import adprofit, ai, auth, backup, brush_out, deductions, express, fresh, imports, inbound, inventory, jst_auto, maintenance, open_api, others, outbound, pack_rules, payables, pop_auto, product_data, products, reconcile, report, uploads, warehouse_in, warehouses
 from .routers.backup import create_backup_file, create_json_backup_file, load_config
 
 # 桌面 Web 前端目录（WSFC_ERP/web/static，前后端分离；SERVE_STATIC=1 时后端顺带托管）
@@ -153,6 +153,14 @@ async def lifespan(app: FastAPI):
         print("[自动出库] 定时调度已启动（每 20 秒检查一次到点的分仓）")
     except Exception as e:  # noqa: BLE001 - 调度起不来不该阻止服务启动
         print("[自动出库] 定时调度启动失败:", e)
+    # 6) 京东 POP 店订单定时导入（京麦模块）：与聚水潭调度并列，互不影响
+    try:
+        from .pop.runner import start_scheduler as start_pop_scheduler
+
+        start_pop_scheduler()
+        print("[京麦POP] 定时导入调度已启动（每 20 秒检查一次到点的分仓）")
+    except Exception as e:  # noqa: BLE001
+        print("[京麦POP] 定时导入调度启动失败:", e)
     yield
     task.cancel()
 
@@ -237,6 +245,7 @@ app.include_router(inbound.router)
 app.include_router(outbound.router)
 app.include_router(inventory.router)
 app.include_router(jst_auto.router)  # 自动出库设置（聚水潭销售出库单定时导出并导入）
+app.include_router(pop_auto.router)  # 自动出库设置 → 京麦模块（京东 POP 店订单定时导入并出库）
 app.include_router(others.router)
 app.include_router(payables.router)   # 待付款账单（入库/入仓/出库/其他收支/手动记账 汇总）
 app.include_router(pack_rules.router)

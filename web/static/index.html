@@ -1289,7 +1289,20 @@
           <div class="card">
             <div class="card-head">
               <h3>自动出库设置</h3>
-              <span class="hint">定时从聚水潭自动导出销售出库单（xlsx），下载后直接在<b>当前分仓</b>建出库单。设置按分仓隔离，当前分仓：<b id="jstWhName">—</b></span>
+              <span class="hint">定时把平台订单导入成出库单；按模块独立配置，设置按分仓隔离，当前分仓：<b id="jstWhName">—</b></span>
+            </div>
+            <div class="seg" id="autoModuleSeg">
+              <button class="seg-item active" data-mod="jst" onclick="switchAutoModule('jst')">聚水潭</button>
+              <button class="seg-item" data-mod="pop" onclick="switchAutoModule('pop')">京麦 · POP 店</button>
+            </div>
+            <div class="hint" id="autoModuleHint">聚水潭：定时导出销售出库单（xlsx），下载后直接在本分仓建出库单。</div>
+          </div>
+
+          <div id="autoModuleJst" class="auto-module" data-mod="jst">
+          <div class="card">
+            <div class="card-head">
+              <h3>聚水潭账号与登录</h3>
+              <span class="hint">所有分仓共用</span>
               <div class="grow"></div>
               <button class="btn secondary" onclick="loadJstAutoPage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
             </div>
@@ -1399,6 +1412,117 @@
             </div>
             <div class="table-wrap"><table id="jstHistoryTable"></table></div>
           </div>
+          </div><!-- /autoModuleJst -->
+
+          <!-- 京麦（POP 店）：jdfenxi 每晚抓订单 → ERP 按窗口拉取并建出库单 -->
+          <div id="autoModulePop" class="auto-module" data-mod="pop" style="display:none;">
+            <div class="card">
+              <div class="card-head">
+                <h3>数据源（jdfenxi 挂载服务）</h3>
+                <span class="hint">只读订单缓存，不触发浏览器抓取；jdfenxi 每晚 19:00 自己抓最近 7 天</span>
+                <div class="grow"></div>
+                <button class="btn secondary" onclick="loadPopAutoPage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+              </div>
+              <div class="form-grid">
+                <div class="field">
+                  <label>服务地址</label>
+                  <input id="popServiceUrl" placeholder="留空 = 127.0.0.1:18011" />
+                  <div class="field-hint" id="popServiceHint"></div>
+                </div>
+                <div class="field" style="min-width:280px;">
+                  <label>POP 店铺账号 → 出库单客户（店铺名）</label>
+                  <textarea id="popAccounts" rows="3" placeholder="acct4=沛沛佳pop"></textarea>
+                  <div class="field-hint">每行一个：账号=店铺名。店铺名必须与「扣点设置」里的 shop 完全一致才会扣点。</div>
+                </div>
+              </div>
+              <div class="toolbar">
+                <button class="btn green" onclick="savePopAuto()"><svg class="ic"><use href="#i-save"/></svg> 保存设置</button>
+                <button class="btn secondary" onclick="checkPopSource()">检测连通</button>
+                <span class="muted" id="popCheckResult"></span>
+              </div>
+              <div class="hint" id="popDeductionHint"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-head">
+                <h3>本分仓（<b id="popWhName">—</b>）的 POP 自动导入</h3>
+                <span class="hint">每天定时拉订单 → 建出库单；设置按分仓隔离</span>
+              </div>
+              <div class="toolbar">
+                <label class="check-inline" title="关闭后不再定时执行，仍可手动「立即导入」">
+                  <input type="checkbox" id="popEnabled" /> 启用定时导入
+                </label>
+                <span class="muted" id="popNextRuns"></span>
+              </div>
+              <div class="form-grid">
+                <div class="field">
+                  <label>价格口径</label>
+                  <select id="popPriceMode"></select>
+                  <div class="field-hint">供货价 = 京东结算给我们的钱；实付 = 买家付款（含优惠，收入会偏高）</div>
+                </div>
+                <div class="field">
+                  <label>每次拉几天</label>
+                  <input id="popDays" type="number" min="1" max="30" step="1" />
+                  <div class="field-hint">默认 7 天：jdfenxi 每晚重抓最近 7 天，订单状态变化能被覆盖</div>
+                </div>
+                <div class="field"><label>导入操作员</label><input id="popOperator" placeholder="留空 = 用第一个管理员账号" /></div>
+                <div class="field">
+                  <label>每天执行时间</label>
+                  <input id="popSchedule" placeholder="如 19:40" />
+                  <div class="field-hint">排在 jdfenxi 19:00 抓取之后；留空 = 不定时</div>
+                </div>
+                <div class="field">
+                  <label>定时浮动范围（分钟）</label>
+                  <input id="popJitter" type="number" min="0" max="120" step="1" />
+                  <div class="field-hint">实际触发时间在定时点 ±N 分钟内随机（每天不同），建议 5~15</div>
+                </div>
+                <div class="field" style="grid-column:1/-1;">
+                  <label>可导入的订单状态</label>
+                  <div id="popStatusBox" class="toolbar" style="flex-wrap:wrap;gap:12px;"></div>
+                  <div class="field-hint">已取消(29) 不导入；它的作用是让「已建单后又被取消」的订单自动红冲</div>
+                </div>
+              </div>
+              <div class="toolbar" style="flex-wrap:wrap;">
+                <label class="check-inline" title="按整单毛重自动结算快递费（代发按商品净重）">
+                  <input type="checkbox" id="popAutoExpress" /> 自动算快递费
+                </label>
+                <label class="check-inline" title="订单状态变成已取消时，对已建的单自动红冲">
+                  <input type="checkbox" id="popAutoReverse" /> 订单取消自动红冲
+                </label>
+                <label class="check-inline" title="按平台订单号跳过已建过的单，重跑不会重复建单">
+                  <input type="checkbox" id="popSkipImported" /> 跳过已导入订单
+                </label>
+              </div>
+              <div class="toolbar" style="flex-wrap:wrap;">
+                <input id="popRunFrom" type="date" class="mono" title="补导起始日（留空=按每次拉几天）" />
+                <input id="popRunTo" type="date" class="mono" title="补导截止日" />
+                <button class="btn green" onclick="runPopAuto(false)">立即导入（建单）</button>
+                <button class="btn secondary" onclick="runPopAuto(true)">只试算（不建单）</button>
+                <button class="btn sm ghost" onclick="refreshPopStatus()">刷新状态</button>
+              </div>
+              <div id="popRunStatus" class="muted" style="white-space:pre-wrap;"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-head">
+                <h3>待办</h3>
+                <span class="hint">京东 SKU 没对上系统商品时，对应订单整单跳过（不建半张单），在这里补关联后重跑</span>
+                <div class="grow"></div>
+                <button class="btn secondary" onclick="loadPopPending()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+              </div>
+              <div id="popPendingBox"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-head">
+                <h3>执行记录</h3>
+                <span class="hint">最近 20 次，含建单 / 跳过重复 / 红冲 / 未匹配</span>
+                <div class="grow"></div>
+                <button class="btn secondary" onclick="loadPopHistory()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+              </div>
+              <div class="table-wrap"><table id="popHistoryTable"></table></div>
+            </div>
+          </div><!-- /autoModulePop -->
         </div>
 
         <!-- 模块显示调整：勾选侧边栏各功能的显示 / 隐藏（记忆化到本机浏览器） -->
