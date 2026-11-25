@@ -105,6 +105,17 @@ function bindSearchable(root = document) {
       rendered = null;           // 文本被外部改动，下次打开重新渲染
     }
     sel.addEventListener("change", syncInput);
+    // 初始就把「当前选中项」显示出来。以前只在 change / blur / 点页面空白处才同步，
+    // 所以弹窗刚打开时输入框是空的（只看到 placeholder），用户以为「关联库存商品是空的」，
+    // 点一下页面才冒出文字 —— 全站所有 searchable 下拉都中招。
+    syncInput();
+    // options 被整体替换时（如单位下拉先建空 select 再填充、切换商品类型重填单位），
+    // 同一个 select 不会重新绑定，这里跟着同步一次显示文本。
+    const mo = new MutationObserver(() => {
+      if (!sel.isConnected) { mo.disconnect(); return; }
+      syncInput();
+    });
+    mo.observe(sel, { childList: true });
 
     function renderList(filter) {
       const f = (filter || "").toLowerCase().trim();
