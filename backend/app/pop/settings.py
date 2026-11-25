@@ -260,6 +260,10 @@ def upsert_pending(key: str, task: dict[str, Any]) -> dict[str, Any]:
             keep = {k: old[k] for k in ("id", "created_at") if old.get(k)}
             old.update(task)
             old.update(keep)
+            # 之前「忽略」过的同类待办，问题又出现了就重新打开（否则补完映射前它一直藏着）
+            old["status"] = "open"
+            old.pop("closed_at", None)
+            old.pop("close_note", None)
             task = old
         else:
             task.setdefault("id", f"pop-{datetime.now():%Y%m%d%H%M%S}-{task.get('type', 'x')}")
