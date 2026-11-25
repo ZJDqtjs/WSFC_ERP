@@ -5777,10 +5777,11 @@ function pFreeShipChanged() {
   sel.disabled = !!box.checked;
   sel.title = box.checked ? "该商品已勾「包邮」，出库不计快递费" : "";
 }
-async function openProductModal(pid = 0, prefillName = "") {
+async function openProductModal(pid = 0, prefillName = "", draft = null) {
   await ensureUnits();   // 先取最新单位表，否则刚新增的单位不会出现在「单位（默认单位）」下拉里
   if (!EXPRESS_CARRIER_LIST.length) await loadExpressCarrierList();   // 快递公司下拉要选项
-  const p = pid ? PRODUCTS.find((x) => x.id === pid) : null;
+  // draft：点「复制」时带进来的商品信息（字段与保存 payload 同构），按「新增商品」打开并预填
+  const p = draft || (pid ? PRODUCTS.find((x) => x.id === pid) : null);
   const ptype = p ? p.product_type : "stock";
   const curUnit = p ? (p.default_unit || p.base_unit) : "斤";
   const curCat = p ? p.category : (prodForceCat || ""); // 独立分类页新增时自动带上分类
@@ -5801,10 +5802,15 @@ async function openProductModal(pid = 0, prefillName = "") {
   const carrierOpts = `<option value="">（默认快递${EXPRESS_CARRIER_LIST.length ? "：" + esc((EXPRESS_CARRIER_LIST.find((c) => c.id === EXPRESS_CARRIER_DEFAULT) || {}).name || "") : ""}）</option>`
     + EXPRESS_CARRIER_LIST.map((c) =>
       `<option value="${esc(c.id)}"${c.id === curCarrier ? " selected" : ""}>${esc(c.name)}</option>`).join("");
+  // 「复制」：以当前商品信息新建一条（编辑态才有）。方便复用同类商品再改几处，不用从头填
+  const copyBtn = (pid && !draft)
+    ? `<button class="btn secondary sm" type="button" onclick="duplicateProduct()" title="按当前填写的商品信息新建一条（编码要另填）">复制</button>`
+    : "";
+  const title = draft ? "新增商品（复制）" : (pid ? "编辑商品" : "新增商品");
   // 商品表单字段多，用加宽弹窗（字段自动多列排布）减少上下滚动
   $("modalBox").classList.add("wide");
   openModal(`
-    <h3>${pid ? "编辑商品" : "新增商品"} <button class="close" onclick="closeModal()">✕</button></h3>
+    <h3><span>${title}</span><span style="display:flex;gap:8px;align-items:center;">${copyBtn}<button class="close" onclick="closeModal()">✕</button></span></h3>
     <div class="form-grid">
       <div class="field"><label>商品编码</label><input id="pCode" value="${esc(p?.code || "")}" placeholder="如 ydj001，可留空" />
         <div class="field-hint">主编码：没匹配到店铺的订单都归它</div>
@@ -5868,11 +5874,11 @@ async function openProductModal(pid = 0, prefillName = "") {
       <div class="field-hint">出库时按这家快递公司的规则算快递费；选「默认快递」= 跟随「快递费」页的默认设置。出库单预览后仍可在「关联结算」的快递费行里按单改。勾了下面的「包邮」则不计快递费。</div>
     </div>
     <label style="display:flex;gap:6px;align-items:center;margin-top:10px;"><input type="checkbox" id="pFreeShip" onchange="pFreeShipChanged()" ${p?.free_shipping ? "checked" : ""}/> 包邮（出库不计快递费：该商品的运费不再自动结算）</label>
-    ${p ? `<label style="display:flex;gap:6px;align-items:center;margin-top:10px;"><input type="checkbox" id="pActive" ${p.is_active ? "checked" : ""}/> 启用该商品</label>` : ""}
+    ${p && !draft ? `<label style="display:flex;gap:6px;align-items:center;margin-top:10px;"><input type="checkbox" id="pActive" ${p.is_active ? "checked" : ""}/> 启用该商品</label>` : ""}
     <div class="modal-foot">
-      ${p ? `<button class="btn danger" onclick="deleteProduct(${p.id})" style="margin-right:auto;">删除</button>` : ""}
+      ${p && !draft ? `<button class="btn danger" onclick="deleteProduct(${p.id})" style="margin-right:auto;">删除</button>` : ""}
       <button class="btn secondary" onclick="closeModal()">取消</button>
-      <button class="btn" onclick="saveProduct(${pid || 0})">保存</button>
+      <button class="btn" onclick="saveProduct(${draft ? 0 : (pid || 0)})">保存</button>
     </div>`);
   initProductUnitSelect(ptype, curUnit);
   initCodeRows(p?.codes || [], !!(p && p.multi_code));   // 多端商品：多店铺多编码回填
@@ -6200,7 +6206,8 @@ function collectCodes() {
   })).filter((x) => x.code);
 }
 
-async function saveProduct(pid, opts) {
+/** 从商品弹窗当前填写的内容收集保存 payload（「保存」与「复制」共用，保证两者口径一致）。 */
+function collectProductPayload(opts) {
   const ptype = $("pType").value;
   const unit = $("pUnit") ? $("pUnit").value : "斤";
   const unitPayload = deriveUnitPayload(ptype, unit, PM_EDIT_P);
@@ -6243,6 +6250,23 @@ async function saveProduct(pid, opts) {
     express_carrier: $("pExpressCarrier") ? $("pExpressCarrier").value : "",
     is_active: $("pActive") ? $("pActive").checked : true,
   };
+  return payload;
+}
+/** 「复制」：把当前弹窗里的商品信息（含还没保存的改动）原样带进「新增商品」表单，
+    改个编码/名称即可存成一条新商品 —— 关联结算这类同类商品多，不用再从头填一遍。
+    编码全局唯一，复制品必须另填，这里清空（多店铺编码同理）。 */
+function duplicateProduct() {
+  const draft = collectProductPayload();
+  if (!(draft.name || "").trim()) { toast("请先填写商品名称"); return; }
+  draft.code = "";
+  draft.codes = [];
+  draft.code_takeover = false;
+  draft.unit_change_ratio = null;   // 换单位换算关系是原商品的历史迁移参数，复制品用不上
+  draft.is_active = true;
+  openProductModal(0, "", draft);
+}
+async function saveProduct(pid, opts) {
+  const payload = collectProductPayload(opts);
   if (!payload.name.trim()) { toast("请填写商品名称"); return; }
   // 订单商品可以不关联库存大类 = 代发（本仓不扣库存，只统计代发数量与代发成本）；
   // 但代发成本按「参考成本」计，没填就会算成 0，这里给个提醒（不拦保存）。
