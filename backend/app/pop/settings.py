@@ -41,11 +41,11 @@ MAX_RUNS = 50
 MAX_PENDING = 20
 MAX_PENDING_ITEMS = 200
 
-# 京东 POP 订单状态码（实测：3 待出库、16 已出库、19 已完成、29 已取消）
+# 京东 POP 订单状态码（按 jdfenxi 实际返回统计：8 待出库、16 已出库、19 已完成、29 已取消）
 STATUS_CHOICES = [
     {"code": 16, "label": "已出库"},
     {"code": 19, "label": "已完成"},
-    {"code": 3, "label": "待出库"},
+    {"code": 8, "label": "待出库"},
     {"code": 29, "label": "已取消"},
 ]
 
