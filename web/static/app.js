@@ -6281,7 +6281,7 @@ async function saveProduct(pid, opts) {
   if (!payload.name.trim()) { toast("请填写商品名称"); return; }
   // 订单商品可以不关联库存大类 = 代发（本仓不扣库存，只统计代发数量与代发成本）；
   // 但代发成本按「参考成本」计，没填就会算成 0，这里给个提醒（不拦保存）。
-  if (payload.product_type === "order" && !stockLinks.length && !payload.unit_cost) {
+  if (payload.product_type === "order" && !(payload.stock_links || []).length && !payload.unit_cost) {
     if (!confirm("该订单商品未关联库存商品（= 代发），但「参考成本」为 0，代发成本会按 0 计。仍要保存吗？")) return;
   }
   try {
