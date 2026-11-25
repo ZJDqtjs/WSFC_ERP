@@ -211,7 +211,7 @@ def _reverse_canceled(db, order: dict, operator: str) -> tuple[bool, str]:
     orig = db.scalar(select(Outbound).where(
         Outbound.external_no == ext, Outbound.is_return.is_(False)))
     if not orig:
-        return False, "没有已建的单（跳过）"
+        return False, ""   # 从没建过单的取消单：正常跳过，不产生告警噪音
     done = db.scalar(select(Outbound.id).where(Outbound.return_of_id == orig.id))
     if done:
         return False, f"{orig.code} 已红冲过"
@@ -364,7 +364,7 @@ def _run_warehouse(key: str, *, start=None, end=None, dry_run=False,
                         ok, msg = _reverse_canceled(db, order, operator)
                         if ok:
                             stats["reversed"] += 1
-                        elif "已红冲过" not in msg:
+                        elif msg and "已红冲过" not in msg:
                             warnings.append(f"单{ext} 取消：{msg}")
                     else:
                         stats["status_skipped"] += 1
