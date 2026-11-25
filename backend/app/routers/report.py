@@ -1324,6 +1324,10 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             "other_cogs": 0.0,  # 其他关联结算
             "express_cogs": 0.0,  # 快递运费
             "brush_cogs": 0.0,  # 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差，按销售金额占比分摊到单内商品）
+            # brush_cogs 的两项拆分（同一套占比分摊）：前端成本构成小字要按项展示，
+            # 只有合计的话刷单行会「什么都不显示」（见 costSplitText）
+            "brush_fee_cogs": 0.0,   # 其中「快递+包装固定费」（逐单手填，默认 3.6/单）
+            "brush_cost_cogs": 0.0,  # 其中「刷单成本」（导入确认时手填）
             "settle_income": 0.0,  # 客户代收的关联结算（包材/人工/快递费，按销售金额占比分摊到单内商品）
         }
         by_product[key] = d
@@ -1503,6 +1507,14 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         adj = brush_adjust(o)
         if adj:
             _spread(o.id, "brush_cogs", adj)
+            # 同一单按同一套占比再拆一次：两项之和恰好等于 brush_cogs
+            # （adj = brush_cost + brush_fee_of(o) − brush_auto_fee）
+            _fee_part = brush_fee_of(o) - float(getattr(o, "brush_auto_fee", 0) or 0)
+            if _fee_part:
+                _spread(o.id, "brush_fee_cogs", _fee_part)
+            _cost_part = float(getattr(o, "brush_cost", 0) or 0)
+            if _cost_part:
+                _spread(o.id, "brush_cost_cogs", _cost_part)
         settle_in = float(o.settle_income or 0.0)
         if settle_in:
             _spread(o.id, "settle_income", settle_in)
@@ -1644,6 +1656,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "other_cogs": other,        # 其他关联结算
                 "express_cogs": express,
                 "brush_cogs": brush,        # 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差）
+                # 刷单结算的两项拆分：前端成本构成小字按项展示（和 = brush_cogs）
+                "brush_fee_cogs": round(d.get("brush_fee_cogs", 0.0), 2),
+                "brush_cost_cogs": round(d.get("brush_cost_cogs", 0.0), 2),
                 "settle_income": settle,    # 客户代收的关联结算（包材/人工/快递费）
                 "total_cogs": total_cogs,
                 "gross_profit": gp,
@@ -1678,7 +1693,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 _t["gross_sales"] += r["gross_sales"]
                 for _f in ("cogs", "goods_cogs", "pack_cogs", "labor_cogs",
                            "material_cogs", "other_cogs", "express_cogs",
-                           "brush_cogs", "settle_income", "total_cogs"):
+                           "brush_cogs", "brush_fee_cogs", "brush_cost_cogs",
+                           "settle_income", "total_cogs"):
                     _t[_f] = round(_t[_f] + r[_f], 2)
                 _t["gross_profit"] = round(_t["amount"] + _t["settle_income"] - _t["total_cogs"], 2)
                 _den = (_t["gross_sales"] or _t["amount"]) + _t["settle_income"]
@@ -1776,6 +1792,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             # 固定成本（每袋打包费/难量化包材，老记录为 0）——成本构成小字里单独列出
             "fixed_cogs": fixed,
             "brush_cogs": 0.0,
+            # 入仓行没有刷单结算（字段仍返回，前端成本构成小字按项取值不会缺）
+            "brush_fee_cogs": 0.0,
+            "brush_cost_cogs": 0.0,
             "settle_income": 0.0,
             "total_cogs": total_cogs,
             "gross_profit": gp,
@@ -2072,7 +2091,7 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
     # 入仓品要单独成行，不能和同名同规格的出库商品合并（否则「出库方式」就没法区分了）
     num_fields = ("qty", "weight_kg", "amount", "gross_sales", "goods_cogs", "pack_cogs",
                   "labor_cogs", "material_cogs", "other_cogs", "express_cogs", "brush_cogs",
-                  "fixed_cogs", "settle_income")
+                  "brush_fee_cogs", "brush_cost_cogs", "fixed_cogs", "settle_income")
     buckets: dict[tuple, dict] = {}
     for p in parts:
         for r in p.get("by_product") or []:

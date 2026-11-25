@@ -8363,25 +8363,31 @@ function costSplitText(r) {
   const brushCost = Number(r.brush_cost_cogs) || 0;  // 刷单单手填的「刷单成本」
   const isWi = !!r.is_warehouse_in;   // 入仓行：material/express 字段装的是「包材/运费」，标签要换
   const fixed = Number(r.fixed_cogs) || 0;   // 入仓品固定成本（每袋打包费 / 难量化包材）
+  // 刷单结算（芳谊放单仓，口径见 app/brush.py）：优先按「快递+包装固定费 / 刷单成本」两项拆开；
+  // 同一商品可能既有真实出库又有刷单单，所以刷单只作为一个分项追加，不能提前 return。
+  // 拆分字段拿不到时（旧数据/旧接口）兜底显示合计，否则整行成本构成小字会变成空串、什么都不显示。
+  const brushParts = [];
   if (brush) {
-    // 刷单单：本仓不出货、不结转商品/包材/人工/快递，成本就是这两项手填值（口径见 app/brush.py）
-    const items = [];
-    if (brushFee) items.push(`快递+包装 ${fmtMoney(brushFee)}`);
-    if (brushCost) items.push(`刷单成本 ${fmtMoney(brushCost)}`);
-    return items.join(" ＋ ");
+    const shown = brushFee + brushCost;
+    if (brushFee) brushParts.push(`快递+包装 ${fmtMoney(brushFee)}`);
+    if (brushCost) brushParts.push(`刷单成本 ${fmtMoney(brushCost)}`);
+    if (!shown) brushParts.push(`刷单结算 ${fmtMoney(brush)}`);
+    else if (Math.abs(brush - shown) >= 0.01) brushParts.push(`刷单结算 ${fmtMoney(brush - shown)}`);
   }
-  if (!(r.is_dropship || oldPack || express || labor || material || other || fixed)) return "";
-  const parts = [`${r.is_dropship ? "代发成本" : "商品成本"} ${fmtMoney(goods)}`];
-  if (split) {
-    if (labor) parts.push(`打包人工 ${fmtMoney(labor)}`);
-    if (material) parts.push(`${isWi ? "包材" : "耗材"} ${fmtMoney(material)}`);
-    if (other) parts.push(`其他关联结算 ${fmtMoney(other)}`);
-  } else if (oldPack) {
-    parts.push(`打包人工+耗材 ${fmtMoney(oldPack)}`);
+  const parts = [];
+  if (r.is_dropship || oldPack || express || labor || material || other || fixed) {
+    parts.push(`${r.is_dropship ? "代发成本" : "商品成本"} ${fmtMoney(goods)}`);
+    if (split) {
+      if (labor) parts.push(`打包人工 ${fmtMoney(labor)}`);
+      if (material) parts.push(`${isWi ? "包材" : "耗材"} ${fmtMoney(material)}`);
+      if (other) parts.push(`其他关联结算 ${fmtMoney(other)}`);
+    } else if (oldPack) {
+      parts.push(`打包人工+耗材 ${fmtMoney(oldPack)}`);
+    }
+    if (express) parts.push(`${isWi ? "运费" : "快递费"} ${fmtMoney(express)}`);
+    if (fixed) parts.push(`固定成本 ${fmtMoney(fixed)}`);
   }
-  if (express) parts.push(`${isWi ? "运费" : "快递费"} ${fmtMoney(express)}`);
-  if (fixed) parts.push(`固定成本 ${fmtMoney(fixed)}`);
-  return parts.join(" ＋ ");
+  return parts.concat(brushParts).join(" ＋ ");
 }
 function outAggBy(rows, pool) {
   // pool='sale' 汇总销售商品；pool='pack' 汇总耗材/包装(不含人工)；pool='labor' 仅人工；
