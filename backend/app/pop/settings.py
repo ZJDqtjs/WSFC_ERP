@@ -57,6 +57,9 @@ WH_DEFAULTS: dict[str, Any] = {
     "accounts": [],          # [{account, customer, label}]
     "price_mode": "supply",
     "statuses": [16, 19],
+    # 日切时间（点）：16 = 「昨天 16:00 ~ 今天 16:00 下的单算今天」，0 = 自然日。
+    # 出库单日期、每日单量、报表都已按这个业务日归集（见 runner._biz_date）。
+    "day_cutoff_hour": 16,
     "days": 7,
     # jdfenxi 每晚 19:00 抓取，导入排在其后（带 ±10 分钟抖动）
     "schedule": ["19:40"],
@@ -145,6 +148,7 @@ def wh_of(d: dict[str, Any] | None, key: str) -> dict[str, Any]:
     out["schedule"] = [_clean_str(s, 48) for s in raw_sched if _clean_str(s, 48)]
     out["price_mode"] = "pay" if _clean_str(out.get("price_mode")) == "pay" else "supply"
     out["days"] = int(_clean_num(out.get("days"), 7, 1, 30))
+    out["day_cutoff_hour"] = int(_clean_num(out.get("day_cutoff_hour"), 16, 0, 23))
     out["jitter_minutes"] = int(_clean_num(out.get("jitter_minutes"), 10, 0, 120))
     for k in ("enabled", "auto_express", "auto_reverse", "skip_imported"):
         out[k] = _clean_bool(out.get(k), bool(WH_DEFAULTS[k]))
@@ -169,7 +173,7 @@ def patch(d: dict[str, Any], key: str, updates: dict[str, Any]) -> dict[str, Any
         for k in ("enabled", "auto_express", "auto_reverse", "skip_imported"):
             if k in updates and updates[k] is not None:
                 cur[k] = _clean_bool(updates[k], cur.get(k, False))
-        for k, lo, hi in (("days", 1, 30), ("jitter_minutes", 0, 120)):
+        for k, lo, hi in (("days", 1, 30), ("jitter_minutes", 0, 120), ("day_cutoff_hour", 0, 23)):
             if k in updates and updates[k] not in (None, ""):
                 cur[k] = int(_clean_num(updates[k], WH_DEFAULTS[k], lo, hi))
         if "accounts" in updates and updates["accounts"] is not None:

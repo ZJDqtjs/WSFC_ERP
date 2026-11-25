@@ -1461,9 +1461,14 @@
                   <div class="field-hint">供货价 = 京东结算给我们的钱；实付 = 买家付款（含优惠，收入会偏高）</div>
                 </div>
                 <div class="field">
+                  <label>日切时间（点）</label>
+                  <input id="popCutoff" type="number" min="0" max="23" step="1" />
+                  <div class="field-hint">16 = 「昨天 16:00 ~ 今天 16:00 下的单」算今天（出库单日期/报表都按这个业务日）；0 = 自然日</div>
+                </div>
+                <div class="field">
                   <label>每次拉几天</label>
                   <input id="popDays" type="number" min="1" max="30" step="1" />
-                  <div class="field-hint">默认 7 天：jdfenxi 每晚重抓最近 7 天，订单状态变化能被覆盖</div>
+                  <div class="field-hint">默认 7 个业务日：jdfenxi 每晚重抓最近 7 天，订单状态变化能被覆盖</div>
                 </div>
                 <div class="field"><label>导入操作员</label><input id="popOperator" placeholder="留空 = 用第一个管理员账号" /></div>
                 <div class="field">

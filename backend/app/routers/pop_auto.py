@@ -43,6 +43,7 @@ class SettingsIn(BaseModel):
     accounts: list[AccountIn] | None = None
     price_mode: str = ""
     statuses: list[int] | None = None
+    day_cutoff_hour: int | None = None   # 日切点：16 = 昨天16:00~今天16:00 算今天，0 = 自然日
     days: int | None = None
     schedule: list[str] | None = None
     jitter_minutes: int | None = None
@@ -118,6 +119,8 @@ def _validate(data: SettingsIn) -> None:
             raise HTTPException(400, "「已取消」不能作为可导入状态：它只用于把已建的单自动红冲")
     if data.price_mode and data.price_mode not in ("supply", "pay"):
         raise HTTPException(400, "价格口径只能是 supply（供货价）或 pay（买家实付）")
+    if data.day_cutoff_hour is not None and not (0 <= int(data.day_cutoff_hour) <= 23):
+        raise HTTPException(400, "日切时间只能是 0~23 点（0 = 自然日）")
 
 
 @router.get("/settings")

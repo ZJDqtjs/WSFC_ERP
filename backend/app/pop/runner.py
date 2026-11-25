@@ -66,6 +66,45 @@ def _chunks(seq: list, n: int = 400):
         yield seq[i:i + n]
 
 
+# ---------------------------------------------------------------- 业务日（日切）
+# 统计口径（用户定义）：16:00 切日 —— 「昨天 16:00 ~ 今天 16:00 下的单」算今天这一单日。
+# 实现：把下单时刻 +（24 - 日切点）小时后取自然日，就是它所属的业务日。
+#   11-24 16:30 → +8h → 11-25 00:30 → 业务日 11-25（属于「今天」）
+#   11-25 15:59 → +8h → 11-25 23:59 → 业务日 11-25
+#   11-25 16:01 → +8h → 11-26 00:01 → 业务日 11-26（归到明天）
+def _order_dt(order: dict) -> datetime | None:
+    raw = str(order.get("orderTime") or "").strip()
+    if not raw:
+        return None
+    for fmt, n in (("%Y-%m-%d %H:%M:%S", 19), ("%Y-%m-%d %H:%M", 16), ("%Y-%m-%d", 10)):
+        try:
+            return datetime.strptime(raw[:n], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _biz_date(order: dict, cutoff: int) -> str:
+    """订单所属业务日（YYYY-MM-DD）；日切点 0 = 自然日。"""
+    dt = _order_dt(order)
+    if dt is None:
+        return _iso(order.get("day") or _today())
+    if cutoff <= 0:
+        return f"{dt:%Y-%m-%d}"
+    return f"{dt + timedelta(hours=24 - cutoff):%Y-%m-%d}"
+
+
+def _last_complete_biz(now: datetime, cutoff: int) -> date:
+    """最后一个「已经结束」的业务日。
+
+    cutoff=16 时，今天 16:00 之后下的单已经算明天，所以此刻（16:00 后）最后一个完整业务日
+    就是今天；而在 16:00 之前跑，今天这一天还没结束 → 只能导到昨天。
+    """
+    if cutoff <= 0:
+        return now.date()
+    return (now + timedelta(hours=24 - cutoff)).date() - timedelta(days=1)
+
+
 def _pick_unit(p: Product) -> str:
     """选一个商品实际配置过的销售单位（默认单位 → 基础单位 → 第一个）。"""
     conv = p.conversions or {}
@@ -162,8 +201,12 @@ def _order_lines(order: dict, price_mode: str) -> list[dict]:
     return rows
 
 
-def _build_payload(db, order: dict, cfg: dict, customer: str, operator: str) -> tuple[dict | None, list[dict]]:
-    """一张订单 → create_outbound 的 payload；返回 (payload, 未匹配明细)。"""
+def _build_payload(db, order: dict, cfg: dict, customer: str, operator: str,
+                   day: str = "") -> tuple[dict | None, list[dict]]:
+    """一张订单 → create_outbound 的 payload；返回 (payload, 未匹配明细)。
+
+    day：业务日（16:00 切日后的日期）；不传则回退订单的自然日。
+    """
     rows = _order_lines(order, cfg.get("price_mode") or "supply")
     if not rows:
         return None, []
@@ -189,7 +232,7 @@ def _build_payload(db, order: dict, cfg: dict, customer: str, operator: str) -> 
         return None, unmapped
     if not lines:
         return None, []
-    day = _iso(order.get("day") or order.get("orderTime") or "")
+    day = day or _iso(order.get("day") or order.get("orderTime") or "")
     remark = f"京东POP 单{order.get('orderId') or ''}" + ("".join(notes))
     payload = {
         "customer": customer,
@@ -203,8 +246,11 @@ def _build_payload(db, order: dict, cfg: dict, customer: str, operator: str) -> 
     return payload, []
 
 
-def _reverse_canceled(db, order: dict, operator: str) -> tuple[bool, str]:
-    """已建单的订单变「已取消」→ 按原单全量红冲。返回 (是否红冲, 说明)。"""
+def _reverse_canceled(db, order: dict, operator: str, day: str = "") -> tuple[bool, str]:
+    """已建单的订单变「已取消」→ 按原单全量红冲。返回 (是否红冲, 说明)。
+
+    红冲单日期用「本次运行的业务日」（不跟原单日期走），跨月取消才落在正确的月份里。
+    """
     ext = str(order.get("orderId") or "").strip()
     if not ext:
         return False, "缺订单号"
@@ -222,7 +268,7 @@ def _reverse_canceled(db, order: dict, operator: str) -> tuple[bool, str]:
     if not items:
         return False, f"{orig.code} 没有销售行"
     create_sales_return(
-        db, orig.id, items, _today().isoformat(),
+        db, orig.id, items, day or _today().isoformat(),
         operator=operator, remark=f"京东POP 订单取消 单{ext}",
     )
     return True, f"已红冲 {orig.code}"
@@ -270,8 +316,19 @@ def _run_warehouse(key: str, *, start=None, end=None, dry_run=False,
             "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "finished_at": None,
         })
 
-    end_d = end or _today()
+    # 业务日窗口：默认「最后一个完整业务日」往前推 days 天（16:00 切日时 19:40 跑 = 今天为止）
+    cutoff = int(cfg.get("day_cutoff_hour") or 0)
+    end_d = end or _last_complete_biz(datetime.now(), cutoff)
     start_d = start or (end_d - timedelta(days=max(1, int(cfg.get("days") or 7)) - 1))
+    # 抓取用的时间边界：业务日首日的前一天 cutoff 点 → 末日 cutoff 点（如昨天16:00 ~ 今天16:00）
+    if cutoff > 0:
+        fetch_from = start_d - timedelta(days=1)
+        st_time, et_time = f"{cutoff:02d}:00:00", f"{cutoff:02d}:00:00"
+    else:
+        fetch_from = start_d
+        st_time, et_time = "00:00:00", "23:59:59"
+    window_text = (f"业务日 {_iso(start_d)} ~ {_iso(end_d)}"
+                   + (f"（{cutoff}:00 切日）" if cutoff else ""))
     stats = {"orders": 0, "created": 0, "duplicate_skipped": 0, "status_skipped": 0,
              "unmapped": 0, "reversed": 0, "failed": 0, "dry_run": 0}
     warnings: list[str] = []
@@ -295,7 +352,8 @@ def _run_warehouse(key: str, *, start=None, end=None, dry_run=False,
                 acct = acc.get("account") or ""
                 customer = (acc.get("customer") or acc.get("label") or acct).strip()
                 _set_state(step=f"拉取 {acct} 订单", message=f"{start_d} ~ {end_d}")
-                data = client.fetch_orders(_iso(start_d), _iso(end_d), account=acct,
+                data = client.fetch_orders(_iso(fetch_from), _iso(end_d), start_time=st_time,
+                                           end_time=et_time, account=acct,
                                            url=st.service_url())
                 if not data.get("ok"):
                     failed.append({"account": acct, "reason": data.get("error") or "拉取失败"})
@@ -320,6 +378,11 @@ def _run_warehouse(key: str, *, start=None, end=None, dry_run=False,
                         code = int(order.get("statusCode") or 0)
                     except (TypeError, ValueError):
                         code = 0
+                    # 按业务日归集：窗口边界外（如今天 16:00 之后下的单，属于明天）不导
+                    biz = _biz_date(order, cutoff)
+                    if cutoff > 0 and not (_iso(start_d) <= biz <= _iso(end_d)):
+                        stats["status_skipped"] += 1
+                        continue
                     if code in statuses:
                         if not ext:
                             continue
@@ -332,7 +395,7 @@ def _run_warehouse(key: str, *, start=None, end=None, dry_run=False,
                                     Outbound.return_of_id == orig.id)):
                                 flapped.append(ext)
                             continue
-                        payload, bad = _build_payload(db, order, cfg, customer, operator)
+                        payload, bad = _build_payload(db, order, cfg, customer, operator, day=biz)
                         if bad:
                             for b in bad:
                                 d = unmapped.setdefault(b["sku"] or b["name"], {
@@ -361,7 +424,7 @@ def _run_warehouse(key: str, *, start=None, end=None, dry_run=False,
                         stats["status_skipped"] += 1
                         if dry_run:
                             continue
-                        ok, msg = _reverse_canceled(db, order, operator)
+                        ok, msg = _reverse_canceled(db, order, operator, day=_iso(end_d))
                         if ok:
                             stats["reversed"] += 1
                         elif msg and "已红冲过" not in msg:
@@ -394,11 +457,17 @@ def _run_warehouse(key: str, *, start=None, end=None, dry_run=False,
                 stats["flapped"] = len(set(flapped))
             if missing_days:
                 warnings.append("jdfenxi 有未抓取日期：" + "、".join(sorted(set(missing_days))[:7]))
+            if cutoff > 0 and _iso(fetch_from) in set(missing_days):
+                # 业务日 = 前一天 cutoff 点起，最早那天要用到「前一天」的缓存；jdfenxi 只留 7 天，
+                # 首轮补历史时这一段可能缺失 → 明确告警，别让人以为那天的单少了是没下单
+                warnings.append(
+                    f"缺 {_iso(fetch_from)} 缓存：最早业务日 {_iso(start_d)} 只统计了 "
+                    f"{cutoff}:00 之后的订单（可把「每次拉几天」调小后再补）")
 
             entry = {
                 "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "trigger": trigger, "ok": not failed, "warehouse": key,
-                "window": f"{_iso(start_d)} ~ {_iso(end_d)}",
+                "window": window_text,
                 "stats": stats,
                 "message": (f"新建 {stats['created']} 张，跳过重复 {stats['duplicate_skipped']}，"
                             f"红冲 {stats['reversed']}，未匹配 {stats['unmapped']}"
@@ -419,7 +488,7 @@ def _run_warehouse(key: str, *, start=None, end=None, dry_run=False,
         st.record_run(key, {
             "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "trigger": trigger, "ok": False, "warehouse": key, "stats": stats,
-            "window": f"{_iso(start_d)} ~ {_iso(end_d)}", "message": "执行失败", "error": err,
+            "window": window_text, "message": "执行失败", "error": err,
         })
         _set_state(running=False, ok=False, step="失败", error=err,
                    finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))

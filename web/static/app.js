@@ -11534,6 +11534,7 @@ function fillPopAuto(d) {
       `<option value="${esc(m.value)}"${wh.price_mode === m.value ? " selected" : ""}>${esc(m.label)}</option>`).join("");
   }
   if ($("popDays")) $("popDays").value = wh.days || 7;
+  if ($("popCutoff")) $("popCutoff").value = wh.day_cutoff_hour ?? 16;
   if ($("popOperator")) $("popOperator").value = wh.operator || "";
   if ($("popSchedule")) $("popSchedule").value = (wh.schedule || []).join(",");
   if ($("popJitter")) $("popJitter").value = wh.jitter_minutes ?? 10;
@@ -11578,6 +11579,7 @@ async function savePopAuto() {
     accounts: popParseAccounts($("popAccounts")?.value),
     price_mode: $("popPriceMode")?.value || "supply",
     statuses: [...document.querySelectorAll(".pop-status:checked")].map((x) => Number(x.value)),
+    day_cutoff_hour: Number($("popCutoff")?.value || 0),
     days: Number($("popDays")?.value || 7),
     schedule: ($("popSchedule")?.value || "").split(",").map((s) => s.trim()).filter(Boolean),
     jitter_minutes: Number($("popJitter")?.value || 0),
