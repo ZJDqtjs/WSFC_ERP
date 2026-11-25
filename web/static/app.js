@@ -555,9 +555,50 @@ function applyHashRoute() {
   }
 }
 window.addEventListener("hashchange", applyHashRoute);
-/* =============== 快递费规则 =============== */
+/* =============== 快递费规则（多快递公司） =============== */
+let EXPRESS_CFG = null;        // {default_carrier, carriers:[{id,name,mode,first_kg_fee,per_extra_kg,rate_per_kg,round_up,note}]}
+let EXPRESS_EDIT_ID = null;    // 正在编辑的快递公司 id（null=新增中）
+
+function expressCarrierSummary(c) {
+  return c.mode === "flat"
+    ? `每 kg ¥${fmtNum(c.rate_per_kg)}`
+    : `1kg 内 ¥${fmtNum(c.first_kg_fee)} + 每超 1kg ¥${fmtNum(c.per_extra_kg)}${c.round_up ? "（续重向上取整）" : ""}`;
+}
+function renderExpressCarrierTable() {
+  const t = $("exprCarrierTable");
+  if (!t) return;
+  const doc = EXPRESS_CFG || { default_carrier: "", carriers: [] };
+  const rows = (doc.carriers || []).map((c) => `<tr${c.id === EXPRESS_EDIT_ID ? ' style="background:var(--primary-light,#eff6ff);"' : ""}>
+      <td><b>${esc(c.name)}</b>${c.id === doc.default_carrier ? ' <span class="badge" style="background:var(--primary,#2563eb);color:#fff;">默认</span>' : ""}
+        ${c.note ? `<div class="muted" style="font-size:12px;">${esc(c.note)}</div>` : ""}</td>
+      <td>${esc(expressCarrierSummary(c))}</td>
+      <td>${c.mode === "flat" ? "每 kg 单价" : "首重 + 续重"}</td>
+      <td class="line-actions">
+        <button class="btn sm secondary" onclick="expressEditCarrier('${esc(c.id)}')">编辑</button>
+        ${c.id === doc.default_carrier ? "" : `<button class="btn sm secondary" onclick="expressSetDefault('${esc(c.id)}')">设为默认</button>`}
+        <button class="btn sm danger" onclick="expressDeleteCarrier('${esc(c.id)}')">删除</button>
+      </td></tr>`).join("");
+  t.innerHTML = `<thead><tr><th style="width:30%;">快递公司</th><th>计费规则</th><th>计费方式</th><th>操作</th></tr></thead>
+    <tbody>${rows || `<tr><td colspan="4" class="empty">暂无快递规则，点「新增快递公司」添加（如 京东快递 / 中通 / 顺丰）</td></tr>`}</tbody>`;
+}
+function fillExpressForm(c) {
+  EXPRESS_EDIT_ID = c ? c.id : null;
+  $("expName").value = c ? c.name : "";
+  $("expMode").value = c && c.mode === "flat" ? "flat" : "tiered";
+  $("expFirst").value = c ? c.first_kg_fee : 3.6;
+  $("expExtra").value = c ? c.per_extra_kg : 1;
+  $("expRate").value = c ? c.rate_per_kg : 3.6;
+  $("expRoundUp").checked = c ? !!c.round_up : true;
+  $("expNote").value = c ? (c.note || "") : "";
+  if ($("expCarrierTitle")) $("expCarrierTitle").textContent = c ? `编辑计费规则 · ${c.name}` : "编辑计费规则（新快递公司）";
+  renderExpressCarrierTable();
+  previewExpress();
+}
 function currentExprCfg() {
   return {
+    id: EXPRESS_EDIT_ID || "",
+    name: ($("expName").value || "").trim(),
+    note: ($("expNote").value || "").trim(),
     mode: $("expMode").value,
     first_kg_fee: parseFloat($("expFirst").value) || 0,
     per_extra_kg: parseFloat($("expExtra").value) || 0,
@@ -576,32 +617,114 @@ function previewExpress() {
   if (!el) return;
   const cfg = currentExprCfg();
   const weights = [1, 2, 3, 5, 10];
-  el.innerHTML = weights.map((w) =>
+  const head = cfg.name ? `<div class="muted" style="width:100%;font-size:12px;">按「${esc(cfg.name)}」的规则：${esc(expressCarrierSummary(cfg))}</div>` : "";
+  el.innerHTML = head + weights.map((w) =>
     `<div class="expr-item"><span class="expr-w">毛重 ${w}kg</span><span class="expr-fee">${fmtMoney(exprFee(cfg, w))}</span></div>`
   ).join("");
+}
+/** 已保存的快递公司列表（已存在的那家带上编辑区未保存的改动） */
+function expressSavedDoc() {
+  const cfg = currentExprCfg();
+  const doc = EXPRESS_CFG || { default_carrier: "", carriers: [] };
+  const list = (doc.carriers || []).map((c) => ({ ...c }));
+  const i = cfg.id ? list.findIndex((c) => c.id === cfg.id) : -1;
+  if (i >= 0) list[i] = { ...list[i], ...cfg };
+  return { default_carrier: doc.default_carrier || (list[0] || {}).id || "", carriers: list };
+}
+/** 把编辑区的当前值并进快递公司列表，得到待提交的整份配置（新增时会生成 id） */
+function expressDraftDoc() {
+  const cfg = currentExprCfg();
+  const doc = expressSavedDoc();
+  if (cfg.id) return { doc, id: cfg.id };
+  cfg.id = "c" + Date.now().toString(36);
+  doc.carriers.push(cfg);
+  if (!doc.default_carrier) doc.default_carrier = cfg.id;
+  return { doc, id: cfg.id };
 }
 async function loadExpressPage() {
   try {
     const r = await api("/api/express/rule");
-    $("expMode").value = r.mode === "flat" ? "flat" : "tiered";
-    $("expFirst").value = r.first_kg_fee;
-    $("expExtra").value = r.per_extra_kg;
-    $("expRate").value = r.rate_per_kg;
-    $("expRoundUp").checked = !!r.round_up;
-    previewExpress();
-    $("expRateInfo").textContent = "已加载当前计费规则";
+    EXPRESS_CFG = { default_carrier: r.default_carrier, carriers: r.carriers || [] };
+    EXPRESS_CARRIER_LIST = EXPRESS_CFG.carriers;          // 出库单的快递费行共用这份缓存
+    EXPRESS_CARRIER_DEFAULT = EXPRESS_CFG.default_carrier;
+    const cur = EXPRESS_CFG.carriers.find((c) => c.id === EXPRESS_EDIT_ID)
+      || EXPRESS_CFG.carriers.find((c) => c.id === EXPRESS_CFG.default_carrier)
+      || EXPRESS_CFG.carriers[0] || null;
+    fillExpressForm(cur);
+    const defName = (EXPRESS_CFG.carriers.find((c) => c.id === EXPRESS_CFG.default_carrier) || {}).name || "—";
+    $("expRateInfo").textContent = `已加载 ${EXPRESS_CFG.carriers.length} 家快递公司，默认：${defName}`;
   } catch (e) { toast("加载规则失败：" + e.message); }
 }
 async function saveExpressRule() {
   const cfg = currentExprCfg();
+  if (!cfg.name) { toast("请填写快递公司名称"); return; }
   const bad = cfg.mode === "tiered" ? [cfg.first_kg_fee, cfg.per_extra_kg] : [cfg.rate_per_kg];
   if (bad.some((v) => isNaN(v) || v < 0)) { toast("请填写正确的费用（≥0）"); return; }
+  const { doc, id } = expressDraftDoc();
   try {
-    await api("/api/express/rule", "PUT", cfg);
-    previewExpress();
+    const saved = await api("/api/express/rule", "PUT", doc);
+    EXPRESS_CFG = { default_carrier: saved.default_carrier, carriers: saved.carriers || [] };
+    EXPRESS_CARRIER_LIST = EXPRESS_CFG.carriers;
+    EXPRESS_CARRIER_DEFAULT = EXPRESS_CFG.default_carrier;
+    fillExpressForm(EXPRESS_CFG.carriers.find((c) => c.id === id) || EXPRESS_CFG.carriers[0] || null);
     $("expRateInfo").textContent = "已保存，实时生效";
     toast("快递费规则已保存");
   } catch (e) { toast("保存失败：" + e.message); }
+}
+function expressAddCarrier() {
+  const names = (EXPRESS_CFG?.carriers || []).map((c) => c.name);
+  fillExpressForm(null);
+  $("expName").value = "";
+  $("expName").placeholder = `如 ${["京东快递", "中通", "顺丰", "圆通"].find((n) => !names.includes(n)) || "快递公司"}`;
+  $("expName").focus();
+  toast("填好名称与计费规则后点「保存计费规则」");
+}
+function expressEditCarrier(id) {
+  const c = (EXPRESS_CFG?.carriers || []).find((x) => x.id === id);
+  if (c) fillExpressForm(c);
+}
+async function expressSetDefault(id) {
+  const target = id || EXPRESS_EDIT_ID;
+  if (!target) { toast("请先保存这家新快递公司，再设为默认"); return; }
+  const doc = expressSavedDoc();
+  doc.default_carrier = target;
+  try {
+    const saved = await api("/api/express/rule", "PUT", doc);
+    EXPRESS_CFG = { default_carrier: saved.default_carrier, carriers: saved.carriers || [] };
+    renderExpressCarrierTable();
+    $("expRateInfo").textContent = `已设默认快递：${(EXPRESS_CFG.carriers.find((c) => c.id === saved.default_carrier) || {}).name || ""}`;
+    toast("已设为默认快递（出库默认按它计费）");
+    loadExpressCarrierList();
+  } catch (e) { toast("设置失败：" + e.message); }
+}
+async function expressDeleteCarrier(id) {
+  const target = id || EXPRESS_EDIT_ID;
+  const list = (EXPRESS_CFG?.carriers || []);
+  const c = list.find((x) => x.id === target);
+  if (!c) { toast("先选中一家快递公司"); return; }
+  if (list.length <= 1) { toast("至少要保留一家快递公司"); return; }
+  if (!confirm(`确认删除「${c.name}」的计费规则？已出库单的成本不受影响。`)) return;
+  // 删除时不要带上编辑区里没保存的改动：直接按已保存的列表提交
+  const doc = { default_carrier: EXPRESS_CFG.default_carrier, carriers: list.filter((x) => x.id !== target) };
+  try {
+    const saved = await api("/api/express/rule", "PUT", doc);
+    EXPRESS_CFG = { default_carrier: saved.default_carrier, carriers: saved.carriers || [] };
+    fillExpressForm(EXPRESS_CFG.carriers.find((x) => x.id === saved.default_carrier) || EXPRESS_CFG.carriers[0] || null);
+    toast("已删除该快递公司");
+    loadExpressCarrierList();
+  } catch (e) { toast("删除失败：" + e.message); }
+}
+/* 出库单：缓存快递公司规则（「关联结算」里的快递费行用它选公司/重算） */
+async function loadExpressCarrierList() {
+  try {
+    const r = await api("/api/express/rule");
+    EXPRESS_CARRIER_LIST = r.carriers || [];
+    EXPRESS_CARRIER_DEFAULT = r.default_carrier || (EXPRESS_CARRIER_LIST[0] || {}).id || "";
+  } catch (e) {
+    EXPRESS_CARRIER_LIST = [];
+    EXPRESS_CARRIER_DEFAULT = "";
+  }
+  return EXPRESS_CARRIER_LIST;
 }
 /* =============== 扣点设置 =============== */
 async function loadDeductionPage() {
@@ -7266,6 +7389,9 @@ let outSaleRowId = 0;
 let OUT_PREVIEW = null;  // 最近一次服务端出库预览（含先进先出结转成本），用于展示真实成本
 let OUT_FEE_MANUAL = false;  // 固定费用合计是否被手动改过（改过就别让「预览结算」覆盖掉）
 let OUT_EXPRESS_MANUAL = null;  // 快递费手动改过的金额（null=按整单毛重自动算）
+let OUT_EXPRESS_CARRIER = null; // 本单选用的快递公司 id（null=默认快递）；在「关联结算」的快递费行里切换
+let EXPRESS_CARRIER_LIST = [];  // 快递公司规则缓存（快递费页 + 出库单的快递费行共用）
+let EXPRESS_CARRIER_DEFAULT = ""; // 默认快递公司 id
 
 /* ---------- 实收金额口径：客户承担的关联结算（包材 / 人工 / 快递费） ----------
    手动出库 / AI 出库：客户的付款里含包材/工时/运费 → 默认全勾，勾选后计入「实收金额」
@@ -7322,6 +7448,7 @@ function initOutbound() {
   if (!$("outDate").value) $("outDate").value = today();
   if (!$("outSaleBody").children.length) addSaleRow();
   settleRestore();
+  loadExpressCarrierList();   // 关联结算的快递费行要选快递公司
   loadOutbounds();
   renderJstPending();   // 顺手刷新「待办处理」卡片（没有待办会自动隐藏）
 }
@@ -7431,15 +7558,59 @@ function autoExpressOn() { return $("outAutoExpress") ? $("outAutoExpress").chec
 async function previewOutbound() {
   const lines = collectSaleLines();
   if (!lines.length) { toast("请至少添加一行销售商品"); return; }
+  if (!EXPRESS_CARRIER_LIST.length) await loadExpressCarrierList();   // 快递费行要能选公司
   try {
     // 手动挑选的关联物品也带上：后端追加在自动带出的结算项后面，一起按 FIFO 算成本
     const r = await api("/api/outbounds/preview", "POST", {
       lines, auto_express: autoExpressOn(), extra_pack_lines: collectManualPackLines(),
       settle_cats: settleCats(),   // 实收含哪些关联结算（后端据此回 settle_income）
       express_fee: OUT_EXPRESS_MANUAL,   // 手动改过快递费：预览也按这个金额算，和提交保持一致
+      express_carrier: outExpressCarrierId(),   // 关联结算里绑定的快递公司（不选=默认快递）
     });
     renderPackPreview(r);
   } catch (e) { toast("预览失败：" + e.message); }
+}
+/** 快递费行里的「快递公司」下拉选项（默认选中本行已绑定的公司） */
+function expressCarrierOptions(carrierId) {
+  const list = EXPRESS_CARRIER_LIST.length
+    ? EXPRESS_CARRIER_LIST
+    : [{ id: "", name: "（默认快递）" }];
+  const cur = carrierId || OUT_EXPRESS_CARRIER || EXPRESS_CARRIER_DEFAULT;
+  return list.map((c) =>
+    `<option value="${esc(c.id)}"${c.id === cur ? " selected" : ""}>${esc(c.name)}</option>`
+  ).join("");
+}
+/** 关联结算里换快递公司：按新公司的规则，用本行毛重立刻重算快递费 */
+function expressCarrierPick(sel) {
+  const tr = sel.closest("tr");
+  OUT_EXPRESS_CARRIER = sel.value || null;
+  OUT_EXPRESS_MANUAL = null;   // 换了公司：手填金额作废，改按新公司的规则算
+  try { if (OUT_EXPRESS_CARRIER) localStorage.setItem("outExpressCarrier", OUT_EXPRESS_CARRIER); } catch (e) { /* 隐私模式忽略 */ }
+  if (tr) tr.querySelector(".pl-exp-reset")?.remove();
+  const cfg = EXPRESS_CARRIER_LIST.find((c) => c.id === OUT_EXPRESS_CARRIER);
+  const w = parseFloat(tr?.dataset?.weight || "");
+  if (!cfg || !(w > 0) || !tr) { previewOutbound(); return; }
+  const fee = exprFee(cfg, w);
+  const td = tr.querySelector("td[data-auto-fee]");
+  if (td) td.dataset.autoFee = String(fee);
+  const inp = tr.querySelector(".pl-up");
+  if (inp) {
+    inp.value = fee;
+    inp.title = `按「${cfg.name}」整单毛重 ${w}kg 自动算：¥${fmtNum(fee)}/单；不对可手填本单实际快递费`;
+  }
+  tr.dataset.up = String(fee);
+  const qty = parseFloat(tr.querySelector(".pl-qty")?.value) || 1;
+  const amt = tr.querySelector(".pl-amount");
+  if (amt) amt.textContent = fmtMoney(fee * qty);
+  calcOutboundTotals();
+  toast(`本单快递费已改按「${cfg.name}」计：${fmtMoney(fee)}`);
+}
+/** 本单选用的快递公司 id（取「关联结算」快递费行里的绑定；没绑就沿用上次选的，再没有=默认快递） */
+function outExpressCarrierId() {
+  const sel = document.querySelector("#outPackBody tr[data-express='1'] .pl-carrier");
+  if (sel && sel.value) return sel.value;
+  if (OUT_EXPRESS_CARRIER) return OUT_EXPRESS_CARRIER;
+  try { return localStorage.getItem("outExpressCarrier") || null; } catch (e) { return null; }
 }
 function renderPackPreview(r) {
   OUT_PREVIEW = r;
@@ -7456,15 +7627,20 @@ function renderPackPreview(r) {
   $("outPackBody").innerHTML = r.pack_lines.map((pl, i) => {
     const m = PRODUCTS.find((x) => x.id === pl.product_id);
     // 快递费行标记出来：删掉它 = 这笔不结算快递费（否则重新预览又会被自动加回来）
-    const isExpress = !!(m && m.category === "快递");
+    const isExpress = pl.express_carrier_id != null || !!(m && m.category === "快递");
+    const isAutoExpress = pl.express_weight != null;   // 按整单毛重自动算的那行 → 可以切快递公司
     const isManual = !!pl.manual;   // 手动挑选的关联物品（后端已按 FIFO 算好成本一起返回）
-    return `<tr data-idx="${i}" data-pid="${pl.product_id}" data-unit="${esc(pl.unit)}" data-up="${pl.unit_price}"${isManual ? ' data-manual="1"' : ""}${isExpress ? ' data-express="1"' : ""}>
-      <td><b>${esc(pl.product_name)}</b>${isManual ? ' <span class="badge" style="background:var(--primary-light);color:var(--primary);">手动</span>' : ""}</td>
+    // 快递公司绑定就在这一行上改：换一家立刻按它的规则重算本单快递费
+    const carrierPick = isAutoExpress
+      ? `<div style="margin-top:4px;"><select class="pl-carrier" style="max-width:140px;" onchange="expressCarrierPick(this)" title="这单按哪家快递公司的规则计费（在「快递费」页维护规则）">${expressCarrierOptions(pl.express_carrier_id)}</select></div>`
+      : "";
+    return `<tr data-idx="${i}" data-pid="${pl.product_id}" data-unit="${esc(pl.unit)}" data-up="${pl.unit_price}" data-weight="${pl.express_weight != null ? pl.express_weight : ""}"${isManual ? ' data-manual="1"' : ""}${isExpress ? ' data-express="1"' : ""}>
+      <td><b>${esc(pl.product_name)}</b>${isManual ? ' <span class="badge" style="background:var(--primary-light);color:var(--primary);">手动</span>' : ""}${carrierPick}</td>
       <td><select class="searchable pl-unit" onchange="packLineUnitChanged(this)">${m ? unitOptions(m, pl.unit) : `<option>${pl.unit}</option>`}</select></td>
       <td><input class="pl-qty" type="number" step="any" value="${pl.quantity}" oninput="packLineChanged(this)" style="width:90px;" /></td>
       <td><span class="badge pack">${isExpress ? "快递费" : (isManual && m && m.category === "人工" ? "人工" : "包装消耗")}</span></td>
       ${isExpress
-        ? `<td class="num mono"><input class="pl-up" type="number" step="any" min="0" value="${OUT_EXPRESS_MANUAL != null ? OUT_EXPRESS_MANUAL : pl.unit_price}" oninput="expressFeeChanged(this)" style="width:100px;" title="系统按整单毛重自动算：¥${fmtNum(pl.auto_express_fee != null ? pl.auto_express_fee : pl.unit_price)}/单；不对可手填本单实际快递费" /> /单${OUT_EXPRESS_MANUAL != null ? ` · <a href="javascript:;" onclick="outExpressReset()">恢复自动</a>` : ""}</td>`
+        ? `<td class="num mono" data-auto-fee="${pl.auto_express_fee != null ? pl.auto_express_fee : pl.unit_price}"><input class="pl-up" type="number" step="any" min="0" value="${OUT_EXPRESS_MANUAL != null ? OUT_EXPRESS_MANUAL : pl.unit_price}" oninput="expressFeeChanged(this)" style="width:100px;" title="按${pl.express_carrier ? `「${esc(pl.express_carrier)}」` : ""}整单毛重${pl.express_weight != null ? ` ${pl.express_weight}kg` : ""}自动算：¥${fmtNum(pl.auto_express_fee != null ? pl.auto_express_fee : pl.unit_price)}/单；不对可手填本单实际快递费" /> /单${OUT_EXPRESS_MANUAL != null ? ` · <a class="pl-exp-reset" href="javascript:;" onclick="outExpressReset()">恢复自动</a>` : ""}</td>`
         : `<td class="num mono">¥${fmtNum(pl.unit_price)}/${esc(pl.unit)}</td>`}
       <td class="num pl-amount">${fmtMoney(pl.amount)}</td>
       <td><button class="btn sm danger" title="删除该结算项" onclick="removePackRow(this)">✕</button></td></tr>`;
@@ -7677,6 +7853,7 @@ function clearPreview() {
   OUT_PREVIEW = null;
   OUT_FEE_MANUAL = false;
   OUT_EXPRESS_MANUAL = null;
+  OUT_EXPRESS_CARRIER = null;   // 下一单回到默认快递
   if ($("outAdjust")) $("outAdjust").value = "";
   if ($("outFeeHint")) $("outFeeHint").textContent = "";
 }
@@ -7889,6 +8066,7 @@ async function submitOutbound() {
       lines, pack_lines: packLines, pack_fee_total: fee,
       auto_express: autoExpressOn(),   // 与预览一致：关掉就不再自动加快递费
       express_fee: OUT_EXPRESS_MANUAL, // 手动改过快递费：按手填金额落库（不填=后端按毛重自动算）
+      express_carrier: outExpressCarrierId(),   // 关联结算里绑定的快递公司（不选=默认快递）
       pay_status: payStatus, adjust_amount: adjust,
       settle_cats: settleCats(),       // 实收含哪些关联结算（客户随货款付回来的包材/人工/运费）
     });

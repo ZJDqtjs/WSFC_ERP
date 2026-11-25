@@ -403,7 +403,7 @@
             <label class="field-inline" style="display:inline-flex;align-items:center;gap:6px;">
               <input type="checkbox" id="outAutoExpress" checked /> 自动计快递费
             </label>
-            <span class="muted">自动带出泡沫箱 / 泡沫垫 / 打包费等关联结算项；勾选时再按整单毛重自动计快递费（不勾选则这笔不算快递费）</span>
+            <span class="muted">自动带出泡沫箱 / 泡沫垫 / 打包费等关联结算项；勾选时再按整单毛重自动计快递费（不勾选则这笔不算快递费）。默认按「默认快递」，预览后可在下方关联结算的「快递费」行里切换快递公司</span>
           </div>
 
           <div id="outPreview" style="display:none;">
@@ -1415,20 +1415,33 @@
         </div>
       </section>
 
-      <!-- 快递费规则 -->
+      <!-- 快递费规则（按快递公司分别配置） -->
       <section id="page-express" class="page">
         <div class="card">
           <div class="card-head">
             <h3><svg class="ic"><use href="#i-truck"/></svg> 快递费规则</h3>
-            <span class="hint">出库时按「整单毛重」自动计算快递费并计入销售成本。整单毛重 = 商品净重之和 + 每单箱体 0.1kg；商品净重由「扣减库存量」推导（重量类）</span>
+            <span class="hint">出库时按「整单毛重」自动计算快递费并计入销售成本。整单毛重 = 商品净重之和 + 每单箱体 0.1kg；商品净重由「扣减库存量」推导（重量类）。可为每家快递公司单独配置计费规则，出库单默认用「默认快递」</span>
+            <div class="grow"></div>
+            <button class="btn green" onclick="expressAddCarrier()"><svg class="ic"><use href="#i-plus"/></svg> 新增快递公司</button>
+            <button class="btn secondary" onclick="loadExpressPage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
           </div>
-          <div class="toolbar">
-            <div class="field" style="grid-column:1/-1;"><label>计费方式</label>
+          <div class="table-wrap"><table id="exprCarrierTable"></table></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3 id="expCarrierTitle">编辑计费规则</h3>
+            <span class="hint" id="expCarrierHint">在上表点「编辑」修改某家快递公司，或点「新增快递公司」添加新的计费规则</span>
+          </div>
+          <div class="form-grid">
+            <div class="field"><label>快递公司名称 *</label><input id="expName" placeholder="如 京东快递 / 中通 / 顺丰" oninput="previewExpress()" /></div>
+            <div class="field"><label>计费方式</label>
               <select id="expMode" onchange="previewExpress()">
                 <option value="tiered">首重 + 续重（1kg 内多少钱，每超 1kg 加收）</option>
                 <option value="flat">每 kg 单价</option>
               </select>
             </div>
+            <div class="field"><label>备注</label><input id="expNote" placeholder="渠道 / 时效说明，仅展示" /></div>
           </div>
           <div class="form-grid">
             <div class="field"><label>1kg 以内（元）</label><input id="expFirst" type="number" step="0.01" min="0" oninput="previewExpress()" /><div class="field-hint">首重，如 3.6</div></div>
@@ -1438,7 +1451,8 @@
           </div>
           <div class="toolbar">
             <button class="btn green" onclick="saveExpressRule()"><svg class="ic"><use href="#i-save"/></svg> 保存计费规则</button>
-            <button class="btn secondary" onclick="loadExpressPage()"><svg class="ic"><use href="#i-refresh"/></svg> 刷新</button>
+            <button class="btn secondary" onclick="expressSetDefault()"><svg class="ic"><use href="#i-check"/></svg> 设为默认快递</button>
+            <button class="btn danger" onclick="expressDeleteCarrier()">删除该快递公司</button>
             <span class="muted" id="expRateInfo"></span>
           </div>
         </div>

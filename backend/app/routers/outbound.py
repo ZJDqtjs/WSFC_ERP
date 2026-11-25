@@ -52,6 +52,8 @@ class PreviewIn(BaseModel):
     auto_express: bool = True   # False = 不自动结算快递费（手动出库时删掉「快递费」行）
     # 手动改过的快递费：自动算出来的金额不对时，按用户手填的金额预览（不填=按整单毛重自动算）
     express_fee: float | None = None
+    # 用哪家快递公司的计费规则（快递费规则页配置的 id；不填=默认快递）
+    express_carrier: str | None = None
     # 手动挑选的关联出库物品（追加在自动带出的结算项后面）：让预览也按 FIFO 算它们的成本
     extra_pack_lines: list[PackLine] = Field(default=[])
     # 客户承担的关联结算类别（material 包材 / labor 人工 / express 快递费）：预览随之返回 settle_income
@@ -71,6 +73,8 @@ class OutboundIn(BaseModel):
     auto_express: bool = True
     # 手动改过的快递费（自动算的不对时手填）：不填=按整单毛重自动算
     express_fee: float | None = None
+    # 用哪家快递公司的计费规则（快递费规则页配置的 id；不填=默认快递）
+    express_carrier: str | None = None
     pay_status: str = "paid"  # paid 已付款/已回款（默认）/ unpaid 待付款（先进「待付款账单」）
     # 金额调整（给客户抹零/凑整）：正=加收，负=抹零。商品成本不变，差额自动记「金额调整」其他收支
     adjust_amount: float = 0.0
@@ -293,7 +297,8 @@ def preview(data: PreviewIn, db: Session = Depends(get_db), user: User = Depends
         # settle_cats = 客户承担的关联结算类别 → 返回 settle_income，前端实收金额直接用服务端的数
         return build_order(db, data.lines, [], None, data.auto_express,
                            allow_self_stock=True, extra_pack_lines=data.extra_pack_lines,
-                           settle_cats=data.settle_cats, express_fee=data.express_fee)
+                           settle_cats=data.settle_cats, express_fee=data.express_fee,
+                           express_carrier=data.express_carrier)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

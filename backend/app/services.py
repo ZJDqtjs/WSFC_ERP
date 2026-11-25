@@ -214,50 +214,111 @@ def default_conversions(base_unit: str) -> dict:
     return dict(DEFAULT_CONVERSIONS_BASE_COUNT)
 
 
-# ---------------- 快递费（多段计费，规则页可实时维护） ----------------
+# ---------------- 快递费（多快递公司 + 多段计费，规则页可实时维护） ----------------
 EXPRESS_CONFIG_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "json", "express_config.json")
 EXPRESS_BOX_WEIGHT_KG = 0.1      # 每个包裹在净重基础上统一加 0.1kg 箱重
-DEFAULT_EXPRESS_CONFIG = {
+# 一家快递公司的计费规则
+DEFAULT_EXPRESS_CARRIER = {
+    "id": "jd",
+    "name": "京东快递",
     "mode": "tiered",   # tiered=首重+续重（1kg内首重价，每超1kg加收）；flat=每kg单价
     "first_kg_fee": 3.6,   # 1kg 以内
     "per_extra_kg": 1.0,   # 每超 1kg 加收
     "rate_per_kg": 3.6,    # flat 模式：每 1kg 单价
     "round_up": True,      # 是否按整 kg 向上取整（续重按 ≥1kg 段计）
+    "note": "",            # 备注（渠道/时效说明，仅展示）
 }
+# 配置文件结构：{"default_carrier": "jd", "carriers": [ {一家快递公司}, ... ]}
+DEFAULT_EXPRESS_CONFIG = {
+    "default_carrier": DEFAULT_EXPRESS_CARRIER["id"],
+    "carriers": [dict(DEFAULT_EXPRESS_CARRIER)],
+}
+EXPRESS_CARRIER_FIELDS = ("mode", "first_kg_fee", "per_extra_kg", "rate_per_kg", "round_up")
+
+
+def normalize_express_carrier(raw: dict | None, index: int = 0) -> dict:
+    """把一条快递规则补齐成完整结构（缺字段回退默认值）。"""
+    src = raw if isinstance(raw, dict) else {}
+    cid = str(src.get("id") or f"c{index + 1}").strip() or f"c{index + 1}"
+    cfg = dict(DEFAULT_EXPRESS_CARRIER)
+    cfg["id"] = cid
+    cfg["name"] = str(src.get("name") or "").strip() or f"快递公司{index + 1}"
+    for k in EXPRESS_CARRIER_FIELDS:
+        if k in src and src[k] is not None:
+            cfg[k] = src[k]
+    cfg["mode"] = "flat" if cfg.get("mode") == "flat" else "tiered"
+    for k in ("first_kg_fee", "per_extra_kg", "rate_per_kg"):
+        try:
+            cfg[k] = float(cfg.get(k) or 0)
+        except (TypeError, ValueError):
+            cfg[k] = 0.0
+    cfg["round_up"] = bool(cfg.get("round_up", True))
+    cfg["note"] = str(src.get("note") or "")
+    return cfg
+
+
+def normalize_express_config(data: dict | None) -> dict:
+    """规范化整份快递费配置；兼容旧版「单条扁平规则」文件（自动迁成一家「京东快递」）。"""
+    src = data if isinstance(data, dict) else {}
+    raw_list = src.get("carriers")
+    if not isinstance(raw_list, list) or not raw_list:
+        # 旧格式：顶层就是一条规则（mode/first_kg_fee/...），迁移成「京东快递」这一家
+        raw_list = ([{**DEFAULT_EXPRESS_CARRIER, **{k: v for k, v in src.items() if k in EXPRESS_CARRIER_FIELDS}}]
+                    if any(k in src for k in EXPRESS_CARRIER_FIELDS) else [DEFAULT_EXPRESS_CARRIER])
+    carriers, seen = [], set()
+    for i, item in enumerate(raw_list):
+        c = normalize_express_carrier(item, i)
+        if c["id"] in seen:      # id 重复时补后缀，保证能唯一定位
+            c["id"] = f"{c['id']}-{i + 1}"
+        seen.add(c["id"])
+        carriers.append(c)
+    default_id = str(src.get("default_carrier") or "").strip()
+    if default_id not in seen:
+        default_id = carriers[0]["id"]
+    return {"default_carrier": default_id, "carriers": carriers}
 
 
 def load_express_config() -> dict:
-    """读取快递费计费配置。文件缺失/异常时回退默认。"""
-    cfg = dict(DEFAULT_EXPRESS_CONFIG)
+    """读取快递费计费配置（多快递公司）。文件缺失/异常时回退默认。"""
     try:
         with open(EXPRESS_CONFIG_FILE, encoding="utf-8") as f:
-            data = json.load(f)
-            for k in cfg:
-                if k in data:
-                    cfg[k] = data[k]
+            return normalize_express_config(json.load(f))
     except Exception:
-        pass
-    return cfg
+        return normalize_express_config(None)
 
 
 def save_express_config(cfg: dict) -> dict:
     """保存快递费计费配置到文件（实时生效）。"""
-    merged = dict(DEFAULT_EXPRESS_CONFIG)
-    if cfg and isinstance(cfg, dict):
-        merged.update(cfg)
+    merged = normalize_express_config(cfg)
     os.makedirs(os.path.dirname(EXPRESS_CONFIG_FILE), exist_ok=True)
     with open(EXPRESS_CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(merged, f, ensure_ascii=False, indent=2)
     return merged
 
 
-def compute_express_fee(weight_kg: float, cfg: dict | None = None) -> float:
-    """快递费。
-    - tiered：1kg 内收 first_kg_fee；每超 1kg 加收 per_extra_kg（round_up 时按整 kg 向上取整）。
-    - flat：weight × rate_per_kg。
-    """
+def express_carrier_cfg(cfg: dict | None = None, carrier_id: str | None = None) -> dict:
+    """取某家快递公司的计费规则；不指定 / 找不到时用默认快递公司。
+    cfg 允许直接传单家规则（兼容旧调用）或整份配置（含 carriers）。"""
     if cfg is None:
         cfg = load_express_config()
+    if isinstance(cfg, dict) and isinstance(cfg.get("carriers"), list):
+        doc = normalize_express_config(cfg)
+        want = (carrier_id or "").strip() or doc["default_carrier"]
+        for c in doc["carriers"]:
+            if c["id"] == want or c["name"] == want:
+                return c
+        return next(c for c in doc["carriers"] if c["id"] == doc["default_carrier"])
+    return normalize_express_carrier(cfg)
+
+
+def compute_express_fee(weight_kg: float, cfg: dict | None = None,
+                        carrier_id: str | None = None) -> float:
+    """快递费（按某家快递公司的规则）。
+    - tiered：1kg 内收 first_kg_fee；每超 1kg 加收 per_extra_kg（round_up 时按整 kg 向上取整）。
+    - flat：weight × rate_per_kg。
+    cfg 不传 → 读配置文件、用默认快递公司；carrier_id 指定用哪家快递公司计费。
+    """
+    cfg = express_carrier_cfg(cfg, carrier_id)
     w = max(0.0, float(weight_kg))
     if cfg.get("mode") == "flat":
         return round(w * float(cfg.get("rate_per_kg") or 0.0), 2)
@@ -1348,13 +1409,17 @@ def settle_cats_label(cats) -> str:
 def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_express: bool = True,
                 allow_self_stock: bool = False, extra_pack_lines=None,
                 settle_cats=None, brush: bool = False,
-                express_fee: float | None = None) -> dict:
+                express_fee: float | None = None,
+                express_carrier: str | None = None) -> dict:
     """构建出库单明细：销售行 + 关联结算行(包装材料) + 费用，并校验库存。不落库。
 
     成本结转按「先进先出(FIFO)」：从商品最早的入库批次依次扣减，成本 = Σ(批次单位成本 × 扣减数量)。
 
     auto_express=False 时不自动结算快递费（手动出库时用户在预览里删掉「快递费」行即为不结算），
     其余批量导入/聚水潭等流程不传该参数，保持「按整单毛重自动计快递费」的原行为。
+
+    express_carrier：用哪家快递公司的计费规则（快递费规则页配置的 id 或名称）。
+    不传 = 用规则页的「默认快递」。
 
     allow_self_stock（手动出库）：销售行直接选的就是「库存商品（大类）」时，扣它自己的库存。
     导入路径必须保持 False —— 平台商品名误指到大类时应当报错，而不是悄悄扣大类的库存改账。
@@ -1580,7 +1645,9 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
     # auto_express=False（手动出库并在预览里删掉了「快递费」行）时不再自动追加
     if auto_express and express_weight > 0:
         total_weight = round(express_weight + EXPRESS_BOX_WEIGHT_KG, 3)
-        auto_fee = compute_express_fee(total_weight)
+        # 按所选快递公司（不传=默认快递）的计费规则算
+        carrier = express_carrier_cfg(None, express_carrier)
+        auto_fee = compute_express_fee(total_weight, carrier)
         # 手动改过快递费（自动算的不对）：按用户手填的金额记，单位成本=该金额（数量固定 1 单）
         fee_used = round(float(express_fee), 2) if express_fee is not None else auto_fee
         if fee_used > 0:
@@ -1592,6 +1659,9 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
                     "unit_price": fee_used, "amount": fee_used, "cogs": fee_used,
                     "pack_fee": 0, "line_type": "pack", "sale_product_id": None,
                     "express_weight": total_weight, "manual": False,
+                    # 这一单用的是哪家快递公司的规则（前端提示/核对用）
+                    "express_carrier": carrier.get("name") or "",
+                    "express_carrier_id": carrier.get("id") or "",
                     "spec": f"{total_weight:.3f}kg",
                     # 自动算出来的建议值：前端「恢复自动」时展示/核对用
                     "auto_express_fee": auto_fee,
@@ -1706,6 +1776,8 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
         settle_cats=payload.get("settle_cats"),
         # 手动改过的快递费（不填=按整单毛重自动算）
         express_fee=payload.get("express_fee"),
+        # 用哪家快递公司的规则计费（不填=默认快递）
+        express_carrier=payload.get("express_carrier"),
         brush=brush,
     )
     op = (payload.get("operator") or "").strip() or operator
