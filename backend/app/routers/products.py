@@ -977,6 +977,19 @@ def copy_products_to_warehouse(
             existing = target.scalar(select(Product).where(Product.name == src.name))
             if existing:
                 mapping[src.id] = existing.id
+                # 复用目标仓已有商品时不会覆盖它自己的资料（各仓各自的账）；但如果它一直没有
+                # 成本基准，而源仓有，就必须提醒——否则出库照样按 0 成本记，问题被悄悄藏起来。
+                if (
+                    existing.product_type == "stock"
+                    and float(existing.unit_cost or 0) <= 0
+                    and float(existing.avg_cost or 0) <= 0
+                    and (float(src.unit_cost or 0) > 0 or float(src.avg_cost or 0) > 0)
+                ):
+                    warnings.append(
+                        f"目标仓已有同名商品「{existing.name}」且参考成本为 0（未覆盖），"
+                        f"源仓成本为 {float(src.unit_cost or 0) or float(src.avg_cost or 0):g}，"
+                        f"如目标仓也在用它出库，请到商品编辑页补填参考成本"
+                    )
                 mapped.append({
                     "source_id": src.id, "target_id": existing.id,
                     "name": src.name, "product_type": src.product_type, "is_main": is_main,
@@ -1019,6 +1032,16 @@ def copy_products_to_warehouse(
                     f"「{src.name}」有 {len(src_links) - len(stock_links)} 项扣减库存商品在目标仓没有对应商品，已丢弃"
                 )
             first = stock_links[0] if stock_links else None
+            # 参考成本：手填的优先；没手填（0）就用源仓「库存均价」兜底。
+            # 均价是历史入库批次算出来的真实成本，而复制不带库存数量/均价/流水（各仓自己的账），
+            # 缺了这一手，目标仓该商品就没有任何成本基准 → 出库/关联结算的成本全按 0 记、
+            # 毛利虚高（2026-11 天麻、百合整批复制过来就是这样翻的车）。
+            unit_cost = float(src.unit_cost or 0) or float(src.avg_cost or 0)
+            if unit_cost <= 0 and src.product_type == "stock":
+                warnings.append(
+                    f"「{src.name}」源仓既没有参考成本也没有库存均价，复制后成本为 0，"
+                    f"请到商品编辑页补填参考成本"
+                )
             np = Product(
                 code=code,
                 multi_code=multi,
@@ -1030,7 +1053,7 @@ def copy_products_to_warehouse(
                 default_unit=src.default_unit or src.base_unit,
                 spec=src.spec or "",
                 sale_price=src.sale_price or 0.0,
-                unit_cost=src.unit_cost or 0.0,
+                unit_cost=unit_cost,
                 weight_kg=src.weight_kg or 0.0,
                 free_shipping=bool(src.free_shipping),
                 express_carrier=src.express_carrier or "",

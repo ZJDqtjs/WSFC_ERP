@@ -8832,7 +8832,7 @@ async function openCopyToWarehouseModal() {
   if (!whs.length) { toast("没有其他分仓可复制"); return; }
   openModal(`
     <h3>复制商品到其他仓（${prodSel.size} 个） <button class="close" onclick="closeModal()">✕</button></h3>
-    <p class="hint" style="margin-bottom:12px;">把选中商品的资料复制到目标仓；目标仓已有同名商品会直接复用，不会覆盖。库存数量、均价与出入库历史不复制。</p>
+    <p class="hint" style="margin-bottom:12px;">把选中商品的资料复制到目标仓；目标仓已有同名商品会直接复用，不会覆盖。库存数量、均价与出入库历史不复制（但参考成本会带过去，没手填时取源仓库存均价，保证目标仓出库能算出成本）。</p>
     <div class="form-grid">
       <div class="field"><label>目标分仓</label>
         <select id="cpTargetWh">${whs.map((w) => `<option value="${esc(w.key)}">${esc(w.name)}（${esc(w.key)}）</option>`).join("")}</select>
