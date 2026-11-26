@@ -425,14 +425,17 @@ let prodForceCat = "";  // 包材 / 人工 / 快递 等独立入口强制筛选�
 let prodForceType = ""; // 关联结算 等独立入口强制筛选的商品类型（order）
 function goProducts() { prodForceCat = ""; prodForceType = ""; goPage("products"); }
 function goPage(name) {
-  // 高亮当前导航项（商品页按 data-cat / data-type 精确匹配）
+  if (typeof closeAllDrawers === "function") closeAllDrawers();
+  if (typeof syncTopbarTitle === "function") syncTopbarTitle(name);
+  // 高亮当前导航项
   document.querySelectorAll(".nav-item").forEach((x) => {
     const hit = x.dataset.page === name &&
-      (name !== "products" ||
+      (name !== "products" || !x.dataset.cat && !x.dataset.type ||
         ((x.dataset.cat || "") === (prodForceCat || "") &&
          (x.dataset.type || "") === (prodForceType || "")));
     x.classList.toggle("active", hit);
   });
+  if (name === "products" && typeof syncProdTabUI === "function") syncProdTabUI();
   document.querySelectorAll(".page").forEach((x) => x.classList.remove("active"));
   const page = $("page-" + name);
   if (!page) return;   // 老书签/失效深链（如 #/eva）不再报错
@@ -1025,7 +1028,7 @@ function setUser(u) {
       ? t.charAt(0).toUpperCase()
       : t.slice(-1);
   const wt = $("warehouseTag");
-  if (wt) wt.textContent = u.warehouse ? `当前分仓：${u.warehouse.name}` : "";
+  if (wt) wt.textContent = u.warehouse ? u.warehouse.name : "选择分仓";
   // 操作员 = 当前登录账号：始终回填并锁定只读（服务端同样以登录账号为准，不信前端值）
   ["inOperator", "outOperator", "adjOperator", "fOperator", "finOperator"].forEach((id) => {
     const el = $(id);
@@ -6609,57 +6612,44 @@ function inboundBlockHtml(idx) {
     <div class="in-block-head">
       <span class="muted">第 ${idx} 张入库单</span>
       <div class="grow"></div>
-      <button class="btn sm danger in-block-del" onclick="removeInboundBlock(this)">删除这一行</button>
+      <button class="btn sm danger in-block-del" onclick="removeInboundBlock(this)">删除</button>
     </div>
-    <div class="form-grid">
+    <div class="form-grid compact-grid">
       <div class="field">
         <label>商品 *</label>
         <input class="in-pick-name" readonly placeholder="＋ 点击选择商品" onclick="openInboundPicker(this)" style="cursor:pointer;background:var(--primary-50);" />
         <div class="field-hint in-stock-hint"></div>
       </div>
       <div class="field"><label>进货单位 *</label><select class="in-unit" onchange="inBlockUnitChanged(this)"></select><div class="field-hint in-unit-hint"></div></div>
-      <div class="field"><label>数量 *</label><input class="in-qty" type="number" min="0" step="any" placeholder="0" oninput="calcInboundBlock(this)" /><div class="field-hint">数量填 0 = 只记运费/装卸费等开支，不入库存</div></div>
-      <div class="field"><label>单价（所选单位）*</label><input class="in-price" type="number" min="0" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" /><div class="field-hint in-price-hint"></div></div>
+      <div class="field"><label>数量 *</label><input class="in-qty" type="number" min="0" step="any" placeholder="0（仅记费用填0）" oninput="calcInboundBlock(this)" /></div>
+      <div class="field"><label>单价 *</label><input class="in-price" type="number" min="0" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" /><div class="field-hint in-price-hint"></div></div>
       <div class="field"><label>金额</label><input class="in-amount" readonly /></div>
-      <div class="field">
-        <label>调整（抹零 / 凑整）</label>
-        <input class="in-adjust" type="number" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" />
-        <div class="field-hint in-adjust-hint">正=多付，负=少付；差额自动记「金额调整」其他收支，商品成本不变</div>
-      </div>
-      <div class="field">
-        <label>运费（选填）</label>
-        <input class="in-freight" type="number" min="0" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" />
-        <div class="field-hint in-freight-hint">计入该批次成本 → 体现在这个品的毛利；并自动记入「其他收支」备查</div>
-      </div>
-      <div class="field">
-        <label>装卸费（选填）</label>
-        <input class="in-handling" type="number" min="0" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" />
-        <div class="field-hint">同运费：入成本、进「其他收支」，不强制填</div>
-      </div>
-      <div class="field">
-        <label>手续费（选填）</label>
-        <input class="in-fee" type="number" min="0" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" />
-        <div class="field-hint">付款给供应商产生的转账手续费：同运费，入成本、进「其他收支」</div>
-      </div>
       <div class="field"><label>供应商</label><input class="in-supplier" placeholder="供应商名称" /></div>
       <div class="field"><label>日期 *</label><input class="in-date" type="date" /></div>
-      <div class="field"><label>操作员</label><input class="in-operator" readonly title="默认当前登录账号，不可修改" /></div>
+      <div class="field"><label>操作员</label><input class="in-operator" readonly /></div>
       <div class="field in-pay-field">
         <label>付款状态</label>
-        ${inboundPayRadios("inPay_" + idx, "paid", 0,
-          "待付款：先进「待付款账单」，点「已支付」后才计入财务报表；部分付款：已付部分计入报表，未付余额留在待付款账单")}
+        ${inboundPayRadios("inPay_" + idx, "paid", 0, "")}
       </div>
     </div>
-    <div class="field" style="margin-top:12px;">
-      <label>备注</label>
-      <textarea id="inRemark_${idx}" rows="1" placeholder="可选" onpaste="pasteRemarkFiles('inRemark_${idx}', event)"></textarea>
-      <div class="attach-bar">
-        <button type="button" class="btn sm secondary" onclick="$('inRemarkFile_${idx}').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 图片 / 附件</button>
-        <span class="attach-tip">支持图片、PDF、Excel 等（≤20MB），可直接 Ctrl+V 粘贴</span>
-        <input type="file" id="inRemarkFile_${idx}" multiple style="display:none;" onchange="uploadRemarkFiles('inRemark_${idx}', this)" />
+    <details class="adv-fold" style="margin-top:10px;">
+      <summary>附加费用与备注附件（调整 / 运费 / 装卸费 / 手续费）</summary>
+      <div class="form-grid compact-grid" style="margin-top:10px;">
+        <div class="field"><label>金额调整（正加负减）</label><input class="in-adjust" type="number" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" /><div class="field-hint in-adjust-hint"></div></div>
+        <div class="field"><label>运费</label><input class="in-freight" type="number" min="0" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" /><div class="field-hint in-freight-hint"></div></div>
+        <div class="field"><label>装卸费</label><input class="in-handling" type="number" min="0" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" /></div>
+        <div class="field"><label>转账手续费</label><input class="in-fee" type="number" min="0" step="any" placeholder="0.00" oninput="calcInboundBlock(this)" /></div>
       </div>
-      <div class="attach-list" id="inRemark_${idx}Files"></div>
-    </div>
+      <div class="field" style="margin-top:8px;">
+        <label>备注与附件</label>
+        <textarea id="inRemark_${idx}" rows="1" placeholder="可选（支持 Ctrl+V 粘贴图片）" onpaste="pasteRemarkFiles('inRemark_${idx}', event)"></textarea>
+        <div class="attach-bar">
+          <button type="button" class="btn sm secondary" onclick="$('inRemarkFile_${idx}').click()"><svg class="ic"><use href="#i-paperclip"/></svg> 添加附件</button>
+          <input type="file" id="inRemarkFile_${idx}" multiple style="display:none;" onchange="uploadRemarkFiles('inRemark_${idx}', this)" />
+        </div>
+        <div class="attach-list" id="inRemark_${idx}Files"></div>
+      </div>
+    </details>
     <div class="muted in-block-sum" style="font-size:12px;"></div>
   </div>`;
 }
@@ -7045,6 +7035,7 @@ async function submitInbound() {
       const empties = inboundBlocks().filter((b) => !+(b.dataset.pid || 0));
       if (empties.length > 1) empties.slice(1).forEach((b) => b.remove());
       syncInboundBlocks();
+      if (!r.failed_count && typeof closeDrawer === "function") closeDrawer("inboundDrawer");
       loadInbounds(); loadStock();
       // 刷新商品缓存：下次选这个商品时会带上「这次录入的价」（最近价实时跟着变）
       api("/api/products").then((ps) => { PRODUCTS = ps; }).catch(() => {});
@@ -8140,6 +8131,7 @@ async function submitOutbound() {
     clearRemarkField("outRemark");
     setPay("outPay", "paid");
     if ($("outAutoExpress")) $("outAutoExpress").checked = true;   // 复位：下一笔仍默认自动计快递费
+    if (typeof closeDrawer === "function") closeDrawer("outboundDrawer");
     loadOutbounds(); loadStock();
   } catch (e) { toast("出库失败：" + e.message); }
 }
@@ -10508,6 +10500,7 @@ function oeEdit(id) {
   oeSyncTotal();
   $("oeSaveBtn").textContent = "✓ 保存修改";
   oeAlertMsg(`正在修改 ${r.date}「${r.category}」${fmtMoney(Math.abs(Number(r.amount) || 0))}${fee ? `（含手续费 ${fmtMoney(fee)}）` : ""}（保存后覆盖原记录）`);
+  if (typeof openDrawer === "function") openDrawer("oeDrawer");
   $("oeCategory").focus();
 }
 
@@ -10535,6 +10528,7 @@ async function oeSubmit() {
     const tail = (!income && payStatus === "unpaid") ? "（待付款，已进待付款账单）" : "";
     toast((editing ? "已保存修改" : `已登记${income ? "收入" : "开支"} ${category} ${fmtMoney(total)}${fee ? `（含手续费 ${fmtMoney(fee)}）` : ""}`) + tail);
     oeResetForm();
+    if (typeof closeDrawer === "function") closeDrawer("oeDrawer");
     await loadOtherExpensePage();
   } catch (e) { oeAlertMsg("保存失败：" + e.message); }
 }
@@ -13555,8 +13549,9 @@ function adpView(btn) {
   const view = btn.dataset.view || "overview";
   btn.closest(".seg").querySelectorAll(".seg-item").forEach((x) => x.classList.toggle("active", x === btn));
   $("adpOverviewCard").classList.toggle("adp-collapsed", view !== "overview");
-  ["adpOverviewBody", "adpBridgeCard", "adpAccountsCard"].forEach((id) => {
-    $(id).style.display = view === "overview" ? "" : "none";
+  ["adpOverviewBody", "adpBridgeCard", "adpAccountsCard", "adpFinanceGrid"].forEach((id) => {
+    const el = $(id);
+    if (el) el.style.display = view === "overview" ? "" : "none";
   });
   $("adpWhInCard").style.display = view === "whin" ? "" : "none";
   $("adpDealCard").style.display = view === "sku" ? "" : "none";
