@@ -29,6 +29,11 @@ router = APIRouter(prefix="/api/outbounds", tags=["outbound"])
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
+# 无日期筛选（列表页「全部」）时的兜底上限。出库单已 3.3 万单 / 13 万明细，
+# 整表一次性序列化实测 ~73MB、22 秒，会把 1.6G 小机器拖进 swap 并让整站 502，
+# 所以只回最近 OUTBOUND_LIST_CAP 单；更早的记录必须带日期区间查。
+OUTBOUND_LIST_CAP = 3000
+
 
 class SaleLine(BaseModel):
     product_id: int
@@ -313,6 +318,9 @@ def list_outbounds(date_from: str = "", date_to: str = "", g: str = "", db: Sess
         q = q.where(Outbound.date <= date_to)
     if g:
         q = q.where(Outbound.import_group.in_([x for x in g.split(",") if x]))
+    if not date_from and not date_to and not g:
+        # 无任何条件 = 列表页点了「全部」：只给最近 N 单，避免整表加载拖垮服务
+        q = q.limit(OUTBOUND_LIST_CAP)
     return [_to_dict(o) for o in db.execute(q).scalars()]
 
 

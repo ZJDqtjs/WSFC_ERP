@@ -200,6 +200,7 @@ const batchState = {
           <van-button size="mini" plain @click="selectedIds = []">取消</van-button>
         </div>
         <div class="muted" style="margin-top:8px;">共 {{ list.length }} 单，合并 {{ entries.length }} 行</div>
+        <div v-if="capped" class="muted" style="margin-top:4px;">仅显示最近 3000 单，更早的记录请选择日期范围筛选。</div>
 
         <van-pull-refresh v-model="refreshing" @refresh="loadList">
           <div v-if="!entries.length" class="empty">暂无出库记录</div>
@@ -588,7 +589,7 @@ import RemarkView from '../components/RemarkView.vue'
 import OperatorField from '../components/OperatorField.vue'
 import PayStatusField from '../components/PayStatusField.vue'
 import { ensureUserName } from '../utils/user'
-import { fmtMoney, fmtNum, num, defaultUnit, unitFactor, priceOf, todayStr } from '../utils/format'
+import { fmtMoney, fmtNum, num, defaultUnit, unitFactor, priceOf, todayStr, daysAgoStr } from '../utils/format'
 
 const router = useRouter()
 const tab = ref('new')
@@ -911,7 +912,9 @@ function onPackUnitSelect(a) {
 /* ---------- 记录列表 ---------- */
 const list = ref([])
 const kw = ref('')
-const filter = reactive({ from: '', to: '' })
+// 默认最近 30 天：出库单已有 3 万+，不带日期会整表拉取（响应 70MB+，后端会被拖死）
+const filter = reactive({ from: daysAgoStr(29), to: todayStr() })
+const capped = ref(false)
 const selectedIds = ref([])
 const detailId = ref(null)
 
@@ -967,6 +970,8 @@ async function loadList() {
     if (filter.from) q.push(`date_from=${filter.from}`)
     if (filter.to) q.push(`date_to=${filter.to}`)
     list.value = await api('/api/outbounds' + (q.length ? '?' + q.join('&') : ''))
+    // 后端对「全部」有兜底上限（OUTBOUND_LIST_CAP=3000），触顶时提示一下
+    capped.value = !q.length && list.value.length >= 3000
     selectedIds.value = selectedIds.value.filter((id) => list.value.some((r) => r.id === id))
   } catch (e) { showToast(e.message || '加载失败') }
   refreshing.value = false
