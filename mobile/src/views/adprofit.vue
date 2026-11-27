@@ -2,41 +2,33 @@
   <div class="sub-page">
     <van-nav-bar title="广告利润" left-arrow fixed placeholder @click-left="goBack" />
     <div style="padding:12px;">
-      <!-- 区间 / 口径 -->
+      <!-- 紧凑筛选卡 -->
       <div class="card">
         <div class="row wrap" style="gap:6px;">
-          <van-field v-model="df" type="date" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
-          <van-field v-model="dt" type="date" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
+          <van-field v-model="df" type="date" class="m-date" />
+          <van-field v-model="dt" type="date" class="m-date" />
           <van-button size="small" type="primary" @click="quickKey = ''; load()">查询</van-button>
+          <van-button size="small" plain icon="replay" :loading="loading" @click="load(true)" />
         </div>
-        <div class="seg" style="margin:8px 0 0;">
-          <div class="seg-item" :class="{ active: quickKey === 'today' }" @click="quick('today')">今天</div>
-          <div class="seg-item" :class="{ active: quickKey === 'month' }" @click="quick('month')">本月</div>
-          <div class="seg-item" :class="{ active: quickKey === 'lastmonth' }" @click="quick('lastmonth')">上月</div>
+        <div class="chip-row mt8">
+          <button type="button" class="chip-btn" :class="{ active: quickKey === 'today' }" @click="quick('today')">今天</button>
+          <button type="button" class="chip-btn" :class="{ active: quickKey === 'month' }" @click="quick('month')">本月</button>
+          <button type="button" class="chip-btn" :class="{ active: quickKey === 'lastmonth' }" @click="quick('lastmonth')">上月</button>
+          <span class="grow"></span>
+          <button type="button" class="chip-btn" :class="{ active: scope === 'all' }" @click="setScope('all')">全仓</button>
+          <button type="button" class="chip-btn" :class="{ active: scope === 'one' }" @click="setScope('one')">当前仓</button>
         </div>
+        <div class="row mt8" style="justify-content:space-between;">
+          <span class="muted" style="display:inline-flex;align-items:center;">排除其他收支 <HelpTip title="口径说明" :text="rangeHint || '与财务报表口径一致，排除零散其他收支。'" /></span>
+          <van-switch v-model="excludeOther" size="18" @update:model-value="load()" />
+        </div>
+      </div>
 
-        <div class="seg" style="margin:10px 0 0;">
-          <div class="seg-item" :class="{ active: scope === 'all' }" @click="setScope('all')">全仓总览</div>
-          <div class="seg-item" :class="{ active: scope === 'one' }" @click="setScope('one')">当前分仓</div>
-        </div>
-
-        <!-- 口径切换：财务口径 / 入仓台账 / 成交口径，与桌面端一致，三块互不混算 -->
-        <div class="seg" style="margin:10px 0 0;">
-          <div class="seg-item" :class="{ active: view === 'overview' }" @click="view = 'overview'">财务口径</div>
-          <div class="seg-item" :class="{ active: view === 'whin' }" @click="view = 'whin'">入仓台账</div>
-          <div class="seg-item" :class="{ active: view === 'sku' }" @click="view = 'sku'">成交口径</div>
-        </div>
-
-        <div class="row" style="margin-top:10px;gap:8px;align-items:center;">
-          <span class="grow" style="font-size:13px;">排除其他收支</span>
-          <span class="muted" style="font-size:12px;">与财务报表口径一致</span>
-          <van-switch v-model="excludeOther" size="20" @update:model-value="load()" />
-        </div>
-
-        <div class="row wrap" style="gap:8px;margin-top:10px;">
-          <van-button size="small" plain :loading="loading" @click="load(true)">刷新广告缓存</van-button>
-        </div>
-        <div class="muted" style="font-size:12px;margin-top:8px;line-height:1.5;">{{ rangeHint }}</div>
+      <!-- 主口径切换 -->
+      <div class="seg">
+        <div class="seg-item" :class="{ active: view === 'overview' }" @click="view = 'overview'">财务口径</div>
+        <div class="seg-item" :class="{ active: view === 'whin' }" @click="view = 'whin'">入仓台账</div>
+        <div class="seg-item" :class="{ active: view === 'sku' }" @click="view = 'sku'">成交 · SKU</div>
       </div>
 
       <!-- 财务口径：与财务报表同一套账，含入仓台账备货结算 -->
@@ -76,8 +68,10 @@
 
       <!-- 利润桥 -->
       <div v-if="view === 'overview'" class="card">
-        <div class="card-title">利润表明细 · 财务口径（含入仓台账）</div>
-        <div class="muted" style="font-size:12px;margin-bottom:6px;">与「财务报表」同一套口径，本页只额外扣减广告费</div>
+        <div class="card-title">
+          利润表明细 · 财务口径
+          <HelpTip title="财务口径说明" text="与「财务报表」同一套口径，本页只额外扣减广告费；已含入仓台账备货结算。" />
+        </div>
         <div v-for="b in bridge" :key="b.name" class="bridge-row">
           <span class="grow" :class="{ bold: b.bold }">{{ b.name }}</span>
           <span class="mono" :class="[b.bold ? 'bold' : '', num(b.value) >= 0 ? 'down' : 'up']">{{ fmtMoney(b.value) }}</span>
@@ -87,8 +81,10 @@
 
       <!-- 按店铺账号 -->
       <div v-if="view === 'overview'" class="card">
-        <div class="card-title">按店铺账号的广告费</div>
-        <div class="muted" style="font-size:12px;margin-bottom:6px;">来自挂载服务「花费一览」的本地缓存（一次抓取 = 一个账号 + 一个区间）</div>
+        <div class="card-title">
+          按店铺账号广告费
+          <HelpTip title="广告费缓存说明" text="来自挂载服务「花费一览」本地缓存，按账号+区间整段读取；所选区间存在缺口日期时不计入广告费，请到挂载服务补抓。" />
+        </div>
         <div v-if="!accounts.length" class="empty">所选区间没有可用的花费缓存</div>
         <div v-for="a in accounts" :key="a.label" class="list-item">
           <div class="row">
@@ -96,18 +92,15 @@
             <span class="bold up">{{ fmtMoney(a.total) }}</span>
           </div>
           <div class="item-meta">CPS {{ fmtMoney(a.cps) }} · 京准通 {{ fmtMoney(a.jzt) }} · 覆盖 {{ a.covered }} 天</div>
-          <div v-if="a.gaps" class="item-meta" style="color:#ed6a0c;">缺口：{{ a.gaps }}</div>
-        </div>
-        <div class="muted" style="font-size:12px;margin-top:8px;line-height:1.5;">
-          缓存只能按账号 + 区间整段读取：所选区间拼不满的日期会列在「缺口」里且不计入广告费，此时广告费会被低估，请到挂载服务按该区间补抓一次。
+          <div v-if="a.gaps" class="item-meta" style="color:var(--m-amber);">缺口：{{ a.gaps }}</div>
         </div>
       </div>
 
-      <!-- 入仓台账：备货结算口径，单独成表，不与 SKU 成交合计混用 -->
+      <!-- 入仓台账 -->
       <div v-if="view === 'whin'" class="card">
-        <div class="card-title">入仓台账（备货结算）</div>
-        <div class="muted" style="font-size:12px;margin-bottom:6px;line-height:1.5;">
-          已计入「财务口径」的收入与毛利；这是备货入仓/结算口径，不是京东实际成交
+        <div class="card-title">
+          入仓台账（备货结算）
+          <HelpTip title="入仓台账口径" text="备货入仓结算口径，已计入财务口径，非京东实际成交；同一批货不会在成交口径重复计入。" />
         </div>
         <div v-if="loading" class="empty">加载中…</div>
         <template v-else>
@@ -126,16 +119,13 @@
             <div class="item-meta mono">收入 {{ fmtMoney(r.revenue) }} · 成本 {{ fmtMoney(r.cogs) }} · 毛利 {{ fmtMoney(r.gross) }}</div>
           </div>
         </template>
-        <div class="muted" style="font-size:12px;margin-top:8px;line-height:1.5;">
-          京东是否卖出要看「成交口径」；同一批货不会在成交口径重复计入。
-        </div>
       </div>
 
-      <!-- 成交口径：利润表小计 + 与财务口径对账 -->
+      <!-- 成交口径 -->
       <div v-if="view === 'sku'" class="card">
-        <div class="card-title">利润表 · 成交口径</div>
-        <div class="muted" style="font-size:12px;margin-bottom:6px;line-height:1.5;">
-          ERP 出库销售 + 入仓品京东实际成交；不含入仓台账，合计对应下方 SKU 明细
+        <div class="card-title">
+          利润表 · 成交口径
+          <HelpTip title="成交口径说明" text="ERP 出库销售 + 入仓品京东实际成交，不含入仓备货台账，合计对应下方 SKU 明细。" />
         </div>
         <div v-if="skuLoading" class="empty">按 SKU 加载中…</div>
         <template v-else>
@@ -436,17 +426,17 @@ onMounted(() => load())
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
+.sub-page { min-height: 100vh; background: var(--m-bg); }
 .mono { font-variant-numeric: tabular-nums; }
 .bridge-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #f5f5f5; font-size: 13px; }
 .bridge-row:last-child { border-bottom: none; }
 .alert { border-radius: 8px; padding: 8px 10px; font-size: 12px; line-height: 1.5; }
 .alert.warn { background: #fffbe8; color: #ed6a0c; }
-.pick { font-size: 13px; padding: 5px 6px; border: 1px solid #dcdee0; border-radius: 6px; background: #fff; color: #323233; }
+.pick { font-size: 13px; padding: 5px 6px; border: 1px solid #dcdee0; border-radius: 6px; background: var(--m-card); color: var(--m-text); }
 .sku-item { padding: 10px 0; border-bottom: 1px solid #f5f5f5; }
 .sku-item:last-of-type { border-bottom: none; }
 .sku-name { font-weight: 600; font-size: 14px; }
-.sku-metrics { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; font-size: 12px; color: #646566; }
-.sku-metrics b { color: #323233; font-variant-numeric: tabular-nums; }
+.sku-metrics { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; font-size: 12px; color: var(--m-text-sec); }
+.sku-metrics b { color: var(--m-text); font-variant-numeric: tabular-nums; }
 .sku-total { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e5e5e5; }
 </style>

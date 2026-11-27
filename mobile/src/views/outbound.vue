@@ -26,9 +26,9 @@ const batchState = {
     <template v-if="tab === 'new'">
       <div class="card">
         <div class="card-title">
-          <span class="grow">新增出库 / 销售单</span>
+          <span class="grow">新增出库 / 销售单 <HelpTip title="出库说明" text="卖商品会自动结转关联包装材料、打包人工与快递费。" /></span>
           <van-button size="mini" plain type="primary" icon="down" @click="openBatch('jushuitan')">聚水潭</van-button>
-          <van-button size="mini" plain icon="exchange" @click="openBatch('brush')">刷单出库</van-button>
+          <van-button size="mini" plain icon="exchange" @click="openBatch('brush')">刷单</van-button>
           <van-button size="mini" plain icon="down" @click="openBatch('outbound')">批量</van-button>
         </div>
         <van-cell-group inset>
@@ -66,7 +66,6 @@ const batchState = {
           <van-button size="small" plain type="primary" icon="plus" @click="addRow">加一行</van-button>
           <van-button size="small" plain @click="clearRows">清空</van-button>
         </div>
-        <div class="muted" style="margin-top:8px;">卖商品会自动结转关联包装材料、打包人工与快递费。</div>
       </div>
 
       <!-- 预览结算结果 -->
@@ -101,16 +100,14 @@ const batchState = {
           <div class="muted">{{ fmtMoney(packLineUnitPrice(pl)) }}/{{ pl.unit }} · 成本小计 {{ fmtMoney(packLineCost(pl)) }}</div>
         </div>
 
-        <div class="row" style="gap:8px;margin-top:10px;align-items:flex-start;">
+        <div class="row" style="gap:8px;margin-top:10px;">
           <van-button size="small" plain type="primary" icon="plus" @click="openPackPicker">添加关联物品</van-button>
-          <span class="muted" style="flex:1;">
-            手动挑选本单实际用到的包材 / 人工 / 快递费等（任意商品都可选）；数量按本单用量填，提交时与自动带出的结算项一起结转成本
-          </span>
+          <HelpTip title="添加关联物品" text="手动挑选本单实际用到的包材 / 人工 / 快递费等（任意商品都可选），数量按本单用量填，提交时一并结转成本。" />
         </div>
 
         <div class="divider"></div>
         <div class="form-row">
-          <span class="lbl">固定费用合计（人工打包费等）</span>
+          <span class="lbl">固定费用合计</span>
           <div class="inline-field">
             <van-field v-model="packFeeTotal" type="number" style="width:96px;" @update:model-value="onFeeInput" />
             <span class="muted">元</span>
@@ -118,19 +115,20 @@ const batchState = {
         </div>
 
         <div class="form-row">
-          <span class="lbl">调整（给客户抹零 / 凑整）</span>
+          <span class="lbl">金额调整 <HelpTip title="金额调整" text="正=加收，负=抹零；差额自动记「金额调整」其他收支，商品成本不变。" /></span>
           <div class="inline-field">
             <van-field v-model="form.adjust" type="number" style="width:96px;" placeholder="0.00" />
             <span class="muted">元</span>
           </div>
         </div>
-        <div class="muted" style="margin-bottom:4px;">
-          正=加收，负=抹零；差额自动记「金额调整」其他收支，商品成本不变。
-        </div>
 
         <div class="divider"></div>
         <div class="row" style="justify-content:space-between;">
-          <span class="lbl">实收金额包含（客户随货款一起付的）</span>
+          <span class="lbl">实收包含 <HelpTip title="实收金额口径" text="勾选的类别会计入「实收金额」与报表收入（客户随货款付回）；成本照旧含包材/快递。固定成本仅在客户付回时勾选。" /></span>
+          <div class="row" style="gap:6px;">
+            <van-button size="mini" plain @click="setSettleAll(true)">全选</van-button>
+            <van-button size="mini" plain @click="setSettleAll(false)">清空</van-button>
+          </div>
         </div>
         <van-checkbox-group v-model="settleCats" direction="horizontal" style="margin-top:6px;">
           <van-checkbox
@@ -141,15 +139,7 @@ const batchState = {
             style="margin:0 12px 6px 0;"
           >{{ c.label }}</van-checkbox>
         </van-checkbox-group>
-        <div class="row" style="gap:8px;">
-          <van-button size="mini" plain @click="setSettleAll(true)">全选</van-button>
-          <van-button size="mini" plain @click="setSettleAll(false)">全不选</van-button>
-          <span class="muted" style="flex:1;">{{ settleHint }}</span>
-        </div>
-        <div class="muted" style="margin-top:4px;">
-          勾选的类别会计入「实收金额」与报表收入（客户是付了这笔钱的）；成本照旧含包材/快递，所以毛利不会被包材吃掉。
-          「固定成本」= 上面的固定费用合计（工时/胶带这类按金额记的），客户付回时才勾。不勾 = 实收只算货款 + 调整。
-        </div>
+        <div v-if="settleHint" class="muted" style="margin-top:2px;">{{ settleHint }}</div>
 
         <div class="stat-grid cols2" style="margin-top:10px;">
           <div class="stat"><div class="label">销售收入</div><div class="value">{{ fmtMoney(totals.amount) }}</div></div>
@@ -195,14 +185,14 @@ const batchState = {
     <template v-else>
       <div class="card">
         <div class="row wrap" style="gap:6px;">
-          <van-field v-model="filter.from" type="date" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
-          <van-field v-model="filter.to" type="date" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
+          <van-field v-model="filter.from" type="date" style="max-width:132px;background:var(--m-bg-soft);border-radius:6px;padding:6px 10px;" />
+          <van-field v-model="filter.to" type="date" style="max-width:132px;background:var(--m-bg-soft);border-radius:6px;padding:6px 10px;" />
           <van-button size="small" type="primary" @click="loadList">筛选</van-button>
           <van-button size="small" plain @click="quick(0)">今天</van-button>
           <van-button size="small" plain @click="quick(7)">近7天</van-button>
           <van-button size="small" plain @click="quick(null)">全部</van-button>
         </div>
-        <van-field v-model="kw" placeholder="筛选单号 / 客户" style="background:#f7f8fa;border-radius:6px;margin-top:8px;" />
+        <van-field v-model="kw" placeholder="筛选单号 / 客户" style="background:var(--m-bg-soft);border-radius:6px;margin-top:8px;" />
 
         <div v-if="selectedIds.length" class="batch-bar">
           <span class="muted">已选 {{ selectedIds.length }} 单</span>
@@ -1443,7 +1433,7 @@ onActivated(() => { if (tab.value === 'list') loadList() })
 .unmapped-list { margin-top: 6px; }
 .unmapped-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 .unmapped-item .ellipsis { font-size: 12px; }
-.ai-plan { background: #f7f8fa; border-radius: 8px; padding: 10px; margin-top: 8px; font-size: 12px; }
+.ai-plan { background: var(--m-bg-soft); border-radius: 8px; padding: 10px; margin-top: 8px; font-size: 12px; }
 .agg-row { padding: 8px 0; border-bottom: 1px solid #f5f5f5; }
 .agg-row:last-child { border-bottom: none; }
 .agg-row .bold { font-size: 13.5px; }
@@ -1451,15 +1441,15 @@ onActivated(() => { if (tab.value === 'list') loadList() })
 /* 芳谊放单仓逐单刷单结算 */
 .brush-box { background: #f0f7ff; border-radius: 8px; padding: 10px; margin-top: 8px; }
 .brush-batch { display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; }
-.brush-batch :deep(.van-field) { padding: 4px 8px; background: #fff; border-radius: 6px; }
+.brush-batch :deep(.van-field) { padding: 4px 8px; background: var(--m-card); border-radius: 6px; }
 .brush-batch :deep(.van-button) { flex: none; }
-.brush-mode { padding: 5px 4px; font-size: 12px; border: none; border-radius: 6px; background: #fff; color: #323233; }
+.brush-mode { padding: 5px 4px; font-size: 12px; border: none; border-radius: 6px; background: var(--m-card); color: var(--m-text); }
 .brush-row { padding: 8px 0; border-bottom: 1px solid #e8eef7; }
 .brush-row:last-of-type { border-bottom: none; }
 .brush-row .muted { font-size: 12px; }
-.brush-row :deep(.van-field) { padding: 2px 6px; background: #fff; border-radius: 6px; }
-.brush-row :deep(.van-field__label) { font-size: 11px; color: #969799; }
-.detail-box { background: #f7f8fa; border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
+.brush-row :deep(.van-field) { padding: 2px 6px; background: var(--m-card); border-radius: 6px; }
+.brush-row :deep(.van-field__label) { font-size: 11px; color: var(--m-muted); }
+.detail-box { background: var(--m-bg-soft); border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
 .detail-line { padding: 5px 0; border-bottom: 1px solid #ececec; font-size: 13px; }
 .detail-line:last-child { border-bottom: none; }
 .batch-line { display: flex; align-items: center; gap: 6px; padding: 6px 0 0 22px; }

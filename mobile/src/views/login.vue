@@ -125,13 +125,13 @@ async function doLogin() {
 
 <style scoped>
 .login-wrap { min-height: 100vh; background: #1989fa; display: flex; align-items: center; justify-content: center; }
-.login-box { width: 86%; background: #fff; border-radius: 14px; padding: 28px 8px 18px; }
+.login-box { width: 86%; background: var(--m-card); border-radius: 14px; padding: 28px 8px 18px; }
 .logo { text-align: center; font-size: 22px; font-weight: 700; color: #1989fa; }
-.sub { text-align: center; color: #969799; font-size: 12px; margin: 4px 0 20px; }
+.sub { text-align: center; color: var(--m-muted); font-size: 12px; margin: 4px 0 20px; }
 .key-row { display: flex; align-items: center; }
 .key-row .van-field { flex: 1; }
 .key-row .van-button { margin: 0 8px 0 4px; }
-.key-hint { color: #969799; font-size: 11px; line-height: 1.6; padding: 6px 18px 0; }
+.key-hint { color: var(--m-muted); font-size: 11px; line-height: 1.6; padding: 6px 18px 0; }
 .login-err {
   margin: 10px 16px 0; padding: 8px 10px; border-radius: 8px;
   background: #fff1f0; color: #ee0a24; font-size: 12px; line-height: 1.6; word-break: break-all;

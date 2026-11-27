@@ -5,11 +5,8 @@
       <!-- 商品类别扣点 -->
       <div class="card">
         <div class="card-title">
-          <span class="grow">商品类别扣点</span>
+          <span class="grow">商品类别扣点 <HelpTip title="类别入库扣点" text="批量导入入库解析进货单价时按 原价 × (1 − 扣点%) 折算为入库成本，影响库存均价与利润。" /></span>
           <van-button size="mini" plain type="primary" icon="plus" @click="openDeduc()">新增</van-button>
-        </div>
-        <div class="muted" style="margin-bottom:8px;">
-          按商品类别设置入库扣点百分比；批量导入 → 入库解析「进货单价」时按 原价 × (1 − 扣点%) 折算为入库成本（影响库存均价与利润）。
         </div>
         <div v-if="!list.length" class="empty">暂无扣点规则</div>
         <div v-for="d in list" :key="d.id" class="list-item">
@@ -28,11 +25,8 @@
       <!-- 店铺扣点 -->
       <div class="card">
         <div class="card-title">
-          <span class="grow">店铺扣点规则</span>
+          <span class="grow">店铺扣点规则 <HelpTip title="店铺扣点" text="聚水潭订单导入时按店铺名称扣减订单卖家实收，保存后立即生效。" /></span>
           <van-button size="mini" plain type="primary" icon="plus" @click="openShop()">新增</van-button>
-        </div>
-        <div class="muted" style="margin-bottom:8px;">
-          聚水潭订单导入时按「店铺名称」扣减订单收入（卖家实收），保存后立即生效。
         </div>
         <div v-if="!shopRules.length" class="empty">暂无店铺扣点规则</div>
         <div v-for="r in shopRules" :key="r.shop" class="list-item">
@@ -104,8 +98,8 @@
           </div>
           <div v-if="!shopCats.length" class="empty" style="padding:10px 0;">请添加至少一个分类扣点</div>
           <div v-for="(c, i) in shopCats" :key="i" class="row" style="margin-bottom:8px;">
-            <van-field v-model="c.category" placeholder="分类名" style="background:#f7f8fa;border-radius:6px;" />
-            <van-field v-model="c.percent" type="number" placeholder="%" style="max-width:96px;background:#f7f8fa;border-radius:6px;" />
+            <van-field v-model="c.category" placeholder="分类名" style="background:var(--m-bg-soft);border-radius:6px;" />
+            <van-field v-model="c.percent" type="number" placeholder="%" style="max-width:96px;background:var(--m-bg-soft);border-radius:6px;" />
             <van-icon name="cross" color="#ee0a24" @click="shopCats.splice(i, 1)" />
           </div>
         </template>
@@ -260,7 +254,7 @@ onMounted(load)
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
+.sub-page { min-height: 100vh; background: var(--m-bg); }
 .percent { color: #ee0a24; }
 .cat-chip { display: inline-block; background: #f2f3f5; border-radius: 10px; padding: 2px 8px; margin: 2px 4px 0 0; font-size: 11px; }
 </style>

@@ -13,16 +13,16 @@
 
     <van-cell-group inset title="业务管理">
       <van-cell title="商品管理" icon="goods-collect-o" is-link to="/products" />
-      <van-cell title="一单多货（多货打包规则）" icon="logistics" is-link to="/packrules" />
+      <van-cell title="一单多货" value="打包规则" icon="logistics" is-link to="/packrules" />
       <van-cell title="鲜货现采" icon="bag-o" is-link to="/fresh" />
     </van-cell-group>
 
     <van-cell-group inset title="经营分析">
       <van-cell title="财务报表" icon="bar-chart-o" is-link to="/report" />
-      <van-cell title="广告利润（含广告费）" icon="chart-trending-o" is-link to="/adprofit" />
+      <van-cell title="广告利润" value="含广告费" icon="chart-trending-o" is-link to="/adprofit" />
       <van-cell title="其他收支" icon="balance-list-o" is-link to="/otherexp" />
       <van-cell title="待付款账单" icon="bill-o" is-link to="/payables" />
-      <van-cell :title="`库存管理（缺货 ${lowStockCount} 项）`" icon="shopping-cart-o" is-link to="/stock" />
+      <van-cell title="库存管理" :value="lowStockCount ? `缺货 ${lowStockCount} 项` : '正常'" icon="shopping-cart-o" is-link to="/stock" />
     </van-cell-group>
 
     <van-cell-group inset title="规则设置">
@@ -31,8 +31,8 @@
     </van-cell-group>
 
     <van-cell-group inset title="数据与系统">
-      <van-cell title="设置（分仓 / 备份 / 批量导入 / 聚水潭）" icon="setting-o" is-link to="/settings" />
-      <van-cell title="切换分仓" icon="cluster-o" is-link @click="$router.push({ path: '/settings', query: { panel: 'wh' } })" />
+      <van-cell title="切换分仓" :value="user.warehouse ? user.warehouse.name : ''" icon="cluster-o" is-link @click="$router.push({ path: '/settings', query: { panel: 'wh' } })" />
+      <van-cell title="系统设置" value="备份 / 导入 / 聚水潭" icon="setting-o" is-link to="/settings" />
     </van-cell-group>
 
     <div style="margin: 20px 16px;">

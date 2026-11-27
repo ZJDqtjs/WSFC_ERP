@@ -2,24 +2,23 @@
   <div class="sub-page">
     <van-nav-bar title="其他收支" left-arrow fixed placeholder @click-left="goBack" />
     <div style="padding:12px;">
-      <!-- 页级切换：其他支出 / 其他收入 —— 登记、统计、明细整页跟随 -->
-      <div class="card scope-head">
-        <div class="seg">
-          <div class="seg-item" :class="{ active: scope === 'expense' }" @click="setScope('expense')">其他支出</div>
-          <div class="seg-item" :class="{ active: scope === 'income' }" @click="setScope('income')">其他收入</div>
-        </div>
-        <div class="muted scope-hint">{{ scopeHint }}</div>
+      <!-- 顶层切换 + 区间筛选合一 -->
+      <div class="seg">
+        <div class="seg-item" :class="{ active: scope === 'expense' }" @click="setScope('expense')">其他支出</div>
+        <div class="seg-item" :class="{ active: scope === 'income' }" @click="setScope('income')">其他收入</div>
       </div>
 
-      <!-- 统计区间 -->
       <div class="card">
         <div class="row wrap" style="gap:6px;">
-          <van-field v-model="df" type="date" placeholder="起" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
-          <van-field v-model="dt" type="date" placeholder="止" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
+          <van-field v-model="df" type="date" placeholder="起" class="m-date" />
+          <van-field v-model="dt" type="date" placeholder="止" class="m-date" />
           <van-button size="small" type="primary" @click="load">查询</van-button>
+          <span class="grow"></span>
+          <van-button size="small" type="success" icon="plus" @click="openForm()">记一笔</van-button>
         </div>
-        <div class="seg" style="margin:8px 0 0;">
-          <div v-for="q in QUICKS" :key="q.key" class="seg-item" :class="{ active: quickKey === q.key }" @click="quick(q.key)">{{ q.label }}</div>
+        <div class="chip-row mt8">
+          <button v-for="q in QUICKS" :key="q.key" type="button" class="chip-btn" :class="{ active: quickKey === q.key }" @click="quick(q.key)">{{ q.label }}</button>
+          <HelpTip v-if="scopeHint" title="其他收支说明" :text="scopeHint" />
         </div>
       </div>
 
@@ -111,7 +110,7 @@
           <span class="grow">{{ scope === 'income' ? '收入明细' : '支出明细' }}</span>
           <van-button size="mini" type="primary" icon="plus" @click="openForm()">登记</van-button>
         </div>
-        <van-field v-model="kw" placeholder="筛选类型 / 备注 / 操作员" style="background:#f7f8fa;border-radius:6px;" />
+        <van-field v-model="kw" placeholder="筛选类型 / 备注 / 操作员" style="background:var(--m-bg-soft);border-radius:6px;" />
         <div v-if="!filteredRows.length" class="empty">
           该区间暂无{{ scopeWord }}，点右上角「登记」新增
           <template v-if="scope === 'income'"><br />入库单的「供应商补偿」会自动出现在这里</template>
@@ -355,11 +354,11 @@ onMounted(load)
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
+.sub-page { min-height: 100vh; background: var(--m-bg); }
 .scope-head { padding-bottom: 8px; }
 .scope-hint { padding: 6px 2px 0; font-size: 12px; line-height: 1.5; }
 .bar-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
-.bar-x { width: 44px; flex: none; font-size: 11px; color: #969799; font-variant-numeric: tabular-nums; }
+.bar-x { width: 44px; flex: none; font-size: 11px; color: var(--m-muted); font-variant-numeric: tabular-nums; }
 .bar-track { flex: 1; height: 14px; background: #f2f3f5; border-radius: 7px; overflow: hidden; display: block; }
 .bar-fill { display: block; height: 100%; background: #ee0a24; border-radius: 7px; min-width: 3px; }
 .bar-fill.income { background: #07c160; }

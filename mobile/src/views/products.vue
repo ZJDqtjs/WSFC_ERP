@@ -17,7 +17,7 @@
             @click="ptype = t.key"
           >{{ t.label }}</div>
         </div>
-        <van-field v-model="kw" placeholder="搜索商品名称 / 分类 / 编码" style="background:#f7f8fa;border-radius:6px;" />
+        <van-field v-model="kw" placeholder="搜索商品名称 / 分类 / 编码" style="background:var(--m-bg-soft);border-radius:6px;" />
         <div class="row wrap" style="gap:6px;margin-top:8px;">
           <van-tag v-for="c in cats" :key="c" :type="pcat === c ? 'primary' : 'default'" round @click="pcat = pcat === c ? '' : c">{{ c }}</van-tag>
         </div>
@@ -83,7 +83,13 @@
     <!-- ============ 商品编辑弹层 ============ -->
     <van-popup v-model:show="editShow" position="bottom" round :style="{ height: '92%' }">
       <div class="sheet-body">
-        <div class="sheet-title">{{ form.id ? '编辑商品' : '新增商品' }}</div>
+        <div class="sheet-title">
+          {{ form.id ? '编辑商品' : '新增商品' }}
+          <HelpTip
+            title="商品录入说明"
+            text="重量类按克记账（1斤=500克），计数类按个记账；订单商品固定为「单」。售价与参考成本均按所选单位填写，保存自动折算。仓储方用于同名商品按聚水潭仓储方区分，留空表示不限。"
+          />
+        </div>
 
         <van-cell-group inset>
           <van-field v-model="form.code" label="商品编码" placeholder="如 ydj001，可留空" />
@@ -96,50 +102,41 @@
           <van-field label="商品类型">
             <template #input>
               <van-radio-group v-model="form.product_type" direction="horizontal" @change="onTypeChange">
-                <van-radio name="stock">库存商品（大类）</van-radio>
-                <van-radio name="order">订单商品（小类）</van-radio>
+                <van-radio name="stock">库存商品</van-radio>
+                <van-radio name="order">订单商品</van-radio>
               </van-radio-group>
             </template>
           </van-field>
           <van-field :model-value="form.unit" readonly label="单位" placeholder="点击选择" @click="unitPickShow = true" />
           <van-field v-model="form.sale_price" type="number" :label="`默认售价（元/${formDispUnit}）`" :placeholder="`元/${formDispUnit}`" />
           <van-field v-model="form.unit_cost" type="number" :label="`参考成本（元/${formDispUnit}）`" :placeholder="`元/${formDispUnit}`" />
-          <van-field v-model="form.weight_kg" type="number" label="单件净重" placeholder="kg，用于算快递费">
+          <van-field v-model="form.weight_kg" type="number" label="单件净重" placeholder="kg，算快递用">
             <template #button><span class="muted">kg</span></template>
           </van-field>
-          <van-field v-model="form.spec" label="规格说明" placeholder="如：每个约150克；或每袋5斤" />
-          <van-field v-model="form.warehouse_party" label="仓储方" placeholder="如 云南芳谊昆明（干货）仓；多个用、分隔，留空=不限" />
+          <van-field v-model="form.spec" label="规格说明" placeholder="选填" />
+          <van-field v-model="form.warehouse_party" label="仓储方" placeholder="留空 = 不限；多个用、分隔" />
         </van-cell-group>
-        <div class="muted" style="padding:0 4px 8px;">
-          聚水潭出库单的「仓储方」列。出库单没有 SKU 时只能靠商品名称匹配；<b>同名商品</b>请建两条并填不同仓储方，导入时按每行仓储方精确匹配。留空 = 不限。
-        </div>
-        <div class="muted" style="padding:0 4px 8px;">
-          重量类按克记账（1斤=500克），计数类按个记账；订单商品固定为「单」。单位换算表由所选单位自动生成。<br />
-          售价与参考成本都按「{{ formDispUnit }}」填<span v-if="formFactor !== 1">（1{{ formDispUnit }} = {{ fmtNum(formFactor) }}{{ formBaseUnit }}）</span>，存库自动折回基础单位；售价出库时带出，参考成本在无入库时按此结算。
-        </div>
 
         <template v-if="form.product_type === 'order'">
-          <van-cell-group inset title="关联库存商品（出库扣减对象·可多个）">
-            <div v-if="!form.stock_links.length" class="muted" style="padding:8px 4px;">未关联任何库存商品 = <b>代发</b>：不扣库存，只统计代发数量与代发成本</div>
-            <div v-for="(l, i) in form.stock_links" :key="i" class="row" style="gap:8px;align-items:center;padding:6px 4px;">
-              <span class="grow pack-name" @click="openStockLinkPicker(i)">{{ nameOf(l.product_id) || '＋ 选择库存商品' }}</span>
-              <van-field v-model="l.multiplier" type="number" label="倍数" style="max-width:160px;" />
-              <van-icon name="delete-o" color="#ee0a24" @click="form.stock_links.splice(i, 1)" />
-            </div>
-            <van-button size="mini" plain type="primary" icon="plus" style="margin:8px 4px;" @click="addStockLink">添加扣减库存商品</van-button>
-          </van-cell-group>
-          <div class="muted" style="padding:0 4px 8px;">
-            卖 1 单本商品时，从下面每个库存大类按其倍数扣减库存（如 礼盒 = 苹果1斤 + 梨1斤）；
-            一个都不填 = <b>代发</b>：本仓不扣库存，只统计代发数量与代发成本（按「参考成本」计）。
+          <div class="row" style="justify-content:space-between;margin:10px 2px 6px;">
+            <span class="bold">关联库存商品 <HelpTip title="关联库存说明" text="卖 1 单本商品时按倍数扣减对应库存大类；不关联任何库存商品则视为「代发」（不扣库存，按参考成本计代发成本）。" /></span>
+            <van-button size="mini" plain type="primary" icon="plus" @click="addStockLink">添加</van-button>
           </div>
+          <van-cell-group inset>
+            <div v-if="!form.stock_links.length" class="muted" style="padding:10px 12px;">当前为代发（未关联库存商品）</div>
+            <div v-for="(l, i) in form.stock_links" :key="i" class="row" style="gap:8px;align-items:center;padding:6px 10px;">
+              <span class="grow pack-name" @click="openStockLinkPicker(i)">{{ nameOf(l.product_id) || '＋ 选择库存商品' }}</span>
+              <van-field v-model="l.multiplier" type="number" label="倍数" style="max-width:150px;" />
+              <van-icon name="delete-o" color="#dc2626" @click="form.stock_links.splice(i, 1)" />
+            </div>
+          </van-cell-group>
         </template>
 
         <div class="divider"></div>
-        <div class="row" style="justify-content:space-between;">
-          <span class="bold">出库关联结算清单</span>
+        <div class="row" style="justify-content:space-between;margin-bottom:6px;">
+          <span class="bold">出库关联结算清单 <HelpTip title="关联结算清单" text="卖 1 单本商品时自动扣减这些包材/人工库存。" /></span>
           <van-button size="mini" plain type="primary" icon="plus" @click="addPack">添加</van-button>
         </div>
-        <div class="muted" style="margin-bottom:6px;">卖 1 单本商品时，自动扣减这些商品（包材 / 人工等）的库存。</div>
 
         <div v-if="!form.pack_items.length" class="empty" style="padding:10px 0;">未配置关联结算项</div>
         <div v-for="(it, i) in form.pack_items" :key="i" class="pack-edit-row">
@@ -781,9 +778,9 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
+.sub-page { min-height: 100vh; background: var(--m-bg); }
 .batch-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: #fff7e6; border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
 .pack-edit-row { padding: 8px 0; border-bottom: 1px dashed #f0f0f0; }
 .pack-name { font-weight: 600; font-size: 13px; color: #1989fa; }
-.blocked-item { font-size: 13px; line-height: 1.7; color: #323233; }
+.blocked-item { font-size: 13px; line-height: 1.7; color: var(--m-text); }
 </style>

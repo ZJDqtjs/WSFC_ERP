@@ -11,14 +11,11 @@
       <template v-if="tab === 'view'">
       <div class="card">
         <div class="card-title">
-          <span class="grow">今日鲜货概览</span>
+          <span class="grow">今日鲜货概览 <HelpTip title="鲜货现采说明" text="展示鲜货库存与均价；导入今日订单可预演算消耗需求（仅采购参考，不实际扣减库存）。" /></span>
           <van-button size="mini" plain type="primary" icon="setting-o" @click="openConfig">管理清单</van-button>
         </div>
-        <div class="muted" style="margin-bottom:8px;">
-          展示鲜货（蔬菜 / 干货）库存与均价；导入今日订单可预演算消耗需求（仅采购参考，不实际扣库存）。
-        </div>
         <div class="row" style="gap:8px;">
-          <van-button size="small" plain type="primary" icon="down" @click="planFile && planFile.click()">导入今日订单</van-button>
+          <van-button size="small" type="primary" icon="down" @click="planFile && planFile.click()">导入今日订单</van-button>
           <input ref="planFile" type="file" accept=".xlsx" style="display:none" @change="doPlan" />
           <van-button size="small" plain icon="replay" @click="load">刷新</van-button>
         </div>
@@ -77,27 +74,23 @@
       <template v-else>
         <div class="card">
           <div class="card-title">
-            <span class="grow">鲜货入库</span>
-            <van-button size="mini" plain type="primary" icon="setting-o" @click="openConfig">管理展示商品</van-button>
+            <span class="grow">鲜货入库 <HelpTip title="鲜货入库说明" text="仅展示在「管理商品」中勾选的鲜货；填数量即可入库，单价自动带出，未填数量的行不会入库。" /></span>
+            <van-button size="mini" plain type="primary" icon="setting-o" @click="openConfig">管理商品</van-button>
             <van-button size="mini" plain icon="replay" @click="loadInbound">刷新</van-button>
-          </div>
-          <div class="muted" style="margin-bottom:8px;">
-            只有在「管理展示商品」里挑过的商品才会出现在下面；填数量即可入库，单价自动带出（最近入库价 → 参考成本，可改），运费 / 装卸费默认空。
           </div>
           <van-cell-group inset>
             <van-field v-model="inForm.date" label="日期" type="date" />
             <van-field v-model="inForm.supplier" label="供应商" placeholder="可留空" />
             <OperatorField v-model="inForm.operator" />
             <PayStatusField v-model="inForm.pay_status" hint="待付款：先进「待付款账单」，点「已支付」后才计入财务报表" />
-            <van-field v-model="inForm.remark" label="备注" placeholder="本次入库的每一张单共用（可选）" />
+            <van-field v-model="inForm.remark" label="备注" placeholder="共用备注（可选）" />
           </van-cell-group>
         </div>
 
         <div class="card">
-          <van-field v-model="inKw" placeholder="筛选商品（只影响显示，已填数量不会丢）" style="background:#f7f8fa;border-radius:6px;" />
-          <div class="row" style="gap:8px;margin-top:8px;">
-            <van-button size="mini" plain @click="inClearQty">清空已填数量</van-button>
-            <span class="muted" style="flex:1;">填了数量的行会高亮；没填数量的行不会入库</span>
+          <div class="row" style="gap:8px;">
+            <van-field v-model="inKw" placeholder="筛选商品…" class="m-input grow" />
+            <van-button size="small" plain @click="inClearQty">清空</van-button>
           </div>
           <div v-if="doneCount" class="muted" style="margin-top:6px;">
             今日已入库 {{ doneCount }} 个商品已隐藏（明天 0 点自动回来）
@@ -180,7 +173,7 @@
 
         <div class="divider"></div>
         <div class="bold" style="margin-bottom:6px;">全部可选鲜货（{{ all.length }}）</div>
-        <van-field v-model="cfgKw" placeholder="搜索商品" style="background:#f7f8fa;border-radius:6px;margin-bottom:8px;" />
+        <van-field v-model="cfgKw" placeholder="搜索商品" style="background:var(--m-bg-soft);border-radius:6px;margin-bottom:8px;" />
         <div v-for="a in allFiltered" :key="a.id" class="picker-item" :class="{ on: isSel(a.id) }" @click="toggle(a)">
           <van-checkbox :model-value="isSel(a.id)" style="margin-right:4px;" />
           <span class="grow">{{ a.name }}</span>
@@ -495,7 +488,7 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
+.sub-page { min-height: 100vh; background: var(--m-bg); }
 .order-idx {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0;

@@ -310,6 +310,6 @@ onMounted(load)
 </script>
 
 <style scoped>
-.og-page { min-height: 100vh; background: #f7f8fa; }
+.og-page { min-height: 100vh; background: var(--m-bg-soft); }
 .faint { color: #a6a8ab; }
 </style>
