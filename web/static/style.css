@@ -1104,7 +1104,10 @@ select.searchable[data-scombo="1"] { display: none !important; }
 .mv-legend i.up { background: var(--green); }
 .mv-legend i.down { background: var(--red); }
 .mv-chart { display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; padding: 4px 2px 2px; border-bottom: 1px solid var(--border); }
-.mv-col { flex: 1 0 22px; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
+.mv-col { flex: 1 0 22px; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; border-radius: 4px; padding: 2px 0; transition: background var(--transition); }
+.mv-col:hover { background: var(--primary-50); }
+.mv-col:hover .mv-bar { filter: brightness(1.1); }
+.mv-note { font-size: 12px; color: var(--muted); margin-top: 6px; }
 .mv-val { font-size: 9px; line-height: 1; color: var(--muted); margin-bottom: 2px; white-space: nowrap; }
 .mv-val.up { color: var(--green); }
 .mv-val.down { color: var(--red); }
@@ -1194,3 +1197,47 @@ tr.draft-off { opacity: 0.45; }
 
 /* Focus Visible */
 :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* ============ Unified Confirm Dialog (replaces native confirm) ============ */
+.confirm-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  background: rgba(15, 23, 42, 0.48);
+  backdrop-filter: blur(2px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.confirm-mask.show { display: flex; }
+.confirm-box {
+  width: 100%;
+  max-width: 420px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 20px 22px 18px;
+  animation: popIn 0.16s ease-out;
+}
+.confirm-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.confirm-head h4 { font-size: 15px; font-weight: 600; color: var(--text); }
+.confirm-ico {
+  width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700;
+}
+.confirm-ico.danger { background: var(--red-light); color: var(--red); }
+.confirm-ico.info { background: var(--primary-light); color: var(--primary); }
+.confirm-body {
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.confirm-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+

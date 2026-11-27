@@ -240,6 +240,64 @@
     if (el) el.textContent = PAGE_NAMES[pageName] || "企业台账";
   };
 
+  /* ---------- 8. 统一确认弹窗（替代浏览器原生 confirm） ---------- */
+  let confirmMask = null;
+  window.uiConfirm = function (message, opts) {
+    opts = opts || {};
+    const text = String(message || "");
+    const isDanger = opts.danger != null
+      ? !!opts.danger
+      : /(删除|清空|覆盖|撤销|忽略|不可撤销|回退)/.test(text);
+    const title = opts.title || (isDanger ? "确认操作" : "提示确认");
+    const okText = opts.okText || (isDanger ? "确认继续" : "确定");
+    const cancelText = opts.cancelText || "取消";
+
+    return new Promise((resolve) => {
+      if (!confirmMask) {
+        confirmMask = document.createElement("div");
+        confirmMask.className = "confirm-mask";
+        document.body.appendChild(confirmMask);
+      }
+      const escHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      confirmMask.innerHTML = `
+        <div class="confirm-box" role="alertdialog" aria-modal="true">
+          <div class="confirm-head">
+            <span class="confirm-ico ${isDanger ? "danger" : "info"}">${isDanger ? "!" : "?"}</span>
+            <h4>${escHtml(title)}</h4>
+          </div>
+          <div class="confirm-body">${escHtml(text)}</div>
+          <div class="confirm-foot">
+            <button type="button" class="btn secondary" data-act="cancel">${escHtml(cancelText)}</button>
+            <button type="button" class="btn ${isDanger ? "danger" : ""}" data-act="ok">${escHtml(okText)}</button>
+          </div>
+        </div>`;
+      confirmMask.classList.add("show");
+      const okBtn = confirmMask.querySelector('[data-act="ok"]');
+      const cancelBtn = confirmMask.querySelector('[data-act="cancel"]');
+
+      function done(val) {
+        confirmMask.classList.remove("show");
+        document.removeEventListener("keydown", onKey, true);
+        confirmMask.removeEventListener("click", onClick);
+        resolve(val);
+      }
+      function onClick(e) {
+        if (e.target === confirmMask) { done(false); return; }
+        const btn = e.target.closest("button[data-act]");
+        if (!btn) return;
+        done(btn.dataset.act === "ok");
+      }
+      function onKey(e) {
+        if (!confirmMask.classList.contains("show")) return;
+        if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); }
+        else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); done(true); }
+      }
+      confirmMask.addEventListener("click", onClick);
+      document.addEventListener("keydown", onKey, true);
+      setTimeout(() => (isDanger ? cancelBtn : okBtn).focus(), 10);
+    });
+  };
+
   // 页面加载完成后给所有侧边栏按钮补齐 title（折叠时悬停可见名称）
   document.addEventListener("DOMContentLoaded", () => {
     document.querySelectorAll(".side-nav .nav-item").forEach((btn) => {
