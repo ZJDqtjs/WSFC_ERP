@@ -3,18 +3,20 @@
     <van-nav-bar title="快递费规则" left-arrow fixed placeholder @click-left="goBack" />
     <div style="padding:12px;">
       <div class="card">
-        <div class="card-title">计费规则</div>
-        <div class="muted" style="margin-bottom:8px;">
-          出库时按「整单毛重」自动计算快递费并计入销售成本。整单毛重 = 商品净重之和 + 每单箱体 0.1kg；
-          商品净重由「扣减库存量」推导（重量类），推不出时使用商品资料里手填的单件净重。
+        <div class="card-title">
+          计费规则
+          <HelpTip
+            title="快递费计算口径"
+            text="出库按整单毛重（商品净重之和 + 0.1kg 箱重）自动算快递费并计入成本。重量类自动推导净重，计数类使用商品资料手填净重。"
+          />
         </div>
 
         <van-cell-group inset>
           <van-field label="计费方式">
             <template #input>
               <van-radio-group v-model="cfg.mode" direction="vertical">
-                <van-radio name="tiered">首重 + 续重（1kg 内一个价，每超 1kg 加收）</van-radio>
-                <van-radio name="flat">每 kg 单价</van-radio>
+                <van-radio name="tiered">首重 + 续重</van-radio>
+                <van-radio name="flat" style="margin-top:6px;">每 kg 单价</van-radio>
               </van-radio-group>
             </template>
           </van-field>
@@ -26,10 +28,9 @@
             <van-field v-model="cfg.per_extra_kg" type="number" label="每超 1kg" placeholder="续重，如 1">
               <template #button><span class="muted">元</span></template>
             </van-field>
-            <van-field label="续重按整 kg 向上取整">
+            <van-field label="续重向上取整">
               <template #input><van-switch v-model="cfg.round_up" size="20" /></template>
             </van-field>
-            <div class="muted" style="padding:0 16px 8px;">如 1.5kg 按 2kg 计费（仅对超出部分取整）。</div>
           </template>
 
           <van-field v-else v-model="cfg.rate_per_kg" type="number" label="每 1kg 单价" placeholder="如 3.6">
@@ -116,5 +117,5 @@ onMounted(load)
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
+.sub-page { min-height: 100vh; background: var(--m-bg); }
 </style>

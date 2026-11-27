@@ -24,8 +24,8 @@ export default defineConfig({
         short_name: '台账',
         description: '库存与财务一体化移动端（PWA）',
         lang: 'zh-CN',
-        theme_color: '#1989fa',
-        background_color: '#f7f8fa',
+        theme_color: '#2563eb',
+        background_color: '#f1f5f9',
         display: 'standalone',
         start_url: mobileBase,
         icons: [
@@ -66,5 +66,5 @@ export default defineConfig({
       [config.routes.uploads]: { target: config.api_target, changeOrigin: true }
     }
   },
-  build: { outDir: 'dist' }
+  build: { outDir: 'dist', target: 'esnext', minify: 'terser' }
 })

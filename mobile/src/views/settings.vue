@@ -28,9 +28,9 @@ const batchStore = {
       <!-- ==================== 分仓 ==================== -->
       <template v-if="panel === 'wh'">
         <div class="card">
-          <div class="card-title">切换分仓</div>
-          <div class="muted" style="margin-bottom:8px;">
-            分仓只作用于你自己的登录：切换后立即生效、无需重新登录，也不会影响其他在线用户。仅管理员可操作。
+          <div class="card-title">
+            切换分仓
+            <HelpTip title="分仓说明" text="分仓只作用于你自己的登录：切换后立即生效、无需重新登录，也不会影响其他在线用户（仅管理员可操作）。" />
           </div>
           <div v-for="w in warehouses" :key="w.key" class="list-item">
             <div class="row">
@@ -51,13 +51,13 @@ const batchStore = {
       <!-- ==================== 商品资料备份 ==================== -->
       <template v-else-if="panel === 'pdata'">
         <div class="card">
-          <div class="card-title">商品资料备份（解耦维护）</div>
-          <div class="muted" style="margin-bottom:8px;">
-            商品资料按「数据表」拆分为 5 个 JSON 独立保存于后端 <code>backend/json</code>，商品间相互引用用「名称」表达，可跨库 / 跨设备迁移。
+          <div class="card-title">
+            商品资料备份
+            <HelpTip title="商品资料备份说明" text="将商品资料拆分为 5 个 JSON 保存于后端 backend/json，按名称互相引用，支持跨库/跨设备迁移。" />
           </div>
           <div class="row" style="gap:8px;flex-wrap:wrap;">
-            <van-button size="small" type="success" icon="passed" :loading="pdataBusy" @click="pdataExportAll">一键导出到 json 目录</van-button>
-            <van-button size="small" type="primary" icon="replay" :loading="pdataBusy" @click="pdataImportAll">从 json 目录一键导入</van-button>
+            <van-button size="small" type="success" icon="passed" :loading="pdataBusy" @click="pdataExportAll">一键导出</van-button>
+            <van-button size="small" type="primary" icon="replay" :loading="pdataBusy" @click="pdataImportAll">一键导入</van-button>
           </div>
           <div v-if="pdataDir" class="muted" style="margin-top:8px;">目录：{{ pdataDir }}</div>
           <div v-if="pdataMsg" class="alert ok">{{ pdataMsg }}</div>
@@ -222,7 +222,7 @@ const batchStore = {
           <div class="form-row">
             <span class="lbl">定时浮动（分钟）</span>
             <div class="grow"></div>
-            <van-field v-model="jstWh.jitter_minutes" type="number" style="width:80px;background:#f7f8fa;border-radius:6px;" />
+            <van-field v-model="jstWh.jitter_minutes" type="number" style="width:80px;background:var(--m-bg-soft);border-radius:6px;" />
           </div>
           <div class="row" style="gap:10px;align-items:center;margin-top:6px;">
             <span class="lbl">执行后自动导入出库单</span>
@@ -1027,7 +1027,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
+.sub-page { min-height: 100vh; background: var(--m-bg); }
 .io-row { padding: 10px 0; border-bottom: 1px solid #f5f5f5; }
 .io-row:last-child { border-bottom: none; }
 .io-name { font-weight: 600; font-size: 14px; }
@@ -1040,7 +1040,7 @@ onMounted(() => {
 .unmapped-list { margin-top: 6px; }
 .unmapped-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 .unmapped-item .ellipsis { font-size: 12px; }
-.ai-plan { background: #f7f8fa; border-radius: 8px; padding: 10px; margin-top: 8px; font-size: 12px; }
+.ai-plan { background: var(--m-bg-soft); border-radius: 8px; padding: 10px; margin-top: 8px; font-size: 12px; }
 .agg-row { padding: 8px 0; border-bottom: 1px solid #f5f5f5; }
 .agg-row:last-child { border-bottom: none; }
 .agg-row .bold { font-size: 13.5px; }
@@ -1048,9 +1048,9 @@ onMounted(() => {
 code { background: #f2f3f5; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
 
 /* 自动出库设置 / 模块显示 */
-.lbl { color: #646566; font-size: 13px; }
+.lbl { color: var(--m-text-sec); font-size: 13px; }
 .pick {
   font-size: 13px; padding: 4px 6px; max-width: 62%;
-  border: 1px solid #dcdee0; border-radius: 6px; background: #fff; color: #323233;
+  border: 1px solid #dcdee0; border-radius: 6px; background: var(--m-card); color: var(--m-text);
 }
 </style>

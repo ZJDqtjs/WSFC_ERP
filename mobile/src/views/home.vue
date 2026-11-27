@@ -16,20 +16,21 @@
     </div>
 
     <!-- AI 智能录入 -->
-    <div class="card">
+    <div class="card ai-card">
       <div class="card-title">
-        <van-icon name="fire-o" color="#1989fa" /> AI 智能录入
-      </div>
-      <div class="muted" style="margin-bottom:8px;">
-        用大白话描述入库/出库，AI 自动拆成系统格式；识别后可核对再提交，也可拍票据多张连传。<br />
-        <b>选好图片后先预览，按回车或点「识别并录入」才开始识别</b>；拍照/传图时，上面的文字会作为补充说明一起发给 AI（如「图里的京东箱子就是纸箱：京东8号-&gt;8号纸箱」）。
+        <van-icon name="fire-o" color="#2563eb" /> AI 智能录入
+        <HelpTip
+          title="AI 智能录入说明"
+          text="用大白话描述入库/出库，AI 自动拆成系统格式；支持拍票据多张连传。选图后先预览，按回车或点「识别并录入」开始识别；输入框里的文字会作为补充说明一起发给 AI（如：京东8号->8号纸箱）。"
+        />
       </div>
       <van-field
         v-model="aiText"
         type="textarea"
         rows="2"
         autosize
-        placeholder="文字：今天入库了100斤木耳，25一斤；图片补充说明：京东8号->8号纸箱"
+        class="m-input"
+        placeholder="输入入库/出库描述，或选图后附补充说明…"
         @keydown.enter.exact.prevent="aiRun"
       />
       <div class="quick-row">
@@ -946,7 +947,7 @@ async function submitAI() {
 /* 待识别图片预览 */
 .pending-box { margin-top: 8px; }
 .pending-list { display: flex; flex-wrap: wrap; gap: 8px; }
-.pending-item { position: relative; width: 72px; height: 72px; border: 1px solid #ebedf0; border-radius: 8px; overflow: hidden; }
+.pending-item { position: relative; width: 72px; height: 72px; border: 1px solid var(--m-border); border-radius: 8px; overflow: hidden; }
 .pending-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .pending-x {
   position: absolute; top: 0; right: 0; padding: 2px;
@@ -955,20 +956,20 @@ async function submitAI() {
 }
 .danger-text { color: #ee0a24; font-weight: 600; font-variant-numeric: tabular-nums; }
 .think-box { margin-top: 10px; background: #f2f3f5; border-radius: 8px; padding: 8px; }
-.think-box pre { font-size: 12px; color: #646566; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow: auto; margin-top: 6px; }
-.think-sub { font-size: 11px; font-weight: 600; color: #969799; margin-top: 8px; }
-.think-answer { background: #eef6ff; border-radius: 6px; padding: 6px; color: #323233 !important; }
-.ai-img { width: 100%; max-height: 200px; object-fit: contain; border-radius: 8px; margin-bottom: 10px; background: #f7f8fa; }
+.think-box pre { font-size: 12px; color: var(--m-text-sec); white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow: auto; margin-top: 6px; }
+.think-sub { font-size: 11px; font-weight: 600; color: var(--m-muted); margin-top: 8px; }
+.think-answer { background: #eef6ff; border-radius: 6px; padding: 6px; color: var(--m-text) !important; }
+.ai-img { width: 100%; max-height: 200px; object-fit: contain; border-radius: 8px; margin-bottom: 10px; background: var(--m-bg-soft); }
 .ai-line { padding: 10px 0; border-bottom: 1px solid #f5f5f5; }
 .ai-line-name { font-weight: 600; font-size: 14px; }
 /* AI 确认弹层：撑满可用高度 + 底部按钮吸底，明细多时也不会被挤没 */
 .ai-sheet { display: flex; flex-direction: column; max-height: 88vh; }
-.ai-sheet .sheet-foot { position: sticky; bottom: 0; background: #fff; padding: 10px 0 4px; }
+.ai-sheet .sheet-foot { position: sticky; bottom: 0; background: var(--m-card); padding: 10px 0 4px; }
 /* AI 出库：费用项 / 实收核对 */
 .ai-charge { padding: 8px 0; border-bottom: 1px dashed #f0f0f0; }
 .pick {
   font-size: 13px; padding: 3px 6px; border: 1px solid #dcdee0;
-  border-radius: 6px; background: #fff; color: #323233; max-width: 46%;
+  border-radius: 6px; background: var(--m-card); color: var(--m-text); max-width: 46%;
 }
 .alert { border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-top: 8px; }
 .alert.ok { background: #f0f9eb; color: #07c160; }

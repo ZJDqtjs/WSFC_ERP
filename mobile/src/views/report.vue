@@ -2,48 +2,39 @@
   <div class="sub-page">
     <van-nav-bar title="财务报表" left-arrow fixed placeholder @click-left="goBack" />
     <div style="padding:12px;">
-      <!-- 查询条件 -->
+      <!-- 紧凑筛选卡：日期 + 快捷胶囊 + 范围 + 口径 -->
       <div class="card">
         <div class="row wrap" style="gap:6px;">
-          <van-field v-model="df" type="date" placeholder="起" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
-          <van-field v-model="dt" type="date" placeholder="止" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
+          <van-field v-model="df" type="date" placeholder="起" class="m-date" />
+          <van-field v-model="dt" type="date" placeholder="止" class="m-date" />
           <van-button size="small" type="primary" @click="load">查询</van-button>
         </div>
-        <!-- 商品名称筛选：与时间区间叠加使用（留空＝全部商品） -->
-        <van-field
-          v-model="gkw"
-          clearable
-          placeholder="筛选 商品名称 / 规格 / 出库方式（入仓、代发；留空＝全部商品）"
-          style="margin-top:6px;background:#f7f8fa;border-radius:6px;"
-        />
-        <div class="seg" style="margin:8px 0 0;">
-          <div class="seg-item" :class="{ active: quickKey === 'today' }" @click="quick('today')">今天</div>
-          <div class="seg-item" :class="{ active: quickKey === 'month' }" @click="quick('month')">本月</div>
-          <div class="seg-item" :class="{ active: quickKey === 'all' }" @click="quick('all')">全部</div>
+        <div class="chip-row mt8">
+          <button type="button" class="chip-btn" :class="{ active: quickKey === 'today' }" @click="quick('today')">今天</button>
+          <button type="button" class="chip-btn" :class="{ active: quickKey === 'month' }" @click="quick('month')">本月</button>
+          <button type="button" class="chip-btn" :class="{ active: quickKey === 'all' }" @click="quick('all')">全部</button>
+          <span class="grow"></span>
+          <button type="button" class="chip-btn" :class="{ active: scope === 'all' }" @click="setScope('all')">全仓</button>
+          <button type="button" class="chip-btn" :class="{ active: scope === 'one' }" @click="setScope('one')">单仓</button>
         </div>
-      </div>
-
-      <!-- 报表口径开关：开启后不计入「其他收支」的款项，只看商品售卖利润（默认开启） -->
-      <div class="caliber" :class="{ off: !excludeOther }">
-        <span class="grow">
-          {{ excludeOther ? '排除其他收支 · 只看商品售卖利润' : '含其他收支（并入期间费用）' }}
-        </span>
-        <van-switch v-model="excludeOther" size="18" @update:model-value="onExcludeOther" />
-      </div>
-
-      <!-- 顶层：全仓总览 / 单仓总览 -->
-      <div class="seg">
-        <div class="seg-item" :class="{ active: scope === 'all' }" @click="setScope('all')">全仓总览</div>
-        <div class="seg-item" :class="{ active: scope === 'one' }" @click="setScope('one')">单仓总览</div>
-      </div>
-
-      <!-- 查看分仓（只有单仓总览需要选看哪个仓） -->
-      <div v-if="scope === 'one'" class="card" style="padding:10px 12px;" @click="whShow = true">
-        <div class="row">
-          <span class="grow">查看分仓：<b>{{ whName }}</b>{{ isCurrent ? '（当前分仓）' : '' }}</span>
-          <van-icon name="arrow" color="#969799" />
+        <div class="row mt8" style="gap:8px;">
+          <van-field
+            v-model="gkw"
+            clearable
+            placeholder="筛选商品 / 规格 / 入仓 / 代发…"
+            class="m-input grow"
+          />
+          <button v-if="scope === 'one'" type="button" class="chip-btn active" @click="whShow = true">
+            {{ whName }} ▾
+          </button>
         </div>
-        <div class="muted" style="font-size:12px;margin-top:2px;">换一个只是换看谁的数据，不会改变你的工作分仓</div>
+        <div class="row mt8" style="justify-content:space-between;">
+          <span class="muted" style="display:inline-flex;align-items:center;">
+            {{ excludeOther ? '排除其他收支' : '含其他收支' }}
+            <HelpTip title="报表口径" text="开启「排除其他收支」后只看商品售卖利润，不计入零散其他收支。切换查看分仓仅切换报表数据，不改变当前工作分仓。" />
+          </span>
+          <van-switch v-model="excludeOther" size="18" @update:model-value="onExcludeOther" />
+        </div>
       </div>
 
       <!-- 商品筛选生效时的提示条：给出该商品的销量 / 销售额 / 成本 / 毛利（两种视角通用） -->
@@ -445,7 +436,7 @@
           <span class="grow">财务流水</span>
           <van-button size="mini" plain type="primary" icon="plus" @click="openFinance">手动记账</van-button>
         </div>
-        <van-field v-model="fkw" placeholder="筛选分类 / 商品 / 备注 / 操作员" style="background:#f7f8fa;border-radius:6px;" />
+        <van-field v-model="fkw" placeholder="筛选分类 / 商品 / 备注 / 操作员" style="background:var(--m-bg-soft);border-radius:6px;" />
         <div v-if="!financeFiltered.length" class="empty">本期无财务流水</div>
         <div v-for="f in financePage" :key="f.id" class="list-item">
           <div class="row">
@@ -1023,14 +1014,14 @@ onMounted(() => { applyQuery(); if (!inited) load() })
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
+.sub-page { min-height: 100vh; background: var(--m-bg); }
 .caliber {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 10px; margin-bottom: 8px;
   border-radius: 6px; background: #e8f7ee; color: #07a05a;
   font-size: 12px; line-height: 1.5;
 }
-.caliber.off { background: #f2f3f5; color: #646566; }
+.caliber.off { background: #f2f3f5; color: var(--m-text-sec); }
 /* 商品名称筛选提示条 */
 .gfilter {
   background: #eef6ff;
@@ -1046,7 +1037,7 @@ onMounted(() => { applyQuery(); if (!inited) load() })
 .gfilter a { cursor: pointer; }
 .cost-stack { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: #f2f3f5; margin-bottom: 10px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; flex-shrink: 0; }
-.cost-split { color: #969799; font-size: 11px; }
+.cost-split { color: var(--m-muted); font-size: 11px; }
 .exp-track { height: 6px; background: #f2f3f5; border-radius: 3px; overflow: hidden; display: block; }
 .exp-fill { display: block; height: 100%; background: #f97316; border-radius: 3px; min-width: 2px; }
 .alert { border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-top: 8px; }

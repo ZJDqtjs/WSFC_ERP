@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { showToast } from 'vant'
 import Vant from 'vant'
 import App from './app.vue'
+import HelpTip from './components/HelpTip.vue'
 import routes from './router'
 import { setupNativeBack } from './utils/back'
 import { startMaintenanceWatch } from './utils/maintenance'
@@ -19,6 +20,7 @@ router.beforeEach((to) => {
 
 const app = createApp(App)
 app.use(Vant)          // 全量注册 Vant 组件（van-field / van-button / van-tabbar 等）
+app.component('HelpTip', HelpTip)
 app.use(router)
 app.provide('toast', showToast)
 setupNativeBack(router)   // Capacitor 套壳里接管安卓返回键（浏览器/PWA 自动跳过）

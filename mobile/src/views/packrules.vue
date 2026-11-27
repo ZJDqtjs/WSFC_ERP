@@ -6,13 +6,13 @@
 
     <div style="padding:12px;">
       <div class="card">
-        <div class="muted" style="margin-bottom:8px;">
-          区别于「关联结算 / 人工」的一单一货；此处维护一张订单含多种商品时的合并打包规则（纸箱 + 人工）。
+        <div class="row" style="gap:8px;">
+          <van-field v-model="kw" placeholder="搜索组合 / 商品 / 纸箱…" class="m-input grow" />
+          <HelpTip title="一单多货说明" text="维护单笔订单含多种商品时的合并打包规则（纸箱 + 人工），区别于一单一货的关联结算。" />
         </div>
-        <van-field v-model="kw" placeholder="搜索组合 / 商品 / 纸箱" style="background:#f7f8fa;border-radius:6px;" />
-        <div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap;">
+        <div class="row mt8" style="gap:6px;flex-wrap:wrap;">
           <van-button size="mini" plain icon="down" @click="exportJson">导出 JSON</van-button>
-          <van-button size="mini" plain icon="plus" @click="openRule()">新增规则</van-button>
+          <van-button size="mini" type="primary" icon="plus" @click="openRule()">新增规则</van-button>
         </div>
 
         <div v-if="selected.length" class="batch-bar">
@@ -283,7 +283,7 @@ onMounted(load)
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
+.sub-page { min-height: 100vh; background: var(--m-bg); }
 .batch-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: #fff7e6; border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
 .edit-row { padding: 8px 0; border-bottom: 1px dashed #f0f0f0; }
 .pick-name { font-weight: 600; font-size: 13px; color: #1989fa; }

@@ -17,29 +17,25 @@
       </div>
 
       <template v-if="tab === 'bill'">
-      <!-- 视图 -->
-      <div class="seg" style="margin-bottom:8px;">
-        <div class="seg-item" :class="{ active: view === 'unpaid' }" @click="setView('unpaid')">待结清</div>
-        <div class="seg-item" :class="{ active: view === 'all' }" @click="setView('all')">含最近已结清</div>
-      </div>
-
       <div class="card">
-        <van-field v-model="kw" placeholder="筛选 款项 / 单据 / 客户 / 操作员" style="background:#f7f8fa;border-radius:6px;" />
-        <div class="row wrap" style="gap:6px;align-items:center;margin-top:8px;">
+        <div class="chip-row" style="margin-bottom:8px;">
+          <button type="button" class="chip-btn" :class="{ active: view === 'unpaid' }" @click="setView('unpaid')">待结清</button>
+          <button type="button" class="chip-btn" :class="{ active: view === 'all' }" @click="setView('all')">含近30天已结清</button>
+          <HelpTip title="待付款账单说明" text="入库 / 入仓 / 出库 / 其他收支中标记「待付款」的单据均汇总于此；点「已支付」后按原日期纳入财务报表。已结清默认载入最近 30 天。" />
+        </div>
+        <van-field v-model="kw" placeholder="搜索款项 / 单据 / 客户 / 操作员…" class="m-input" />
+        <div class="row wrap mt8" style="gap:6px;align-items:center;">
           <div class="date-pick" :class="{ 'has-value': df }">
-            <van-field v-model="df" type="date" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
+            <van-field v-model="df" type="date" class="m-date" />
             <span class="date-ph">开始</span>
           </div>
           <div class="date-pick" :class="{ 'has-value': dt }">
-            <van-field v-model="dt" type="date" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
+            <van-field v-model="dt" type="date" class="m-date" />
             <span class="date-ph">结束</span>
           </div>
-          <van-button size="small" plain :disabled="!filtered" @click="clearFilter">清空筛选</van-button>
+          <van-button size="small" plain :disabled="!filtered" @click="clearFilter">清空</van-button>
         </div>
-        <div class="muted" style="font-size:12px;margin-top:6px;">
-          按日期区间 / 关键词筛选，下面的合计实时更新
-        </div>
-        <div v-if="undatedCount" class="muted" style="font-size:12px;">{{ undatedCount }} 笔无日期的账单未计入</div>
+        <div v-if="undatedCount" class="muted" style="font-size:12px;margin-top:4px;">{{ undatedCount }} 笔无日期未计入</div>
       </div>
 
       <!-- 筛选结果实时合计 -->
@@ -97,37 +93,30 @@
           <span class="grow muted">{{ view === 'all' ? '含最近已结清（最近 30 天，可撤销）' : '只列未结清的账单' }}</span>
         </div>
       </div>
-
-      <div class="muted" style="font-size:12px;padding:4px 2px;">
-        入库 / 入仓 / 出库 / 其他收支 里勾了「待付款」的单据都会汇总到这里；点「已支付」后按原日期纳入财务报表。已结清只载入最近 30 天。
-      </div>
       </template>
 
       <!-- ============ 代发 ============ -->
       <template v-else>
-        <div class="seg" style="margin-bottom:8px;">
-          <div class="seg-item" :class="{ active: dsView === 'unpaid' }" @click="setDsView('unpaid')">待结清</div>
-          <div class="seg-item" :class="{ active: dsView === 'all' }" @click="setDsView('all')">含已结清</div>
-        </div>
-
         <div class="card">
-          <van-field v-model="dsKw" placeholder="筛选 商品 / 规格 / 操作员" style="background:#f7f8fa;border-radius:6px;" />
-          <div class="row wrap" style="gap:6px;align-items:center;margin-top:8px;">
+          <div class="chip-row" style="margin-bottom:8px;">
+            <button type="button" class="chip-btn" :class="{ active: dsView === 'unpaid' }" @click="setDsView('unpaid')">待结清</button>
+            <button type="button" class="chip-btn" :class="{ active: dsView === 'all' }" @click="setDsView('all')">含已结清</button>
+            <HelpTip title="代发应付说明" text="按「商品 + 规格 + 出库日期」分行，按天核对单价 × 单量 = 代发成本；日期区间在服务端过滤。" />
+          </div>
+          <van-field v-model="dsKw" placeholder="搜索商品 / 规格 / 操作员…" class="m-input" />
+          <div class="row wrap mt8" style="gap:6px;align-items:center;">
             <div class="date-pick" :class="{ 'has-value': dsFrom }">
-              <van-field v-model="dsFrom" type="date" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" @update:model-value="loadDs" />
+              <van-field v-model="dsFrom" type="date" class="m-date" @update:model-value="loadDs" />
               <span class="date-ph">开始</span>
             </div>
             <div class="date-pick" :class="{ 'has-value': dsTo }">
-              <van-field v-model="dsTo" type="date" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" @update:model-value="loadDs" />
+              <van-field v-model="dsTo" type="date" class="m-date" @update:model-value="loadDs" />
               <span class="date-ph">结束</span>
             </div>
-            <van-button size="small" plain :disabled="!dsFiltered" @click="clearDsFilter">清空筛选</van-button>
-          </div>
-          <div class="muted" style="font-size:12px;margin-top:6px;">
-            按「商品 + 规格 + 出库日期」分行，按天核对「单价 × 单量 = 代发成本」；日期区间在服务端过滤
+            <van-button size="small" plain :disabled="!dsFiltered" @click="clearDsFilter">清空</van-button>
           </div>
           <div v-if="dsTruncated" class="alert warn">
-            共 {{ dsTotal.groups || 0 }} 行，这里只列最近 {{ dsLimit }} 行；用日期区间可以缩小范围
+            共 {{ dsTotal.groups || 0 }} 行，当前显示最近 {{ dsLimit }} 行，可用日期筛选缩小范围
           </div>
         </div>
 
@@ -530,7 +519,7 @@ onMounted(load)
 </script>
 
 <style scoped>
-.sub-page { min-height: 100vh; background: #f7f8fa; }
+.sub-page { min-height: 100vh; background: var(--m-bg); }
 
 /* 日期框为空时，隐藏浏览器自带的「yyyy/mm/日」掩码，改用自己的占位文案 */
 .date-pick {
@@ -556,9 +545,9 @@ onMounted(load)
   margin-bottom: 8px;
   border: 1px solid #e8f0fb;
   border-radius: 8px;
-  background: #f0f8ff;
+  background: var(--m-primary-light);
   font-size: 13px;
-  color: #323233;
+  color: var(--m-text);
 }
 .pay-sum b.sum { font-size: 17px; color: #0067c0; }
 .pay-sum b.down { color: #d13438; }

@@ -13,11 +13,11 @@
     <!-- ============ 库存总览 ============ -->
     <template v-if="tab === 'overview'">
       <div class="card">
-        <van-search v-model="kw" placeholder="搜索商品名称 / 分类" shape="round" />
-        <div class="seg" style="margin:8px 0 4px;">
-          <div class="seg-item" :class="{ active: sortDir === 'desc' }" @click="sortDir = 'desc'">库存多→少</div>
-          <div class="seg-item" :class="{ active: sortDir === 'asc' }" @click="sortDir = 'asc'">库存少→多</div>
-          <div class="seg-item" :class="{ active: onlyLow }" @click="onlyLow = !onlyLow">仅看缺货</div>
+        <van-search v-model="kw" placeholder="搜索商品名称 / 分类" shape="round" style="padding:0 0 8px;" />
+        <div class="chip-row" style="margin-bottom:8px;">
+          <button type="button" class="chip-btn" :class="{ active: sortDir === 'desc' }" @click="sortDir = 'desc'">库存多→少</button>
+          <button type="button" class="chip-btn" :class="{ active: sortDir === 'asc' }" @click="sortDir = 'asc'">库存少→多</button>
+          <button type="button" class="chip-btn" :class="{ active: onlyLow }" @click="onlyLow = !onlyLow">仅看缺货</button>
         </div>
         <div class="row" style="justify-content:space-between;margin:6px 0;">
           <span class="muted">共 {{ filtered.length }} 项 · 总值 {{ fmtMoney(totalValue) }}</span>
@@ -42,9 +42,9 @@
     <template v-else-if="tab === 'adj'">
       <div class="card">
         <div class="row wrap" style="gap:6px;">
-          <van-field v-model="adjFilter.product_id" readonly placeholder="全部商品" style="flex:1;background:#f7f8fa;border-radius:6px;padding:6px 10px;" @click="openProductFilter" />
-          <van-field v-model="adjFilter.from" type="date" placeholder="起" style="max-width:130px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
-          <van-field v-model="adjFilter.to" type="date" placeholder="止" style="max-width:130px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
+          <van-field v-model="adjFilter.product_id" readonly placeholder="全部商品" style="flex:1;background:var(--m-bg-soft);border-radius:6px;padding:6px 10px;" @click="openProductFilter" />
+          <van-field v-model="adjFilter.from" type="date" placeholder="起" style="max-width:130px;background:var(--m-bg-soft);border-radius:6px;padding:6px 10px;" />
+          <van-field v-model="adjFilter.to" type="date" placeholder="止" style="max-width:130px;background:var(--m-bg-soft);border-radius:6px;padding:6px 10px;" />
           <van-button size="small" type="primary" @click="loadAdjustments">查询</van-button>
         </div>
         <van-pull-refresh v-model="refreshing" @refresh="loadAdjustments">
@@ -70,9 +70,9 @@
     <template v-else-if="tab === 'mv'">
       <div class="card">
         <div class="row wrap" style="gap:6px;">
-          <van-field v-model="mvFilter.product_id" readonly placeholder="全部商品" style="flex:1;background:#f7f8fa;border-radius:6px;padding:6px 10px;" @click="openProductFilter('mv')" />
-          <van-field v-model="mvFilter.from" type="date" placeholder="起" style="max-width:130px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
-          <van-field v-model="mvFilter.to" type="date" placeholder="止" style="max-width:130px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
+          <van-field v-model="mvFilter.product_id" readonly placeholder="全部商品" style="flex:1;background:var(--m-bg-soft);border-radius:6px;padding:6px 10px;" @click="openProductFilter('mv')" />
+          <van-field v-model="mvFilter.from" type="date" placeholder="起" style="max-width:130px;background:var(--m-bg-soft);border-radius:6px;padding:6px 10px;" />
+          <van-field v-model="mvFilter.to" type="date" placeholder="止" style="max-width:130px;background:var(--m-bg-soft);border-radius:6px;padding:6px 10px;" />
           <van-button size="small" type="primary" @click="mvFirstPage">查询</van-button>
           <van-button size="small" plain @click="quickMv(0)">今天</van-button>
           <van-button size="small" plain @click="quickMv(7)">近7天</van-button>
@@ -81,17 +81,19 @@
         <van-field
           v-model="mvFilter.keyword"
           placeholder="筛选流水（商品 / 单号 / 备注 / 操作员）"
-          style="background:#f7f8fa;border-radius:6px;margin-top:8px;"
+          style="background:var(--m-bg-soft);border-radius:6px;margin-top:8px;"
           @update:model-value="onMvKeyword"
         />
-        <van-checkbox
-          v-model="mvFilter.mergeOut"
-          shape="square"
-          style="margin-top:8px;"
-          @update:model-value="mvFirstPage"
-        >合并出库</van-checkbox>
-        <div class="muted" style="margin-top:6px;">
-          把同一商品、同一扣减量的出库行合并成一行（显示单数与合计出库量）；表格为完整流水，图表只统计真实库存进出。
+        <div class="row mt8" style="gap:4px;">
+          <van-checkbox
+            v-model="mvFilter.mergeOut"
+            shape="square"
+            @update:model-value="mvFirstPage"
+          >合并出库</van-checkbox>
+          <HelpTip
+            title="合并出库说明"
+            text="把同一商品、同一扣减量的出库行合并成一行显示单数与合计出库量；下方列表为完整流水，图表仅统计真实库存进出。"
+          />
         </div>
       </div>
 
@@ -167,8 +169,8 @@
     <template v-else>
       <div class="card">
         <div class="row wrap" style="gap:6px;">
-          <van-field v-model="wlFilter.from" type="date" style="max-width:130px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
-          <van-field v-model="wlFilter.to" type="date" style="max-width:130px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
+          <van-field v-model="wlFilter.from" type="date" style="max-width:130px;background:var(--m-bg-soft);border-radius:6px;padding:6px 10px;" />
+          <van-field v-model="wlFilter.to" type="date" style="max-width:130px;background:var(--m-bg-soft);border-radius:6px;padding:6px 10px;" />
           <van-button size="small" type="primary" @click="loadWorkload">查询</van-button>
           <van-button size="small" plain @click="quickWl('month')">本月</van-button>
           <van-button size="small" plain @click="quickWl('all')">全部</van-button>
@@ -594,15 +596,15 @@ onActivated(() => { if (tab.value === 'overview') loadStock() })
 .stock-num.low { color: #ee0a24; }
 .primary { color: #1989fa; }
 .adj-preview {
-  background: #f7f8fa; border-radius: 8px; padding: 10px 12px;
-  font-size: 12px; line-height: 1.9; color: #646566;
+  background: var(--m-bg-soft); border-radius: 8px; padding: 10px 12px;
+  font-size: 12px; line-height: 1.9; color: var(--m-text-sec);
 }
 
 /* ---------- 库存流水：图表 / 分页 ---------- */
 .mv-merged { background: #fafcff; }
 .mv-group { margin-bottom: 12px; }
 .mv-group:last-child { margin-bottom: 0; }
-.mv-unit { font-size: 12px; color: #646566; margin-bottom: 4px; }
+.mv-unit { font-size: 12px; color: var(--m-text-sec); margin-bottom: 4px; }
 /* 一组柱：上半绿=入库（贴中线向上）、下半红=出库（贴中线向下），中线在正中间 */
 .mv-cols { display: flex; gap: 2px; overflow-x: auto; padding-bottom: 2px; }
 .mv-col { flex: 0 0 auto; width: 22px; display: flex; flex-direction: column; }
@@ -612,11 +614,11 @@ onActivated(() => { if (tab.value === 'overview') loadStock() })
 .mv-bar { width: 100%; border-radius: 2px 2px 0 0; }
 .mv-bar.in { background: #07c160; }
 .mv-bar.out { background: #ee0a24; border-radius: 0 0 2px 2px; }
-.mv-x { font-size: 9px; color: #969799; text-align: center; margin-top: 2px; writing-mode: horizontal-tb; }
+.mv-x { font-size: 9px; color: var(--m-muted); text-align: center; margin-top: 2px; writing-mode: horizontal-tb; }
 .mv-pager { border-top: 1px solid #f5f5f5; margin-top: 10px; padding-top: 8px; }
 .mv-warn { color: #ed6a0c; font-size: 12px; margin-top: 4px; }
 .mv-size {
   font-size: 12px; padding: 3px 6px; border: 1px solid #dcdee0;
-  border-radius: 6px; background: #fff; color: #323233;
+  border-radius: 6px; background: var(--m-card); color: var(--m-text);
 }
 </style>

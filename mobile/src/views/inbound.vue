@@ -9,7 +9,7 @@
     <template v-if="tab === 'new'">
       <div class="card">
         <div class="card-title">
-          <span class="grow">新增入库单</span>
+          <span class="grow">新增入库单 <HelpTip title="入库说明" text="按采购单位录入，系统自动折算到基础单位并重算先进先出成本。" /></span>
           <van-button size="mini" plain type="primary" icon="down" @click="batchShow = true">批量入库</van-button>
         </div>
         <van-cell-group inset>
@@ -68,9 +68,8 @@
         </div>
       </div>
 
-      <div class="card">
+      <div class="card" style="padding:12px;">
         <van-button block round type="success" :loading="saving" @click="submit">确认入库</van-button>
-        <div class="muted" style="margin-top:8px;">按采购单位录入，系统自动折算到基础单位并重算先进先出成本。</div>
       </div>
     </template>
 
@@ -78,14 +77,16 @@
     <template v-else>
       <div class="card">
         <div class="row wrap" style="gap:6px;">
-          <van-field v-model="filter.from" type="date" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
-          <van-field v-model="filter.to" type="date" style="max-width:132px;background:#f7f8fa;border-radius:6px;padding:6px 10px;" />
+          <van-field v-model="filter.from" type="date" class="m-date" />
+          <van-field v-model="filter.to" type="date" class="m-date" />
           <van-button size="small" type="primary" @click="loadList">筛选</van-button>
-          <van-button size="small" plain @click="quick(0)">今天</van-button>
-          <van-button size="small" plain @click="quick(7)">近7天</van-button>
-          <van-button size="small" plain @click="quick(null)">全部</van-button>
         </div>
-        <van-field v-model="kw" placeholder="筛选单号 / 商品 / 供应商" style="background:#f7f8fa;border-radius:6px;margin-top:8px;" />
+        <div class="chip-row mt8">
+          <button type="button" class="chip-btn" @click="quick(0)">今天</button>
+          <button type="button" class="chip-btn" @click="quick(7)">近7天</button>
+          <button type="button" class="chip-btn" @click="quick(null)">全部</button>
+        </div>
+        <van-field v-model="kw" placeholder="搜索单号 / 商品 / 供应商…" class="m-input mt8" />
 
         <!-- 筛选实时汇总：笔数 / 数量（按单位分组）/ 应付 / 已付 / 未付 / 货款与附加费用 -->
         <div v-if="filteredList.length" class="io-sum">
@@ -857,9 +858,9 @@ onActivated(() => { if (tab.value === 'list') loadList() })
   padding: 8px 10px;
   border: 1px solid #e8f0fb;
   border-radius: 8px;
-  background: #f0f8ff;
+  background: var(--m-primary-light);
   font-size: 12.5px;
-  color: #323233;
+  color: var(--m-text);
   line-height: 1.6;
 }
 .io-sum b { color: #0067c0; }
