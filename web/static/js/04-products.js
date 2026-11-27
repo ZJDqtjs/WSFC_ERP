@@ -797,9 +797,17 @@ function pTypeChanged() {
 let STOCKS = [];   // 库存商品（大类）缓存，供关联行下拉使用
 function stockLinkOptions(selId) {
   const list = STOCKS.length ? STOCKS : PRODUCTS.filter((p) => p.is_active && p.product_type === "stock");
-  return '<option value="">选择库存商品（大类）…</option>' + list.map((s) => {
+  const sid = Number(selId) || 0;
+  let extra = "";
+  if (sid && !list.some((s) => s.id === sid)) {
+    const p = PRODUCTS.find((x) => x.id === sid);
+    const du = p ? (p.default_unit || p.base_unit || "") : "";
+    const label = p ? `${p.name}（已停用${du ? "·单位" + du : ""}）` : `#${sid}（已停用/不存在）`;
+    extra = `<option value="${sid}" selected>${esc(label)}</option>`;
+  }
+  return '<option value="">选择库存商品（大类）…</option>' + extra + list.map((s) => {
     const du = s.default_unit || s.base_unit || s.unit || "";
-    return `<option value="${s.id}" ${Number(selId) === s.id ? "selected" : ""}>${esc(s.name)}（${esc(s.category || "—")}${du ? "·单位" + esc(du) : ""}）</option>`;
+    return `<option value="${s.id}" ${sid === s.id ? "selected" : ""}>${esc(s.name)}（${esc(s.category || "—")}${du ? "·单位" + esc(du) : ""}）</option>`;
   }).join("");
 }
 /* ---------- 订单商品「扣减方案」多套（每套 = 若干 库存商品 × 倍数） ----------
