@@ -163,18 +163,19 @@
     const seg = document.getElementById("prodTabSeg");
     if (seg) seg.querySelectorAll(".seg-item").forEach((x) => x.classList.remove("active"));
     if (btn) btn.classList.add("active");
-    window.prodForceCat = (btn && btn.dataset.cat) || "";
-    window.prodForceType = (btn && btn.dataset.type) || "";
-    if (typeof window.renderProducts === "function") window.renderProducts();
+    const type = (btn && btn.dataset.type) || "";
+    const cat = (btn && btn.dataset.cat) || "";
+    if (typeof window.setProductTabFilter === "function") {
+      window.setProductTabFilter(type, cat);
+    }
   };
 
   window.syncProdTabUI = function () {
     const seg = document.getElementById("prodTabSeg");
     if (!seg) return;
-    const cat = window.prodForceCat || "";
-    const type = window.prodForceType || "";
+    const f = typeof window.getProductTabFilter === "function" ? window.getProductTabFilter() : { type: "", cat: "" };
     seg.querySelectorAll(".seg-item").forEach((x) => {
-      const hit = (x.dataset.cat || "") === cat && (x.dataset.type || "") === type;
+      const hit = (x.dataset.cat || "") === (f.cat || "") && (x.dataset.type || "") === (f.type || "");
       x.classList.toggle("active", hit);
     });
   };

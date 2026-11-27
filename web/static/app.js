@@ -423,6 +423,14 @@ const PAGE_TITLES = {
 };
 let prodForceCat = "";  // 包材 / 人工 / 快递 等独立入口强制筛选的商品分类
 let prodForceType = ""; // 关联结算 等独立入口强制筛选的商品类型（order）
+function setProductTabFilter(type, cat) {
+  prodForceType = type || "";
+  prodForceCat = cat || "";
+  renderProducts();
+}
+function getProductTabFilter() {
+  return { type: prodForceType || "", cat: prodForceCat || "" };
+}
 function goProducts() { prodForceCat = ""; prodForceType = ""; goPage("products"); }
 function goPage(name) {
   if (typeof closeAllDrawers === "function") closeAllDrawers();

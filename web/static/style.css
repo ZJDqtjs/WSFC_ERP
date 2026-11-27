@@ -972,6 +972,7 @@ body.notice-on .sidebar { top: 36px; height: calc(100vh - 36px); }
 .shop-cat-row input { border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; font-size: 13px; background: var(--card); color: var(--text); }
 
 /* Searchable Combo */
+select.searchable[data-scombo="1"] { display: none !important; }
 .scombo { position: relative; display: inline-block; width: 100%; min-width: 120px; }
 .scombo-input { width: 100%; border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 10px; font-size: 13px; background: var(--card); outline: none; cursor: pointer; color: var(--text); }
 .scombo-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); cursor: text; }
