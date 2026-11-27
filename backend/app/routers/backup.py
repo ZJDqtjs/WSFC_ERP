@@ -196,6 +196,12 @@ def push_file_remote(path: Path, cfg: dict) -> tuple[bool, str]:
                 conn.send(chunk)
         resp = conn.getresponse()
         body = resp.read().decode("utf-8", "replace")
+        if resp.status == 413:
+            # 413 几乎总是对端 nginx 的 client_max_body_size（默认 1m）在拦，请求根本没到接收端
+            return False, (
+                f"HTTP 413：对端 nginx 拒绝请求体（{_human_size(size)}），"
+                "需在其站点配置里放开 client_max_body_size，或直接推送接收端端口"
+            )
         if resp.status != 200:
             return False, f"HTTP {resp.status}: {body[:200]}"
         return True, body[:200] or "ok"
@@ -659,6 +665,21 @@ def _deploy_script(cfg: dict) -> str:
         "  exit 1",
         "fi",
         "",
+        "# 端口预检：80/443 通常已被 nginx 占用，接收端绑定会失败；不预检就会「假成功」——",
+        "# 脚本显示已启动，实际请求全被 nginx 接走（小请求 404、大请求 413），排查成本极高。",
+        'if [ "$PORT" -lt 1024 ] && [ "$(id -u)" -ne 0 ]; then',
+        '  echo "端口 $PORT 是特权端口，当前用户无权限绑定。请改用 1024 以上端口（如 18080），或用 sudo 执行。" >&2',
+        "  exit 1",
+        "fi",
+        'if command -v ss >/dev/null 2>&1 && ss -ltnH "sport = :$PORT" 2>/dev/null | grep -q .; then',
+        '  echo "端口 $PORT 已被占用，接收端无法启动。占用情况：" >&2',
+        '  ss -ltnpH "sport = :$PORT" 2>/dev/null >&2 || true',
+        '  echo "若占用者是 nginx，请把本页目标服务器改成空闲端口（如 ip:18080/cloudback）后重新下载本脚本；" >&2',
+        '  echo "若确实要走 80，请在 nginx 站点里加：location $PREFIX { client_max_body_size 0; proxy_pass http://127.0.0.1:18080; }" >&2',
+        '  echo "并把本脚本的 --port 改成 18080（勿让接收端直接绑定 80）。" >&2',
+        "  exit 1",
+        "fi",
+        "",
         'mkdir -p "$DATA_DIR"',
         "",
         "# 写入接收端程序",
@@ -676,6 +697,14 @@ def _deploy_script(cfg: dict) -> str:
         " --dir \"$DATA_DIR\" --token \"$TOKEN\" --keep \"$KEEP\" > \"$APP_DIR/receiver.log\" 2>&1 &",
         'echo $! > "$APP_DIR/receiver.pid"',
         "sleep 1",
+        "",
+        "# 启动后自检：进程起来但没监听（端口冲突/权限）时必须立刻报错，而不是打印「已启动」",
+        'HEALTH="$PREFIX"; if [ "$HEALTH" = "/" ]; then HEALTH=""; fi',
+        'if command -v curl >/dev/null 2>&1 && ! curl -fsS "http://127.0.0.1:$PORT$HEALTH/health" >/dev/null 2>&1; then',
+        '  echo "接收端启动失败：127.0.0.1:$PORT$HEALTH/health 无响应，日志最后 20 行：" >&2',
+        '  tail -n 20 "$APP_DIR/receiver.log" >&2 || true',
+        "  exit 1",
+        "fi",
         "",
         'echo "接收端已启动，PID=$(cat "$APP_DIR/receiver.pid")"',
         'echo "接收地址： http://<本机IP>:$PORT$PREFIX      （与本页填写的地址保持一致）"',

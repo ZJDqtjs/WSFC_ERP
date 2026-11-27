@@ -612,7 +612,8 @@ def _mark_paid(db: Session, kind: str, rid: int, paid: bool) -> tuple[str, str]:
         ).scalars():
             f.pay_status, f.paid_at = rec.pay_status, rec.paid_at
         # 单据带出的其他收支同样随主单结算：金额调整(ref_type=kind) + 入库运费/装卸镜像行
-        exp_types = [kind] + (["inbound_fee"] if kind == "inbound" else [])
+        # （inbound_fee=已摊批次成本；inbound_fee_exp=零数量开支单，两者的付款状态都跟主单走）
+        exp_types = [kind] + (["inbound_fee", "inbound_fee_exp"] if kind == "inbound" else [])
         for e in db.execute(
             select(OtherExpense).where(OtherExpense.ref_type.in_(exp_types), OtherExpense.ref_id == rec.id)
         ).scalars():

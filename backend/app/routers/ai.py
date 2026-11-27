@@ -886,7 +886,9 @@ def _last_price_default(db: Session, p: Product | None, op_type: str) -> float:
         return round(price, 4)
 
     if op_type == "inbound":
-        row = db.query(Inbound).filter(Inbound.product_id == p.id).order_by(Inbound.id.desc()).first()
+        row = db.query(Inbound).filter(
+            Inbound.product_id == p.id, Inbound.quantity_base > 0   # 零数量开支单没有入库价
+        ).order_by(Inbound.id.desc()).first()
         if row and row.unit_price:
             return to_du(row.unit_price, row.unit)
         # 参考采购价没维护时，退回商品资料里的「均价」（库存均价），再没有才是 0

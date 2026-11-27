@@ -162,6 +162,34 @@ def _income_of(o) -> float:
     return (o.total_amount or 0.0) + (getattr(o, "settle_income", 0.0) or 0.0)
 
 
+# ---------------- 规格口径：去掉「，合并N件」 ----------------
+# 聚水潭导入时会把「这一单买了几件」拼到出库行规格末尾（见 imports._pack_rule_settle：
+# spec = 外部商品名 + f"，合并{qty}件"）。它描述的是订单件数，不是商品规格差异，
+# 但报表/规格统计都按 spec 分桶，不做处理会把同一个商品拆成
+# 「黑花生1.5斤」「黑花生1.5斤，合并2件」「…合并3件」… 好几行（看起来就是同规格重复）。
+# 这里只在**统计口径**上归并，历史数据不动。
+_MERGE_QTY_TAG = "，合并"
+
+
+def _norm_spec(spec: str) -> str:
+    """Python 侧：去掉规格末尾的「，合并N件」。"""
+    s = (spec or "").strip()
+    i = s.find(_MERGE_QTY_TAG)
+    if i >= 0 and s.endswith("件"):
+        return s[:i].strip()
+    return s
+
+
+def _spec_norm_expr(col):
+    """SQL 侧：与 _norm_spec 同口径（分组前就去掉后缀，分组结果天然合并）。"""
+    s = func.trim(func.coalesce(col, ""))
+    pos = func.instr(s, _MERGE_QTY_TAG)
+    return case(
+        (and_(pos > 0, s.like("%件")), func.trim(func.substr(s, 1, pos - 1))),
+        else_=s,
+    )
+
+
 # 报表读出库单只用到这几列：整行 ORM 实例化在 wh01 一个月就要造 3.3 万个对象
 # （实测占 _summary_of 一半耗时，光InstanceState.__init__ 就 1.5 秒）。
 # 列查询返回的 Row 同样支持 o.total_amount / getattr(o, "brush_cost", 0) 这种属性访问，
@@ -1236,7 +1264,11 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     expense = round(manual_expense + other_total, 2)
     purchase = sum(f.amount for f in finances if f.type == "expense" and f.category == "采购支出")
     # 本期进货 = 货款 + 入库运费/装卸费（与「支出」分区的采购桶、支出合计口径一致）
-    purchase_db = sum(_inbound_landed(i) for i in inbounds)
+    # 数量为 0 的入库单只是「先记运费」的开支，不进库存/不算进货（它的运费走其他收支期间费用，避免重复）
+    purchase_db = sum(
+        _inbound_landed(i) for i in inbounds
+        if float(getattr(i, "quantity_base", 0.0) or 0.0) > 0
+    )
     net = round(gross - expense, 2)
     # 库存总值直接让 SQL 求和：不必把全部商品实例化成 ORM 对象再在 Python 里加
     stock_value = round(float(db.execute(
@@ -1264,6 +1296,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         其它商品一律 shop="" 入桶，报表口径与行数完全不变。
         """
         key_shop = shop if (split_shop and pid in split_shop) else ""
+        spec = _norm_spec(spec)   # 「，合并N件」是订单件数，不算规格差异
         key = (pid, spec, dropship, key_shop)
         d = by_product.get(key)
         if d is not None:
@@ -1291,6 +1324,10 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             "other_cogs": 0.0,  # 其他关联结算
             "express_cogs": 0.0,  # 快递运费
             "brush_cogs": 0.0,  # 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差，按销售金额占比分摊到单内商品）
+            # brush_cogs 的两项拆分（同一套占比分摊）：前端成本构成小字要按项展示，
+            # 只有合计的话刷单行会「什么都不显示」（见 costSplitText）
+            "brush_fee_cogs": 0.0,   # 其中「快递+包装固定费」（逐单手填，默认 3.6/单）
+            "brush_cost_cogs": 0.0,  # 其中「刷单成本」（导入确认时手填）
             "settle_income": 0.0,  # 客户代收的关联结算（包材/人工/快递费，按销售金额占比分摊到单内商品）
         }
         by_product[key] = d
@@ -1306,7 +1343,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     if date_to:
         line_conds.append(Outbound.date <= date_to)
     paid_out = func.coalesce(Outbound.pay_status, PAID) != "unpaid"
-    spec_expr = func.trim(func.coalesce(OutboundLine.spec, ""))
+    spec_expr = _spec_norm_expr(OutboundLine.spec)
     dr_expr = func.coalesce(OutboundLine.is_dropship, 0)
     pk = aliased(Product)
     # 关联结算行的费用类别（人工/包材/快递/其他）→ 成本字段；口径同 _pack_cost_category_of
@@ -1357,7 +1394,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
     owned_rows = db.execute(
         select(
             owner.product_id.label("pid"),
-            func.trim(func.coalesce(owner.spec, "")).label("spec"),
+            _spec_norm_expr(owner.spec).label("spec"),
             func.coalesce(owner.is_dropship, 0).label("dr"),
             field_expr.label("field"),
             func.coalesce(func.sum(OutboundLine.cogs), 0).label("amt"),
@@ -1371,7 +1408,7 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         .join(owner, owner.id == first_sale.c.sid)
         .join(pk, pk.id == OutboundLine.product_id, isouter=True)
         .where(OutboundLine.line_type == "pack", *line_conds, paid_out)
-        .group_by(owner.product_id, func.trim(func.coalesce(owner.spec, "")),
+        .group_by(owner.product_id, _spec_norm_expr(owner.spec),
                   func.coalesce(owner.is_dropship, 0), field_expr,
                   func.trim(func.coalesce(Outbound.customer, "")))
     ).all()
@@ -1470,6 +1507,14 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         adj = brush_adjust(o)
         if adj:
             _spread(o.id, "brush_cogs", adj)
+            # 同一单按同一套占比再拆一次：两项之和恰好等于 brush_cogs
+            # （adj = brush_cost + brush_fee_of(o) − brush_auto_fee）
+            _fee_part = brush_fee_of(o) - float(getattr(o, "brush_auto_fee", 0) or 0)
+            if _fee_part:
+                _spread(o.id, "brush_fee_cogs", _fee_part)
+            _cost_part = float(getattr(o, "brush_cost", 0) or 0)
+            if _cost_part:
+                _spread(o.id, "brush_cost_cogs", _cost_part)
         settle_in = float(o.settle_income or 0.0)
         if settle_in:
             _spread(o.id, "settle_income", settle_in)
@@ -1611,6 +1656,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 "other_cogs": other,        # 其他关联结算
                 "express_cogs": express,
                 "brush_cogs": brush,        # 芳谊放单仓刷单结算（刷单成本 + 固定费覆盖差）
+                # 刷单结算的两项拆分：前端成本构成小字按项展示（和 = brush_cogs）
+                "brush_fee_cogs": round(d.get("brush_fee_cogs", 0.0), 2),
+                "brush_cost_cogs": round(d.get("brush_cost_cogs", 0.0), 2),
                 "settle_income": settle,    # 客户代收的关联结算（包材/人工/快递费）
                 "total_cogs": total_cogs,
                 "gross_profit": gp,
@@ -1645,7 +1693,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
                 _t["gross_sales"] += r["gross_sales"]
                 for _f in ("cogs", "goods_cogs", "pack_cogs", "labor_cogs",
                            "material_cogs", "other_cogs", "express_cogs",
-                           "brush_cogs", "settle_income", "total_cogs"):
+                           "brush_cogs", "brush_fee_cogs", "brush_cost_cogs",
+                           "settle_income", "total_cogs"):
                     _t[_f] = round(_t[_f] + r[_f], 2)
                 _t["gross_profit"] = round(_t["amount"] + _t["settle_income"] - _t["total_cogs"], 2)
                 _den = (_t["gross_sales"] or _t["amount"]) + _t["settle_income"]
@@ -1743,6 +1792,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
             # 固定成本（每袋打包费/难量化包材，老记录为 0）——成本构成小字里单独列出
             "fixed_cogs": fixed,
             "brush_cogs": 0.0,
+            # 入仓行没有刷单结算（字段仍返回，前端成本构成小字按项取值不会缺）
+            "brush_fee_cogs": 0.0,
+            "brush_cost_cogs": 0.0,
             "settle_income": 0.0,
             "total_cogs": total_cogs,
             "gross_profit": gp,
@@ -1795,6 +1847,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         b["count"] += 1
 
     for i in inbounds:  # 采购/进货（与顶部「本期进货」同源；含运费/装卸）
+        if float(getattr(i, "quantity_base", 0.0) or 0.0) <= 0:
+            continue   # 零数量 = 只记运费的开支单，运费在「其他收支」里作为期间费用计
         _add_expense(exp_day, i.date, "purchase", _inbound_landed(i))
         _add_expense(exp_month, (i.date or "")[:7], "purchase", _inbound_landed(i))
     for e in others_in:
@@ -1846,6 +1900,8 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
 
     expense_items: list[dict] = []
     for i in inbounds:
+        if float(getattr(i, "quantity_base", 0.0) or 0.0) <= 0:
+            continue   # 零数量 = 只记运费的开支单，从「其他收支」行列出，避免重复
         fee = round((getattr(i, "freight", 0.0) or 0.0) + (getattr(i, "handling", 0.0) or 0.0)
                     + (getattr(i, "fee", 0.0) or 0.0), 2)
         note = i.supplier or i.remark or ""
@@ -1952,7 +2008,9 @@ def _summary_of(db: Session, date_from: str, date_to: str, key: str, exclude_oth
         "total_expense": round(purchase_db + expense + brush_total, 2),
         "stock_value": stock_value,
         "order_count": len(outbounds),
-        "inbound_count": len(inbounds),
+        "inbound_count": sum(
+            1 for i in inbounds if float(getattr(i, "quantity_base", 0.0) or 0.0) > 0
+        ),   # 零数量开支单不算进货笔数
         "by_product": product_rows,
         # 出库自动结算的关联成本明细（包材/人工/快递），已包含在 cogs 中
         "pack_costs": pack_costs,
@@ -2033,7 +2091,7 @@ def _merge_summaries(parts: list[dict], date_from: str, date_to: str, failed: li
     # 入仓品要单独成行，不能和同名同规格的出库商品合并（否则「出库方式」就没法区分了）
     num_fields = ("qty", "weight_kg", "amount", "gross_sales", "goods_cogs", "pack_cogs",
                   "labor_cogs", "material_cogs", "other_cogs", "express_cogs", "brush_cogs",
-                  "fixed_cogs", "settle_income")
+                  "brush_fee_cogs", "brush_cost_cogs", "fixed_cogs", "settle_income")
     buckets: dict[tuple, dict] = {}
     for p in parts:
         for r in p.get("by_product") or []:
@@ -2208,7 +2266,7 @@ def _sales_by_spec_of(db: Session, date_from: str, date_to: str, key: str) -> di
     if date_to:
         conds.append(Outbound.date <= date_to)
     sale_conds = [*conds, OutboundLine.line_type == "sale"]
-    spec_col = func.coalesce(func.nullif(func.trim(OutboundLine.spec), ""), "未标规格")
+    spec_col = func.coalesce(func.nullif(_spec_norm_expr(OutboundLine.spec), ""), "未标规格")
     dropship = OutboundLine.is_dropship == True  # noqa: E712 - 生成 SQL 的 = 1，NULL 不匹配
 
     def _sums():
@@ -2481,7 +2539,7 @@ def _overview_of(db: Session, key: str, name: str, date_from: str, date_to: str,
                 case((inb_partial & (inbound_paid < inbound_landed), inbound_paid), else_=inbound_landed)
             ), 0),
         )
-        .where(*_date_conds(Inbound), paid(Inbound))
+        .where(*_date_conds(Inbound), paid(Inbound), Inbound.quantity_base > 0)
     ).one()
     purchase = float(purchase)
     stock_value = round(float(db.execute(

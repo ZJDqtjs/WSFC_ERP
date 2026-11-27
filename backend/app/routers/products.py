@@ -72,6 +72,8 @@ class ProductIn(BaseModel):
     unit_cost: float = 0.0
     weight_kg: float = 0.0  # 单件毛重(kg/默认单位)
     free_shipping: bool = False  # 包邮：出库不计快递费（订单商品勾它，或其关联的库存大类勾它，都算包邮）
+    # 这个商品默认发哪家快递（「快递费」页配置的快递公司 id；空=用默认快递）
+    express_carrier: str | None = None
     conversions: dict[str, float] = {}
     pack_items: list[PackItem] = []
     pack_fee: float = 0.0
@@ -109,6 +111,7 @@ def _last_in_map(db: Session) -> dict[int, dict]:
     """
     latest = (
         select(Inbound.product_id, func.max(Inbound.id).label("mid"))
+        .where(Inbound.quantity_base > 0)   # 零数量 = 只记运费的开支单，没有入库价
         .group_by(Inbound.product_id)
         .subquery()
     )
@@ -198,6 +201,7 @@ def _to_dict(p: Product, db: Session | None = None, last_in: dict[int, dict] | N
         "last_in_date": li.get("date") or "",
         "weight_kg": p.weight_kg or 0,
         "free_shipping": bool(p.free_shipping),
+        "express_carrier": p.express_carrier or "",
         "conversions": p.conversions or {},
         "pack_items": p.pack_items or [],
         "pack_fee": p.pack_fee,
@@ -512,6 +516,7 @@ def create_product(data: ProductIn, db: Session = Depends(get_db), user: User = 
         unit_cost=data.unit_cost,
         weight_kg=data.weight_kg,
         free_shipping=data.free_shipping,
+        express_carrier=(data.express_carrier or "").strip(),
         conversions=conversions,
         pack_items=[item.model_dump() for item in data.pack_items],
         pack_fee=data.pack_fee,
@@ -638,6 +643,9 @@ def update_product(pid: int, data: ProductIn, db: Session = Depends(get_db), use
     p.unit_cost = data.unit_cost
     p.weight_kg = data.weight_kg
     p.free_shipping = data.free_shipping
+    # None = 旧客户端没传这个字段 → 保留原值；"" = 清空（用默认快递）
+    if data.express_carrier is not None:
+        p.express_carrier = data.express_carrier.strip()
     p.conversions = data.conversions or default_conversions(data.base_unit)
     p.pack_items = [item.model_dump() for item in data.pack_items]
     p.pack_fee = data.pack_fee
@@ -969,6 +977,19 @@ def copy_products_to_warehouse(
             existing = target.scalar(select(Product).where(Product.name == src.name))
             if existing:
                 mapping[src.id] = existing.id
+                # 复用目标仓已有商品时不会覆盖它自己的资料（各仓各自的账）；但如果它一直没有
+                # 成本基准，而源仓有，就必须提醒——否则出库照样按 0 成本记，问题被悄悄藏起来。
+                if (
+                    existing.product_type == "stock"
+                    and float(existing.unit_cost or 0) <= 0
+                    and float(existing.avg_cost or 0) <= 0
+                    and (float(src.unit_cost or 0) > 0 or float(src.avg_cost or 0) > 0)
+                ):
+                    warnings.append(
+                        f"目标仓已有同名商品「{existing.name}」且参考成本为 0（未覆盖），"
+                        f"源仓成本为 {float(src.unit_cost or 0) or float(src.avg_cost or 0):g}，"
+                        f"如目标仓也在用它出库，请到商品编辑页补填参考成本"
+                    )
                 mapped.append({
                     "source_id": src.id, "target_id": existing.id,
                     "name": src.name, "product_type": src.product_type, "is_main": is_main,
@@ -1011,6 +1032,16 @@ def copy_products_to_warehouse(
                     f"「{src.name}」有 {len(src_links) - len(stock_links)} 项扣减库存商品在目标仓没有对应商品，已丢弃"
                 )
             first = stock_links[0] if stock_links else None
+            # 参考成本：手填的优先；没手填（0）就用源仓「库存均价」兜底。
+            # 均价是历史入库批次算出来的真实成本，而复制不带库存数量/均价/流水（各仓自己的账），
+            # 缺了这一手，目标仓该商品就没有任何成本基准 → 出库/关联结算的成本全按 0 记、
+            # 毛利虚高（2026-11 天麻、百合整批复制过来就是这样翻的车）。
+            unit_cost = float(src.unit_cost or 0) or float(src.avg_cost or 0)
+            if unit_cost <= 0 and src.product_type == "stock":
+                warnings.append(
+                    f"「{src.name}」源仓既没有参考成本也没有库存均价，复制后成本为 0，"
+                    f"请到商品编辑页补填参考成本"
+                )
             np = Product(
                 code=code,
                 multi_code=multi,
@@ -1022,9 +1053,10 @@ def copy_products_to_warehouse(
                 default_unit=src.default_unit or src.base_unit,
                 spec=src.spec or "",
                 sale_price=src.sale_price or 0.0,
-                unit_cost=src.unit_cost or 0.0,
+                unit_cost=unit_cost,
                 weight_kg=src.weight_kg or 0.0,
                 free_shipping=bool(src.free_shipping),
+                express_carrier=src.express_carrier or "",
                 conversions=dict(src.conversions or default_conversions(src.base_unit)),
                 pack_items=pack_items,
                 pack_fee=src.pack_fee or 0.0,

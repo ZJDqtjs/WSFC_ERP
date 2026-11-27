@@ -56,6 +56,9 @@ class Product(Base):
     # 包邮：该商品出库时不参与快递费结算（订单商品勾了它、或其关联的库存大类勾了，都算包邮）；
     # 整单所有销售行都是包邮时不会生成「快递费(自动)」行。
     free_shipping: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 这个商品默认发哪家快递（存「快递费」页配置的快递公司 id；空=用默认快递）。
+    # 出库时按它决定本单用哪家快递公司的规则计费，出库单的关联结算里仍可按单覆盖。
+    express_carrier: Mapped[str] = mapped_column(String(64), default="")
     conversions: Mapped[dict] = mapped_column(JSON, default=dict)  # {单位: 换算到基础单位的系数}
     # 销售关联商品/包装清单：[{product_id, quantity, unit}]
     pack_items: Mapped[list] = mapped_column(JSON, default=list)
@@ -140,6 +143,9 @@ class Outbound(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(32), index=True)
     import_group: Mapped[str] = mapped_column(String(32), index=True, default="")  # 批量导入批次号，空=单条
+    # 平台订单号（京东 POP 店 orderId）：定时导入按它去重（重跑不重复建单），
+    # 订单状态回撤（已出库 → 已取消）时也按它找回原单做红冲。空 = 非平台单（手动/聚水潭走备注单号）。
+    external_no: Mapped[str] = mapped_column(String(64), index=True, default="")
     pack_rule_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 命中的一单多货规则ID
     pack_rule_name: Mapped[str] = mapped_column(String(255), default="")  # 规则名快照（规则改动不影响历史）
     customer: Mapped[str] = mapped_column(String(64), default="")

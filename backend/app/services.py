@@ -99,7 +99,7 @@ def _latest_inbound_dates(db: Session, product_ids) -> dict[int, str]:
         return {}
     rows = db.execute(
         select(Inbound.product_id, func.max(Inbound.date))
-        .where(Inbound.product_id.in_(ids))
+        .where(Inbound.product_id.in_(ids), Inbound.quantity_base > 0)   # 零数量开支单不算进货
         .group_by(Inbound.product_id)
     ).all()
     return {int(pid): (dt or "") for pid, dt in rows if pid}
@@ -214,50 +214,111 @@ def default_conversions(base_unit: str) -> dict:
     return dict(DEFAULT_CONVERSIONS_BASE_COUNT)
 
 
-# ---------------- 快递费（多段计费，规则页可实时维护） ----------------
+# ---------------- 快递费（多快递公司 + 多段计费，规则页可实时维护） ----------------
 EXPRESS_CONFIG_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "json", "express_config.json")
 EXPRESS_BOX_WEIGHT_KG = 0.1      # 每个包裹在净重基础上统一加 0.1kg 箱重
-DEFAULT_EXPRESS_CONFIG = {
+# 一家快递公司的计费规则
+DEFAULT_EXPRESS_CARRIER = {
+    "id": "jd",
+    "name": "京东快递",
     "mode": "tiered",   # tiered=首重+续重（1kg内首重价，每超1kg加收）；flat=每kg单价
     "first_kg_fee": 3.6,   # 1kg 以内
     "per_extra_kg": 1.0,   # 每超 1kg 加收
     "rate_per_kg": 3.6,    # flat 模式：每 1kg 单价
     "round_up": True,      # 是否按整 kg 向上取整（续重按 ≥1kg 段计）
+    "note": "",            # 备注（渠道/时效说明，仅展示）
 }
+# 配置文件结构：{"default_carrier": "jd", "carriers": [ {一家快递公司}, ... ]}
+DEFAULT_EXPRESS_CONFIG = {
+    "default_carrier": DEFAULT_EXPRESS_CARRIER["id"],
+    "carriers": [dict(DEFAULT_EXPRESS_CARRIER)],
+}
+EXPRESS_CARRIER_FIELDS = ("mode", "first_kg_fee", "per_extra_kg", "rate_per_kg", "round_up")
+
+
+def normalize_express_carrier(raw: dict | None, index: int = 0) -> dict:
+    """把一条快递规则补齐成完整结构（缺字段回退默认值）。"""
+    src = raw if isinstance(raw, dict) else {}
+    cid = str(src.get("id") or f"c{index + 1}").strip() or f"c{index + 1}"
+    cfg = dict(DEFAULT_EXPRESS_CARRIER)
+    cfg["id"] = cid
+    cfg["name"] = str(src.get("name") or "").strip() or f"快递公司{index + 1}"
+    for k in EXPRESS_CARRIER_FIELDS:
+        if k in src and src[k] is not None:
+            cfg[k] = src[k]
+    cfg["mode"] = "flat" if cfg.get("mode") == "flat" else "tiered"
+    for k in ("first_kg_fee", "per_extra_kg", "rate_per_kg"):
+        try:
+            cfg[k] = float(cfg.get(k) or 0)
+        except (TypeError, ValueError):
+            cfg[k] = 0.0
+    cfg["round_up"] = bool(cfg.get("round_up", True))
+    cfg["note"] = str(src.get("note") or "")
+    return cfg
+
+
+def normalize_express_config(data: dict | None) -> dict:
+    """规范化整份快递费配置；兼容旧版「单条扁平规则」文件（自动迁成一家「京东快递」）。"""
+    src = data if isinstance(data, dict) else {}
+    raw_list = src.get("carriers")
+    if not isinstance(raw_list, list) or not raw_list:
+        # 旧格式：顶层就是一条规则（mode/first_kg_fee/...），迁移成「京东快递」这一家
+        raw_list = ([{**DEFAULT_EXPRESS_CARRIER, **{k: v for k, v in src.items() if k in EXPRESS_CARRIER_FIELDS}}]
+                    if any(k in src for k in EXPRESS_CARRIER_FIELDS) else [DEFAULT_EXPRESS_CARRIER])
+    carriers, seen = [], set()
+    for i, item in enumerate(raw_list):
+        c = normalize_express_carrier(item, i)
+        if c["id"] in seen:      # id 重复时补后缀，保证能唯一定位
+            c["id"] = f"{c['id']}-{i + 1}"
+        seen.add(c["id"])
+        carriers.append(c)
+    default_id = str(src.get("default_carrier") or "").strip()
+    if default_id not in seen:
+        default_id = carriers[0]["id"]
+    return {"default_carrier": default_id, "carriers": carriers}
 
 
 def load_express_config() -> dict:
-    """读取快递费计费配置。文件缺失/异常时回退默认。"""
-    cfg = dict(DEFAULT_EXPRESS_CONFIG)
+    """读取快递费计费配置（多快递公司）。文件缺失/异常时回退默认。"""
     try:
         with open(EXPRESS_CONFIG_FILE, encoding="utf-8") as f:
-            data = json.load(f)
-            for k in cfg:
-                if k in data:
-                    cfg[k] = data[k]
+            return normalize_express_config(json.load(f))
     except Exception:
-        pass
-    return cfg
+        return normalize_express_config(None)
 
 
 def save_express_config(cfg: dict) -> dict:
     """保存快递费计费配置到文件（实时生效）。"""
-    merged = dict(DEFAULT_EXPRESS_CONFIG)
-    if cfg and isinstance(cfg, dict):
-        merged.update(cfg)
+    merged = normalize_express_config(cfg)
     os.makedirs(os.path.dirname(EXPRESS_CONFIG_FILE), exist_ok=True)
     with open(EXPRESS_CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(merged, f, ensure_ascii=False, indent=2)
     return merged
 
 
-def compute_express_fee(weight_kg: float, cfg: dict | None = None) -> float:
-    """快递费。
-    - tiered：1kg 内收 first_kg_fee；每超 1kg 加收 per_extra_kg（round_up 时按整 kg 向上取整）。
-    - flat：weight × rate_per_kg。
-    """
+def express_carrier_cfg(cfg: dict | None = None, carrier_id: str | None = None) -> dict:
+    """取某家快递公司的计费规则；不指定 / 找不到时用默认快递公司。
+    cfg 允许直接传单家规则（兼容旧调用）或整份配置（含 carriers）。"""
     if cfg is None:
         cfg = load_express_config()
+    if isinstance(cfg, dict) and isinstance(cfg.get("carriers"), list):
+        doc = normalize_express_config(cfg)
+        want = (carrier_id or "").strip() or doc["default_carrier"]
+        for c in doc["carriers"]:
+            if c["id"] == want or c["name"] == want:
+                return c
+        return next(c for c in doc["carriers"] if c["id"] == doc["default_carrier"])
+    return normalize_express_carrier(cfg)
+
+
+def compute_express_fee(weight_kg: float, cfg: dict | None = None,
+                        carrier_id: str | None = None) -> float:
+    """快递费（按某家快递公司的规则）。
+    - tiered：1kg 内收 first_kg_fee；每超 1kg 加收 per_extra_kg（round_up 时按整 kg 向上取整）。
+    - flat：weight × rate_per_kg。
+    cfg 不传 → 读配置文件、用默认快递公司；carrier_id 指定用哪家快递公司计费。
+    """
+    cfg = express_carrier_cfg(cfg, carrier_id)
     w = max(0.0, float(weight_kg))
     if cfg.get("mode") == "flat":
         return round(w * float(cfg.get("rate_per_kg") or 0.0), 2)
@@ -536,8 +597,10 @@ def inbound_unit_factor(product: Product, rec: "Inbound") -> float:
 
 
 def inbound_edit_impact(db: Session, rec: "Inbound", quantity: float | None = None,
-                        unit_price: float | None = None, date: str | None = None) -> dict:
-    """评估「修改入库单数量 / 单价（/日期）」的影响范围，**不落库**。
+                        unit_price: float | None = None, date: str | None = None,
+                        freight: float | None = None, handling: float | None = None,
+                        fee: float | None = None) -> dict:
+    """评估「修改入库单数量 / 单价 / 运费等费用（/日期）」的影响范围，**不落库**。
 
     做法：把这张入库单对应的库存流水按新数量、新到岸金额替换掉，对同一商品再做一次
     完整 FIFO 重放，与当前结果逐条比对出库流水的结转成本：
@@ -545,22 +608,32 @@ def inbound_edit_impact(db: Session, rec: "Inbound", quantity: float | None = No
       - 有变化 → 返回受影响的出库单（单号 / 日期 / 客户 / 成本前后与差额），
         保存时 recompute_product 会按 FIFO 重算并把新成本回写到这些订单。
 
-    返回结构供前端弹窗展示；异常（数量非法、缺流水）抛 ValueError。
+    返回结构供前端弹窗展示；异常（数量/单价/费用非法）抛 ValueError。
     """
     product = db.get(Product, rec.product_id)
     if not product:
         raise ValueError("商品不存在")
     new_qty = round(float(rec.quantity if quantity is None else quantity), 6)
     new_price = round(float(rec.unit_price if unit_price is None else unit_price), 6)
-    if new_qty <= 0:
-        raise ValueError("数量必须大于 0")
+    new_freight = round(float(rec.freight or 0.0) if freight is None else float(freight), 2)
+    new_handling = round(float(rec.handling or 0.0) if handling is None else float(handling), 2)
+    new_fee = round(float(rec.fee or 0.0) if fee is None else float(fee), 2)
+    if new_freight < 0 or new_handling < 0 or new_fee < 0:
+        raise ValueError("运费 / 装卸费 / 手续费不能为负数")
+    if new_qty < 0:
+        raise ValueError("数量不能为负数")
     if new_price < 0:
         raise ValueError("单价不能为负数")
+    old_fee_sum = round(float(rec.freight or 0.0) + float(rec.handling or 0.0) + float(rec.fee or 0.0), 2)
+    fee_sum = round(new_freight + new_handling + new_fee, 2)
+    if new_qty <= 0 and float(rec.quantity_base or 0.0) > 0:
+        raise ValueError("已有库存的入库单数量必须大于 0；要撤销这笔入库请直接删除该单")
+    if new_qty <= 0 and fee_sum <= 0:
+        raise ValueError("数量为 0 时请至少填运费/装卸费/手续费")
     new_base = new_qty * inbound_unit_factor(product, rec)
     new_total = round(new_qty * new_price, 2)
-    fee_sum = round(float(rec.freight or 0.0) + float(rec.handling or 0.0) + float(rec.fee or 0.0), 2)
     old_total = round(float(rec.total_amount or 0.0), 2)
-    old_landed = round(old_total + fee_sum, 2)
+    old_landed = round(old_total + old_fee_sum, 2)
     new_landed = round(new_total + fee_sum, 2)
 
     mv = db.scalar(
@@ -569,39 +642,50 @@ def inbound_edit_impact(db: Session, rec: "Inbound", quantity: float | None = No
             StockMovement.move_type == "in",
         ).order_by(StockMovement.id)
     )
-    if not mv:
-        raise ValueError("该入库单缺少库存流水，无法评估影响")
 
     moves = _movement_rows(db, rec.product_id)
     before = _fifo_replay(moves, fallback=product.unit_cost or 0.0)
     new_date = (date or "").strip() or rec.date
-    sim = [
-        SimpleNamespace(
-            id=m.id, move_type=m.move_type,
-            quantity_base=(new_base if m.id == mv.id else m.quantity_base),
-            amount=(new_landed if m.id == mv.id else m.amount),
-            ref_type=m.ref_type, ref_id=m.ref_id,
-            cost_locked=getattr(m, "cost_locked", False),
-            date=(new_date if m.id == mv.id else m.date),
+    if mv is None:
+        # 纯开支单（入库数量为 0）：本来没有库存流水；数量改成 >0 时按「新增一条入库流水」模拟
+        sim = list(moves)
+        if new_base > 0:
+            next_id = max([m.id for m in moves] or [0]) + 1
+            sim.append(SimpleNamespace(
+                id=next_id, move_type="in", quantity_base=new_base, amount=new_landed,
+                ref_type="inbound", ref_id=rec.id, cost_locked=False, date=new_date,
+            ))
+            sim.sort(key=lambda m: (m.date or "", m.id))
+        after = _fifo_replay(sim, fallback=product.unit_cost or 0.0)
+        used = False   # 这张单本来就没进过库存，谈不上「被出库用到」
+    else:
+        sim = [
+            SimpleNamespace(
+                id=m.id, move_type=m.move_type,
+                quantity_base=(new_base if m.id == mv.id else m.quantity_base),
+                amount=(new_landed if m.id == mv.id else m.amount),
+                ref_type=m.ref_type, ref_id=m.ref_id,
+                cost_locked=getattr(m, "cost_locked", False),
+                date=(new_date if m.id == mv.id else m.date),
+            )
+            for m in moves
+        ]
+        if new_date != (mv.date or ""):
+            sim.sort(key=lambda m: (m.date or "", m.id))   # 改日期会改变 FIFO 顺序
+        after = _fifo_replay(sim, fallback=product.unit_cost or 0.0)
+
+        # 这批货是否已经被出库/包装消耗用到：把它从 FIFO 队列里拿掉，若出库成本有变化 → 用过
+        without = _fifo_replay([m for m in moves if m.id != mv.id], fallback=product.unit_cost or 0.0)
+        used = any(
+            abs(without[4].get(mid, 0.0) - before[4].get(mid, 0.0)) > 1e-9
+            for mid in set(without[4]) | set(before[4])
         )
-        for m in moves
-    ]
-    if new_date != (mv.date or ""):
-        sim.sort(key=lambda m: (m.date or "", m.id))   # 改日期会改变 FIFO 顺序
-    after = _fifo_replay(sim, fallback=product.unit_cost or 0.0)
 
     stock0, value0 = before[0], before[1]
     stock1, value1 = after[0], after[1]
     avg0 = (value0 / stock0) if stock0 > 1e-9 else before[3]
     avg1 = (value1 / stock1) if stock1 > 1e-9 else after[3]
     costs0, costs1 = before[4], after[4]
-
-    # 这批货是否已经被出库/包装消耗用到：把它从 FIFO 队列里拿掉，若出库成本有变化 → 用过
-    without = _fifo_replay([m for m in moves if m.id != mv.id], fallback=product.unit_cost or 0.0)
-    used = any(
-        abs(without[4].get(mid, 0.0) - costs0.get(mid, 0.0)) > 1e-9
-        for mid in set(without[4]) | set(costs0)
-    )
 
     info = {m.id: m for m in moves}
     by_outbound: dict[int, float] = {}
@@ -639,7 +723,7 @@ def inbound_edit_impact(db: Session, rec: "Inbound", quantity: float | None = No
             f"修改后库存将为 {fmt_qty(stock1)}（超卖），超出已入库数量；"
             "缺口服用的出库成本会按暂估成本重算"
         )
-    if new_date != (mv.date or ""):
+    if new_date != ((mv.date if mv is not None else rec.date) or ""):
         warnings.append("入库日期改动会改变 FIFO 先后顺序，可能影响更多出库单的结转成本")
 
     affected_count = len(affected)
@@ -755,6 +839,7 @@ def purge_inbounds(db: Session, ids: list[int]) -> tuple[int, int, set[int]]:
         _bulk_delete_ref(db, FinanceRecord, "inbound", part)
         _bulk_delete_ref(db, OtherExpense, "inbound", part)  # 金额调整带出的其他收支一并删除
         _bulk_delete_ref(db, OtherExpense, INBOUND_FEE_REF, part)  # 运费/装卸费镜像行一并删除
+        _bulk_delete_ref(db, OtherExpense, INBOUND_FEE_EXPENSE_REF, part)  # 零数量入库的运费开支行
         _bulk_delete_ref(db, OtherExpense, INBOUND_COMP_REF, part)  # 供应商补偿镜像行一并删除
         db.execute(delete(Inbound).where(Inbound.id.in_(part)).execution_options(synchronize_session=False))
     db.flush()
@@ -956,6 +1041,9 @@ def sync_adjust_expense(db: Session, kind: str, ref_id: int, code: str, date: st
 
 # 入库「运费 / 装卸费 / 转账手续费」带出的其他收支镜像行的 ref_type（与金额调整的 "inbound" 区分，互不误伤）
 INBOUND_FEE_REF = "inbound_fee"
+# 数量为 0 的入库单（货还没到，先记运费/装卸费等开支）：没有批次成本可摊，
+# 镜像行用这个 ref_type 让报表期间费用照常扣，而不是被「已计入批次成本」的排除规则剔掉。
+INBOUND_FEE_EXPENSE_REF = "inbound_fee_exp"
 INBOUND_FEE_CATEGORIES = (("freight", "运费"), ("handling", "装卸费"), ("fee", "转账手续费"))
 
 # 「广告费充值」类其他收支的前缀：钱是充进京准通账户的预付款，不是本期费用。
@@ -974,14 +1062,19 @@ def sync_inbound_fee_expenses(db: Session, rec: "Inbound", product_name: str, pa
 
     这几项费用已计入批次到岸成本（FIFO 结转随销量扣减，体现在该品毛利上）；这里的镜像行
     只供「其他收支」页按类型/日期查询，报表的期间费用聚合一律排除 ref_type="inbound_fee"
-    （见 routers/report.py），避免「成本 + 期间费用」重复扣减。日期/付款状态随单据
-    同步维护（sync_doc_edit / pay_bill / 删除级联）。
+    （见 routers/report.py），避免「成本 + 期间费用」重复扣减。
+
+    例外：数量为 0 的入库单（货还没到、先记运费）没有批次成本可摊，镜像行改用
+    ref_type="inbound_fee_exp"，报表期间费用照常扣，钱不会凭空消失；之后把数量改成 >0
+    时这里会把 ref_type 一并切回 "inbound_fee"。日期/付款状态随单据同步维护。
     """
+    # 数量为 0 → 这笔运费是本期费用；有货 → 摊进批次成本，不重复进期间费用
+    ref_type = INBOUND_FEE_REF if float(rec.quantity_base or 0.0) > 0 else INBOUND_FEE_EXPENSE_REF
     for attr, label in INBOUND_FEE_CATEGORIES:
         amount = round(float(getattr(rec, attr, 0.0) or 0.0), 2)
         existing = list(db.execute(
             select(OtherExpense).where(
-                OtherExpense.ref_type == INBOUND_FEE_REF,
+                OtherExpense.ref_type.in_([INBOUND_FEE_REF, INBOUND_FEE_EXPENSE_REF]),
                 OtherExpense.ref_id == rec.id,
                 OtherExpense.category == label,
             )
@@ -992,15 +1085,18 @@ def sync_inbound_fee_expenses(db: Session, rec: "Inbound", product_name: str, pa
             for e in existing[:1]:
                 db.delete(e)
             continue
-        remark = f"入库 {rec.code} {label} · {product_name}（已计入批次成本）"
+        remark = f"入库 {rec.code} {label} · {product_name}" + (
+            "（仅记开支，不入库存成本）" if ref_type == INBOUND_FEE_EXPENSE_REF else "（已计入批次成本）"
+        )
         if existing:
             e = existing[0]
             e.amount, e.date, e.remark, e.operator = amount, rec.date, remark, rec.operator
             e.pay_status, e.paid_at = pay["pay_status"], pay["paid_at"]
+            e.ref_type = ref_type   # 数量在 0 / >0 之间切换时一并改口径
         else:
             db.add(OtherExpense(
                 category=label, amount=amount, date=rec.date, remark=remark,
-                operator=rec.operator, ref_type=INBOUND_FEE_REF, ref_id=rec.id,
+                operator=rec.operator, ref_type=ref_type, ref_id=rec.id,
                 pay_status=pay["pay_status"], paid_at=pay["paid_at"],
             ))
 
@@ -1138,8 +1234,10 @@ def sync_doc_edit(db: Session, kind: str, ref_id: int, date: str, operator: str,
     ).scalars():
         f.date, f.operator = date, operator
         f.pay_status, f.paid_at = pay["pay_status"], pay["paid_at"]
-    # 其他收支带出行：金额调整(ref_type=kind) + 入库的运费/装卸费镜像行(ref_type=inbound_fee)
-    fee_types = [kind] + ([INBOUND_FEE_REF] if kind == "inbound" else [])
+    # 其他收支带出行：金额调整(ref_type=kind) + 入库的运费/装卸费镜像行(ref_type=inbound_fee / inbound_fee_exp)
+    fee_types = [kind] + (
+        [INBOUND_FEE_REF, INBOUND_FEE_EXPENSE_REF] if kind == "inbound" else []
+    )
     for e in db.execute(
         select(OtherExpense).where(OtherExpense.ref_type.in_(fee_types), OtherExpense.ref_id == ref_id)
     ).scalars():
@@ -1159,17 +1257,18 @@ def sync_doc_edit(db: Session, kind: str, ref_id: int, date: str, operator: str,
 
 
 def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
-    """创建入库单（含库存流水 + 财务记录 + 成本重算）。"""
+    """创建入库单（含库存流水 + 财务记录 + 成本重算）。
+
+    数量允许为 0：此时不产生库存/采购支出，只把运费/装卸费/手续费记成「其他收支」开支
+    （货还没到、先把运费付了的情形）。数量为 0 时必须至少填一项费用。
+    """
     product = db.get(Product, payload["product_id"])
     if not product:
         raise ValueError("商品不存在")
     quantity = float(payload["quantity"])
-    if quantity <= 0:
-        raise ValueError("数量必须大于 0")
     unit = payload["unit"]
     unit_price = float(payload["unit_price"])
     date = payload["date"]
-    qty_base = unit_to_base(product, unit, quantity)
     amount = round(quantity * unit_price, 2)   # 商品金额（货款），不随金额调整变化
     adjust = round(float(payload.get("adjust_amount") or 0), 2)   # 抹零/凑整：正=多付，负=少付
     freight = round(float(payload.get("freight") or 0), 2)    # 运费（选填，计入批次成本）
@@ -1177,6 +1276,11 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     fee = round(float(payload.get("fee") or 0), 2)            # 转账手续费（选填，计入批次成本）
     if freight < 0 or handling < 0 or fee < 0:
         raise ValueError("运费 / 装卸费 / 手续费不能为负数")
+    if quantity < 0:
+        raise ValueError("数量不能为负数")
+    if quantity <= 0 and round(freight + handling + fee, 2) <= 0:
+        raise ValueError("数量必须大于 0；若只想先记录运费/装卸费等开支，请填运费（数量可填 0）")
+    qty_base = unit_to_base(product, unit, quantity) if quantity > 0 else 0.0
     landed = round(amount + freight + handling + fee, 2)  # 批次到岸成本 = 货款 + 运费 + 装卸费 + 手续费（金额调整不计入）
     op = (payload.get("operator") or "").strip() or operator
 
@@ -1206,37 +1310,40 @@ def create_inbound(db: Session, payload: dict, operator: str = "") -> Inbound:
     )
     db.add(rec)
     db.flush()
-    mv = StockMovement(
-        product_id=product.id,
-        move_type="in",
-        quantity_base=qty_base,
-        amount=landed,
-        ref_type="inbound",
-        ref_id=rec.id,
-        date=date,
-        operator=op,
-        remark=f"入库 {rec.code}" + (f"（含运费/装卸/手续费 ¥{round(freight + handling + fee, 2)}）" if freight or handling or fee else ""),
-    )
-    db.add(mv)
-    db.flush()
-    db.add(
-        FinanceRecord(
-            type="expense",
-            category="采购支出",
+    if qty_base > 0:
+        mv = StockMovement(
             product_id=product.id,
-            amount=amount,
-            date=date,
-            operator=op,
-            remark=f"采购入库 {rec.code}",
+            move_type="in",
+            quantity_base=qty_base,
+            amount=landed,
             ref_type="inbound",
             ref_id=rec.id,
-            **pay_link,   # 挂账状态随入库单：待付款时这笔采购支出也不进报表
+            date=date,
+            operator=op,
+            remark=f"入库 {rec.code}" + (f"（含运费/装卸/手续费 ¥{round(freight + handling + fee, 2)}）" if freight or handling or fee else ""),
         )
-    )
+        db.add(mv)
+        db.flush()
+    if amount > 0:   # 数量为 0 的运费开支单没有采购支出，货款为 0 也不留空流水
+        db.add(
+            FinanceRecord(
+                type="expense",
+                category="采购支出",
+                product_id=product.id,
+                amount=amount,
+                date=date,
+                operator=op,
+                remark=f"采购入库 {rec.code}",
+                ref_type="inbound",
+                ref_id=rec.id,
+                **pay_link,   # 挂账状态随入库单：待付款时这笔采购支出也不进报表
+            )
+        )
     sync_adjust_expense(db, "inbound", rec.id, rec.code, date, op, adjust, pay_link)
     sync_inbound_fee_expenses(db, rec, product.name, pay_link)
     sync_compensation_expense(db, rec)
-    recompute_product(db, product.id)
+    if qty_base > 0:
+        recompute_product(db, product.id)
     db.flush()
     return rec
 
@@ -1302,13 +1409,17 @@ def settle_cats_label(cats) -> str:
 def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_express: bool = True,
                 allow_self_stock: bool = False, extra_pack_lines=None,
                 settle_cats=None, brush: bool = False,
-                express_fee: float | None = None) -> dict:
+                express_fee: float | None = None,
+                express_carrier: str | None = None) -> dict:
     """构建出库单明细：销售行 + 关联结算行(包装材料) + 费用，并校验库存。不落库。
 
     成本结转按「先进先出(FIFO)」：从商品最早的入库批次依次扣减，成本 = Σ(批次单位成本 × 扣减数量)。
 
     auto_express=False 时不自动结算快递费（手动出库时用户在预览里删掉「快递费」行即为不结算），
     其余批量导入/聚水潭等流程不传该参数，保持「按整单毛重自动计快递费」的原行为。
+
+    express_carrier：用哪家快递公司的计费规则（快递费规则页配置的 id 或名称）。
+    不传 = 用规则页的「默认快递」。
 
     allow_self_stock（手动出库）：销售行直接选的就是「库存商品（大类）」时，扣它自己的库存。
     导入路径必须保持 False —— 平台商品名误指到大类时应当报错，而不是悄悄扣大类的库存改账。
@@ -1333,6 +1444,9 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
     sale_rows, pack_rows, warnings = [], [], []
     total_amount = total_cogs = 0.0
     express_weight = 0.0  # 整单毛重(kg)，用于自动计算快递费
+    # 商品资料上绑定的快递公司（订单商品优先，其次它扣减的库存大类）：
+    # 出库单没显式指定 express_carrier 时按它计费；整单取第一个「不包邮且绑了公司」的行。
+    carrier_hint = ""
     # FIFO 批次缓存：{库存商品id: (剩余批次deque, 兜底成本)}；同单内对同一商品的多行按顺序依次扣减
     fifo_cache: dict[int, tuple] = {}
 
@@ -1418,6 +1532,8 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
             # 没填净重就不计（视为代发方包邮）。
             if not line_free:
                 express_weight += line_weight_kg(p, qty_base)
+                if not carrier_hint:
+                    carrier_hint = (getattr(p, "express_carrier", "") or "").strip()
             cogs = round(qty_base * (p.unit_cost or 0.0), 2)
             if not (p.unit_cost or 0.0):
                 warnings.append(f"「{p.name}」是代发商品（未关联库存大类）但没填「参考成本」，代发成本按 0 计")
@@ -1442,6 +1558,12 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
                 line_net_kg = line_weight_kg(p, qty_base)
             if not line_free:
                 express_weight += line_net_kg
+                if not carrier_hint:
+                    # 订单商品本身绑的公司优先，没绑就看它扣减的库存大类
+                    carrier_hint = ((getattr(p, "express_carrier", "") or "").strip()
+                                    or next(((getattr(sp, "express_carrier", "") or "").strip()
+                                             for sp, _ in deds
+                                             if (getattr(sp, "express_carrier", "") or "").strip()), ""))
             cogs = round(cogs, 2)
         if fee is None:
             fee = p.pack_fee
@@ -1534,7 +1656,9 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
     # auto_express=False（手动出库并在预览里删掉了「快递费」行）时不再自动追加
     if auto_express and express_weight > 0:
         total_weight = round(express_weight + EXPRESS_BOX_WEIGHT_KG, 3)
-        auto_fee = compute_express_fee(total_weight)
+        # 快递公司优先级：出库单显式指定（关联结算里选的）> 商品资料绑定的 > 默认快递
+        carrier = express_carrier_cfg(None, (express_carrier or "").strip() or carrier_hint)
+        auto_fee = compute_express_fee(total_weight, carrier)
         # 手动改过快递费（自动算的不对）：按用户手填的金额记，单位成本=该金额（数量固定 1 单）
         fee_used = round(float(express_fee), 2) if express_fee is not None else auto_fee
         if fee_used > 0:
@@ -1546,6 +1670,9 @@ def build_order(db: Session, lines, pack_lines=None, fee_total=None, auto_expres
                     "unit_price": fee_used, "amount": fee_used, "cogs": fee_used,
                     "pack_fee": 0, "line_type": "pack", "sale_product_id": None,
                     "express_weight": total_weight, "manual": False,
+                    # 这一单用的是哪家快递公司的规则（前端提示/核对用）
+                    "express_carrier": carrier.get("name") or "",
+                    "express_carrier_id": carrier.get("id") or "",
                     "spec": f"{total_weight:.3f}kg",
                     # 自动算出来的建议值：前端「恢复自动」时展示/核对用
                     "auto_express_fee": auto_fee,
@@ -1660,6 +1787,8 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
         settle_cats=payload.get("settle_cats"),
         # 手动改过的快递费（不填=按整单毛重自动算）
         express_fee=payload.get("express_fee"),
+        # 用哪家快递公司的规则计费（不填=默认快递）
+        express_carrier=payload.get("express_carrier"),
         brush=brush,
     )
     op = (payload.get("operator") or "").strip() or operator
@@ -1672,6 +1801,8 @@ def create_outbound(db: Session, payload: dict, operator: str = "", import_group
     rec = Outbound(
         code=gen_outbound_code(db, date),
         import_group=import_group,
+        # 平台订单号（京东 POP）：定时导入按它去重、取消时按它找原单红冲
+        external_no=(payload.get("external_no") or "").strip(),
         pack_rule_id=payload.get("pack_rule_id"),
         pack_rule_name=(payload.get("pack_rule_name") or "").strip(),
         customer=(payload.get("customer") or "").strip(),
