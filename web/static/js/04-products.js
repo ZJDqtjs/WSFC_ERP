@@ -565,66 +565,74 @@ async function openProductModal(pid = 0, prefillName = "", draft = null) {
   $("modalBox").classList.add("wide");
   openModal(`
     <h3><span>${title}</span><span style="display:flex;gap:8px;align-items:center;">${copyBtn}<button class="close" onclick="closeModal()">✕</button></span></h3>
-    <div class="form-grid">
-      <div class="field"><label>商品编码</label><input id="pCode" value="${esc(p?.code || "")}" placeholder="如 ydj001，可留空" />
-        <div class="field-hint">主编码：没匹配到店铺的订单都归它</div>
-      </div>
-      <div class="field"><label>商品名称 *</label><input id="pName" value="${esc(curName)}" placeholder="如：佛手柑大果2个" /></div>
-      <div class="field" id="pMultiBox" style="grid-column:1/-1;">
-        <label style="display:flex;gap:6px;align-items:center;">
-          <input type="checkbox" id="pMultiCode" ${p?.multi_code ? "checked" : ""} onchange="pMultiToggle()" />
-          多端商品（同一规格在多个店铺/端各有一个编码，如京东多家店的 skuId）
-        </label>
-        <div class="field-hint">开启后可填「编码 + 店铺」多条：对外成本表 <code>/api/open/sku-costs</code> 按出库单的客户/店铺名把销量算到对应编码上（每个 SKU 拿到自己店铺的结算价与成本）；没填店铺的是通用编码。店铺名建议从下拉选（出库单存的是完整店铺名，填简称也能包含匹配）。编码全局唯一（主编码 + 这里的编码）</div>
-        <div id="pCodesBox" style="margin-top:8px;display:${p?.multi_code ? "" : "none"};">
-          <div id="pCodeRows"></div>
-          <datalist id="shopList"></datalist>
-          <button class="btn secondary sm" type="button" onclick="addCodeRow()">＋ 新增编码</button>
+    <div class="pm-section">
+      <div class="pm-grid-3">
+        <div class="field pm-span-2"><label>商品名称 *</label><input id="pName" value="${esc(curName)}" placeholder="如：佛手柑大果2个" /></div>
+        <div class="field"><label>商品编码 <button type="button" class="help-btn" data-help="主编码：未匹配到特定店铺编码的订单均归属此编码，可留空。">?</button></label><input id="pCode" value="${esc(p?.code || "")}" placeholder="如 ydj001，可留空" /></div>
+        <div class="field"><label>商品类型 *</label>
+          <select id="pType" onchange="pTypeChanged()">
+            <option value="stock" ${ptype === "stock" ? "selected" : ""}>库存商品（大类·真实库存）</option>
+            <option value="order" ${ptype === "order" ? "selected" : ""}>订单商品（小类·出库销售）</option>
+          </select></div>
+        <div class="field"><label>分类</label><input id="pCategory" value="${esc(curCat)}" placeholder="如：蔬菜" /></div>
+        <div class="field"><label>默认单位 <button type="button" class="help-btn" data-help="重量类按克记账（1斤=500克），计数类按个记账；订单商品固定为「单」。售价与成本均按此单位填写。">?</button></label><select id="pUnit" class="searchable"></select></div>
+        <div class="field"><label id="pSalePriceLabel">默认售价（元/${esc(du0)}）</label><input id="pSalePrice" type="number" step="any" value="${saleDisp}" /><div class="field-hint" id="pSalePriceHint"></div></div>
+        <div class="field"><label id="pUnitCostLabel">参考成本（元/${esc(du0)}）</label><input id="pUnitCost" type="number" step="any" value="${costDisp}" /><div class="field-hint" id="pUnitCostHint"></div></div>
+        <div class="field" id="pWeightBox"><label>单件净重（kg）<button type="button" class="help-btn" data-help="用于计快递费：重量类自动推导，计数类兜底用此净重；代发商品填净重也按净重算快递（不填=代发包邮）。">?</button></label><input id="pWeightKg" type="number" step="any" value="${p?.weight_kg || 0}" /></div>
+        <div class="field pm-span-3" id="pUnitChangeBox" style="display:none;">
+          <label id="pUnitChangeLabel">换计量单位的换算关系</label>
+          <input id="pUnitRatio" type="number" step="any" min="0" placeholder="如 300" style="max-width:220px;" />
+          <div class="field-hint" id="pUnitChangeHint"></div>
         </div>
-        <div class="field" style="margin-top:12px;">
-          <label>仓储方</label>
-          <input id="pWarehouseParty" list="warehousePartyList" value="${esc(p?.warehouse_party || "")}" placeholder="如 云南芳谊昆明（干货）仓；多个用、分隔；留空=不限" />
+        <div class="field pm-span-3"><label>规格说明</label><input id="pSpec" value="${esc(p?.spec || "")}" placeholder="如：每个约150克；或每袋5斤（选填）" /></div>
+      </div>
+    </div>
+
+    <div id="pMultiBox" class="pm-section" style="display:${ptype === "order" ? "" : "none"};">
+      <div class="pm-grid-3">
+        <div class="field pm-span-2">
+          <label>仓储方 <button type="button" class="help-btn" data-help="对应聚水潭出库单的「仓储方」列。同名商品在不同仓（如芳谊仓代发 vs 自营仓扣库存）请建两条并填不同仓储方；留空=不限。">?</button></label>
+          <input id="pWarehouseParty" list="warehousePartyList" value="${esc(p?.warehouse_party || "")}" placeholder="留空 = 不限；多个用、分隔" />
           <datalist id="warehousePartyList"></datalist>
-          <div class="field-hint">聚水潭出库单的「仓储方」列。出库单没有 SKU 时，系统只能靠商品名称找商品；
-            <b>同名商品</b>（如 松茸干片50g 既在芳谊仓代发、又在自营仓扣库存）请建两条，并在这里填不同的仓储方，
-            导入时按每行的仓储方精确匹配。留空 = 不限（任何仓储方都能匹配）。</div>
+        </div>
+        <div class="field" style="justify-content:flex-end;padding-bottom:6px;">
+          <label class="check-inline">
+            <input type="checkbox" id="pMultiCode" ${p?.multi_code ? "checked" : ""} onchange="pMultiToggle()" />
+            多端多编码
+            <button type="button" class="help-btn" data-help="同一规格在多家店铺有不同编码（如京东多店 skuId）时开启；对外成本表 /api/open/sku-costs 将按店铺名分别归集销量与成本。">?</button>
+          </label>
         </div>
       </div>
-      <div class="field"><label>分类</label><input id="pCategory" value="${esc(curCat)}" placeholder="如：蔬菜" /></div>
-      <div class="field"><label>商品类型 *</label>
-        <select id="pType" onchange="pTypeChanged()">
-          <option value="stock" ${ptype === "stock" ? "selected" : ""}>库存商品（大类·真实库存）</option>
-          <option value="order" ${ptype === "order" ? "selected" : ""}>订单商品（小类·出库销售）</option>
-        </select></div>
-      <div class="field"><label>默认单位 <button type="button" class="help-btn" data-help="重量类按克记账（1斤=500克），计数类按个记账；订单商品固定为「单」。售价与成本均按此单位填写。">?</button></label><select id="pUnit" class="searchable"></select></div>
-      <div class="field"><label id="pSalePriceLabel">默认售价（元/${esc(du0)}）</label><input id="pSalePrice" type="number" step="any" value="${saleDisp}" /><div class="field-hint" id="pSalePriceHint"></div></div>
-      <div class="field"><label id="pUnitCostLabel">参考成本（元/${esc(du0)}）</label><input id="pUnitCost" type="number" step="any" value="${costDisp}" /><div class="field-hint" id="pUnitCostHint"></div></div>
-      <div class="field" id="pUnitChangeBox" style="display:none;grid-column:1/-1;">
-        <label id="pUnitChangeLabel">换计量单位的换算关系</label>
-        <input id="pUnitRatio" type="number" step="any" min="0" placeholder="如 300" style="max-width:200px;" />
-        <div class="field-hint" id="pUnitChangeHint"></div>
-      </div>
-      <div class="field" id="pWeightBox"><label>单件净重（kg）<button type="button" class="help-btn" data-help="用于计快递费：重量类自动推导，计数类兜底用此净重；代发商品填净重也按净重算快递（不填=代发包邮）。">?</button></label><input id="pWeightKg" type="number" step="any" value="${p?.weight_kg || 0}" /></div>
-    </div>
-    <div id="pStockBox" class="form-grid" style="margin-top:10px;display:${ptype === "order" ? "grid" : "none"};">
-      <div class="field" style="grid-column:1/-1;">
-        <label>关联库存商品 <button type="button" class="help-btn" data-help="每套方案 = 若干「库存商品 × 倍数」，出库时按各方案最近采购入库日期自动选最新一套；不配方案则视为「代发」（不扣本仓库存，按参考成本计代发成本）。">?</button></label>
-        <div id="stockSchemeList"></div>
-        <button class="btn secondary sm" onclick="addStockScheme()">＋ 新增扣减方案</button>
+      <div id="pCodesBox" style="margin-top:8px;display:${p?.multi_code ? "" : "none"};">
+        <div id="pCodeRows"></div>
+        <datalist id="shopList"></datalist>
+        <button class="btn secondary sm" type="button" onclick="addCodeRow()">＋ 新增编码</button>
       </div>
     </div>
-    <div class="field" style="margin-top:10px;"><label>规格说明</label><input id="pSpec" value="${esc(p?.spec || "")}" placeholder="如：每个约150克；或每袋5斤" /></div>
-    <hr />
-    <h3>出库关联结算清单 <button type="button" class="help-btn" data-help="每售出 1 单本商品时，自动扣减这些包材/人工等关联商品库存。">?</button></h3>
-    <div id="packRows">${packRowsHtml(p?.pack_items)}</div>
-    <div class="form-grid compact-grid" style="margin-top:10px;">
-      <div class="field"><label>固定费用（元/单）</label><input id="pPackFee" type="number" step="any" value="${p?.pack_fee || 0}" /></div>
-      <div class="field"><label>快递公司 <button type="button" class="help-btn" data-help="出库默认按此快递计费，选「默认快递」跟随快递费页默认设置；勾选包邮则不计快递费。">?</button></label><select id="pExpressCarrier">${carrierOpts}</select></div>
+
+    <div id="pStockBox" class="pm-section" style="display:${ptype === "order" ? "" : "none"};">
+      <div class="pm-sec-head">
+        <h4>关联库存扣减方案 <button type="button" class="help-btn" data-help="每套方案 = 若干「库存商品 × 倍数」，出库时按各方案最近采购入库日期自动选最新一套；不配方案则视为「代发」（不扣本仓库存，按参考成本计代发成本）。">?</button></h4>
+        <button class="btn secondary sm" type="button" onclick="addStockScheme()">＋ 新增方案</button>
+      </div>
+      <div id="stockSchemeList"></div>
     </div>
-    <div class="toolbar" style="margin-top:10px;margin-bottom:0;">
-      <label class="check-inline"><input type="checkbox" id="pFreeShip" onchange="pFreeShipChanged()" ${p?.free_shipping ? "checked" : ""}/> 包邮（不计快递费）</label>
-      ${p && !draft ? `<label class="check-inline"><input type="checkbox" id="pActive" ${p.is_active ? "checked" : ""}/> 启用该商品</label>` : ""}
+
+    <div class="pm-section">
+      <div class="pm-sec-head">
+        <h4>出库关联结算清单 <button type="button" class="help-btn" data-help="每售出 1 单本商品时，自动扣减这些包材/人工等关联商品库存。">?</button></h4>
+      </div>
+      <div id="packRows">${packRowsHtml(p?.pack_items)}</div>
+      <div class="pm-grid-3" style="margin-top:12px;align-items:end;">
+        <div class="field"><label>固定费用（元/单）</label><input id="pPackFee" type="number" step="any" value="${p?.pack_fee || 0}" /></div>
+        <div class="field"><label>快递公司 <button type="button" class="help-btn" data-help="出库默认按此快递计费，选「默认快递」跟随快递费页默认设置；勾选包邮则不计快递费。">?</button></label><select id="pExpressCarrier">${carrierOpts}</select></div>
+        <div class="toolbar" style="margin-bottom:6px;gap:14px;">
+          <label class="check-inline"><input type="checkbox" id="pFreeShip" onchange="pFreeShipChanged()" ${p?.free_shipping ? "checked" : ""}/> 包邮</label>
+          ${p && !draft ? `<label class="check-inline"><input type="checkbox" id="pActive" ${p.is_active ? "checked" : ""}/> 启用</label>` : ""}
+        </div>
+      </div>
     </div>
+
     <div class="modal-foot">
       ${p && !draft ? `<button class="btn danger" onclick="deleteProduct(${p.id})" style="margin-right:auto;">删除</button>` : ""}
       <button class="btn secondary" onclick="closeModal()">取消</button>
@@ -695,17 +703,15 @@ let PM_UNIT_F = 1;
 let PM_SALE_BASE = 0;
 let PM_COST_BASE = 0;
 function updateProductPriceLabels(du, f, bu) {
-  const conv = f !== 1 ? `（1${du} = ${fmtNum(f)}${bu}）` : "";
+  const conv = f !== 1 ? `（1${du}=${fmtNum(f)}${bu}）` : "";
   if ($("pSalePriceLabel")) $("pSalePriceLabel").textContent = `默认售价（元/${du}）`;
   if ($("pUnitCostLabel")) $("pUnitCostLabel").textContent = `参考成本（元/${du}）`;
-  if ($("pSalePriceHint")) $("pSalePriceHint").textContent = `按默认单位填${conv}；出库时按这个价带出`;
+  if ($("pSalePriceHint")) $("pSalePriceHint").textContent = conv ? `换算：${conv}` : "";
   if ($("pUnitCostHint")) {
-    let t = `按默认单位填${conv}；包材/人工等无入库时按此成本结算（如纸箱 0.9 元/个）`;
-    // 商品列表的「参考成本」格有库存均价时优先显示均价（不是这里填的参考成本），
-    // 不说清楚就会出现「编辑页 16.5、列表 5000」这种对不上的观感
     const avg = PM_EDIT_P ? (Number(PM_EDIT_P.avg_cost) || 0) : 0;
-    if (avg > 0) t += `。<b>注意</b>：该商品已有库存均价 ${fmtMoney(avg * f)}/${esc(du)}（由出入库自动形成），列表「参考成本」格优先显示它、出库成本也按它算，改这里不会立刻改变均价`;
-    $("pUnitCostHint").innerHTML = t;
+    $("pUnitCostHint").innerHTML = avg > 0
+      ? `已有库存均价 <b>${fmtMoney(avg * f)}/${esc(du)}</b>（出库优先按均价计）`
+      : "";
   }
 }
 /* 换「计量单位」若跨了类别（计数「个」↔ 重量「克」），基础单位会跟着换（重量→克、计数→个），
@@ -771,7 +777,7 @@ function deriveUnitPayload(ptype, unit, prev) {
 }
 function pTypeChanged() {
   const t = $("pType").value;
-  $("pStockBox").style.display = t === "order" ? "grid" : "none";
+  $("pStockBox").style.display = t === "order" ? "" : "none";
   // 多端商品（多店铺多编码）只对订单商品有意义（平台 SKU 是卖出商品的编码）
   if ($("pMultiBox")) $("pMultiBox").style.display = t === "order" ? "" : "none";
   initProductUnitSelect(t, $("pUnit").value);
