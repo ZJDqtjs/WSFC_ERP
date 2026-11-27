@@ -687,6 +687,59 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .activity-amt { font-size: 13.5px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .empty-tip { text-align: center; color: var(--muted); padding: 28px; font-size: 13px; }
 
+/* ============ Global Unified Form Controls (all pages, modals, tables) ============ */
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):not([type="color"]):not([type="hidden"]):not([type="button"]):not([type="submit"]),
+select,
+textarea {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-size: 13.5px;
+  line-height: 1.4;
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  font-family: inherit;
+  transition: var(--transition);
+  max-width: 100%;
+}
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):not([type="color"]):not([type="hidden"]):not([type="button"]):not([type="submit"]),
+select:not([multiple]) {
+  height: 34px;
+}
+textarea { min-height: 34px; }
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):hover,
+select:hover,
+textarea:hover { border-color: var(--text-muted); }
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus,
+select:focus,
+textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-light);
+}
+input[readonly], textarea[readonly] {
+  background: var(--bg-soft) !important;
+  color: var(--text-secondary);
+}
+input:disabled, select:disabled, textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: var(--bg-soft);
+}
+td input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+td select:not([multiple]) {
+  height: 30px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+.stock-scheme {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
 /* ============ Forms ============ */
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
 .compact-grid { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 10px; }
@@ -694,23 +747,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field label { font-size: 12.5px; color: var(--text-secondary); font-weight: 500; display: inline-flex; align-items: center; gap: 4px; }
-.field input, .field select, .field textarea {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 7px 11px;
-  font-size: 13.5px;
-  background: var(--card);
-  color: var(--text);
-  outline: none;
-  transition: var(--transition);
-  font-family: inherit;
-}
-.field input:hover, .field select:hover, .field textarea:hover { border-color: var(--text-muted); }
-.field input:focus, .field select:focus, .field textarea:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-light);
-}
-.field input[readonly] { background: var(--bg-soft); color: var(--muted); cursor: default; }
+.field input[readonly] { cursor: default; }
 .field-hint { font-size: 11.5px; color: var(--muted); min-height: 0; }
 .field-hint:empty { display: none; }
 
@@ -974,8 +1011,8 @@ body.notice-on .sidebar { top: 36px; height: calc(100vh - 36px); }
 /* Searchable Combo */
 select.searchable[data-scombo="1"] { display: none !important; }
 .scombo { position: relative; display: inline-block; width: 100%; min-width: 120px; }
-.scombo-input { width: 100%; border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 10px; font-size: 13px; background: var(--card); outline: none; cursor: pointer; color: var(--text); }
-.scombo-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); cursor: text; }
+.scombo-input { width: 100%; cursor: pointer; }
+.scombo-input:focus { cursor: text; }
 .scombo-list { display: none; position: absolute; z-index: 60; top: calc(100% + 4px); left: 0; right: 0; max-height: 260px; overflow-y: auto; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-md); padding: 4px; }
 .scombo-item { padding: 7px 10px; font-size: 13px; border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .scombo-item:hover { background: var(--primary-light); color: var(--primary); }
