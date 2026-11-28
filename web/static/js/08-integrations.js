@@ -819,8 +819,21 @@ async function evaPushOtherRun(tid, dryRun) {
       if (dryRun) evaPushApplyMaps(maps);            // 重新试算后把刚才选好的关联填回去
       try { bindSearchable(out); } catch (e) {}   // 补关联的下拉框也要能用搜索
     }
+    // 推送后仍有单没建成：自动试算一次，把「补选关联」的选择框直接给出来（不用自己去点试算）
+    if (!dryRun && (r.unmapped || []).length) {
+      if (out) out.innerHTML = evaPushResultHtml(r) + `<div class="muted" style="margin-top:8px;">还有 ${r.unmapped.length} 种商品在目标仓没有关联，相关单没建成（待办已保留）。正在准备补选选项…</div>`;
+      try {
+        const r2 = await api(`/api/jst-auto/pending/${encodeURIComponent(tid)}/push-warehouse`, "POST",
+          { target_key: target, dry_run: true, mappings: maps });
+        if (out) {
+          out.innerHTML = evaPushResultHtml(r) + evaPushMapHtml(r2);
+          evaPushApplyMaps(maps);
+          try { bindSearchable(out); } catch (e) {}
+        }
+      } catch (e) { /* 自动试算失败不影响推送结果，用户可手动点「试算」 */ }
+    }
     toast(r.message || "已处理");
-    // 推送成功会自动把这条待办标记为已处理，顺手刷新待办数与按钮
+    // 推送后待办可能被保留（部分单没建成），刷新一下让状态同步
     if (!dryRun) setTimeout(() => { renderJstPending(); checkJstPending(false); }, 800);
   } catch (e) {
     if (out) out.innerHTML = `<div class="alert err">${esc(e.message)}</div>`;

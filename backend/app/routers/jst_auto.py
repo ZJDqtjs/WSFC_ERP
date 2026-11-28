@@ -404,11 +404,22 @@ def pending_push_warehouse(task_id: str, data: PushWhIn, user: User = Depends(ge
         only_affected=bool(data.only_affected),
         skip_imported=bool(wh.get("skip_imported", True)),
     )
-    if not data.dry_run and res.get("created"):
+    if not data.dry_run:
+        left = [str(x) for x in (res.get("unmapped") or [])]
+        fails = res.get("failed") or []
         note = f"已推送「{res.get('target_name')}」出库，新建 {res.get('created')} 张"
         if res.get("mappings_saved"):
             note += f"；为目标仓补了 {res['mappings_saved']} 条商品关联"
-        st.close_pending(key, task_id, status="pushed", note=note)
+        if left:
+            note += f"；目标仓仍缺关联 {len(left)} 种：{'、'.join(left[:5])}"
+        if fails:
+            note += f"；建单失败 {len(fails)} 条"
+        if left or fails:
+            # 还有单没建成：待办保持打开，避免整条待办被关掉后“单就消失了”
+            st.patch_pending_item(key, task_id, {
+                "note": note + "（待办已保留：可在弹窗里试算并补选关联后重推）"})
+        else:
+            st.close_pending(key, task_id, status="pushed", note=note)
     return res
 
 
