@@ -1386,7 +1386,7 @@ async function openCopyToWarehouseModal() {
   if (!whs.length) { toast("没有其他分仓可复制"); return; }
   openModal(`
     <h3>复制商品到其他仓（${prodSel.size} 个） <button class="close" onclick="closeModal()">✕</button></h3>
-    <p class="hint" style="margin-bottom:12px;">把选中商品的资料复制到目标仓；目标仓已有同名商品会直接复用，不会覆盖。库存数量、均价与出入库历史不复制（但参考成本会带过去，没手填时取源仓库存均价，保证目标仓出库能算出成本）。</p>
+    <p class="hint" style="margin-bottom:12px;">把选中商品的资料复制到目标仓；目标仓已有同名商品会直接复用，不会覆盖。默认不搬库存（各仓自己的账），需要「整个挪过去」时把下面的「库存处理」改成连同库存一起转。</p>
     <div class="form-grid">
       <div class="field"><label>目标分仓</label>
         <select id="cpTargetWh">${whs.map((w) => `<option value="${esc(w.key)}">${esc(w.name)}（${esc(w.key)}）</option>`).join("")}</select>
@@ -1395,33 +1395,65 @@ async function openCopyToWarehouseModal() {
         <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="cpDeps" checked/> 同时复制关联商品（包材 / 人工 / 库存大类）</label>
         <div class="field-hint">不勾选时，目标仓缺少的关联商品会被丢弃，订单商品的关联结算 / 扣减库存可能不完整。</div>
       </div>
+      <div class="field"><label>库存处理</label>
+        <select id="cpStockMode" onchange="onCopyStockModeChange()">
+          <option value="copy">只复制资料（库存留在原仓）</option>
+          <option value="transfer">连同当前库存一起转过去</option>
+        </select>
+        <div class="field-hint">转移时按原仓的库存结存成本转到目标仓、原仓清零，两仓合计的数量与货值不变；负库存不转移，只在原仓盘盈归零。</div>
+      </div>
       <div class="field"><label>复制后</label>
         <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="cpDisable"/> 在当前仓停用选中的商品</label>
         <div class="field-hint">适合把某个商品的经营从当前仓迁到目标仓。</div>
       </div>
+      <div id="cpStockPreview"></div>
     </div>
     <div class="modal-foot">
       <button class="btn secondary" onclick="closeModal()">取消</button>
-      <button class="btn" onclick="submitCopyToWarehouse()">开始复制</button>
+      <button class="btn" id="cpSubmitBtn" onclick="submitCopyToWarehouse()">开始复制</button>
     </div>`);
+}
+/* 库存处理切到「连同库存一起转」时：预览将转移的库存，并把「停用」默认勾上（搬空后不该再被出库扣一次） */
+function onCopyStockModeChange() {
+  const transfer = $("cpStockMode").value === "transfer";
+  const wrap = $("cpStockPreview");
+  if (wrap) wrap.innerHTML = transfer
+    ? transferPreviewHtml(PRODUCTS.filter((p) => prodSel.has(p.id)))
+    : "";
+  const dis = $("cpDisable");
+  if (dis && transfer) dis.checked = true;
+  const btn = $("cpSubmitBtn");
+  if (btn) btn.textContent = transfer ? "开始转移" : "开始复制";
 }
 async function submitCopyToWarehouse() {
   const target = $("cpTargetWh").value;
   if (!target) { toast("请选择目标分仓"); return; }
+  const transfer = $("cpStockMode").value === "transfer";
   const payload = {
     target_wh: target,
     ids: [...prodSel],
     include_dependencies: $("cpDeps").checked,
     disable_source: $("cpDisable").checked,
   };
+  if (transfer) {
+    payload.transfer_stock = true;
+    if (!(await uiConfirm("确认把选中的商品连同库存转移到目标仓？原仓库存会清零，转移后不会自动回退。"))) return;
+  }
+  let r = null;
   try {
-    const r = await api("/api/products/copy-to-warehouse", "POST", payload);
-    closeModal();
-    prodSel.clear();
-    PRODUCTS = await api("/api/products");
+    r = await api(transfer ? "/api/products/transfer-to-warehouse" : "/api/products/copy-to-warehouse", "POST", payload);
+  } catch (e) { toast((transfer ? "转移失败：" : "复制失败：") + e.message); return; }
+  closeModal();
+  prodSel.clear();
+  if (transfer) {
+    try { await loadStock(); } catch (e) { /* 刷新失败不影响结果展示 */ }
     renderProducts();
-    showCopyResult(r);
-  } catch (e) { toast("复制失败：" + e.message); }
+    showTransferResult(r);
+    return;
+  }
+  PRODUCTS = await api("/api/products");
+  renderProducts();
+  showCopyResult(r);
 }
 function showCopyResult(r) {
   const created = r.created || [];
@@ -1447,7 +1479,7 @@ function showCopyResult(r) {
     <div class="modal-foot"><button class="btn" onclick="closeModal()">知道了</button></div>`);
 }
 
-/* ---------- 转移商品与库存到其他分仓 ---------- */
+/* ---------- 「复制到其他仓」弹窗里的库存处理：转移预览与结果 ---------- */
 /* 选中的商品里「真正要搬库存」的那些：库存商品取它自己，订单商品取它扣减的库存大类
    （订单商品自己不存库存，账记在大类上）。关联结算清单里的包材 / 人工只复制资料，
    库存留在原仓——各仓共用的耗材不该被一起搬空。 */
@@ -1475,59 +1507,6 @@ function transferPreviewHtml(picks) {
     <ul style="margin:4px 0 0 18px;line-height:1.8;max-height:160px;overflow:auto;">${rows}${negRows}</ul>
     <div class="field-hint">按原仓的库存结存成本一起转过去，两仓合计的数量与货值不变。</div></div>`;
 }
-async function openTransferToWarehouseModal() {
-  if (!prodSel.size) { toast("请先勾选要转移的商品"); return; }
-  let whs = [];
-  try {
-    const r = await api("/api/warehouses");
-    whs = (r.warehouses || []).filter((w) => !w.is_current);
-  } catch (e) { toast("读取分仓列表失败：" + e.message); return; }
-  if (!whs.length) { toast("没有其他分仓可转移"); return; }
-  const picks = PRODUCTS.filter((p) => prodSel.has(p.id));
-  openModal(`
-    <h3>转移商品与库存到其他仓（${prodSel.size} 个） <button class="close" onclick="closeModal()">✕</button></h3>
-    <p class="hint" style="margin-bottom:12px;">把选中商品的资料复制到目标仓，同时把当前仓的库存按结存成本一起转过去：原仓库存清零，目标仓按同成本入账。适合「这个商品以后不在本仓做了，整个挪过去」。</p>
-    <div class="form-grid">
-      <div class="field"><label>目标分仓</label>
-        <select id="tfTargetWh">${whs.map((w) => `<option value="${esc(w.key)}">${esc(w.name)}（${esc(w.key)}）</option>`).join("")}</select>
-      </div>
-      <div class="field"><label>复制范围</label>
-        <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="tfDeps" checked/> 同时复制关联商品（包材 / 人工 / 库存大类）</label>
-        <div class="field-hint">不勾选时，目标仓缺少的关联商品会被丢弃，订单商品的关联结算 / 扣减库存可能不完整。</div>
-      </div>
-      <div class="field"><label>转移后</label>
-        <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="tfStock" checked/> 把当前库存一起转过去</label>
-        <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="tfDisable" checked/> 在当前仓停用这些商品（含库存被搬走的库存大类）</label>
-        <div class="field-hint">库存搬空后原仓商品停用，避免再被出库扣一次；目标仓继续正常经营。</div>
-      </div>
-      ${transferPreviewHtml(picks)}
-    </div>
-    <div class="modal-foot">
-      <button class="btn secondary" onclick="closeModal()">取消</button>
-      <button class="btn" onclick="submitTransferToWarehouse()">开始转移</button>
-    </div>`);
-}
-async function submitTransferToWarehouse() {
-  const target = $("tfTargetWh").value;
-  if (!target) { toast("请选择目标分仓"); return; }
-  if (!(await uiConfirm("确认把选中的商品连同库存转移到目标仓？原仓库存会清零，转移后不会自动回退。"))) return;
-  const payload = {
-    target_wh: target,
-    ids: [...prodSel],
-    include_dependencies: $("tfDeps").checked,
-    transfer_stock: $("tfStock").checked,
-    disable_source: $("tfDisable").checked,
-  };
-  let r = null;
-  try {
-    r = await api("/api/products/transfer-to-warehouse", "POST", payload);
-  } catch (e) { toast("转移失败：" + e.message); return; }
-  closeModal();
-  prodSel.clear();
-  try { await loadStock(); } catch (e) { /* 刷新失败不影响结果展示 */ }
-  renderProducts();
-  showTransferResult(r);
-}
 function showTransferResult(r) {
   const moved = r.stock_moved || [];
   const zeroed = r.stock_zeroed || [];
@@ -1552,7 +1531,7 @@ function showTransferResult(r) {
     ${lines.length ? `<ul style="margin:10px 0 6px 20px;line-height:1.9;">${lines.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
     ${movedRows ? `<div class="table-wrap"><table>
         <thead><tr><th>商品</th><th class="num">转移库存</th><th class="num">结转价值</th></tr></thead>
-        <tbody>${movedRows}</tbody></table></div>` : '<div class="alert warn" style="margin-bottom:10px;">这次没有转移库存（未勾选「把当前库存一起转过去」，或原仓库存为 0）</div>'}
+        <tbody>${movedRows}</tbody></table></div>` : '<div class="alert warn" style="margin-bottom:10px;">这次没有转移库存：原仓库存为 0（订单商品看它扣减的库存大类）</div>'}
     ${zeroRows ? `<div class="alert warn" style="margin:10px 0;">负库存未转移（只在原仓归零）：<ul style="margin:6px 0 0 18px;line-height:1.8;">${zeroRows}</ul></div>` : ""}
     ${skipped.length ? `<div class="alert warn" style="margin-bottom:10px;">${skipped.length} 个关联商品未复制：${esc(skipped.slice(0, 6).map((x) => x.name).join("、"))}${skipped.length > 6 ? "…" : ""}</div>` : ""}
     ${warnings.length ? `<div class="alert warn" style="margin-bottom:10px;">${warnings.slice(0, 6).map((x) => esc(x)).join("<br>")}${warnings.length > 6 ? "<br>…" : ""}</div>` : ""}
