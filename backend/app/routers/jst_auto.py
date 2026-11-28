@@ -93,6 +93,12 @@ class RematchIn(BaseModel):
     only_codes: list[str] = []   # 只对这几条重新匹配（默认全部）
 
 
+class PushWhIn(BaseModel):
+    target_key: str              # 推到哪个 ERP 分仓出库（如 wh01）
+    dry_run: bool = False        # True = 只试算给预览，不写库
+    only_affected: bool = True   # 只推涉及待办未关联商品的单（默认）；False = 整个文件都推
+
+
 def _validate_wh(data: WhSettingsIn) -> None:
     """保存前校验：定时时间与区间规则写错要立刻报错，而不是等定时到点才失败。"""
     if data.schedule:
@@ -355,6 +361,50 @@ def pending_rematch(task_id: str, data: RematchIn, user: User = Depends(get_curr
     ).start()
     return {"ok": True, "started": True, "dry_run": False, "matched": matched, "left": left,
             "message": f"{msg}；已开始重新导入出库"}
+
+
+@router.post("/pending/{task_id}/push-warehouse")
+def pending_push_warehouse(task_id: str, data: PushWhIn, user: User = Depends(get_current_user)):
+    """把「商品资料待补全」待办涉及的单推到另一个分仓出库。
+
+    这些商品在本仓没有商品资料 / 关联结算，但同样的商品在别的分仓（如 wh01）早就维护好了
+    （货其实是从那个仓发走的）。推送时复用待办里已经下载好的聚水潭原始文件，
+    用**目标分仓自己的**商品 / 编码关联 / 打包规则重新解析建单，本仓数据不动。
+    dry_run=True 只试算给预览，不写库。
+    """
+    key = get_current_key()
+    task = next((t for t in st.pending_open(key) if t.get("id") == task_id), None)
+    if not task:
+        raise HTTPException(404, "待办不存在或已被处理")
+    if task.get("type") != "unmapped":
+        raise HTTPException(400, "只有「商品资料待补全」的待办能推送到其他分仓")
+    target = (data.target_key or "").strip()
+    if not target:
+        raise HTTPException(400, "请选择要推送到的分仓")
+    if target == key:
+        raise HTTPException(400, "目标分仓就是当前分仓，请选择其它分仓")
+    if target not in {w.get("key") for w in get_warehouses()}:
+        raise HTTPException(404, f"分仓不存在：{target}")
+    if not data.dry_run:
+        state = runner.status()
+        if state.get("running"):
+            raise HTTPException(409, f"已有一轮在执行中（{state.get('warehouse')} · {state.get('step')}），等它结束后再推")
+
+    wh = st.wh_of(st.load(), target)
+    res = runner.push_to_warehouse(
+        key, target,
+        files=[str(p) for p in (task.get("file_paths") or []) if p],
+        codes=[str(it.get("external_code")) for it in (task.get("items") or []) if it.get("external_code")],
+        operator=wh.get("operator") or "",
+        user_name=user.name,
+        dry_run=bool(data.dry_run),
+        only_affected=bool(data.only_affected),
+        skip_imported=bool(wh.get("skip_imported", True)),
+    )
+    if not data.dry_run and res.get("created"):
+        st.close_pending(key, task_id, status="pushed",
+                         note=f"已推送「{res.get('target_name')}」出库，新建 {res.get('created')} 张")
+    return res
 
 
 @router.post("/pending/{task_id}/dismiss")

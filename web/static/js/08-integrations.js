@@ -612,6 +612,8 @@ function evaUnmappedCard(t) {
       <button class="btn green" onclick="evaResolve('${t.id}')">✔ 完成并重新导入</button>
       <button class="btn" title="商品资料维护好之后点它：只自动关联名称/编码 100% 完全一致的商品，不做相似度猜测"
         onclick="evaRematch('${t.id}')">⚡ 重新完全匹配（100% 同名，自动出库）</button>
+      <button class="btn" title="这些商品在本仓没有关联结算、但别的分仓（如 wh01）里有：把本待办涉及的单推到那个分仓建出库单"
+        onclick="evaPushOther('${t.id}')">📦 推其他仓出库</button>
       <button class="btn secondary" onclick="location.hash='#/settings?tab=jushuitan';">去「聚水潭关联」维护</button>
       <button class="btn sm ghost" onclick="evaDismiss('${t.id}')">忽略</button>
       <span class="muted">区间 ${esc(t.window || "")} · 文件 ${esc((t.files || []).join("、"))} · ${esc(t.created_at || "")}</span>
@@ -759,6 +761,98 @@ async function evaDismiss(tid) {
     toast("已忽略");
     renderJstPending(); checkJstPending(false);
   } catch (e) { toast("操作失败：" + e.message); }
+}
+
+/* =============== 推其他仓出库 ===============
+   这些单的商品在本仓没有商品资料 / 关联结算，但同样的商品在别的分仓（如 wh01）早就维护好了
+   （货其实是从那个仓发走的）。这里直接拿待办里已下载的聚水潭原始文件，用**目标分仓自己的**
+   商品 / 编码关联 / 打包规则重新解析建单，本仓数据不动。 */
+async function evaPushOther(tid) {
+  const t = (EVA_TASKS || []).find((x) => x.id === tid);
+  if (!t) { toast("待办已变化，请刷新后重试"); return; }
+  let list = [];
+  try {
+    const r = await api("/api/warehouses");
+    list = (r.warehouses || []).filter((w) => !w.is_current);
+  } catch (e) { toast("读取分仓列表失败：" + e.message); return; }
+  if (!list.length) { toast("只有当前分仓，没有其它分仓可推"); return; }
+  const items = t.items || [];
+  const names = items.slice(0, 3).map((it) => it.external_code).join("、");
+  const opts = list.map((w) => `<option value="${esc(w.key)}">${esc(w.name)}（${esc(w.key)}）</option>`).join("");
+  $("modalBox").classList.remove("wide");
+  openModal(`<h3>📦 推其他仓出库 <button class="close" onclick="closeModal()">✕</button></h3>
+    <div class="hint" style="margin-bottom:10px;">
+      把这条待办涉及的单推到别的分仓建出库单：用那个仓<b>自己的</b>商品资料与关联结算重新解析，
+      本仓的数据不动。<br>
+      · 只推「含有这些未关联商品」的单：${esc(names)}${items.length > 3 ? ` 等 ${items.length} 种` : ""}<br>
+      · 目标仓已经建过的单按出库单号自动跳过，重复点不会建两份。
+    </div>
+    <div class="form-grid">
+      <div class="field"><label>推到哪个分仓出库</label>
+        <select id="pushWhSel" class="searchable">${opts}</select>
+        <div class="field-hint">建议先「试算」看一眼能建几张、目标仓还缺哪些关联，再「确认推送」。</div>
+      </div>
+    </div>
+    <div id="pushWhOut" style="margin:12px 0;"></div>
+    <div class="modal-foot">
+      <button class="btn secondary" id="pushWhTrial" onclick="evaPushOtherRun('${t.id}', true)">试算（不写库）</button>
+      <button class="btn green" id="pushWhGo" onclick="evaPushOtherRun('${t.id}', false)">确认推送</button>
+      <button class="btn" onclick="closeModal(); openJstPending();">返回待办</button>
+    </div>`);
+}
+
+async function evaPushOtherRun(tid, dryRun) {
+  const sel = $("pushWhSel");
+  const target = sel ? sel.value : "";
+  if (!target) { toast("请选择要推送到的分仓"); return; }
+  const out = $("pushWhOut");
+  const btns = [$("pushWhTrial"), $("pushWhGo")].filter(Boolean);
+  btns.forEach((b) => { b.disabled = true; });
+  if (out) out.innerHTML = `<div class="muted">${dryRun ? "正在试算" : "正在推送"}…（单多时可能要几十秒，别关窗口）</div>`;
+  try {
+    const r = await api(`/api/jst-auto/pending/${encodeURIComponent(tid)}/push-warehouse`, "POST",
+      { target_key: target, dry_run: !!dryRun });
+    if (out) out.innerHTML = evaPushResultHtml(r);
+    toast(r.message || "已处理");
+    // 推送成功会自动把这条待办标记为已处理，顺手刷新待办数与按钮
+    if (!dryRun) setTimeout(() => { renderJstPending(); checkJstPending(false); }, 800);
+  } catch (e) {
+    if (out) out.innerHTML = `<div class="alert err">${esc(e.message)}</div>`;
+  } finally {
+    btns.forEach((b) => { b.disabled = false; });
+  }
+}
+
+/* 推送结果 / 试算结果的展示 */
+function evaPushResultHtml(r) {
+  if (!r) return "";
+  const willCreate = Math.max(0, (r.requested || 0) - (r.duplicate_skipped || 0));
+  const line = (k, v, colorVar) => `<div style="display:flex;gap:8px;padding:3px 0;">
+      <span class="muted" style="min-width:130px;">${k}</span>
+      <span${colorVar ? ` style="color:var(--${colorVar})"` : ""}>${v}</span></div>`;
+  const un = (r.unmapped || []).slice(0, 5).map((x) => esc(x)).join("、");
+  const fails = (r.failed || []).slice(0, 3)
+    .map((f) => `${esc(f.doc || "")}${f.reason ? "：" + esc(f.reason) : ""}`).join("；");
+  return `<div class="card" style="border:1px solid ${r.dry_run ? "var(--line,#e5e7eb)" : "var(--green,#16a34a)"};">
+    <div class="card-head"><h3>${r.dry_run ? "试算结果（未写库）" : "推送结果"}</h3>
+      <span class="hint">${esc(r.message || "")}</span></div>
+    ${line("目标分仓", `<b>${esc(r.target_name || r.target || "")}</b>`)}
+    ${line("文件里的单", `${r.orders_in_file || 0} 张（涉及未关联商品 ${r.affected || 0} 张）`)}
+    ${line(r.dry_run ? "预计新建" : "已新建", `<b>${r.dry_run ? willCreate : (r.created || 0)} 张</b>`,
+      (r.dry_run ? willCreate : (r.created || 0)) ? "green" : "")}
+    ${line("目标仓已建过跳过", `${r.duplicate_skipped || 0} 张`)}
+    ${(r.unmapped || []).length
+      ? line("目标仓仍缺关联", `<b>${r.unmapped.length} 种</b>：${un}${r.unmapped.length > 5 ? " 等" : ""}（这些单没建成）`, "red")
+      : ""}
+    ${(r.failed || []).length ? line("解析失败", `${r.failed.length} 条：${fails}`, "red") : ""}
+    ${(r.already_in_source || []).length
+      ? line("本仓已建过的单", `${r.already_in_source.length} 张（多是只结算了已关联商品的部分单，建议核对后再决定是否红冲）`, "red")
+      : ""}
+    ${(r.skipped_files || []).length ? line("跳过的文件", esc(r.skipped_files.join("；"))) : ""}
+    <div class="muted" style="margin-top:6px;font-size:12px;">${r.dry_run
+      ? "试算不写库；确认无误后点下面「确认推送」。"
+      : `已用「${esc(r.target_name || r.target || "")}」的商品资料建单，可去那个分仓的「出库」页核对。`}</div>
+  </div>`;
 }
 
 /* 登录后/打开设置页时检查待办：有就弹窗提醒（站内，不依赖短信或邮箱） */

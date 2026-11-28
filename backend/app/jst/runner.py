@@ -256,8 +256,13 @@ def imported_doc_nos(db, dates: set[str]) -> set[str]:
     return found
 
 
-def import_file(key: str, path: Path, operator: str = "", skip_imported: bool = True) -> dict[str, Any]:
-    """把一个聚水潭导出的 xlsx 导入指定分仓（复用现有导入链路）。"""
+def import_file(key: str, path: Path, operator: str = "", skip_imported: bool = True,
+                only_docs: set[str] | None = None, dry_run: bool = False) -> dict[str, Any]:
+    """把一个聚水潭导出的 xlsx 导入指定分仓（复用现有导入链路）。
+
+    only_docs：只建这些聚水潭出库单号（推送其他仓时用：同一个文件里只推待办涉及的那几张单）；
+    dry_run：只解析不建单（试算，不写库）。
+    """
     from ..routers.imports import _confirm_orders, parse_jushuitan_draft
 
     maker = get_sessionmaker(key)
@@ -265,8 +270,12 @@ def import_file(key: str, path: Path, operator: str = "", skip_imported: bool = 
     try:
         user = _operator_user(db, operator)
         drafts, failed, skip, unmapped_codes, unmapped_list, unmatched_multi = parse_jushuitan_draft(
-            _UploadShim(path), db, user
+            _UploadShim(path), db, user, only_docs=only_docs
         )
+        in_file = len(drafts)
+        if only_docs is not None:
+            drafts = [o for o in drafts if o.doc_no in only_docs]
+        requested = len(drafts)
         dup: list[str] = []
         if skip_imported and drafts:
             done = imported_doc_nos(db, {o.date for o in drafts if o.date})
@@ -274,12 +283,19 @@ def import_file(key: str, path: Path, operator: str = "", skip_imported: bool = 
             for o in drafts:
                 (dup if (o.doc_no and o.doc_no in done) else keep).append(o)
             drafts = keep
-        res = _confirm_orders(db, user, drafts) if drafts else {"created": 0, "failed": [], "warnings": []}
+        if dry_run:
+            db.rollback()   # 试算：解析阶段可能改过会话状态，一律不落库
+            res: dict[str, Any] = {"created": 0, "failed": [], "warnings": []}
+        else:
+            res = _confirm_orders(db, user, drafts) if drafts else {"created": 0, "failed": [], "warnings": []}
         return {
             "orders": len(drafts) + len(dup),
+            "orders_in_file": in_file,
+            "requested": requested,       # 待建（已按 only_docs 过滤，未去重）
             "drafted": len(drafts),
             "created": res.get("created", 0),
             "duplicate_skipped": len(dup),
+            "duplicate_docs": [o.doc_no for o in dup if o.doc_no],
             "status_skipped": skip if isinstance(skip, dict) else {},
             "failed": (failed or []) + (res.get("failed") or []),
             "warnings": res.get("warnings") or [],
@@ -722,6 +738,171 @@ def resolve_pending(key: str, task_id: str, *, mappings: list[dict[str, Any]] | 
         st.upsert_pending(key, upd)
     log.info("待办 %s 处理结果：%s", task_id, res.get("message"))
     return {**res, "mappings_saved": saved, "pending_left": len(left), "task_id": task_id}
+
+
+# ---------------------------------------------------------------- 推其他仓出库
+def push_to_warehouse(
+    src_key: str,
+    target_key: str,
+    *,
+    files: list[str] | None = None,
+    codes: list[str] | None = None,
+    operator: str = "",
+    user_name: str = "",
+    dry_run: bool = False,
+    only_affected: bool = True,
+    skip_imported: bool = True,
+) -> dict[str, Any]:
+    """把「商品资料待补全」待办里的单推到另一个分仓建出库单。
+
+    场景：这些单的商品在本仓没有商品资料 / 关联结算，但同样的商品在别的分仓（如 wh01）
+    早就维护好了 —— 货实际上是从那个仓发走的。这里直接拿聚水潭原始导出文件，用
+    **目标分仓自己的**商品 / 编码关联 / 打包规则重新解析并建单，本仓数据一概不动。
+
+    - only_affected=True（默认）：只推「含有待办里那些未关联商品」的单；同一文件里
+      其它已经在本仓正常出库的单不会重复推到目标仓；
+    - 目标仓已建过的单按出库单号跳过（幂等，重复点不会建两份）；
+    - dry_run=True：只解析给预览（能建几张 / 目标仓还缺哪些关联），不写任何库。
+    """
+    from ..routers.imports import jushuitan_rows, parse_jushuitan_name, read_rows
+
+    paths = [Path(p) for p in (files or []) if p]
+    exists = [p for p in paths if p.exists()]
+    res: dict[str, Any] = {
+        "ok": False,
+        "dry_run": bool(dry_run),
+        "target": target_key,
+        "target_name": _wh_name(target_key),
+        "source_name": _wh_name(src_key),
+        "files": [p.name for p in exists],
+        "orders_in_file": 0,      # 文件里的单总数
+        "affected": 0,            # 含未关联商品的单数（只推这些）
+        "requested": 0,           # 目标仓解析出来、准备新建的单数（未去重）
+        "created": 0,
+        "duplicate_skipped": 0,
+        "failed": [],
+        "warnings": [],
+        "unmapped": [],
+        "unmapped_detail": [],
+        "already_in_source": [],  # 这些单在本仓已经建过（可能只建了已关联的几行）
+        "skipped_files": [],
+        "message": "",
+    }
+    if not exists:
+        res["message"] = "待办里的导出文件不在了（可能已被清理），请先在自动出库设置里重新导出一次"
+        return res
+    if target_key == src_key:
+        res["message"] = "目标分仓不能是当前分仓"
+        return res
+    if target_key not in {w.get("key") for w in get_warehouses()}:
+        res["message"] = f"分仓不存在：{target_key}"
+        return res
+    if not _JOB_LOCK.acquire(blocking=False):
+        res["message"] = "已有一轮自动出库在跑，请稍后再推"
+        return res
+
+    try:
+        _set_state(running=True, warehouse=target_key, trigger=f"推送其他仓·{user_name or '手动'}",
+                   step=f"正在推送到「{_wh_name(target_key)}」…",
+                   started_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        want = {str(c).strip() for c in (codes or []) if str(c).strip()}
+        dup_docs: set[str] = set()
+        failed: list[dict[str, Any]] = []
+        warns: list[str] = []
+        detail: dict[str, dict[str, Any]] = {}
+        already_src: set[str] = set()
+        for f in exists:
+            _set_state(step=f"正在解析 {f.name} …")
+            try:
+                jrows, _skipped = jushuitan_rows(read_rows(_UploadShim(f)))
+            except Exception as e:  # noqa: BLE001 - 单个文件读不了不影响其它文件
+                res["skipped_files"].append(f"{f.name}（{e}）")
+                continue
+            docs = {str(r.get("doc_no")) for r in jrows if r.get("doc_no")}
+            res["orders_in_file"] += len(docs)
+            if only_affected:
+                affected = {
+                    str(r["doc_no"]) for r in jrows
+                    if r.get("doc_no") and want and ({n for n, _q in parse_jushuitan_name(r.get("name"))} & want)
+                }
+            else:
+                affected = set(docs)
+            if not affected:
+                res["skipped_files"].append(f"{f.name}（文件里没有涉及待办的未关联商品）")
+                continue
+            res["affected"] += len(affected)
+            # 这些单在本仓是不是已经建过（部分单只建了「已关联」的那几行）—— 只提示，不影响推送
+            src_db = get_sessionmaker(src_key)()
+            try:
+                dates = {str(r.get("date")) for r in jrows
+                         if str(r.get("doc_no")) in affected and r.get("date")}
+                already_src |= (imported_doc_nos(src_db, dates) & affected)
+            except Exception as e:  # noqa: BLE001 - 只是提示信息，取不到就算了
+                log.info("推送前查本仓已建单失败：%s", e)
+            finally:
+                src_db.close()
+
+            _set_state(step=f"正在用「{_wh_name(target_key)}」的商品资料导入 {f.name} …")
+            try:
+                stt = import_file(target_key, f, operator=operator, skip_imported=skip_imported,
+                                  only_docs=affected, dry_run=dry_run)
+            except Exception as e:  # noqa: BLE001 - 单个文件失败不影响其它文件
+                failed.append({"doc": f.name, "reason": f"{type(e).__name__}: {e}"})
+                continue
+            res["requested"] += int(stt.get("requested") or 0)
+            res["created"] += int(stt.get("created") or 0)
+            dup_docs |= set(stt.get("duplicate_docs") or [])
+            failed += stt.get("failed") or []
+            warns += stt.get("warnings") or []
+            for it in stt.get("unmapped_detail") or []:
+                code = str(it.get("external_code") or "")
+                if code and code not in detail:
+                    detail[code] = it
+
+        res["duplicate_skipped"] = len(dup_docs)
+        res["failed"] = failed
+        res["warnings"] = warns
+        res["unmapped_detail"] = sorted(detail.values(), key=lambda x: -int(x.get("count") or 0))
+        res["unmapped"] = [str(it.get("external_code")) for it in res["unmapped_detail"]]
+        res["already_in_source"] = sorted(already_src)
+
+        if dry_run:
+            res["ok"] = True
+            if not res["affected"]:
+                res["message"] = "文件里没找到涉及这些未关联商品的单，没有需要推送的"
+            else:
+                parts = [
+                    f"「{res['target_name']}」预计可新建 {max(0, res['requested'] - len(dup_docs))} 张",
+                    f"已建过跳过 {len(dup_docs)} 张" if dup_docs else "",
+                    f"目标仓仍缺关联 {len(res['unmapped'])} 种" if res["unmapped"] else "",
+                    f"解析失败 {len(failed)} 条" if failed else "",
+                ]
+                res["message"] = "；".join([p for p in parts if p]) or "没有需要推送的单"
+        else:
+            res["ok"] = bool(res["created"]) or not res["requested"]
+            res["message"] = (
+                "文件里没找到涉及这些未关联商品的单，没有需要推送的" if not res["affected"] else
+                f"已推到「{res['target_name']}」新建出库单 {res['created']} 张"
+                + (f"，跳过已建 {len(dup_docs)} 张" if dup_docs else "")
+                + (f"，目标仓仍缺关联 {len(res['unmapped'])} 种（相关单没建成）" if res["unmapped"] else "")
+                + (f"，失败 {len(failed)} 条" if failed else "")
+            )
+            if res["created"]:
+                st.record_run(target_key, {
+                    "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "trigger": f"从「{_wh_name(src_key)}」推送·{user_name or '手动'}",
+                    "ok": True,
+                    "warehouse": target_key,
+                    "warehouse_name": _wh_name(target_key),
+                    "message": res["message"],
+                    "stats": {"created": res["created"], "duplicate_skipped": len(dup_docs),
+                              "failed": failed[:20], "unmapped": res["unmapped"]},
+                }, update_last=False)
+        log.info("推送到「%s」：%s", target_key, res["message"])
+        return res
+    finally:
+        _set_state(running=False, step="", warehouse="", trigger="")
+        _JOB_LOCK.release()
 
 
 # ---------------------------------------------------------------- 定时调度
