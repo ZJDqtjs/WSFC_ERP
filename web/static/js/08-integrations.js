@@ -585,7 +585,7 @@ function evaUnmappedCard(t) {
   const opts = evaProductOptions();
   const rows = (t.items || []).map((it) => {
     const sug = (it.suggest || []).slice(0, 3).map((s) =>
-      `<button class="btn sm ghost" style="margin:2px 4px 0 0;" onclick="evaSuggest(this, ${s.product_id})">${esc(s.name)}${s.score ? `（${Math.round(s.score * 100)}%）` : ""}</button>`).join("");
+      `<button class="btn sm ghost" style="margin:2px 4px 0 0;" onclick="evaSuggest(this, ${s.id ?? s.product_id})">${esc(s.name)}${s.score ? `（${Math.round(s.score * 100)}%）` : ""}</button>`).join("");
     return `<tr>
       <td><b>${esc(it.external_code)}</b>
         ${it.spec ? `<div class="muted" style="font-size:11px;">规格 ${esc(it.spec)}</div>` : ""}
@@ -785,7 +785,8 @@ async function evaPushOther(tid) {
       把这条待办涉及的单推到别的分仓建出库单：用那个仓<b>自己的</b>商品资料与关联结算重新解析，
       本仓的数据不动。<br>
       · 只推「含有这些未关联商品」的单：${esc(names)}${items.length > 3 ? ` 等 ${items.length} 种` : ""}<br>
-      · 目标仓已经建过的单按出库单号自动跳过，重复点不会建两份。
+      · 目标仓已经建过的单按出库单号自动跳过，重复点不会建两份。<br>
+      · 目标仓<b>也没有关联</b>的商品：那一行不会建（整张单一行都建不了就不建单）。先「试算」，下面会列出来让你现场选对应商品。
     </div>
     <div class="form-grid">
       <div class="field"><label>推到哪个分仓出库</label>
@@ -806,13 +807,18 @@ async function evaPushOtherRun(tid, dryRun) {
   const target = sel ? sel.value : "";
   if (!target) { toast("请选择要推送到的分仓"); return; }
   const out = $("pushWhOut");
+  const maps = evaPushCollectMaps();   // 试算时选的「目标仓关联」一起提交（也用于重算后回填）
   const btns = [$("pushWhTrial"), $("pushWhGo")].filter(Boolean);
   btns.forEach((b) => { b.disabled = true; });
   if (out) out.innerHTML = `<div class="muted">${dryRun ? "正在试算" : "正在推送"}…（单多时可能要几十秒，别关窗口）</div>`;
   try {
     const r = await api(`/api/jst-auto/pending/${encodeURIComponent(tid)}/push-warehouse`, "POST",
-      { target_key: target, dry_run: !!dryRun });
-    if (out) out.innerHTML = evaPushResultHtml(r);
+      { target_key: target, dry_run: !!dryRun, mappings: maps });
+    if (out) {
+      out.innerHTML = evaPushResultHtml(r) + (dryRun ? evaPushMapHtml(r) : "");
+      if (dryRun) evaPushApplyMaps(maps);            // 重新试算后把刚才选好的关联填回去
+      try { bindSearchable(out); } catch (e) {}   // 补关联的下拉框也要能用搜索
+    }
     toast(r.message || "已处理");
     // 推送成功会自动把这条待办标记为已处理，顺手刷新待办数与按钮
     if (!dryRun) setTimeout(() => { renderJstPending(); checkJstPending(false); }, 800);
@@ -821,6 +827,67 @@ async function evaPushOtherRun(tid, dryRun) {
   } finally {
     btns.forEach((b) => { b.disabled = false; });
   }
+}
+
+/* 目标仓还缺关联的商品：在弹窗里直接选对应商品（保存到目标仓的聚水潭关联，之后自动带上） */
+function evaPushMapHtml(r) {
+  const items = r.unmapped_detail || [];
+  if (!items.length) return "";
+  const prods = r.products || [];
+  const label = (p) => `${p.name}${p.type === "order"
+    ? (p.settle ? "（订单·扣库存）" : "（订单·代发，无关联结算）")
+    : "（库存大类）"}`;
+  const opts = ['<option value="">（不关联，这些行不建）</option>']
+    .concat(prods.map((p) => `<option value="${p.id}">${esc(label(p))}</option>`)).join("");
+  const rows = items.map((it) => {
+    const sug = (it.suggest || []).slice(0, 3).map((s) =>
+      `<button class="btn sm ghost" style="margin:2px 4px 0 0;" onclick="pushPickSuggest(this, ${s.id ?? s.product_id})">${esc(s.name)}${s.score ? `（${Math.round(s.score * 100)}%）` : ""}</button>`).join("");
+    return `<tr class="push-map-row">
+      <td><b>${esc(it.external_code)}</b>
+        ${it.reason ? `<div class="muted" style="font-size:11px;">${esc(it.reason)}</div>` : ""}</td>
+      <td>
+        <select class="searchable push-map" data-code="${esc(it.external_code)}" style="min-width:260px;">${opts}</select>
+        ${sug ? `<div class="field-hint">目标仓候选：${sug}</div>` : ""}
+      </td>
+    </tr>`;
+  }).join("");
+  return `<div class="card" style="border:1px solid var(--amber, #f59e0b);margin-top:10px;">
+    <div class="card-head">
+      <h3>目标仓还缺 ${items.length} 种商品的关联</h3>
+      <span class="hint">选好后点上面「确认推送」，会一起保存到「${esc(r.target_name || "")}」的聚水潭关联</span>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th style="width:44%;">聚水潭商品名</th><th>在目标仓关联到</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <div class="field-hint">「订单·扣库存」会按该商品自己的关联结算扣库存并结转成本；
+      「订单·代发」不扣任何库存、成本按参考成本计；选「库存大类」会因没有关联结算建单失败。</div>
+  </div>`;
+}
+
+/** 收集弹窗里补选的目标仓关联 */
+function evaPushCollectMaps() {
+  return [...document.querySelectorAll("#pushWhOut select.push-map")]
+    .map((s) => ({ external_code: s.dataset.code || "", product_id: s.value ? +s.value : null }))
+    .filter((m) => m.external_code && m.product_id);
+}
+
+/** 重新试算后把刚才选好的关联填回下拉框（避免每点一次「试算」就得重选） */
+function evaPushApplyMaps(maps) {
+  const byCode = new Map((maps || []).map((m) => [m.external_code, String(m.product_id)]));
+  document.querySelectorAll("#pushWhOut select.push-map").forEach((sel) => {
+    const v = byCode.get(sel.dataset.code);
+    if (v) sel.value = v;
+  });
+}
+
+/** 点候选商品 → 选中该行的下拉（真正保存要等「确认推送」） */
+function pushPickSuggest(btn, pid) {
+  const row = btn.closest(".push-map-row");
+  const sel = row ? row.querySelector("select.push-map") : null;
+  if (!sel) return;
+  sel.value = String(pid);
+  sel.dispatchEvent(new Event("change", { bubbles: true }));
+  toast("已选中候选商品，点「确认推送」生效");
 }
 
 /* 推送结果 / 试算结果的展示 */
@@ -841,6 +908,7 @@ function evaPushResultHtml(r) {
     ${line(r.dry_run ? "预计新建" : "已新建", `<b>${r.dry_run ? willCreate : (r.created || 0)} 张</b>`,
       (r.dry_run ? willCreate : (r.created || 0)) ? "green" : "")}
     ${line("目标仓已建过跳过", `${r.duplicate_skipped || 0} 张`)}
+    ${r.mappings_saved ? line("补存到目标仓的关联", `${r.mappings_saved} 条`, "green") : ""}
     ${(r.unmapped || []).length
       ? line("目标仓仍缺关联", `<b>${r.unmapped.length} 种</b>：${un}${r.unmapped.length > 5 ? " 等" : ""}（这些单没建成）`, "red")
       : ""}

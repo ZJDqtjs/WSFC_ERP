@@ -97,6 +97,8 @@ class PushWhIn(BaseModel):
     target_key: str              # 推到哪个 ERP 分仓出库（如 wh01）
     dry_run: bool = False        # True = 只试算给预览，不写库
     only_affected: bool = True   # 只推涉及待办未关联商品的单（默认）；False = 整个文件都推
+    # 弹窗里给「目标仓也缺关联」的商品补选的关联（external_code=聚水潭商品名 → 目标仓商品 id）
+    mappings: list[MappingItemIn] = []
 
 
 def _validate_wh(data: WhSettingsIn) -> None:
@@ -395,6 +397,7 @@ def pending_push_warehouse(task_id: str, data: PushWhIn, user: User = Depends(ge
         key, target,
         files=[str(p) for p in (task.get("file_paths") or []) if p],
         codes=[str(it.get("external_code")) for it in (task.get("items") or []) if it.get("external_code")],
+        mappings=[m.model_dump() for m in (data.mappings or [])],
         operator=wh.get("operator") or "",
         user_name=user.name,
         dry_run=bool(data.dry_run),
@@ -402,8 +405,10 @@ def pending_push_warehouse(task_id: str, data: PushWhIn, user: User = Depends(ge
         skip_imported=bool(wh.get("skip_imported", True)),
     )
     if not data.dry_run and res.get("created"):
-        st.close_pending(key, task_id, status="pushed",
-                         note=f"已推送「{res.get('target_name')}」出库，新建 {res.get('created')} 张")
+        note = f"已推送「{res.get('target_name')}」出库，新建 {res.get('created')} 张"
+        if res.get("mappings_saved"):
+            note += f"；为目标仓补了 {res['mappings_saved']} 条商品关联"
+        st.close_pending(key, task_id, status="pushed", note=note)
     return res
 
 

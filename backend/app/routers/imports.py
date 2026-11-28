@@ -887,11 +887,15 @@ def _brush_fee_default() -> float:
 
 
 def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: tuple | None = ("已出库",),
-                          only_docs: set[str] | None = None) -> tuple[list[DraftOrder], list[dict], dict, set]:
+                          only_docs: set[str] | None = None,
+                          mapping_override: dict[str, int] | None = None
+                          ) -> tuple[list[DraftOrder], list[dict], dict, set]:
     """解析聚水潭出库单 → 草稿单（不建单）。
 
     statuses 为 None 时接受全部状态（鲜货需求预演算用），默认只取「已出库」（正式导入用）。
     only_docs：只解析这些出库单号（推送其他仓时用：失败明细/未关联商品也只统计这些单）。
+    mapping_override：临时的「聚水潭商品名 → 商品 id」覆盖（推送弹窗里补选关联时用，
+        试算即按补选的关联算，不用先写库）。
     """
     rows = read_rows(file)
     orders, skip = jushuitan_rows(rows, statuses)
@@ -899,6 +903,10 @@ def parse_jushuitan_draft(file: UploadFile, db: Session, user: User, statuses: t
         orders = [o for o in orders if str(o.get("doc_no")) in only_docs]
     mapping_rows = list(db.execute(select(CodeMapping)).scalars())
     mapping_by_code = {m.external_code: m for m in mapping_rows}
+    for _code, _pid in (mapping_override or {}).items():
+        if _code and _pid:
+            mapping_by_code[_code] = CodeMapping(source="jushuitan", external_code=_code,
+                                                 product_id=int(_pid))
 
     drafts, failed, unmapped_codes = [], [], set()
     unmapped_detail: dict[str, dict] = {}

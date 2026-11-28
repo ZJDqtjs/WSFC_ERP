@@ -257,11 +257,13 @@ def imported_doc_nos(db, dates: set[str]) -> set[str]:
 
 
 def import_file(key: str, path: Path, operator: str = "", skip_imported: bool = True,
-                only_docs: set[str] | None = None, dry_run: bool = False) -> dict[str, Any]:
+                only_docs: set[str] | None = None, dry_run: bool = False,
+                mappings: dict[str, int] | None = None) -> dict[str, Any]:
     """把一个聚水潭导出的 xlsx 导入指定分仓（复用现有导入链路）。
 
     only_docs：只建这些聚水潭出库单号（推送其他仓时用：同一个文件里只推待办涉及的那几张单）；
-    dry_run：只解析不建单（试算，不写库）。
+    dry_run：只解析不建单（试算，不写库）；
+    mappings：临时的「聚水潭商品名 → 商品 id」关联覆盖（推送弹窗补选的关联，试算也按它算）。
     """
     from ..routers.imports import _confirm_orders, parse_jushuitan_draft
 
@@ -270,7 +272,7 @@ def import_file(key: str, path: Path, operator: str = "", skip_imported: bool = 
     try:
         user = _operator_user(db, operator)
         drafts, failed, skip, unmapped_codes, unmapped_list, unmatched_multi = parse_jushuitan_draft(
-            _UploadShim(path), db, user, only_docs=only_docs
+            _UploadShim(path), db, user, only_docs=only_docs, mapping_override=mappings
         )
         in_file = len(drafts)
         if only_docs is not None:
@@ -741,12 +743,60 @@ def resolve_pending(key: str, task_id: str, *, mappings: list[dict[str, Any]] | 
 
 
 # ---------------------------------------------------------------- 推其他仓出库
+def _product_briefs(key: str) -> list[dict[str, Any]]:
+    """目标分仓的商品清单（推送弹窗里补选关联用）。
+
+    settle=True 表示这个商品配了扣减关联（能真扣库存）；订单小类没配扣减 = 代发（不扣库存，
+    成本按参考成本计），库存大类没配关联则会在建单时报错 —— 前端按这个标记提示，避免选错。
+    """
+    from ..models import Product
+
+    db = get_sessionmaker(key)()
+    try:
+        rows = db.execute(select(Product)).scalars()
+        out = []
+        for p in rows:
+            if getattr(p, "is_active", True) is False:
+                continue
+            has_ded = bool(getattr(p, "stock_links", None)) or bool(getattr(p, "stock_product_id", None))
+            out.append({
+                "id": p.id,
+                "name": p.name,
+                "type": p.product_type or "stock",
+                "category": p.category or "",
+                "settle": has_ded,
+                "pack": len(getattr(p, "pack_items", None) or []),
+                "cost": round(float(p.unit_cost or 0), 4),
+            })
+        return sorted(out, key=lambda x: (x["type"] != "order", x["name"]))
+    finally:
+        db.close()
+
+
+def _enrich_unmapped(target_key: str, detail: list[dict[str, Any]]) -> None:
+    """给目标仓还缺关联的商品补上「候选系统商品」（用目标仓自己的商品库算相似度）。"""
+    if not detail:
+        return
+    from ..routers.imports import _suggest_candidates
+
+    db = get_sessionmaker(target_key)()
+    try:
+        for it in detail:
+            code = str(it.get("external_code") or "")
+            if not code:
+                continue
+            it["suggest"] = _suggest_candidates(db, code)
+    finally:
+        db.close()
+
+
 def push_to_warehouse(
     src_key: str,
     target_key: str,
     *,
     files: list[str] | None = None,
     codes: list[str] | None = None,
+    mappings: list[dict[str, Any]] | None = None,
     operator: str = "",
     user_name: str = "",
     dry_run: bool = False,
@@ -759,10 +809,12 @@ def push_to_warehouse(
     早就维护好了 —— 货实际上是从那个仓发走的。这里直接拿聚水潭原始导出文件，用
     **目标分仓自己的**商品 / 编码关联 / 打包规则重新解析并建单，本仓数据一概不动。
 
+    - mappings：在弹窗里给「目标仓也缺关联」的商品补选的关联（保存到**目标仓**的聚水潭关联，
+      以后同一个商品名在该仓自动带上）；
     - only_affected=True（默认）：只推「含有待办里那些未关联商品」的单；同一文件里
       其它已经在本仓正常出库的单不会重复推到目标仓；
     - 目标仓已建过的单按出库单号跳过（幂等，重复点不会建两份）；
-    - dry_run=True：只解析给预览（能建几张 / 目标仓还缺哪些关联），不写任何库。
+    - dry_run=True：只解析给预览（能建几张 / 目标仓还缺哪些关联 / 可选的系统商品），不写任何库。
     """
     from ..routers.imports import jushuitan_rows, parse_jushuitan_name, read_rows
 
@@ -786,6 +838,8 @@ def push_to_warehouse(
         "unmapped_detail": [],
         "already_in_source": [],  # 这些单在本仓已经建过（可能只建了已关联的几行）
         "skipped_files": [],
+        "mappings_saved": 0,      # 本次在弹窗里补选、保存到目标仓的关联条数
+        "products": [],           # 目标仓商品清单（仅试算时返回，供弹窗补选关联）
         "message": "",
     }
     if not exists:
@@ -805,6 +859,15 @@ def push_to_warehouse(
         _set_state(running=True, warehouse=target_key, trigger=f"推送其他仓·{user_name or '手动'}",
                    step=f"正在推送到「{_wh_name(target_key)}」…",
                    started_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        # 弹窗里补选的关联：写进**目标仓**的聚水潭关联（预览/试算不写）
+        if not dry_run and mappings:
+            res["mappings_saved"] = _save_mappings(target_key, mappings)
+        # 补选的关联在本次解析里直接生效（试算也能看到「补完还差什么」，不用先写库）
+        override = {
+            str(m.get("external_code") or "").strip(): int(m["product_id"])
+            for m in (mappings or [])
+            if m.get("external_code") and m.get("product_id")
+        }
         want = {str(c).strip() for c in (codes or []) if str(c).strip()}
         dup_docs: set[str] = set()
         failed: list[dict[str, Any]] = []
@@ -845,7 +908,7 @@ def push_to_warehouse(
             _set_state(step=f"正在用「{_wh_name(target_key)}」的商品资料导入 {f.name} …")
             try:
                 stt = import_file(target_key, f, operator=operator, skip_imported=skip_imported,
-                                  only_docs=affected, dry_run=dry_run)
+                                  only_docs=affected, dry_run=dry_run, mappings=override or None)
             except Exception as e:  # noqa: BLE001 - 单个文件失败不影响其它文件
                 failed.append({"doc": f.name, "reason": f"{type(e).__name__}: {e}"})
                 continue
@@ -868,6 +931,9 @@ def push_to_warehouse(
 
         if dry_run:
             res["ok"] = True
+            # 试算顺带把「目标仓还能选哪些商品」给前端：缺关联的每种给候选，外加目标仓商品清单
+            _enrich_unmapped(target_key, res["unmapped_detail"])
+            res["products"] = _product_briefs(target_key)
             if not res["affected"]:
                 res["message"] = "文件里没找到涉及这些未关联商品的单，没有需要推送的"
             else:
