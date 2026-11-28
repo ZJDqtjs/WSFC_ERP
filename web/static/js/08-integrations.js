@@ -942,7 +942,9 @@ function renderMvTable(res) {
         : `<td class="num mono" style="color:${v >= 0 ? "var(--green)" : "var(--red)"}">${v >= 0 ? "+" : ""}${fmtNum(v)} ${esc(unit)}</td>`;
       const typeCell = mg
         ? `${typeBadge.out}<div class="muted" style="font-size:11px;">×${mg.count} 单</div>`
-        : (typeBadge[m.move_type] || m.move_type);
+        : (m.ref_type === "transfer"
+          ? '<span class="badge adjust">转移</span>'   // 分仓转移：本质是盘点增减，但口径要能一眼分开
+          : (typeBadge[m.move_type] || m.move_type));
       const noteCell = mg
         ? `<span class="muted">已合并 ${mg.count} 笔${mg.days > 1 ? `（跨 ${mg.days} 天）` : ""}</span>`
           + `<div class="muted" style="font-size:11px;" title="${esc(mg.codes.join("、"))}${mg.more ? `（另有 ${mg.more} 个单号）` : ""}">`

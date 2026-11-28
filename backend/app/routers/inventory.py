@@ -180,6 +180,7 @@ def list_movements(
                 "product_id": m.product_id,
                 "product_name": p.name if p else "",
                 "move_type": m.move_type,
+                "ref_type": m.ref_type,   # transfer = 分仓转移，前端据此显示「转移」而不是「盘点」
                 "quantity_base": m.quantity_base,
                 "unit": du,
                 "quantity_display": round(m.quantity_base / f, 4),

@@ -1,6 +1,8 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
@@ -711,6 +713,24 @@ class CopyToWarehouseIn(BaseModel):
     disable_source: bool = False
 
 
+class TransferToWarehouseIn(BaseModel):
+    """把当前仓的商品连同库存一起搬到另一个分仓（迁移场景）。
+
+    - include_dependencies：同「复制到其他仓」，保证订单商品的关联结算 / 扣减库存不断链；
+    - transfer_stock=True：把原仓现有库存按 FIFO 结存价值转到目标仓，原仓清零；
+      负库存**不搬**（不把欠账转给别人），只在原仓盘盈归零；
+    - disable_source=True：转移后把原仓这些商品停用（库存已搬走，避免继续出库）；
+    - date：库存流水的业务日期，空 = 今天。
+    """
+
+    target_wh: str
+    ids: list[int] = []
+    include_dependencies: bool = True
+    transfer_stock: bool = True
+    disable_source: bool = True
+    date: str = ""
+
+
 def _names_brief(names: list[str], limit: int = 4) -> str:
     """名称列表缩略展示：最多 limit 个，超出用「…」。（引用来源里动辄几十个商品，列全了没法看）"""
     names = [str(n or "—") for n in names]
@@ -866,6 +886,61 @@ def _product_ref_ids(p: Product) -> set[int]:
                 if pid:
                     refs.add(int(pid))
     return refs
+
+
+def _deduct_stock_ids(p: Product) -> set[int]:
+    """订单商品真正扣减的库存商品 id（扣减清单 + 多套方案）。
+
+    与 `_product_ref_ids` 的区别：这里**不含**关联结算清单（pack_items）里的包材 / 人工——
+    那些是各仓共用的耗材，转移库存时不该被一起搬空。
+    """
+    refs: set[int] = set()
+    links = list(p.stock_links or [])
+    if not links and p.stock_product_id:
+        links = [{"product_id": p.stock_product_id}]
+    for it in links:
+        pid = (it or {}).get("product_id")
+        if pid:
+            refs.add(int(pid))
+    for s in (getattr(p, "stock_schemes", None) or []):
+        if isinstance(s, dict):
+            for it in (s.get("links") or []):
+                pid = (it or {}).get("product_id")
+                if pid:
+                    refs.add(int(pid))
+    return refs
+
+
+def _stock_transfer_products(db: Session, ids: list[int]) -> list[Product]:
+    """跟着商品一起搬库存的清单。
+
+    - 选中的库存商品（product_type=stock）→ 它自己；
+    - 选中的订单商品 → 它扣减的库存大类（订单商品自己不存库存，账记在大类上）；
+    - 关联结算清单里的包材 / 人工只复制资料、库存留在原仓（共用耗材不该被搬空）。
+    """
+    out: list[Product] = []
+    seen: set[int] = set()
+    for pid in ids:
+        p = db.get(Product, int(pid))
+        if not p:
+            continue
+        cand = [p.id] if p.product_type == "stock" else sorted(_deduct_stock_ids(p))
+        for cid in cand:
+            if cid in seen:
+                continue
+            sp = db.get(Product, cid)
+            if not sp or sp.product_type != "stock":
+                continue
+            seen.add(cid)
+            out.append(sp)
+    return out
+
+
+def _display_qty(p: Product, qty_base: float) -> tuple[float, str]:
+    """基础单位数量 → 商品默认单位数量（与商品页 / 库存页的展示口径一致）。"""
+    du = p.default_unit or p.base_unit or ""
+    f = float((p.conversions or {}).get(du) or 0) or 1.0
+    return (qty_base / f, du or p.base_unit or "")
 
 
 def _collect_copy_order(db: Session, ids: list[int]) -> list[Product]:
@@ -1106,3 +1181,216 @@ def copy_products_to_warehouse(
         "warnings": warnings,
         "disabled": disabled,
     }
+
+
+def _undo_target_stock(target_key: str, move_ids: list[int], product_ids: list[int]) -> None:
+    """原仓清零失败时，把目标仓刚写进去的转入流水删掉并重算，避免「两仓都有库存」。"""
+    if not move_ids:
+        return
+    tdb = get_sessionmaker(target_key)()
+    try:
+        for i in range(0, len(move_ids), 400):   # SQLite 单条 SQL 变量数有上限，分批删
+            tdb.execute(delete(StockMovement).where(
+                StockMovement.id.in_(move_ids[i:i + 400])))
+        for pid in product_ids:
+            recompute_product(tdb, pid)
+        tdb.commit()
+    except Exception:  # noqa: BLE001 - 兜底回滚，失败也不该盖住原始异常
+        tdb.rollback()
+    finally:
+        tdb.close()
+
+
+@router.post("/products/transfer-to-warehouse")
+def transfer_products_to_warehouse(
+    data: TransferToWarehouseIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """把当前仓选中的商品连同库存一起转移到目标分仓。
+
+    与「复制到其他仓」的区别只有库存那一段：
+      1. 原仓按 FIFO 结存价值写一条负向流水（库存清零），目标仓按同价值写一条正向流水，
+         成本基准（均价）保持不变——两仓合计的数量与价值都不变，不是白送也不是凭空多出来；
+      2. 负库存不转移（不把欠账搬给别人），只在原仓盘盈归零，与「盘点调整」同一口径；
+      3. 转移完把原仓这些商品停用（库存已搬空，继续挂着容易被再出库一次）。
+    """
+    src_key = get_current_key()
+    target_key = (data.target_wh or "").strip()
+    if not target_key:
+        raise HTTPException(400, "请选择目标分仓")
+    if not key_exists(target_key):
+        raise HTTPException(404, "目标分仓不存在")
+    if target_key == src_key:
+        raise HTTPException(400, "目标分仓不能与当前分仓相同")
+    if not data.ids:
+        raise HTTPException(400, "请选择要转移的商品")
+    day = (data.date or "").strip() or datetime.now().strftime("%Y-%m-%d")
+    try:
+        datetime.strptime(day, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(400, "日期格式不正确，应为 YYYY-MM-DD")
+
+    src_name = current_warehouse_name(src_key)
+    target_name = current_warehouse_name(target_key)
+
+    # 1) 先用既有的「复制到其他仓」把商品资料建到目标仓（不停用，停用放到最后统一做）
+    copy_res = copy_products_to_warehouse(
+        CopyToWarehouseIn(
+            target_wh=target_key,
+            ids=data.ids,
+            include_dependencies=data.include_dependencies,
+            disable_source=False,
+        ),
+        db=db,
+        user=user,
+    )
+    mapping: dict[int, int] = {}
+    for it in list(copy_res["created"]) + list(copy_res["mapped"]):
+        mapping[int(it["source_id"])] = int(it["target_id"])
+    warnings: list[str] = list(copy_res["warnings"])
+
+    # 2) 目标仓入账（先写目标仓：它失败时原仓一行没动，最坏情况只是目标仓多了几个空商品）
+    scope = _stock_transfer_products(db, data.ids) if data.transfer_stock else []
+    moved: list[dict] = []
+    zeroed: list[dict] = []
+    stock_changed: set[int] = set()
+    target = get_sessionmaker(target_key)()
+    target_moves: list[StockMovement] = []
+    target_move_ids: list[int] = []
+    target_pids: set[int] = set()
+    created_ids = [int(it["target_id"]) for it in copy_res["created"]]
+    try:
+        # 复制沿用源仓的启用状态；但「转移」意味着这门生意挪到目标仓继续做，
+        # 源仓早就停用的商品在目标仓不能也跟着停用（建出来看不见，等于白转）。
+        for tpid in created_ids:
+            tp = target.get(Product, tpid)
+            if tp and not tp.is_active:
+                tp.is_active = True
+        for p in scope:
+            qty = round(float(p.stock or 0.0), 6)
+            disp, du = _display_qty(p, qty)
+            if qty > 1e-6:
+                tpid = mapping.get(p.id)
+                if not tpid:
+                    warnings.append(
+                        f"「{p.name}」在目标仓没有对应商品（未勾选「同时复制关联商品」），库存没有转过去"
+                    )
+                    continue
+                value = round(float(p.stock_value or 0.0), 4)
+                mv = StockMovement(
+                    product_id=tpid, move_type="adjust", quantity_base=qty, amount=value,
+                    ref_type="transfer", date=day, operator=user.name,
+                    remark=f"从「{src_name}」转入：{p.name} {disp:g}{du}",
+                )
+                target.add(mv)
+                target_moves.append(mv)
+                target_pids.add(tpid)
+                stock_changed.add(p.id)
+                moved.append({
+                    "source_id": p.id, "target_id": tpid, "name": p.name,
+                    "quantity": round(disp, 4), "unit": du,
+                    "quantity_base": qty, "base_unit": p.base_unit or "",
+                    "value": value,
+                    "avg_cost": round(value / disp, 4) if disp else 0.0,
+                })
+                if value <= 0:
+                    warnings.append(
+                        f"「{p.name}」原仓库存价值为 0（没有成本基准），转入后目标仓成本也是 0，请补填参考成本"
+                    )
+            elif qty < -1e-6:
+                # 负库存不搬：只登记，稍后在原仓盘盈归零
+                zeroed.append({
+                    "source_id": p.id, "name": p.name,
+                    "quantity": round(disp, 4), "unit": du,
+                    "quantity_base": qty, "base_unit": p.base_unit or "",
+                })
+                stock_changed.add(p.id)
+        target.flush()
+        target_move_ids = [int(m.id) for m in target_moves]
+        for pid in target_pids:
+            recompute_product(target, pid)
+        target.commit()
+    except Exception as e:  # noqa: BLE001 - 目标仓失败：原仓未动，直接报错
+        target.rollback()
+        raise HTTPException(500, f"目标仓入账失败（原仓未动）：{e}")
+    finally:
+        target.close()
+
+    # 3) 原仓清零：正库存出库转移，负库存盘盈归零
+    src_moves: list[tuple[int, StockMovement]] = []
+    try:
+        for pid in sorted(stock_changed):
+            p = db.get(Product, pid)
+            if not p:
+                continue
+            qty = round(float(p.stock or 0.0), 6)
+            disp, du = _display_qty(p, qty)
+            if qty > 1e-6:
+                mv = StockMovement(
+                    product_id=p.id, move_type="adjust", quantity_base=-qty,
+                    amount=-round(float(p.stock_value or 0.0), 4),
+                    ref_type="transfer", date=day, operator=user.name,
+                    remark=f"转移库存到「{target_name}」：{disp:g}{du}",
+                )
+            elif qty < -1e-6:
+                # 盘盈金额按现有成本入账（均价 → 参考成本兜底），FIFO 用它回补历史超卖
+                cost = float(p.avg_cost or 0.0) or float(p.unit_cost or 0.0) or 0.0
+                mv = StockMovement(
+                    product_id=p.id, move_type="adjust", quantity_base=-qty,
+                    amount=round(-qty * cost, 4),
+                    ref_type="transfer", date=day, operator=user.name,
+                    remark=f"负库存不转移，盘盈归零（原 {disp:g}{du}）",
+                )
+            else:
+                continue
+            db.add(mv)
+            src_moves.append((p.id, mv))
+        db.flush()
+        group_id = int(src_moves[0][1].id) if src_moves else 0
+        for _, mv in src_moves:
+            mv.ref_id = group_id   # 同一次转移归一组，便于流水里回看
+        for pid, _ in src_moves:
+            recompute_product(db, pid)
+        db.commit()
+    except Exception as e:  # noqa: BLE001 - 原仓失败：撤回目标仓转入，保持两仓一致
+        db.rollback()
+        _undo_target_stock(target_key, target_move_ids, sorted(target_pids))
+        raise HTTPException(500, f"原仓清零失败，目标仓转入已撤回：{e}")
+
+    # 4) 停用（默认勾选）：选中的商品 + 库存已搬走的库存大类
+    disabled: list[str] = []
+    stock_disabled: list[str] = []
+    if data.disable_source:
+        done: set[int] = set()
+        for pid in data.ids:
+            p = db.get(Product, int(pid))
+            if p and p.is_active:
+                p.is_active = False
+                disabled.append(p.name)
+                done.add(p.id)
+        for pid in sorted(stock_changed):
+            if pid in done:
+                continue
+            p = db.get(Product, pid)
+            if p and p.is_active:
+                p.is_active = False
+                stock_disabled.append(p.name)
+        if disabled or stock_disabled:
+            db.commit()
+
+    return {
+        "ok": True,
+        "date": day,
+        "source": {"key": src_key, "name": src_name},
+        "target": {"key": target_key, "name": target_name},
+        "created": copy_res["created"],
+        "mapped": copy_res["mapped"],
+        "skipped": copy_res["skipped"],
+        "warnings": warnings,
+        "stock_moved": moved,
+        "stock_zeroed": zeroed,
+        "disabled": disabled,
+        "stock_disabled": stock_disabled,
+    }
+

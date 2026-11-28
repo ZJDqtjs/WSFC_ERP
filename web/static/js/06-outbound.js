@@ -1447,6 +1447,118 @@ function showCopyResult(r) {
     <div class="modal-foot"><button class="btn" onclick="closeModal()">知道了</button></div>`);
 }
 
+/* ---------- 转移商品与库存到其他分仓 ---------- */
+/* 选中的商品里「真正要搬库存」的那些：库存商品取它自己，订单商品取它扣减的库存大类
+   （订单商品自己不存库存，账记在大类上）。关联结算清单里的包材 / 人工只复制资料，
+   库存留在原仓——各仓共用的耗材不该被一起搬空。 */
+function transferStockTargets(picks) {
+  const ids = new Set();
+  picks.forEach((p) => {
+    if (p.product_type === "stock") { ids.add(p.id); return; }
+    prodSchemes(p).forEach((s) => (s.links || []).forEach((l) => l && l.product_id && ids.add(l.product_id)));
+  });
+  return [...ids].map((id) => PRODUCTS.find((x) => x.id === id)).filter(Boolean);
+}
+function transferPreviewHtml(picks) {
+  const list = transferStockTargets(picks);
+  const moving = list.filter((p) => Number(p.stock) > 1e-6);
+  const neg = list.filter((p) => Number(p.stock) < -1e-6);
+  if (!moving.length && !neg.length) {
+    return `<div class="field"><label>将要转移的库存</label>
+      <div class="field-hint">当前仓这些商品没有库存（0），这次只复制资料。</div></div>`;
+  }
+  const rows = moving.map((p) =>
+    `<li>${esc(p.name)}：${fmtStock(p)}，结转价值 ${fmtMoney(p.stock_value)}</li>`).join("");
+  const negRows = neg.map((p) =>
+    `<li>${esc(p.name)}：${fmtStock(p)} <span class="badge off">负库存</span> 不转移，只在原仓盘盈归零</li>`).join("");
+  return `<div class="field"><label>将要转移的库存（${moving.length} 项）</label>
+    <ul style="margin:4px 0 0 18px;line-height:1.8;max-height:160px;overflow:auto;">${rows}${negRows}</ul>
+    <div class="field-hint">按原仓的库存结存成本一起转过去，两仓合计的数量与货值不变。</div></div>`;
+}
+async function openTransferToWarehouseModal() {
+  if (!prodSel.size) { toast("请先勾选要转移的商品"); return; }
+  let whs = [];
+  try {
+    const r = await api("/api/warehouses");
+    whs = (r.warehouses || []).filter((w) => !w.is_current);
+  } catch (e) { toast("读取分仓列表失败：" + e.message); return; }
+  if (!whs.length) { toast("没有其他分仓可转移"); return; }
+  const picks = PRODUCTS.filter((p) => prodSel.has(p.id));
+  openModal(`
+    <h3>转移商品与库存到其他仓（${prodSel.size} 个） <button class="close" onclick="closeModal()">✕</button></h3>
+    <p class="hint" style="margin-bottom:12px;">把选中商品的资料复制到目标仓，同时把当前仓的库存按结存成本一起转过去：原仓库存清零，目标仓按同成本入账。适合「这个商品以后不在本仓做了，整个挪过去」。</p>
+    <div class="form-grid">
+      <div class="field"><label>目标分仓</label>
+        <select id="tfTargetWh">${whs.map((w) => `<option value="${esc(w.key)}">${esc(w.name)}（${esc(w.key)}）</option>`).join("")}</select>
+      </div>
+      <div class="field"><label>复制范围</label>
+        <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="tfDeps" checked/> 同时复制关联商品（包材 / 人工 / 库存大类）</label>
+        <div class="field-hint">不勾选时，目标仓缺少的关联商品会被丢弃，订单商品的关联结算 / 扣减库存可能不完整。</div>
+      </div>
+      <div class="field"><label>转移后</label>
+        <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="tfStock" checked/> 把当前库存一起转过去</label>
+        <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="tfDisable" checked/> 在当前仓停用这些商品（含库存被搬走的库存大类）</label>
+        <div class="field-hint">库存搬空后原仓商品停用，避免再被出库扣一次；目标仓继续正常经营。</div>
+      </div>
+      ${transferPreviewHtml(picks)}
+    </div>
+    <div class="modal-foot">
+      <button class="btn secondary" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="submitTransferToWarehouse()">开始转移</button>
+    </div>`);
+}
+async function submitTransferToWarehouse() {
+  const target = $("tfTargetWh").value;
+  if (!target) { toast("请选择目标分仓"); return; }
+  if (!(await uiConfirm("确认把选中的商品连同库存转移到目标仓？原仓库存会清零，转移后不会自动回退。"))) return;
+  const payload = {
+    target_wh: target,
+    ids: [...prodSel],
+    include_dependencies: $("tfDeps").checked,
+    transfer_stock: $("tfStock").checked,
+    disable_source: $("tfDisable").checked,
+  };
+  let r = null;
+  try {
+    r = await api("/api/products/transfer-to-warehouse", "POST", payload);
+  } catch (e) { toast("转移失败：" + e.message); return; }
+  closeModal();
+  prodSel.clear();
+  try { await loadStock(); } catch (e) { /* 刷新失败不影响结果展示 */ }
+  renderProducts();
+  showTransferResult(r);
+}
+function showTransferResult(r) {
+  const moved = r.stock_moved || [];
+  const zeroed = r.stock_zeroed || [];
+  const disabled = r.disabled || [];
+  const stockDisabled = r.stock_disabled || [];
+  const skipped = r.skipped || [];
+  const warnings = r.warnings || [];
+  const lines = [];
+  if ((r.created || []).length) lines.push(`在「${r.target.name}」新建 ${r.created.length} 个商品`);
+  if ((r.mapped || []).length) lines.push(`复用目标仓已有同名商品 ${r.mapped.length} 个`);
+  if (disabled.length) lines.push(`已在原仓停用 ${disabled.length} 个选中商品`);
+  if (stockDisabled.length) lines.push(`库存已搬走，另停用 ${stockDisabled.length} 个关联库存大类`);
+  const movedRows = moved.map((x) => `<tr>
+      <td>${esc(x.name)}</td>
+      <td class="num mono">${fmtNum(x.quantity)} ${esc(x.unit)}</td>
+      <td class="num mono">${fmtMoney(x.value)}</td></tr>`).join("");
+  const zeroRows = zeroed.map((x) =>
+    `<li>${esc(x.name)}：原 ${fmtNum(x.quantity)} ${esc(x.unit)}，不转移，原仓已盘盈归零</li>`).join("");
+  openModal(`
+    <h3>转移完成 <button class="close" onclick="closeModal()">✕</button></h3>
+    <p class="hint">从「${esc(r.source.name)}」转到「${esc(r.target.name)}」，库存流水日期 ${esc(r.date)}</p>
+    ${lines.length ? `<ul style="margin:10px 0 6px 20px;line-height:1.9;">${lines.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+    ${movedRows ? `<div class="table-wrap"><table>
+        <thead><tr><th>商品</th><th class="num">转移库存</th><th class="num">结转价值</th></tr></thead>
+        <tbody>${movedRows}</tbody></table></div>` : '<div class="alert warn" style="margin-bottom:10px;">这次没有转移库存（未勾选「把当前库存一起转过去」，或原仓库存为 0）</div>'}
+    ${zeroRows ? `<div class="alert warn" style="margin:10px 0;">负库存未转移（只在原仓归零）：<ul style="margin:6px 0 0 18px;line-height:1.8;">${zeroRows}</ul></div>` : ""}
+    ${skipped.length ? `<div class="alert warn" style="margin-bottom:10px;">${skipped.length} 个关联商品未复制：${esc(skipped.slice(0, 6).map((x) => x.name).join("、"))}${skipped.length > 6 ? "…" : ""}</div>` : ""}
+    ${warnings.length ? `<div class="alert warn" style="margin-bottom:10px;">${warnings.slice(0, 6).map((x) => esc(x)).join("<br>")}${warnings.length > 6 ? "<br>…" : ""}</div>` : ""}
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">知道了</button></div>`);
+}
+
 async function batchDeleteInbounds() {
   if (!inSel.size) return;
   if (!(await uiConfirm(`确认删除选中的 ${inSel.size} 条入库单？将回退库存与成本。`))) return;
